@@ -39,6 +39,7 @@ type UserRepository interface {
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, token *db.RefreshToken) error
 	GetByHash(ctx context.Context, hash string) (*db.RefreshToken, error)
+	DeleteByHash(ctx context.Context, hash string) error
 	Revoke(ctx context.Context, id uuid.UUID) error
 	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteExpired(ctx context.Context) error

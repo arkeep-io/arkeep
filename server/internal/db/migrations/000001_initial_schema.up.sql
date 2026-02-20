@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users (
     password        TEXT        NOT NULL DEFAULT '',
     display_name    TEXT        NOT NULL,
     role            TEXT        NOT NULL DEFAULT 'user',
+    is_active       INTEGER     NOT NULL DEFAULT 1,
     oidc_provider   TEXT        NOT NULL DEFAULT '',
     oidc_sub        TEXT        NOT NULL DEFAULT '',
     last_login_at   DATETIME,

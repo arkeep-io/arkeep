@@ -51,6 +51,7 @@ type User struct {
 	Password     EncryptedString `gorm:"type:text"` // empty for OIDC users
 	DisplayName  string          `gorm:"not null"`
 	Role         string          `gorm:"not null;default:'user'"` // "admin" or "user"
+	IsActive     bool            `gorm:"not null;default:true"`   // false = account disabled
 	OIDCProvider string          `gorm:"default:''"`              // provider ID if OIDC user
 	OIDCSub      string          `gorm:"default:''"`              // subject claim from OIDC token
 	LastLoginAt  *time.Time

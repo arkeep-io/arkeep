@@ -192,3 +192,16 @@ func (r *gormRefreshTokenRepository) DeleteExpired(ctx context.Context) error {
 	}
 	return nil
 }
+
+// DeleteByHash permanently removes a refresh token by its SHA-256 hash.
+// If no token matches the hash the call is a no-op — the desired state
+// (token gone) is already met.
+func (r *gormRefreshTokenRepository) DeleteByHash(ctx context.Context, hash string) error {
+	err := r.db.WithContext(ctx).
+		Where("token_hash = ?", hash).
+		Delete(&db.RefreshToken{}).Error
+	if err != nil {
+		return fmt.Errorf("refresh_tokens: delete by hash: %w", err)
+	}
+	return nil
+}
