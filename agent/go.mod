@@ -1,8 +1,8 @@
-module github.com/arkeep/arkeep/agent
+module github.com/arkeep-io/arkeep/agent
 
 go 1.26
 
-require github.com/arkeep/arkeep/shared v0.0.0
+require github.com/arkeep-io/arkeep/shared v0.0.0
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -12,4 +12,4 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 )
 
-replace github.com/arkeep/arkeep/shared => ../shared
+replace github.com/arkeep-io/arkeep/shared => ../shared

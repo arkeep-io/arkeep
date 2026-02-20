@@ -1,4 +1,4 @@
-module github.com/arkeep/arkeep/shared
+module github.com/arkeep-io/arkeep/shared
 
 go 1.26
 

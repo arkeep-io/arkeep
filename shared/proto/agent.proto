@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package arkeep.agent.v1;
 
-option go_package = "github.com/arkeep/arkeep/shared/proto/agentv1";
+option go_package = "github.com/arkeep-io/arkeep/shared/proto/agentv1";
 
 // AgentService handles all communication between server and agent.
 service AgentService {
