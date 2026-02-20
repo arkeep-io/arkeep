@@ -75,7 +75,7 @@ This makes deployment behind NAT and corporate firewalls effortless.
 ## Roadmap
 
 - **v1.0** — Production-ready core, all free features complete
-- **v1.x** — Proxmox integration (VM and LXC backup)
+- **v1.x** — Proxmox and VM Ware integration (VM and LXC backup)
 - **v2.0** — Bandwidth throttling, BYOK encryption key management
 
 ## Development
