@@ -90,7 +90,7 @@ This makes deployment behind NAT and corporate firewalls effortless.
 
 ### Getting started
 ```bash
-git clone https://github.com/arkeep/arkeep
+git clone https://github.com/arkeep-io/arkeep
 cd arkeep
 task proto
 task run:server
