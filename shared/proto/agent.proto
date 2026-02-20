@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package arkeep.agent.v1;
+
+option go_package = "github.com/arkeep/arkeep/shared/proto/agentv1";
+
+// AgentService handles all communication between server and agent.
+service AgentService {
+  // Register is called once with a one-time token to get a permanent agent token.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Connect opens a persistent bidirectional stream.
+  // Agent sends events (heartbeat, job updates, logs, docker state).
+  // Server sends commands (run job, cancel job).
+  rpc Connect(stream AgentMessage) returns (stream ServerMessage);
+}
+
+// ─── Agent → Server ──────────────────────────────────────────────────────────
+
+message AgentMessage {
+  oneof payload {
+    Heartbeat   heartbeat    = 1;
+    JobUpdate   job_update   = 2;
+    JobLog      job_log      = 3;
+    DockerState docker_state = 4;
+  }
+}
+
+message Heartbeat {
+  string agent_id    = 1;
+  string version     = 2;
+  string os          = 3;
+  string arch        = 4;
+  int64  uptime_secs = 5;
+  double cpu_percent = 6;
+  double mem_percent = 7;
+}
+
+message JobUpdate {
+  string    job_id          = 1;
+  JobStatus status          = 2;
+  int64     bytes_processed = 3;
+  int64     bytes_added     = 4;
+  int32     files_processed = 5;
+  string    error_message   = 6;
+  string    snapshot_id     = 7;
+}
+
+message JobLog {
+  string   job_id    = 1;
+  LogLevel level     = 2;
+  string   message   = 3;
+  int64    timestamp = 4;
+}
+
+message DockerState {
+  string             agent_id   = 1;
+  repeated Container containers = 2;
+}
+
+message Container {
+  string          id      = 1;
+  string          name    = 2;
+  string          image   = 3;
+  string          status  = 4;
+  repeated Volume volumes = 5;
+}
+
+message Volume {
+  string name        = 1;
+  string mount_point = 2;
+  string driver      = 3;
+}
+
+// ─── Server → Agent ──────────────────────────────────────────────────────────
+
+message ServerMessage {
+  oneof payload {
+    JobCommand job_command = 1;
+    CancelJob  cancel_job  = 2;
+  }
+}
+
+message JobCommand {
+  string  job_id      = 1;
+  JobType type        = 2;
+  string  policy_json = 3;
+}
+
+message CancelJob {
+  string job_id = 1;
+}
+
+// ─── Registration ────────────────────────────────────────────────────────────
+
+message RegisterRequest {
+  string registration_token = 1;
+  string name               = 2;
+  string version            = 3;
+  string os                 = 4;
+  string arch               = 5;
+}
+
+message RegisterResponse {
+  string agent_id    = 1;
+  string agent_token = 2;
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_RUNNING     = 1;
+  JOB_STATUS_COMPLETED   = 2;
+  JOB_STATUS_FAILED      = 3;
+  JOB_STATUS_CANCELLED   = 4;
+}
+
+enum JobType {
+  JOB_TYPE_UNSPECIFIED = 0;
+  JOB_TYPE_BACKUP      = 1;
+  JOB_TYPE_RESTORE     = 2;
+  JOB_TYPE_VERIFY      = 3;
+  JOB_TYPE_PRUNE       = 4;
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_INFO        = 1;
+  LOG_LEVEL_WARNING     = 2;
+  LOG_LEVEL_ERROR       = 3;
+}

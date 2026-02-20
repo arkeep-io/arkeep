@@ -1,0 +1,51 @@
+name: Security
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"
+  push:
+    branches: [main]
+
+jobs:
+  gosec:
+    name: Go Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Run gosec
+        uses: securego/gosec@master
+        with:
+          args: ./...
+
+  trivy:
+    name: Container Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build server image
+        run: docker build -f server/Dockerfile -t arkeep-server:scan .
+
+      - name: Build agent image
+        run: docker build -f agent/Dockerfile -t arkeep-agent:scan .
+
+      - name: Scan server image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: arkeep-server:scan
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+
+      - name: Scan agent image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: arkeep-agent:scan
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH

@@ -1,0 +1,98 @@
+version: "3"
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "none"
+  BUILD_DATE:
+    sh: date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown"
+  LDFLAGS: "-s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}"
+
+tasks:
+  # ─── Build ──────────────────────────────────────────────────────────────────
+  build:
+    desc: Build all components
+    deps: [build:server, build:agent]
+
+  build:server:
+    desc: Build server binary
+    dir: server
+    cmd: go build -ldflags="{{.LDFLAGS}}" -o ../bin/arkeep-server ./cmd/server
+
+  build:agent:
+    desc: Build agent binary
+    dir: agent
+    cmd: go build -ldflags="{{.LDFLAGS}}" -o ../bin/arkeep-agent ./cmd/agent
+
+  # ─── Run (development) ──────────────────────────────────────────────────────
+  run:server:
+    desc: Run server in development mode
+    dir: server
+    cmd: go run ./cmd/server --log-level=debug
+    env:
+      ARKEEP_SECRET_KEY: dev-secret-key-do-not-use-in-production
+
+  run:agent:
+    desc: Run agent in development mode
+    dir: agent
+    cmd: go run ./cmd/agent --server=localhost:9090 --log-level=debug
+    env:
+      ARKEEP_TOKEN: dev-token
+
+  # ─── Test ───────────────────────────────────────────────────────────────────
+  test:
+    desc: Run all tests
+    deps: [test:shared, test:server, test:agent]
+
+  test:shared:
+    desc: Run shared tests
+    dir: shared
+    cmd: go test -v -race -count=1 ./...
+
+  test:server:
+    desc: Run server tests
+    dir: server
+    cmd: go test -v -race -count=1 ./...
+
+  test:agent:
+    desc: Run agent tests
+    dir: agent
+    cmd: go test -v -race -count=1 ./...
+
+  # ─── Proto ──────────────────────────────────────────────────────────────────
+  proto:
+    desc: Generate Go code from protobuf definitions
+    cmd: >
+      protoc
+      --go_out=shared/proto
+      --go_opt=paths=source_relative
+      --go-grpc_out=shared/proto
+      --go-grpc_opt=paths=source_relative
+      -I shared/proto
+      shared/proto/agent.proto
+    sources:
+      - shared/proto/*.proto
+    generates:
+      - shared/proto/**/*.pb.go
+      - shared/proto/**/*_grpc.pb.go
+
+  # ─── Lint ───────────────────────────────────────────────────────────────────
+  lint:
+    desc: Run Go linter
+    cmd: golangci-lint run ./...
+
+  # ─── Tidy ───────────────────────────────────────────────────────────────────
+  tidy:
+    desc: Tidy all Go modules
+    cmds:
+      - cd shared && go mod tidy
+      - cd server && go mod tidy
+      - cd agent && go mod tidy
+
+  # ─── Clean ──────────────────────────────────────────────────────────────────
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - cmd: rm -rf bin/
+        ignore_error: true

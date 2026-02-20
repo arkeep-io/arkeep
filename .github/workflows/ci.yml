@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-go:
+    name: Test Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: |
+            server/go.sum
+            agent/go.sum
+            shared/go.sum
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+      - name: Generate proto
+        run: |
+          protoc \
+            --go_out=shared/proto \
+            --go_opt=paths=source_relative \
+            --go-grpc_out=shared/proto \
+            --go-grpc_opt=paths=source_relative \
+            -I shared/proto \
+            shared/proto/agent.proto
+
+      - name: Test shared
+        run: cd shared && go test -v -race -count=1 ./...
+
+      - name: Test server
+        run: cd server && go test -v -race -count=1 ./...
+
+      - name: Test agent
+        run: cd agent && go test -v -race -count=1 ./...
+
+  lint-go:
+    name: Lint Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  test-gui:
+    name: Test GUI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: gui/package-lock.json
+
+      - name: Install dependencies
+        run: cd gui && npm ci
+
+      - name: Type check
+        run: cd gui && npm run type-check
+
+      - name: Build
+        run: cd gui && npm run build

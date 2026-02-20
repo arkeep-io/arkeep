@@ -1,0 +1,22 @@
+services:
+  agent:
+    image: ghcr.io/arkeep/arkeep-agent:latest
+    container_name: arkeep-agent
+    restart: unless-stopped
+    environment:
+      ARKEEP_SERVER: "${ARKEEP_SERVER:?ARKEEP_SERVER is required — gRPC address of the server e.g. server.example.com:9090}"
+      ARKEEP_TOKEN: "${ARKEEP_TOKEN:?ARKEEP_TOKEN is required — generate from the Arkeep GUI}"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+    volumes:
+      - arkeep-agent-data:/var/lib/arkeep-agent
+      # Docker socket — read-only, for automatic container and volume discovery
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the paths you want to back up as read-only
+      # Uncomment and edit as needed:
+      # - /etc:/backup/etc:ro
+      # - /home:/backup/home:ro
+      # - /var/data:/backup/data:ro
+
+volumes:
+  arkeep-agent-data:
+    driver: local

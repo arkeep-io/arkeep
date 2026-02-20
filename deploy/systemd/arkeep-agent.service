@@ -1,0 +1,39 @@
+[Unit]
+Description=Arkeep Backup Agent
+Documentation=https://arkeep.io/docs
+After=network-online.target
+Wants=network-online.target
+After=docker.service
+
+[Service]
+Type=simple
+User=arkeep-agent
+Group=arkeep-agent
+
+ExecStart=/usr/local/bin/arkeep-agent \
+    --server=${ARKEEP_SERVER} \
+    --log-level=${ARKEEP_LOG_LEVEL:-info}
+
+# Environment file — copy to /etc/arkeep/agent.env and edit
+# Minimum required:
+#   ARKEEP_SERVER=your-server:9090
+#   ARKEEP_TOKEN=your-agent-token
+EnvironmentFile=/etc/arkeep/agent.env
+
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/arkeep-agent
+# Needed for Docker socket access
+SupplementaryGroups=docker
+
+StateDirectory=arkeep-agent
+
+[Install]
+WantedBy=multi-user.target

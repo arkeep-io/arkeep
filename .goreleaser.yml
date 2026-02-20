@@ -1,0 +1,96 @@
+version: 2
+
+project_name: arkeep
+
+before:
+  hooks:
+    - go work sync
+
+builds:
+  - id: server
+    main: ./cmd/server
+    binary: arkeep-server
+    dir: server
+    env:
+      - CGO_ENABLED=1
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: agent
+    main: ./cmd/agent
+    binary: arkeep-agent
+    dir: agent
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: agent
+    builds: [agent]
+    name_template: "arkeep-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+  - id: server
+    builds: [server]
+    name_template: "arkeep-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+dockers:
+  - id: server
+    ids: [server]
+    image_templates:
+      - "ghcr.io/arkeep/arkeep-server:{{ .Tag }}"
+      - "ghcr.io/arkeep/arkeep-server:latest"
+      - "arkeep/arkeep-server:{{ .Tag }}"
+      - "arkeep/arkeep-server:latest"
+    dockerfile: server/Dockerfile
+    build_flag_templates:
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
+      - "--build-arg=BUILD_DATE={{ .Date }}"
+      - "--platform=linux/amd64"
+
+  - id: agent
+    ids: [agent]
+    image_templates:
+      - "ghcr.io/arkeep/arkeep-agent:{{ .Tag }}"
+      - "ghcr.io/arkeep/arkeep-agent:latest"
+      - "arkeep/arkeep-agent:{{ .Tag }}"
+      - "arkeep/arkeep-agent:latest"
+    dockerfile: agent/Dockerfile
+    build_flag_templates:
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .Commit }}"
+      - "--build-arg=BUILD_DATE={{ .Date }}"
+      - "--platform=linux/amd64"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
+      - typo
+
+release:
+  github:
+    owner: arkeep
+    name: arkeep
+  draft: false
+  prerelease: auto
