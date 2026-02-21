@@ -7,19 +7,19 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // NotificationHandler groups all notification-related HTTP handlers.
 // Notifications are scoped to the authenticated user — each user can only
 // see and manage their own notifications.
 type NotificationHandler struct {
-	repo   repository.NotificationRepository
+	repo   repositories.NotificationRepository
 	logger *zap.Logger
 }
 
 // NewNotificationHandler creates a new NotificationHandler.
-func NewNotificationHandler(repo repository.NotificationRepository, logger *zap.Logger) *NotificationHandler {
+func NewNotificationHandler(repo repositories.NotificationRepository, logger *zap.Logger) *NotificationHandler {
 	return &NotificationHandler{
 		repo:   repo,
 		logger: logger.Named("notification_handler"),
@@ -124,7 +124,7 @@ func (h *NotificationHandler) MarkAsRead(w http.ResponseWriter, r *http.Request)
 
 	notification, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -141,7 +141,7 @@ func (h *NotificationHandler) MarkAsRead(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.repo.MarkAsRead(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			// Already read — treat as success.
 			NoContent(w)
 			return

@@ -7,17 +7,17 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // DestinationHandler groups all destination-related HTTP handlers.
 type DestinationHandler struct {
-	repo   repository.DestinationRepository
+	repo   repositories.DestinationRepository
 	logger *zap.Logger
 }
 
 // NewDestinationHandler creates a new DestinationHandler.
-func NewDestinationHandler(repo repository.DestinationRepository, logger *zap.Logger) *DestinationHandler {
+func NewDestinationHandler(repo repositories.DestinationRepository, logger *zap.Logger) *DestinationHandler {
 	return &DestinationHandler{
 		repo:   repo,
 		logger: logger.Named("destination_handler"),
@@ -141,7 +141,7 @@ func (h *DestinationHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	dest, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -176,7 +176,7 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	dest, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -220,7 +220,7 @@ func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}

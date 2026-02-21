@@ -25,24 +25,24 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
 // Scheduler wraps gocron and coordinates job creation and dispatch.
 // The zero value is not usable — create instances with New.
 type Scheduler struct {
-	cron        gocron.Scheduler
-	policies    repository.PolicyRepository
-	jobs        repository.JobRepository
-	agentMgr    *agentmanager.Manager
-	logger      *zap.Logger
+	cron     gocron.Scheduler
+	policies repositories.PolicyRepository
+	jobs     repositories.JobRepository
+	agentMgr *agentmanager.Manager
+	logger   *zap.Logger
 }
 
 // New creates and configures a new Scheduler. Call Start to begin processing.
 func New(
-	policies repository.PolicyRepository,
-	jobs repository.JobRepository,
+	policies repositories.PolicyRepository,
+	jobs repositories.JobRepository,
 	agentMgr *agentmanager.Manager,
 	logger *zap.Logger,
 ) (*Scheduler, error) {
@@ -147,7 +147,7 @@ func (s *Scheduler) UpdatePolicy(policy *db.Policy) error {
 // the cron schedule. Used by the REST handler for on-demand backups.
 // The job is created in the DB and dispatched to the agent immediately.
 func (s *Scheduler) TriggerNow(ctx context.Context, policyID uuid.UUID) error {
-	policy, err := s.policies.GetByIDWithDestinations(ctx, policyID)
+	policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, policyID)
 	if err != nil {
 		return fmt.Errorf("policy not found: %w", err)
 	}
@@ -155,14 +155,14 @@ func (s *Scheduler) TriggerNow(ctx context.Context, policyID uuid.UUID) error {
 		zap.String("policy_id", policyID.String()),
 		zap.String("policy_name", policy.Name),
 	)
-	return s.runJob(policy)
+	return s.runJob(policy, destinations)
 }
 
 // DispatchPending looks up all pending jobs for a given agent and attempts to
 // dispatch them via AgentManager. Called by the gRPC server when an agent
 // reconnects, ensuring jobs created while the agent was offline are not lost.
 func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
-	opts := repository.ListOptions{Limit: 100, Offset: 0}
+	opts := repositories.ListOptions{Limit: 100, Offset: 0}
 	pendingJobs, _, err := s.jobs.ListByAgent(ctx, agentID, opts)
 	if err != nil {
 		s.logger.Error("failed to fetch pending jobs for agent",
@@ -197,7 +197,22 @@ func (s *Scheduler) addJob(policy *db.Policy) error {
 	_, err := s.cron.NewJob(
 		gocron.CronJob(policy.Schedule, false),
 		gocron.NewTask(func(p db.Policy) {
-			if err := s.runJob(&p); err != nil {
+			// Re-fetch destinations at tick time to pick up any changes made
+			// since the job was scheduled. The policy snapshot passed in via
+			// closure may be stale if destinations were added or removed.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, destinations, err := s.policies.GetByIDWithDestinations(ctx, p.ID)
+			if err != nil {
+				s.logger.Error("failed to load destinations at tick time",
+					zap.String("policy_id", p.ID.String()),
+					zap.Error(err),
+				)
+				return
+			}
+
+			if err := s.runJob(&p, destinations); err != nil {
 				s.logger.Error("job run failed",
 					zap.String("policy_id", p.ID.String()),
 					zap.String("policy_name", p.Name),
@@ -217,49 +232,44 @@ func (s *Scheduler) addJob(policy *db.Policy) error {
 
 // runJob is the core execution unit called by gocron on each tick (or manually
 // via TriggerNow). It:
-//  1. Loads the policy with its destinations (fresh read to pick up any changes)
-//  2. Creates the Job record in the DB
-//  3. Creates a JobDestination record for each associated destination
-//  4. Updates policy.LastRunAt and policy.NextRunAt
-//  5. Attempts to dispatch the job to the agent via AgentManager
-func (s *Scheduler) runJob(policy *db.Policy) error {
+//  1. Creates the Job record in the DB
+//  2. Creates a JobDestination record for each associated destination
+//  3. Updates policy.LastRunAt and policy.NextRunAt
+//  4. Attempts to dispatch the job to the agent via AgentManager
+//
+// destinations is the pre-fetched slice of PolicyDestination for this policy,
+// passed in by the caller to avoid a redundant DB round-trip.
+func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestination) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Re-fetch with destinations to get the current state of the policy.
-	// The policy passed in may be a snapshot from when it was first scheduled.
-	fresh, err := s.policies.GetByIDWithDestinations(ctx, policy.ID)
-	if err != nil {
-		return fmt.Errorf("failed to reload policy %s: %w", policy.ID, err)
-	}
-
-	if !fresh.Enabled {
+	if !policy.Enabled {
 		// Policy was disabled between schedule registration and tick — skip.
 		s.logger.Info("skipping job for disabled policy",
-			zap.String("policy_id", fresh.ID.String()),
+			zap.String("policy_id", policy.ID.String()),
 		)
 		return nil
 	}
 
 	// --- Create Job record ---
 	job := &db.Job{
-		PolicyID: fresh.ID,
-		AgentID:  fresh.AgentID,
+		PolicyID: policy.ID,
+		AgentID:  policy.AgentID,
 		Status:   "pending",
 	}
 	if err := s.jobs.Create(ctx, job); err != nil {
-		return fmt.Errorf("failed to create job record for policy %s: %w", fresh.ID, err)
+		return fmt.Errorf("failed to create job record for policy %s: %w", policy.ID, err)
 	}
 
 	s.logger.Info("job created",
 		zap.String("job_id", job.ID.String()),
-		zap.String("policy_id", fresh.ID.String()),
-		zap.String("policy_name", fresh.Name),
-		zap.String("agent_id", fresh.AgentID.String()),
+		zap.String("policy_id", policy.ID.String()),
+		zap.String("policy_name", policy.Name),
+		zap.String("agent_id", policy.AgentID.String()),
 	)
 
 	// --- Create JobDestination records ---
-	for _, pd := range fresh.Destinations {
+	for _, pd := range destinations {
 		jd := &db.JobDestination{
 			JobID:         job.ID,
 			DestinationID: pd.DestinationID,
@@ -277,13 +287,12 @@ func (s *Scheduler) runJob(policy *db.Policy) error {
 
 	// --- Update policy schedule timestamps ---
 	now := time.Now().UTC()
-	// NextRunAt is not computed here because gocron manages its own schedule;
-	// the field is updated by the agent when the job completes. We only update
-	// LastRunAt to reflect when the job was last triggered.
-	if err := s.policies.UpdateSchedule(ctx, fresh.ID, now, now); err != nil {
+	// NextRunAt is not computed here because gocron manages its own schedule.
+	// We only update LastRunAt to reflect when the job was last triggered.
+	if err := s.policies.UpdateSchedule(ctx, policy.ID, now, now); err != nil {
 		// Non-fatal — the job was already created, just log the failure.
 		s.logger.Warn("failed to update policy schedule timestamps",
-			zap.String("policy_id", fresh.ID.String()),
+			zap.String("policy_id", policy.ID.String()),
 			zap.Error(err),
 		)
 	}
@@ -294,7 +303,7 @@ func (s *Scheduler) runJob(policy *db.Policy) error {
 		// retry when the agent reconnects.
 		s.logger.Warn("dispatch failed, job remains pending",
 			zap.String("job_id", job.ID.String()),
-			zap.String("agent_id", fresh.AgentID.String()),
+			zap.String("agent_id", policy.AgentID.String()),
 			zap.Error(err),
 		)
 	}

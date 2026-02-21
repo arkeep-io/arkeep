@@ -8,19 +8,19 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 )
 
 // PolicyHandler groups all policy-related HTTP handlers.
 type PolicyHandler struct {
-	repo      repository.PolicyRepository
+	repo      repositories.PolicyRepository
 	scheduler *scheduler.Scheduler
 	logger    *zap.Logger
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repository.PolicyRepository, sched *scheduler.Scheduler, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, sched *scheduler.Scheduler, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
 		scheduler: sched,
@@ -60,8 +60,10 @@ type policyResponse struct {
 	CreatedAt        string                      `json:"created_at"`
 }
 
-// policyToResponse converts a db.Policy to a policyResponse.
-func policyToResponse(p *db.Policy) policyResponse {
+// policyToResponse converts a db.Policy and its associated PolicyDestination
+// slice to a policyResponse. The destinations are passed separately because
+// they are no longer embedded in the Policy struct (see db/models.go).
+func policyToResponse(p *db.Policy, destinations []db.PolicyDestination) policyResponse {
 	resp := policyResponse{
 		ID:               p.ID.String(),
 		Name:             p.Name,
@@ -75,11 +77,11 @@ func policyToResponse(p *db.Policy) policyResponse {
 		RetentionYearly:  p.RetentionYearly,
 		HookPreBackup:    p.HookPreBackup,
 		HookPostBackup:   p.HookPostBackup,
-		Destinations:     make([]policyDestinationResponse, len(p.Destinations)),
+		Destinations:     make([]policyDestinationResponse, len(destinations)),
 		CreatedAt:        p.CreatedAt.UTC().String(),
 	}
 
-	for i, pd := range p.Destinations {
+	for i, pd := range destinations {
 		resp.Destinations[i] = policyDestinationResponse{
 			ID:            pd.ID.String(),
 			DestinationID: pd.DestinationID.String(),
@@ -110,6 +112,8 @@ type listPoliciesResponse struct {
 // -----------------------------------------------------------------------------
 
 // List handles GET /api/v1/policies.
+// Destinations are not preloaded in list view to keep the query lightweight.
+// Use GET /api/v1/policies/{id} to retrieve a single policy with destinations.
 func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
 
@@ -122,7 +126,8 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]policyResponse, len(policies))
 	for i := range policies {
-		items[i] = policyToResponse(&policies[i])
+		// Pass an empty slice — destinations are not fetched in list view.
+		items[i] = policyToResponse(&policies[i], nil)
 	}
 
 	Ok(w, listPoliciesResponse{Items: items, Total: total})
@@ -130,17 +135,17 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // createPolicyRequest is the JSON body expected by POST /api/v1/policies.
 type createPolicyRequest struct {
-	Name             string                   `json:"name"`
-	AgentID          string                   `json:"agent_id"`
-	Schedule         string                   `json:"schedule"`
-	Sources          string                   `json:"sources"` // JSON array
-	RepoPassword     string                   `json:"repo_password"`
-	RetentionDaily   int                      `json:"retention_daily"`
-	RetentionWeekly  int                      `json:"retention_weekly"`
-	RetentionMonthly int                      `json:"retention_monthly"`
-	RetentionYearly  int                      `json:"retention_yearly"`
-	HookPreBackup    string                   `json:"hook_pre_backup"`
-	HookPostBackup   string                   `json:"hook_post_backup"`
+	Name             string                    `json:"name"`
+	AgentID          string                    `json:"agent_id"`
+	Schedule         string                    `json:"schedule"`
+	Sources          string                    `json:"sources"` // JSON array
+	RepoPassword     string                    `json:"repo_password"`
+	RetentionDaily   int                       `json:"retention_daily"`
+	RetentionWeekly  int                       `json:"retention_weekly"`
+	RetentionMonthly int                       `json:"retention_monthly"`
+	RetentionYearly  int                       `json:"retention_yearly"`
+	HookPreBackup    string                    `json:"hook_pre_backup"`
+	HookPostBackup   string                    `json:"hook_post_backup"`
 	Destinations     []destinationEntryRequest `json:"destinations"`
 }
 
@@ -229,7 +234,7 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reload with destinations to return the full representation.
-	full, err := h.repo.GetByIDWithDestinations(r.Context(), policy.ID)
+	full, destinations, err := h.repo.GetByIDWithDestinations(r.Context(), policy.ID)
 	if err != nil {
 		h.logger.Error("failed to reload policy after create", zap.Error(err))
 		ErrInternal(w)
@@ -247,20 +252,20 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	Created(w, policyToResponse(full))
+	Created(w, policyToResponse(full, destinations))
 }
 
 // GetByID handles GET /api/v1/policies/{id}.
-// Returns the policy with its destination associations preloaded.
+// Returns the policy with its destination associations.
 func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
 		return
 	}
 
-	policy, err := h.repo.GetByIDWithDestinations(r.Context(), id)
+	policy, destinations, err := h.repo.GetByIDWithDestinations(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -269,7 +274,7 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, policyToResponse(policy))
+	Ok(w, policyToResponse(policy, destinations))
 }
 
 // updatePolicyRequest is the JSON body for PATCH /api/v1/policies/{id}.
@@ -302,9 +307,10 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policy, err := h.repo.GetByIDWithDestinations(r.Context(), id)
+	// Fetch current policy and its destinations.
+	policy, destinations, err := h.repo.GetByIDWithDestinations(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -369,7 +375,7 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	Ok(w, policyToResponse(policy))
+	Ok(w, policyToResponse(policy, destinations))
 }
 
 // Delete handles DELETE /api/v1/policies/{id}.
@@ -381,7 +387,7 @@ func (h *PolicyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -410,7 +416,7 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.scheduler.TriggerNow(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}

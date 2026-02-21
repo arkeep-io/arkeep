@@ -8,7 +8,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // UserHandler groups all user-related HTTP handlers.
@@ -16,12 +16,12 @@ import (
 // RequireRole("admin") in the router. The /users/me routes are accessible by
 // any authenticated user.
 type UserHandler struct {
-	repo   repository.UserRepository
+	repo   repositories.UserRepository
 	logger *zap.Logger
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(repo repository.UserRepository, logger *zap.Logger) *UserHandler {
+func NewUserHandler(repo repositories.UserRepository, logger *zap.Logger) *UserHandler {
 	return &UserHandler{
 		repo:   repo,
 		logger: logger.Named("user_handler"),
@@ -144,7 +144,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Create(r.Context(), user); err != nil {
-		if errors.Is(err, repository.ErrConflict) {
+		if errors.Is(err, repositories.ErrConflict) {
 			ErrConflict(w, "a user with this email already exists")
 			return
 		}
@@ -165,7 +165,7 @@ func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -200,7 +200,7 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -265,7 +265,7 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -298,7 +298,7 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -340,7 +340,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}

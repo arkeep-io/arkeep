@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // SnapshotHandler groups all snapshot-related HTTP handlers.
@@ -16,12 +16,12 @@ import (
 // removes the cached record only — pruning the actual data from the backup
 // engine is handled separately by the retention policy enforcement.
 type SnapshotHandler struct {
-	repo   repository.SnapshotRepository
+	repo   repositories.SnapshotRepository
 	logger *zap.Logger
 }
 
 // NewSnapshotHandler creates a new SnapshotHandler.
-func NewSnapshotHandler(repo repository.SnapshotRepository, logger *zap.Logger) *SnapshotHandler {
+func NewSnapshotHandler(repo repositories.SnapshotRepository, logger *zap.Logger) *SnapshotHandler {
 	return &SnapshotHandler{
 		repo:   repo,
 		logger: logger.Named("snapshot_handler"),
@@ -128,7 +128,7 @@ func (h *SnapshotHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	snapshot, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -151,7 +151,7 @@ func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}

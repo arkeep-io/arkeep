@@ -7,19 +7,19 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // SettingsHandler groups settings-related HTTP handlers.
 // Currently only OIDC provider configuration is exposed. All routes in this
 // handler are admin-only, enforced by RequireRole("admin") in the router.
 type SettingsHandler struct {
-	oidcRepo repository.OIDCProviderRepository
+	oidcRepo repositories.OIDCProviderRepository
 	logger   *zap.Logger
 }
 
 // NewSettingsHandler creates a new SettingsHandler.
-func NewSettingsHandler(oidcRepo repository.OIDCProviderRepository, logger *zap.Logger) *SettingsHandler {
+func NewSettingsHandler(oidcRepo repositories.OIDCProviderRepository, logger *zap.Logger) *SettingsHandler {
 	return &SettingsHandler{
 		oidcRepo: oidcRepo,
 		logger:   logger.Named("settings_handler"),
@@ -68,7 +68,7 @@ func oidcProviderToResponse(p *db.OIDCProvider) oidcProviderResponse {
 func (h *SettingsHandler) GetOIDC(w http.ResponseWriter, r *http.Request) {
 	provider, err := h.oidcRepo.GetEnabled(r.Context())
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -114,7 +114,7 @@ func (h *SettingsHandler) UpsertOIDC(w http.ResponseWriter, r *http.Request) {
 
 	// Check if a provider already exists — update in place if so, create otherwise.
 	existing, err := h.oidcRepo.GetEnabled(r.Context())
-	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+	if err != nil && !errors.Is(err, repositories.ErrNotFound) {
 		h.logger.Error("failed to check existing OIDC provider", zap.Error(err))
 		ErrInternal(w)
 		return

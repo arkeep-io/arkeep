@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 const (
@@ -33,17 +33,17 @@ const (
 // intentional: OIDC provider settings can be updated via the admin UI and
 // must be reflected immediately without a restart.
 type OIDCAuthProvider struct {
-	providerRepo repository.OIDCProviderRepository
-	userRepo     repository.UserRepository
-	tokenRepo    repository.RefreshTokenRepository
+	providerRepo repositories.OIDCProviderRepository
+	userRepo     repositories.UserRepository
+	tokenRepo    repositories.RefreshTokenRepository
 	jwtManager   *JWTManager
 }
 
 // NewOIDCAuthProvider creates an OIDCAuthProvider with the given dependencies.
 func NewOIDCAuthProvider(
-	providerRepo repository.OIDCProviderRepository,
-	userRepo repository.UserRepository,
-	tokenRepo repository.RefreshTokenRepository,
+	providerRepo repositories.OIDCProviderRepository,
+	userRepo repositories.UserRepository,
+	tokenRepo repositories.RefreshTokenRepository,
 	jwtManager *JWTManager,
 ) *OIDCAuthProvider {
 	return &OIDCAuthProvider{

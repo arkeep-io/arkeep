@@ -12,7 +12,7 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 const (
@@ -44,15 +44,15 @@ const (
 // (AES-256-GCM at rest). Refresh tokens are stored as SHA-256 hashes so the
 // raw token is never persisted.
 type LocalAuthProvider struct {
-	userRepo   repository.UserRepository
-	tokenRepo  repository.RefreshTokenRepository
+	userRepo   repositories.UserRepository
+	tokenRepo  repositories.RefreshTokenRepository
 	jwtManager *JWTManager
 }
 
 // NewLocalAuthProvider creates a LocalAuthProvider with the given dependencies.
 func NewLocalAuthProvider(
-	userRepo repository.UserRepository,
-	tokenRepo repository.RefreshTokenRepository,
+	userRepo repositories.UserRepository,
+	tokenRepo repositories.RefreshTokenRepository,
 	jwtManager *JWTManager,
 ) *LocalAuthProvider {
 	return &LocalAuthProvider{
@@ -254,5 +254,5 @@ func constantTimeEqual(a, b []byte) bool {
 
 // isNotFound checks for the repository ErrNotFound sentinel error.
 func isNotFound(err error) bool {
-	return err != nil && err.Error() == repository.ErrNotFound.Error()
+	return err != nil && err.Error() == repositories.ErrNotFound.Error()
 }

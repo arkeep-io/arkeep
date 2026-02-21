@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // AuthService is the entry point for all authentication operations.
@@ -17,7 +17,7 @@ import (
 type AuthService struct {
 	local      *LocalAuthProvider
 	oidc       *OIDCAuthProvider
-	tokenRepo  repository.RefreshTokenRepository
+	tokenRepo  repositories.RefreshTokenRepository
 	jwtManager *JWTManager
 }
 
@@ -28,7 +28,7 @@ type AuthService struct {
 func NewAuthService(
 	local *LocalAuthProvider,
 	oidc *OIDCAuthProvider,
-	tokenRepo repository.RefreshTokenRepository,
+	tokenRepo repositories.RefreshTokenRepository,
 	jwtManager *JWTManager,
 ) *AuthService {
 	return &AuthService{

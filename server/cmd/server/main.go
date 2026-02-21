@@ -20,7 +20,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 )
 
@@ -138,15 +138,15 @@ func run(ctx context.Context, cfg *config) error {
 	defer sqlDB.Close()
 
 	// --- 3. Repositories ---
-	userRepo := repository.NewUserRepository(gormDB)
-	refreshTokenRepo := repository.NewRefreshTokenRepository(gormDB)
-	agentRepo := repository.NewAgentRepository(gormDB)
-	destinationRepo := repository.NewDestinationRepository(gormDB)
-	policyRepo := repository.NewPolicyRepository(gormDB)
-	jobRepo := repository.NewJobRepository(gormDB)
-	snapshotRepo := repository.NewSnapshotRepository(gormDB)
-	notificationRepo := repository.NewNotificationRepository(gormDB)
-	oidcProviderRepo := repository.NewOIDCProviderRepository(gormDB)
+	userRepo := repositories.NewUserRepository(gormDB)
+	refreshTokenRepo := repositories.NewRefreshTokenRepository(gormDB)
+	agentRepo := repositories.NewAgentRepository(gormDB)
+	destinationRepo := repositories.NewDestinationRepository(gormDB)
+	policyRepo := repositories.NewPolicyRepository(gormDB)
+	jobRepo := repositories.NewJobRepository(gormDB)
+	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
+	notificationRepo := repositories.NewNotificationRepository(gormDB)
+	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 
 	// --- 4. Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are

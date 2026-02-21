@@ -129,26 +129,32 @@ type Destination struct {
 // Policy defines what to back up, when, and how. It is associated with one
 // agent and one or more destinations via PolicyDestination. The schedule uses
 // standard cron expression syntax (e.g. "0 2 * * *" for 2 AM daily).
+//
+// Association fields are intentionally absent from this struct. GORM cannot
+// resolve foreign keys when the primary key is uuid.UUID (a custom type).
+// Related records are loaded via explicit queries in the repository layer
+// (see repository/policy.go: GetByIDWithDestinations).
 type Policy struct {
 	softDelete
-	Name             string `gorm:"not null"`
-	AgentID          uuid.UUID `gorm:"type:text;not null;index"`
-	Schedule         string    `gorm:"not null"` // cron expression
-	Enabled          bool      `gorm:"not null;default:true"`
-	Sources          string    `gorm:"type:text;not null"` // JSON array of source paths
-	RetentionDaily   int       `gorm:"not null;default:7"`
-	RetentionWeekly  int       `gorm:"not null;default:4"`
-	RetentionMonthly int       `gorm:"not null;default:6"`
-	RetentionYearly  int       `gorm:"not null;default:1"`
+	Name             string          `gorm:"not null"`
+	AgentID          uuid.UUID       `gorm:"type:text;not null;index"`
+	Schedule         string          `gorm:"not null"` // cron expression
+	Enabled          bool            `gorm:"not null;default:true"`
+	Sources          string          `gorm:"type:text;not null"` // JSON array of source paths
+	RetentionDaily   int             `gorm:"not null;default:7"`
+	RetentionWeekly  int             `gorm:"not null;default:4"`
+	RetentionMonthly int             `gorm:"not null;default:6"`
+	RetentionYearly  int             `gorm:"not null;default:1"`
 	RepoPassword     EncryptedString `gorm:"type:text;not null"` // Restic repository password
-	HookPreBackup    string    `gorm:"type:text;default:''"` // shell command, optional
-	HookPostBackup   string    `gorm:"type:text;default:''"` // shell command, optional
+	HookPreBackup    string          `gorm:"type:text;default:''"` // shell command, optional
+	HookPostBackup   string          `gorm:"type:text;default:''"` // shell command, optional
 	LastRunAt        *time.Time
 	NextRunAt        *time.Time
 
-	// Associations
-	Agent        Agent               `gorm:"foreignKey:AgentID"`
-	Destinations []PolicyDestination `gorm:"foreignKey:PolicyID"`
+	// Destinations is populated by GetByIDWithDestinations via a manual query.
+	// The gorm:"-" tag prevents GORM from attempting foreign key resolution
+	// on this field, which would fail with uuid.UUID primary keys.
+	Destinations []PolicyDestination `gorm:"-"`
 }
 
 // PolicyDestination is the join table between Policy and Destination.
@@ -159,9 +165,6 @@ type PolicyDestination struct {
 	PolicyID      uuid.UUID `gorm:"type:text;not null;index"`
 	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
 	Priority      int       `gorm:"not null;default:0"`
-
-	// Associations
-	Destination Destination `gorm:"foreignKey:DestinationID"`
 }
 
 // -----------------------------------------------------------------------------
@@ -170,6 +173,10 @@ type PolicyDestination struct {
 
 // Job represents a single backup execution triggered by the scheduler or
 // manually. Status transitions: pending -> running -> succeeded | failed.
+//
+// Destinations and Logs are populated by GetByIDWithDetails via manual queries.
+// The gorm:"-" tag prevents GORM from attempting foreign key resolution on
+// these fields, which would fail with uuid.UUID primary keys.
 type Job struct {
 	base
 	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
@@ -179,10 +186,9 @@ type Job struct {
 	EndedAt   *time.Time
 	Error     string `gorm:"type:text;default:''"` // populated on failure
 
-	// Associations
-	Policy       Policy           `gorm:"foreignKey:PolicyID"`
-	Destinations []JobDestination `gorm:"foreignKey:JobID"`
-	Logs         []JobLog         `gorm:"foreignKey:JobID"`
+	// Populated manually by GetByIDWithDetails — not managed by GORM.
+	Destinations []JobDestination `gorm:"-"`
+	Logs         []JobLog         `gorm:"-"`
 }
 
 // JobDestination tracks the result of a backup job for each individual

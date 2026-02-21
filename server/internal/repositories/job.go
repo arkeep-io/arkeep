@@ -1,4 +1,4 @@
-package repository
+package repositories
 
 import (
 	"context"
@@ -43,23 +43,39 @@ func (r *gormJobRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Job,
 	return &job, nil
 }
 
-// GetByIDWithDetails retrieves a job with its destinations and logs preloaded.
-// Use this when rendering the job detail view to avoid N+1 queries.
-func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*db.Job, error) {
+// GetByIDWithDetails retrieves a job together with its JobDestination and
+// JobLog records using three separate queries. All values are returned
+// independently rather than embedded in the Job struct, because GORM cannot
+// auto-resolve UUID-typed foreign keys (see db/models.go for rationale).
+//
+// Logs are ordered by timestamp ascending so the caller can replay execution
+// order without additional sorting.
+func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*db.Job, []db.JobDestination, []db.JobLog, error) {
 	var job db.Job
-	err := r.db.WithContext(ctx).
-		Preload("Destinations").
-		Preload("Logs", func(db *gorm.DB) *gorm.DB {
-			return db.Order("timestamp ASC")
-		}).
-		First(&job, "id = ?", id).Error
+	err := r.db.WithContext(ctx).First(&job, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
+			return nil, nil, nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("jobs: get by id with details: %w", err)
+		return nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
 	}
-	return &job, nil
+
+	var destinations []db.JobDestination
+	if err := r.db.WithContext(ctx).
+		Where("job_id = ?", id).
+		Find(&destinations).Error; err != nil {
+		return nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
+	}
+
+	var logs []db.JobLog
+	if err := r.db.WithContext(ctx).
+		Where("job_id = ?", id).
+		Order("timestamp ASC").
+		Find(&logs).Error; err != nil {
+		return nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
+	}
+
+	return &job, destinations, logs, nil
 }
 
 // Update persists all fields of an existing job record.
@@ -177,6 +193,19 @@ func (r *gormJobRepository) CreateDestination(ctx context.Context, jd *db.JobDes
 		return fmt.Errorf("jobs: create destination: %w", err)
 	}
 	return nil
+}
+
+// ListDestinationsByJob returns all JobDestination records for a given job.
+// Used internally by GetByIDWithDetails and directly by callers that need
+// only destinations without the full job detail view.
+func (r *gormJobRepository) ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestination, error) {
+	var destinations []db.JobDestination
+	if err := r.db.WithContext(ctx).
+		Where("job_id = ?", jobID).
+		Find(&destinations).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list destinations by job: %w", err)
+	}
+	return destinations, nil
 }
 
 // UpdateDestinationStatus updates the result fields of a job destination

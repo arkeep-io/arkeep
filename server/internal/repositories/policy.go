@@ -1,4 +1,4 @@
-package repository
+package repositories
 
 import (
 	"context"
@@ -45,22 +45,36 @@ func (r *gormPolicyRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.P
 	return &policy, nil
 }
 
-// GetByIDWithDestinations retrieves a policy with its associated destinations
-// preloaded. Use this when you need to access policy.Destinations in the
-// same call to avoid N+1 queries.
-func (r *gormPolicyRepository) GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, error) {
+// GetByIDWithDestinations retrieves a policy and its associated PolicyDestination
+// records using two separate queries. The destinations are returned as a
+// separate slice because GORM cannot auto-resolve UUID-typed foreign keys —
+// embedding association fields in the Policy struct causes a startup error.
+//
+// The caller iterates the destinations slice directly:
+//
+//	policy, destinations, err := repo.GetByIDWithDestinations(ctx, id)
+//	for _, pd := range destinations {
+//	    // pd.DestinationID, pd.Priority
+//	}
+func (r *gormPolicyRepository) GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []db.PolicyDestination, error) {
 	var policy db.Policy
-	err := r.db.WithContext(ctx).
-		Preload("Destinations").
-		Preload("Destinations.Destination").
-		First(&policy, "id = ?", id).Error
+	err := r.db.WithContext(ctx).First(&policy, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
+			return nil, nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("policies: get by id with destinations: %w", err)
+		return nil, nil, fmt.Errorf("policies: get by id with destinations: %w", err)
 	}
-	return &policy, nil
+
+	var destinations []db.PolicyDestination
+	if err := r.db.WithContext(ctx).
+		Where("policy_id = ?", id).
+		Order("priority ASC").
+		Find(&destinations).Error; err != nil {
+		return nil, nil, fmt.Errorf("policies: get destinations for policy %s: %w", id, err)
+	}
+
+	return &policy, destinations, nil
 }
 
 // Update persists all fields of an existing policy record.
@@ -160,7 +174,8 @@ func (r *gormPolicyRepository) UpdateSchedule(ctx context.Context, id uuid.UUID,
 // -----------------------------------------------------------------------------
 
 // AddDestination adds a destination to a policy with the given priority.
-// Returns ErrConflict if the destination is already associated with the policy.
+// Returns an error wrapping the underlying DB error if the insert fails
+// (e.g. duplicate policy+destination combination violates a unique constraint).
 func (r *gormPolicyRepository) AddDestination(ctx context.Context, pd *db.PolicyDestination) error {
 	if err := r.db.WithContext(ctx).Create(pd).Error; err != nil {
 		return fmt.Errorf("policies: add destination: %w", err)

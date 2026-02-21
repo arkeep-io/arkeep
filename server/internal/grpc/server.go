@@ -28,7 +28,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -39,7 +39,7 @@ type Server struct {
 	proto.UnimplementedAgentServiceServer
 
 	agentManager *agentmanager.Manager
-	agentRepo    repository.AgentRepository
+	agentRepo    repositories.AgentRepository
 	logger       *zap.Logger
 	agentToken   string // shared secret agents must present in gRPC metadata
 }
@@ -58,7 +58,7 @@ type Config struct {
 func New(
 	cfg Config,
 	agentManager *agentmanager.Manager,
-	agentRepo repository.AgentRepository,
+	agentRepo repositories.AgentRepository,
 	logger *zap.Logger,
 ) *Server {
 	return &Server{
@@ -169,7 +169,7 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 	logger := s.logger.With(zap.String("hostname", req.Hostname))
 
 	existing, err := s.agentRepo.GetByHostname(ctx, req.Hostname)
-	if err != nil && err != repository.ErrNotFound {
+	if err != nil && err != repositories.ErrNotFound {
 		logger.Error("failed to look up agent by hostname", zap.Error(err))
 		return nil, status.Error(codes.Internal, "registration failed")
 	}

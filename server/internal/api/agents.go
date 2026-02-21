@@ -12,17 +12,17 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // AgentHandler groups all agent-related HTTP handlers.
 type AgentHandler struct {
-	repo   repository.AgentRepository
+	repo   repositories.AgentRepository
 	logger *zap.Logger
 }
 
 // NewAgentHandler creates a new AgentHandler.
-func NewAgentHandler(repo repository.AgentRepository, logger *zap.Logger) *AgentHandler {
+func NewAgentHandler(repo repositories.AgentRepository, logger *zap.Logger) *AgentHandler {
 	return &AgentHandler{
 		repo:   repo,
 		logger: logger.Named("agent_handler"),
@@ -159,7 +159,7 @@ func (h *AgentHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 	agent, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -192,7 +192,7 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	agent, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -230,7 +230,7 @@ func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(r.Context(), id); err != nil {
-		if errors.Is(err, repository.ErrNotFound) {
+		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return
 		}
@@ -260,7 +260,7 @@ func parseUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID,
 
 // paginationOpts reads limit and offset query parameters from the request.
 // Defaults: limit=20, offset=0. Max limit is capped at 100.
-func paginationOpts(r *http.Request) repository.ListOptions {
+func paginationOpts(r *http.Request) repositories.ListOptions {
 	limit := 20
 	offset := 0
 
@@ -278,7 +278,7 @@ func paginationOpts(r *http.Request) repository.ListOptions {
 		}
 	}
 
-	return repository.ListOptions{Limit: limit, Offset: offset}
+	return repositories.ListOptions{Limit: limit, Offset: offset}
 }
 
 // generateToken generates a cryptographically secure 32-byte random hex string.

@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/auth"
-	"github.com/arkeep-io/arkeep/server/internal/repository"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 )
 
@@ -22,14 +22,14 @@ type RouterConfig struct {
 	Logger      *zap.Logger
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
-	Users         repository.UserRepository
-	Agents        repository.AgentRepository
-	Destinations  repository.DestinationRepository
-	Policies      repository.PolicyRepository
-	Jobs          repository.JobRepository
-	Snapshots     repository.SnapshotRepository
-	Notifications repository.NotificationRepository
-	OIDCProviders repository.OIDCProviderRepository
+	Users         repositories.UserRepository
+	Agents        repositories.AgentRepository
+	Destinations  repositories.DestinationRepository
+	Policies      repositories.PolicyRepository
+	Jobs          repositories.JobRepository
+	Snapshots     repositories.SnapshotRepository
+	Notifications repositories.NotificationRepository
+	OIDCProviders repositories.OIDCProviderRepository
 
 	// Secure controls whether auth cookies are set with the Secure flag.
 	// Set to true in production (HTTPS), false in local development.

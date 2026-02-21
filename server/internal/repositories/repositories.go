@@ -1,4 +1,4 @@
-package repository
+package repositories
 
 import (
 	"context"
@@ -91,7 +91,13 @@ type DestinationRepository interface {
 type PolicyRepository interface {
 	Create(ctx context.Context, policy *db.Policy) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Policy, error)
-	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, error)
+
+	// GetByIDWithDestinations retrieves a policy together with its associated
+	// PolicyDestination records. The destinations are returned as a separate
+	// slice rather than embedded in the Policy struct, because GORM cannot
+	// auto-resolve UUID-typed foreign keys. Callers iterate the slice directly.
+	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []db.PolicyDestination, error)
+
 	Update(ctx context.Context, policy *db.Policy) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Policy, int64, error)
@@ -112,7 +118,13 @@ type PolicyRepository interface {
 type JobRepository interface {
 	Create(ctx context.Context, job *db.Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
-	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*db.Job, error)
+
+	// GetByIDWithDetails retrieves a job together with its JobDestination and
+	// JobLog records. All three are returned as separate values to avoid
+	// embedding slice associations in the Job struct (see Policy for rationale).
+	// Logs are ordered by timestamp ascending.
+	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*db.Job, []db.JobDestination, []db.JobLog, error)
+
 	Update(ctx context.Context, job *db.Job) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, endedAt *time.Time, errMsg string) error
 	List(ctx context.Context, opts ListOptions) ([]db.Job, int64, error)
@@ -121,6 +133,7 @@ type JobRepository interface {
 
 	// JobDestination
 	CreateDestination(ctx context.Context, jd *db.JobDestination) error
+	ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestination, error)
 	UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
 	// JobLog
