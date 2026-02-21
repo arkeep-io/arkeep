@@ -29,7 +29,7 @@ and setup instructions.
 **Security**
 - Never log credentials, tokens, or sensitive data
 - Never expose Restic commands or terminology outside the restic package
-- If you find a security vulnerability, email security@arkeep.io instead of
+- If you find a security vulnerability, email crotti.business@gmail.com instead of
   opening a public issue
 
 **Commits**
