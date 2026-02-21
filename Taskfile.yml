@@ -63,14 +63,8 @@ tasks:
   # ─── Proto ──────────────────────────────────────────────────────────────────
   proto:
     desc: Generate Go code from protobuf definitions
-    cmd: >
-      protoc
-      --go_out=shared/proto
-      --go_opt=paths=source_relative
-      --go-grpc_out=shared/proto
-      --go-grpc_opt=paths=source_relative
-      -I shared/proto
-      shared/proto/agent.proto
+    cmds:
+      - protoc --go_out=shared/proto --go_opt=paths=source_relative --go-grpc_out=shared/proto --go-grpc_opt=paths=source_relative -I shared/proto shared/proto/agent.proto
     sources:
       - shared/proto/*.proto
     generates:

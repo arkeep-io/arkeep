@@ -97,6 +97,8 @@ type Agent struct {
 	Name              string     `gorm:"not null"`
 	Hostname          string     `gorm:"not null"`
 	IPAddress         string     `gorm:"not null;default:''"`
+	OS                string     `gorm:"not null;default:''"`
+	Arch              string     `gorm:"not null;default:''"`
 	Version           string     `gorm:"not null;default:''"`
 	Status            string     `gorm:"not null;default:'offline'"` // "online", "offline", "error"
 	LastSeenAt        *time.Time

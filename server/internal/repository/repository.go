@@ -65,6 +65,7 @@ type AgentRepository interface {
 	Create(ctx context.Context, agent *db.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Agent, error)
 	GetByRegistrationToken(ctx context.Context, token string) (*db.Agent, error)
+	GetByHostname(ctx context.Context, hostname string) (*db.Agent, error)
 	Update(ctx context.Context, agent *db.Agent) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
 	Delete(ctx context.Context, id uuid.UUID) error

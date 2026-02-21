@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS agents (
     name                TEXT        NOT NULL,
     hostname            TEXT        NOT NULL,
     ip_address          TEXT        NOT NULL DEFAULT '',
+    os                  TEXT        NOT NULL DEFAULT '',
+    arch                TEXT        NOT NULL DEFAULT '',
     version             TEXT        NOT NULL DEFAULT '',
     status              TEXT        NOT NULL DEFAULT 'offline',
     last_seen_at        DATETIME,

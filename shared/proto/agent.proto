@@ -1,132 +1,255 @@
 syntax = "proto3";
 
-package arkeep.agent.v1;
+package agent;
 
-option go_package = "github.com/arkeep-io/arkeep/shared/proto/agentv1";
+// go_package defines the Go import path for the generated code.
+// All proto-generated files will be placed under shared/proto.
+option go_package = "github.com/arkeep-io/arkeep/shared/proto";
 
-// AgentService handles all communication between server and agent.
+import "google/protobuf/timestamp.proto";
+
+// AgentService is the gRPC service implemented by the server.
+//
+// Architecture note: Arkeep uses a pull model — agents always initiate
+// the connection to the server, never the other way around. This means
+// agents can run behind NAT or firewalls without exposing any port.
+//
+// Typical agent lifecycle:
+//  1. Agent starts and calls Register to announce itself.
+//  2. Agent opens a persistent StreamJobs stream to receive job assignments.
+//  3. Agent sends periodic Heartbeat calls to signal liveness and report metrics.
+//  4. When a job arrives via StreamJobs, the agent executes it and calls
+//     ReportJobStatus for progress updates and StreamLogs for real-time logs.
 service AgentService {
-  // Register is called once with a one-time token to get a permanent agent token.
+  // Register is called once when the agent first connects or reconnects after
+  // a network interruption. The server upserts the agent record in the database
+  // and returns the agent's persistent UUID and display name.
+  //
+  // Agents should store the returned agent_id locally and reuse it on
+  // subsequent Register calls so the server can match them to the existing record.
   rpc Register(RegisterRequest) returns (RegisterResponse);
 
-  // Connect opens a persistent bidirectional stream.
-  // Agent sends events (heartbeat, job updates, logs, docker state).
-  // Server sends commands (run job, cancel job).
-  rpc Connect(stream AgentMessage) returns (stream ServerMessage);
+  // Heartbeat is called periodically by the agent (recommended interval: 30s)
+  // to signal liveness and report lightweight system metrics.
+  //
+  // The server updates the agent's last_seen_at timestamp on every heartbeat.
+  // If the server has pending jobs for this agent, it sets has_pending_jobs=true
+  // in the response as a nudge — the job will arrive on the open StreamJobs stream.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // StreamJobs opens a persistent server-streaming RPC that stays alive for the
+  // entire duration of the agent's session. The server pushes JobAssignment
+  // messages onto this stream whenever the scheduler dispatches a job to the agent.
+  //
+  // The agent should reconnect with exponential backoff if the stream closes
+  // unexpectedly (network drop, server restart, etc.).
+  rpc StreamJobs(StreamJobsRequest) returns (stream JobAssignment);
+
+  // ReportJobStatus is called by the agent to notify the server of job lifecycle
+  // transitions: RUNNING when execution starts, then COMPLETED or FAILED when done.
+  // Intermediate RUNNING calls can carry a progress message for the UI.
+  rpc ReportJobStatus(JobStatusReport) returns (JobStatusResponse);
+
+  // StreamLogs ships log lines produced during job execution to the server in
+  // real-time using client-streaming. The server buffers entries in memory and
+  // flushes them to the database in bulk when the stream closes (job done).
+  //
+  // This avoids N individual INSERT calls during execution.
+  // See server/internal/repository/job.go for the bulk insert implementation.
+  rpc StreamLogs(stream LogEntry) returns (LogStreamResponse);
 }
 
-// ─── Agent → Server ──────────────────────────────────────────────────────────
+// ─── Register ────────────────────────────────────────────────────────────────
 
-message AgentMessage {
-  oneof payload {
-    Heartbeat   heartbeat    = 1;
-    JobUpdate   job_update   = 2;
-    JobLog      job_log      = 3;
-    DockerState docker_state = 4;
-  }
-}
-
-message Heartbeat {
-  string agent_id    = 1;
-  string version     = 2;
-  string os          = 3;
-  string arch        = 4;
-  int64  uptime_secs = 5;
-  double cpu_percent = 6;
-  double mem_percent = 7;
-}
-
-message JobUpdate {
-  string    job_id          = 1;
-  JobStatus status          = 2;
-  int64     bytes_processed = 3;
-  int64     bytes_added     = 4;
-  int32     files_processed = 5;
-  string    error_message   = 6;
-  string    snapshot_id     = 7;
-}
-
-message JobLog {
-  string   job_id    = 1;
-  LogLevel level     = 2;
-  string   message   = 3;
-  int64    timestamp = 4;
-}
-
-message DockerState {
-  string             agent_id   = 1;
-  repeated Container containers = 2;
-}
-
-message Container {
-  string          id      = 1;
-  string          name    = 2;
-  string          image   = 3;
-  string          status  = 4;
-  repeated Volume volumes = 5;
-}
-
-message Volume {
-  string name        = 1;
-  string mount_point = 2;
-  string driver      = 3;
-}
-
-// ─── Server → Agent ──────────────────────────────────────────────────────────
-
-message ServerMessage {
-  oneof payload {
-    JobCommand job_command = 1;
-    CancelJob  cancel_job  = 2;
-  }
-}
-
-message JobCommand {
-  string  job_id      = 1;
-  JobType type        = 2;
-  string  policy_json = 3;
-}
-
-message CancelJob {
-  string job_id = 1;
-}
-
-// ─── Registration ────────────────────────────────────────────────────────────
-
+// RegisterRequest carries static information about the agent's host environment.
+// This data is persisted in the agents table and displayed in the GUI.
 message RegisterRequest {
-  string registration_token = 1;
-  string name               = 2;
-  string version            = 3;
-  string os                 = 4;
-  string arch               = 5;
+  // hostname as reported by the OS (os.Hostname())
+  string hostname = 1;
+  // agent binary version in semver format (e.g. "1.2.3")
+  string version = 2;
+  // operating system identifier matching GOOS values: linux, windows, darwin
+  string os = 3;
+  // CPU architecture matching GOARCH values: amd64, arm64
+  string arch = 4;
+  // capabilities advertised by this agent instance — the server uses these
+  // to validate that a policy assigned to this agent is actually executable
+  AgentCapabilities capabilities = 5;
 }
 
+// AgentCapabilities describes which optional features are available on the agent.
+// Capabilities depend on the binaries installed on the host or container image.
+message AgentCapabilities {
+  // docker is true when the agent can reach the Docker socket and discover volumes.
+  // Requires the Docker socket to be mounted (read-only) into the agent container.
+  bool docker = 1;
+  // restic is true when the restic binary is found in PATH.
+  // Required for all backup, verify, restore, and forget jobs.
+  bool restic = 2;
+  // rclone is true when the rclone binary is found in PATH.
+  // Required for destinations not natively supported by restic.
+  bool rclone = 3;
+}
+
+// RegisterResponse contains the identity the server assigns to this agent.
+// The agent must persist agent_id locally and reuse it on reconnect.
 message RegisterResponse {
-  string agent_id    = 1;
-  string agent_token = 2;
+  // agent_id is a UUIDv7 generated by the server on first registration.
+  // On subsequent Register calls from the same host, the server returns
+  // the existing ID rather than creating a new record.
+  string agent_id = 1;
+  // agent_name is the human-readable display name shown in the GUI.
+  // Defaults to the hostname but can be renamed by the user.
+  string agent_name = 2;
 }
 
-// ─── Enums ───────────────────────────────────────────────────────────────────
+// ─── Heartbeat ───────────────────────────────────────────────────────────────
 
+// HeartbeatRequest is sent periodically by the agent to prove liveness
+// and report current resource utilization for the monitoring dashboard.
+message HeartbeatRequest {
+  // agent_id as returned by Register — used to identify the sender.
+  string agent_id = 1;
+  // metrics is a snapshot of current resource usage on the agent host.
+  SystemMetrics metrics = 2;
+}
+
+// SystemMetrics holds a lightweight snapshot of host resource usage.
+// Values are percentages to avoid unit conversion issues across platforms.
+message SystemMetrics {
+  // cpu_percent is the current CPU utilization across all cores (0–100).
+  float cpu_percent = 1;
+  // mem_percent is the percentage of physical RAM currently in use (0–100).
+  float mem_percent = 2;
+  // disk_percent is the usage percentage of the primary data partition (0–100).
+  // For agents running in Docker, this reflects the host partition where the
+  // backup source is located, not the container overlay filesystem.
+  float disk_percent = 3;
+}
+
+// HeartbeatResponse acknowledges the heartbeat and carries control signals
+// from the server back to the agent.
+message HeartbeatResponse {
+  // has_pending_jobs is a hint that the server has jobs queued for this agent.
+  // The jobs will be delivered on the open StreamJobs stream. This field exists
+  // as a fallback signal in case the stream was reconnected and missed a push.
+  bool has_pending_jobs = 1;
+}
+
+// ─── StreamJobs ──────────────────────────────────────────────────────────────
+
+// StreamJobsRequest opens the job delivery stream for a specific agent.
+message StreamJobsRequest {
+  // agent_id as returned by Register.
+  string agent_id = 1;
+}
+
+// JobAssignment is pushed by the server onto the StreamJobs stream when the
+// scheduler decides a job should run on this agent.
+message JobAssignment {
+  // job_id is a UUIDv7 generated by the server when creating the job record.
+  string job_id = 1;
+  // policy_id is the UUID of the policy that triggered this job.
+  // The agent uses it to fetch policy details if needed, but typically all
+  // required configuration is included in the payload.
+  string policy_id = 2;
+  // type determines how the agent's executor routes the job to the correct handler.
+  JobType type = 3;
+  // payload is a JSON-encoded struct whose shape depends on job type.
+  // See agent/internal/executor/ for the payload structs per job type.
+  // Using bytes (not string) to avoid UTF-8 validation overhead on large payloads.
+  bytes payload = 4;
+  // scheduled_at is when the server originally scheduled this job.
+  // Used for latency tracking and audit purposes.
+  google.protobuf.Timestamp scheduled_at = 5;
+}
+
+// JobType identifies the kind of operation the agent must perform.
+// The executor uses this to select the appropriate JobHandler implementation.
+enum JobType {
+  JOB_TYPE_UNSPECIFIED = 0;
+  // JOB_TYPE_BACKUP runs a full backup cycle: snapshot creation + optional verify.
+  JOB_TYPE_BACKUP      = 1;
+  // JOB_TYPE_VERIFY checks repository integrity via restic check.
+  JOB_TYPE_VERIFY      = 2;
+  // JOB_TYPE_RESTORE extracts files from a snapshot to a target directory.
+  JOB_TYPE_RESTORE     = 3;
+  // JOB_TYPE_FORGET applies the retention policy via restic forget --prune.
+  JOB_TYPE_FORGET      = 4;
+}
+
+// ─── ReportJobStatus ─────────────────────────────────────────────────────────
+
+// JobStatusReport notifies the server of a lifecycle transition for a running job.
+// The agent sends at least two reports per job: RUNNING at start, then COMPLETED
+// or FAILED at the end. Additional RUNNING reports can carry progress messages.
+message JobStatusReport {
+  // job_id must match the job_id from the JobAssignment that started this job.
+  string job_id   = 1;
+  // agent_id is included for server-side validation that the reporting agent
+  // is the one the job was actually assigned to.
+  string agent_id = 2;
+  // status is the new lifecycle state being reported.
+  JobStatus status = 3;
+  // message is a human-readable summary of the transition.
+  // Examples: "Starting backup of /var/data", "3 files added, 0 errors", "connection refused"
+  string message  = 4;
+  // timestamp is when this status transition occurred on the agent.
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// JobStatus represents the lifecycle states of a job as seen by the agent.
 enum JobStatus {
   JOB_STATUS_UNSPECIFIED = 0;
+  // JOB_STATUS_RUNNING is reported when the agent begins execution.
   JOB_STATUS_RUNNING     = 1;
+  // JOB_STATUS_COMPLETED is reported when the job finishes without errors.
   JOB_STATUS_COMPLETED   = 2;
+  // JOB_STATUS_FAILED is reported when the job encounters a fatal error.
   JOB_STATUS_FAILED      = 3;
+  // JOB_STATUS_CANCELLED is reported when the job is aborted (e.g. agent shutdown
+  // or explicit cancellation request from the server — future feature).
   JOB_STATUS_CANCELLED   = 4;
 }
 
-enum JobType {
-  JOB_TYPE_UNSPECIFIED = 0;
-  JOB_TYPE_BACKUP      = 1;
-  JOB_TYPE_RESTORE     = 2;
-  JOB_TYPE_VERIFY      = 3;
-  JOB_TYPE_PRUNE       = 4;
+// JobStatusResponse acknowledges receipt of the status report.
+message JobStatusResponse {
+  // ok is true when the server successfully persisted the status update.
+  bool ok = 1;
 }
 
+// ─── StreamLogs ──────────────────────────────────────────────────────────────
+
+// LogEntry is a single log line produced by the agent during job execution.
+// Entries are streamed in order and buffered server-side for bulk DB insert.
+message LogEntry {
+  // job_id links this log entry to its parent job record.
+  string job_id   = 1;
+  // agent_id is included so the server can validate the sender.
+  string agent_id = 2;
+  // level indicates severity, used for filtering in the GUI log viewer.
+  LogLevel level  = 3;
+  // message is the raw log line from the executor or restic wrapper.
+  // Sensitive values (passwords, credentials) must be redacted by the agent
+  // before including them here. See agent/internal/restic/redact.go.
+  string message  = 4;
+  // timestamp is when the log line was produced on the agent.
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+// LogLevel mirrors common logging severity levels.
+// The agent maps its internal zap levels to these values before streaming.
 enum LogLevel {
   LOG_LEVEL_UNSPECIFIED = 0;
-  LOG_LEVEL_INFO        = 1;
-  LOG_LEVEL_WARNING     = 2;
-  LOG_LEVEL_ERROR       = 3;
+  LOG_LEVEL_DEBUG       = 1;
+  LOG_LEVEL_INFO        = 2;
+  LOG_LEVEL_WARN        = 3;
+  LOG_LEVEL_ERROR       = 4;
+}
+
+// LogStreamResponse is returned by the server when the client closes the stream.
+message LogStreamResponse {
+  // entries_received is the total number of log entries the server accepted.
+  // The agent can use this for basic consistency checking.
+  uint32 entries_received = 1;
 }
