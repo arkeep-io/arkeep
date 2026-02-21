@@ -1,3 +1,7 @@
+// Package db manages the database connection, migrations, and encryption
+// for the Arkeep server. It supports SQLite (via modernc pure-Go driver,
+// no CGO required) and PostgreSQL. Migrations are embedded in the binary
+// and applied automatically on startup via golang-migrate.
 package db
 
 import (
@@ -9,40 +13,33 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
-	migratesqlite "github.com/golang-migrate/migrate/v4/database/sqlite3"
+	migratesqlite "github.com/golang-migrate/migrate/v4/database/sqlite"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"go.uber.org/zap"
 	gormpostgres "gorm.io/driver/postgres"
 	gormsqlite "gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+
+	// modernc pure-Go SQLite driver — no CGO required.
+	// Registers itself as "sqlite" in database/sql.
+	_ "modernc.org/sqlite"
 )
 
-// migrationsFS embeds all SQL migration files into the binary at compile time.
-// Migration files must follow the golang-migrate naming convention:
-// {version}_{title}.up.sql and {version}_{title}.down.sql
-//
-// go:embed migrations/*.sql
+//go:embed migrations/*.sql
 var migrationsFS embed.FS
 
 // Config holds the configuration required to open a database connection.
 // Driver defaults to "sqlite" if left empty.
-// DSN is the file path for SQLite (e.g. "./arkeep.db") or a standard
-// PostgreSQL connection string (e.g. "postgres://user:pass@host/db?sslmode=disable").
 type Config struct {
 	Driver   string // "sqlite" or "postgres"
 	DSN      string
 	Logger   *zap.Logger
-	LogLevel gormlogger.LogLevel // gormlogger.Silent | Warn | Error | Info
+	LogLevel gormlogger.LogLevel
 }
 
-// New opens a database connection for the configured driver, applies any
-// pending migrations, and returns the ready-to-use *gorm.DB instance.
-//
-// Callers should defer a call to close the underlying *sql.DB when done:
-//
-//	sqlDB, _ := db.DB()
-//	defer sqlDB.Close()
+// New opens a database connection, applies pending migrations, and returns
+// the ready-to-use *gorm.DB instance.
 func New(cfg Config) (*gorm.DB, error) {
 	if cfg.Logger == nil {
 		return nil, fmt.Errorf("db: logger is required")
@@ -53,38 +50,39 @@ func New(cfg Config) (*gorm.DB, error) {
 	}
 
 	var (
-		db      *gorm.DB
-		sqlDB   *sql.DB
-		err     error
-		drvName string
+		database *gorm.DB
+		sqlDB    *sql.DB
+		err      error
+		drvName  string
 	)
 
 	switch cfg.Driver {
 	case "sqlite", "":
-		db, err = gorm.Open(gormsqlite.Open(cfg.DSN), gormCfg)
+		// Open the connection manually via database/sql using the modernc driver
+		// (registered as "sqlite"), then hand the existing *sql.DB to GORM so it
+		// does not try to open a second connection with go-sqlite3.
+		sqlDB, err = sql.Open("sqlite", cfg.DSN)
 		if err != nil {
 			return nil, fmt.Errorf("db: failed to open sqlite: %w", err)
 		}
-		sqlDB, err = db.DB()
-		if err != nil {
-			return nil, fmt.Errorf("db: failed to get sql.DB: %w", err)
-		}
-		// SQLite does not support concurrent writes. Limiting to a single open
-		// connection prevents "database is locked" errors under concurrent load.
+		// SQLite supports only one writer at a time.
 		sqlDB.SetMaxOpenConns(1)
-		drvName = "sqlite3"
+
+		database, err = gorm.Open(gormsqlite.Dialector{Conn: sqlDB}, gormCfg)
+		if err != nil {
+			return nil, fmt.Errorf("db: failed to initialize gorm with sqlite: %w", err)
+		}
+		drvName = "sqlite"
 
 	case "postgres":
-		db, err = gorm.Open(gormpostgres.Open(cfg.DSN), gormCfg)
+		database, err = gorm.Open(gormpostgres.Open(cfg.DSN), gormCfg)
 		if err != nil {
 			return nil, fmt.Errorf("db: failed to open postgres: %w", err)
 		}
-		sqlDB, err = db.DB()
+		sqlDB, err = database.DB()
 		if err != nil {
 			return nil, fmt.Errorf("db: failed to get sql.DB: %w", err)
 		}
-		// Connection pool tuned for a typical self-hosted workload.
-		// Adjust via environment variables in production if needed.
 		sqlDB.SetMaxOpenConns(25)
 		sqlDB.SetMaxIdleConns(5)
 		sqlDB.SetConnMaxLifetime(30 * time.Minute)
@@ -98,13 +96,12 @@ func New(cfg Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("db: migrations failed: %w", err)
 	}
 
-	return db, nil
+	return database, nil
 }
 
 // Ping verifies that the database connection is still alive.
-// It is intended for use in health-check endpoints.
-func Ping(ctx context.Context, db *gorm.DB) error {
-	sqlDB, err := db.DB()
+func Ping(ctx context.Context, database *gorm.DB) error {
+	sqlDB, err := database.DB()
 	if err != nil {
 		return fmt.Errorf("db: failed to get sql.DB: %w", err)
 	}
@@ -112,8 +109,7 @@ func Ping(ctx context.Context, db *gorm.DB) error {
 }
 
 // runMigrations applies all pending up-migrations from the embedded SQL files.
-// It is called automatically by New and should not be invoked directly.
-// ErrNoChange is treated as success — it means the schema is already up to date.
+// ErrNoChange is treated as success.
 func runMigrations(sqlDB *sql.DB, driver string, log *zap.Logger) error {
 	src, err := iofs.New(migrationsFS, "migrations")
 	if err != nil {
@@ -123,12 +119,12 @@ func runMigrations(sqlDB *sql.DB, driver string, log *zap.Logger) error {
 	var m *migrate.Migrate
 
 	switch driver {
-	case "sqlite3":
+	case "sqlite":
 		drv, err := migratesqlite.WithInstance(sqlDB, &migratesqlite.Config{})
 		if err != nil {
-			return fmt.Errorf("failed to create sqlite3 migrate driver: %w", err)
+			return fmt.Errorf("failed to create sqlite migrate driver: %w", err)
 		}
-		m, err = migrate.NewWithInstance("iofs", src, "sqlite3", drv)
+		m, err = migrate.NewWithInstance("iofs", src, "sqlite", drv)
 		if err != nil {
 			return fmt.Errorf("failed to create migrator: %w", err)
 		}
