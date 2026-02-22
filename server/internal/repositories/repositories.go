@@ -168,3 +168,25 @@ type NotificationRepository interface {
 	ListByUser(ctx context.Context, userID uuid.UUID, opts ListOptions) ([]db.Notification, int64, error)
 	DeleteReadOlderThan(ctx context.Context, t time.Time) error
 }
+
+// -----------------------------------------------------------------------------
+// SettingsRepository
+// -----------------------------------------------------------------------------
+
+// SettingsRepository manages server configuration key-value pairs.
+// It is the single point of access for the settings table — no other component
+// should read or write settings directly.
+type SettingsRepository interface {
+	// Get retrieves a single setting by key. Returns ErrNotFound if absent.
+	Get(ctx context.Context, key string) (*db.Setting, error)
+
+	// Set creates or updates a setting (upsert semantics).
+	Set(ctx context.Context, key string, value db.EncryptedString) error
+
+	// GetMany retrieves multiple settings by key prefix (e.g. "smtp." returns
+	// all SMTP settings). Returns an empty slice if none match.
+	GetMany(ctx context.Context, prefix string) ([]db.Setting, error)
+
+	// Delete removes a setting. No-op if the key does not exist.
+	Delete(ctx context.Context, key string) error
+}

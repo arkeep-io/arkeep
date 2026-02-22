@@ -23,6 +23,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 )
 
 var (
@@ -148,6 +149,7 @@ func run(ctx context.Context, cfg *config) error {
 	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
+	settingsRepo := repositories.NewSettingsRepository(gormDB)
 
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
@@ -184,6 +186,19 @@ func run(ctx context.Context, cfg *config) error {
 	// immediately after the server is ready.
 	wsHub := websocket.NewHub()
 	go wsHub.Run(ctx)
+
+	// --- Notification Service ---
+	// Must be created after the hub so it can publish real-time in-app
+	// notifications. The service is the single writer to the notifications
+	// table and the single caller of hub.Publish on notification topics.
+	notifService := notification.NewService(notification.Config{
+		NotifRepo:    notificationRepo,
+		UserRepo:     userRepo,
+		SettingsRepo: settingsRepo,
+		Hub:          wsHub,
+		Logger:       logger,
+	})
+	_ = notifService // will be passed to scheduler and agent manager in upcoming steps
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(

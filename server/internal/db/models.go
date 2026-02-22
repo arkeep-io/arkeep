@@ -250,3 +250,20 @@ type Notification struct {
 	ReadAt  *time.Time
 	Payload string `gorm:"type:text;default:'{}'"` // JSON, extra context for the frontend
 }
+
+// -----------------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------------
+
+// Setting is a generic key-value configuration entry stored in the database.
+// Keys are namespaced by convention (e.g. "smtp.host", "webhook.url").
+// Sensitive values (e.g. "smtp.password") are encrypted at the application
+// layer via EncryptedString before being persisted.
+//
+// Setting does not embed base because it uses a string primary key (the key
+// itself) rather than a UUID, and does not need CreatedAt.
+type Setting struct {
+	Key       string          `gorm:"primaryKey"`
+	Value     EncryptedString `gorm:"type:text;not null"`
+	UpdatedAt time.Time       `gorm:"not null;autoUpdateTime"`
+}
