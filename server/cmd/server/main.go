@@ -22,6 +22,7 @@ import (
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
 var (
@@ -111,7 +112,7 @@ func run(ctx context.Context, cfg *config) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// --- 1. Encryption ---
+	// --- Encryption ---
 	// InitEncryption must be called before opening the database so that
 	// EncryptedString fields can encrypt/decrypt transparently on read/write.
 	// The secret key is padded or truncated to exactly 32 bytes (AES-256).
@@ -121,7 +122,7 @@ func run(ctx context.Context, cfg *config) error {
 		return fmt.Errorf("failed to initialize encryption: %w", err)
 	}
 
-	// --- 2. Database ---
+	// --- Database ---
 	gormDB, err := db.New(db.Config{
 		Driver:   cfg.dbDriver,
 		DSN:      cfg.dbDSN,
@@ -137,7 +138,7 @@ func run(ctx context.Context, cfg *config) error {
 	}
 	defer sqlDB.Close()
 
-	// --- 3. Repositories ---
+	// --- Repositories ---
 	userRepo := repositories.NewUserRepository(gormDB)
 	refreshTokenRepo := repositories.NewRefreshTokenRepository(gormDB)
 	agentRepo := repositories.NewAgentRepository(gormDB)
@@ -148,7 +149,7 @@ func run(ctx context.Context, cfg *config) error {
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 
-	// --- 4. Auth ---
+	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
 	// generated in memory. In production, persistent PEM files are used so
 	// tokens survive server restarts.
@@ -161,10 +162,10 @@ func run(ctx context.Context, cfg *config) error {
 	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager)
 	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager)
 
-	// --- 5. Agent Manager ---
+	// --- Agent Manager ---
 	agentMgr := agentmanager.New(logger)
 
-	// --- 6. Scheduler ---
+	// --- Scheduler ---
 	sched, err := scheduler.New(policyRepo, jobRepo, agentMgr, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create scheduler: %w", err)
@@ -178,7 +179,13 @@ func run(ctx context.Context, cfg *config) error {
 		}
 	}()
 
-	// --- 7. gRPC server ---
+	// --- WebSocket Hub ---
+	// The hub must start before the HTTP server so clients can connect
+	// immediately after the server is ready.
+	wsHub := websocket.NewHub()
+	go wsHub.Run(ctx)
+
+	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
 		grpcserver.Config{
 			ListenAddr: cfg.grpcAddr,
@@ -196,11 +203,12 @@ func run(ctx context.Context, cfg *config) error {
 		}
 	}()
 
-	// --- 8. HTTP server ---
+	// --- HTTP server ---
 	router := api.NewRouter(api.RouterConfig{
 		AuthService:   authService,
 		Scheduler:     sched,
 		Logger:        logger,
+		Hub:           wsHub,
 		Users:         userRepo,
 		Agents:        agentRepo,
 		Destinations:  destinationRepo,

@@ -10,6 +10,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
 // RouterConfig holds all dependencies needed to build the HTTP router.
@@ -20,6 +21,7 @@ type RouterConfig struct {
 	AuthService *auth.AuthService
 	Scheduler   *scheduler.Scheduler
 	Logger      *zap.Logger
+	Hub         *websocket.Hub
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
 	Users         repositories.UserRepository
@@ -68,6 +70,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	userHandler := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Logger)
+	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
 
 	// jwtMgr is used by the Authenticate middleware to validate Bearer tokens.
 	jwtMgr := cfg.AuthService.JWTManager()
@@ -82,6 +85,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			// OIDC flow — public because the user is not yet authenticated.
 			r.Get("/auth/oidc/login", authHandler.OIDCLogin)
 			r.Get("/auth/oidc/callback", authHandler.OIDCCallback)
+
+			// WebSocket — authenticated via JWT query parameter (browsers cannot
+			// set Authorization headers on native WebSocket connections).
+			// The Authenticate middleware is NOT used here because the upgrade
+			// must complete before any response is written.
+			r.Get("/ws", wsHandler.ServeWS)
 		})
 
 		// --- Authenticated routes (valid JWT required) ---
