@@ -1,3 +1,15 @@
+// Package main is the entry point for the arkeep-agent binary.
+// It wires all internal packages together and starts the connection loop.
+//
+// Startup sequence:
+//  1. Parse CLI flags / environment variables
+//  2. Build logger
+//  3. Extract embedded restic and rclone binaries (idempotent)
+//  4. Optionally connect to Docker (non-fatal if unavailable)
+//  5. Build executor (job queue + restic wrapper + hooks runner)
+//  6. Build connection manager (gRPC client)
+//  7. Start executor worker and connection loop
+//  8. Block until SIGINT/SIGTERM, then graceful shutdown
 package main
 
 import (
@@ -9,6 +21,12 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+
+	"github.com/arkeep-io/arkeep/agent/internal/connection"
+	"github.com/arkeep-io/arkeep/agent/internal/docker"
+	"github.com/arkeep-io/arkeep/agent/internal/executor"
+	"github.com/arkeep-io/arkeep/agent/internal/hooks"
+	"github.com/arkeep-io/arkeep/agent/internal/restic"
 )
 
 var (
@@ -20,9 +38,9 @@ var (
 type config struct {
 	serverAddr   string
 	agentToken   string
-	logLevel     string
+	stateDir     string
 	dockerSocket string
-	dataDir      string
+	logLevel     string
 }
 
 func main() {
@@ -37,24 +55,22 @@ func newRootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   "arkeep-agent",
-		Short: "Arkeep agent — connects to the Arkeep server and executes backup jobs",
-		Long: `Arkeep agent runs on each machine you want to back up.
+		Short: "Arkeep agent — backup agent for the Arkeep system",
+		Long: `Arkeep agent runs on each machine to be backed up.
 It connects to the Arkeep server via a persistent gRPC stream,
-executes backup jobs, and streams logs and status back to the server.
-The agent never exposes any port — it always initiates the connection.`,
+receives backup jobs, and executes them using the embedded restic binary.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd.Context(), cfg)
 		},
 	}
 
 	root.AddCommand(newVersionCmd())
-	root.AddCommand(newRegisterCmd(cfg))
 
-	root.PersistentFlags().StringVar(&cfg.serverAddr, "server", envOrDefault("ARKEEP_SERVER", "localhost:9090"), "Arkeep server gRPC address (host:port)")
-	root.PersistentFlags().StringVar(&cfg.agentToken, "token", envOrDefault("ARKEEP_TOKEN", ""), "Agent authentication token")
+	root.PersistentFlags().StringVar(&cfg.serverAddr, "server-addr", envOrDefault("ARKEEP_SERVER", "localhost:9090"), "Arkeep server gRPC address (host:port)")
+	root.PersistentFlags().StringVar(&cfg.agentToken, "token", envOrDefault("ARKEEP_TOKEN", ""), "Agent registration token (required)")
+	root.PersistentFlags().StringVar(&cfg.stateDir, "state-dir", envOrDefault("ARKEEP_STATE_DIR", defaultStateDir()), "Directory for agent state (agent-state.json, extracted binaries)")
+	root.PersistentFlags().StringVar(&cfg.dockerSocket, "docker-socket", envOrDefault("ARKEEP_DOCKER_SOCKET", ""), "Docker socket path (empty = platform default)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
-	root.PersistentFlags().StringVar(&cfg.dockerSocket, "docker-socket", envOrDefault("ARKEEP_DOCKER_SOCKET", "/var/run/docker.sock"), "Docker socket path")
-	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for agent state and restic cache")
 
 	return root
 }
@@ -69,27 +85,6 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-func newRegisterCmd(cfg *config) *cobra.Command {
-	var registrationToken string
-
-	cmd := &cobra.Command{
-		Use:   "register",
-		Short: "Register this agent with the Arkeep server",
-		Long: `Register connects to the Arkeep server using a one-time registration token
-generated from the Arkeep GUI, and saves the permanent agent token to the data directory.
-Run this once before starting the agent normally.`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: implement registration flow in connection package
-			return fmt.Errorf("not implemented yet")
-		},
-	}
-
-	cmd.Flags().StringVar(&registrationToken, "registration-token", "", "One-time registration token from the Arkeep GUI (required)")
-	_ = cmd.MarkFlagRequired("registration-token")
-
-	return cmd
-}
-
 func run(ctx context.Context, cfg *config) error {
 	logger, err := buildLogger(cfg.logLevel)
 	if err != nil {
@@ -98,27 +93,96 @@ func run(ctx context.Context, cfg *config) error {
 	defer logger.Sync() //nolint:errcheck
 
 	if cfg.agentToken == "" {
-		return fmt.Errorf("agent token is required — run 'arkeep-agent register' first or set ARKEEP_TOKEN")
+		return fmt.Errorf("agent token is required — set --token or ARKEEP_TOKEN")
 	}
 
 	logger.Info("starting arkeep agent",
 		zap.String("version", version),
 		zap.String("server", cfg.serverAddr),
-		zap.String("log_level", cfg.logLevel),
-		zap.String("data_dir", cfg.dataDir),
+		zap.String("state_dir", cfg.stateDir),
 	)
 
+	// --- Signal handling ---
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// TODO: initialize components in order:
-	// 1. docker.Discovery   — Docker socket watcher (optional, skips if socket unavailable)
-	// 2. executor.Queue     — job execution queue
-	// 3. connection.Manager — gRPC connection to server (starts last, triggers everything)
+	// --- Extract embedded binaries ---
+	// Idempotent: skips extraction if the file already exists with the
+	// correct size. Must run before NewWrapper.
+	extractor := restic.NewExtractor(cfg.stateDir)
+	wrapper, err := restic.NewWrapper(extractor)
+	if err != nil {
+		return fmt.Errorf("failed to prepare restic/rclone binaries: %w", err)
+	}
+	logger.Info("restic and rclone binaries ready")
 
-	<-ctx.Done()
-	logger.Info("shutting down arkeep agent")
+	// --- Docker client (optional) ---
+	// Docker is best-effort: if the socket is unavailable or the daemon is
+	// not running, the agent starts normally but rejects jobs that require
+	// Docker volume discovery. The connection manager advertises Docker
+	// capability in the Register RPC only when the ping succeeds.
+	var dockerClient *docker.Client
+	dockerAvailable := false
+
+	dc, err := docker.NewClient(cfg.dockerSocket)
+	if err != nil {
+		logger.Warn("failed to create Docker client, Docker volume backup unavailable",
+			zap.Error(err),
+		)
+	} else {
+		if pingErr := dc.Ping(ctx); pingErr != nil {
+			logger.Warn("Docker daemon unreachable, Docker volume backup unavailable",
+				zap.Error(pingErr),
+			)
+			dc.Close()
+		} else {
+			dockerClient = dc
+			dockerAvailable = true
+			defer dockerClient.Close()
+			logger.Info("Docker daemon reachable, Docker volume backup available")
+		}
+	}
+
+	// --- Hooks runner ---
+	hooksRunner := hooks.NewRunner(0) // 0 = use DefaultTimeout (5 minutes)
+
+	// --- Executor ---
+	exec := executor.New(wrapper, dockerClient, hooksRunner, logger)
+
+	// --- Connection manager ---
+	connCfg := connection.Config{
+		ServerAddr: cfg.serverAddr,
+		AgentToken: cfg.agentToken,
+		StateDir:   cfg.stateDir,
+		Version:    version,
+		DockerAvailable: dockerAvailable,
+	}
+
+	// Pass Docker availability so the connection manager can advertise it
+	// in the AgentCapabilities sent during Register.
+
+	mgr := connection.New(connCfg, exec, logger)
+
+	// --- Start ---
+	// The executor worker and connection manager run concurrently.
+	// Both respect ctx cancellation for graceful shutdown.
+	go exec.Run(ctx, mgr, mgr)
+
+	// Run blocks until ctx is cancelled (SIGINT/SIGTERM).
+	mgr.Run(ctx)
+
+	logger.Info("arkeep agent stopped")
 	return nil
+}
+
+// defaultStateDir returns the platform-appropriate default state directory.
+// On Linux/macOS: ~/.arkeep
+// On Windows:     %APPDATA%\arkeep
+func defaultStateDir() string {
+	if dir, err := os.UserHomeDir(); err == nil {
+		return dir + "/.arkeep"
+	}
+	return ".arkeep"
 }
 
 func buildLogger(level string) (*zap.Logger, error) {

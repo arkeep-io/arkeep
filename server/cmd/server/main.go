@@ -168,7 +168,7 @@ func run(ctx context.Context, cfg *config) error {
 	agentMgr := agentmanager.New(logger)
 
 	// --- Scheduler ---
-	sched, err := scheduler.New(policyRepo, jobRepo, agentMgr, logger)
+	sched, err := scheduler.New(policyRepo, jobRepo, destinationRepo, agentMgr, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
