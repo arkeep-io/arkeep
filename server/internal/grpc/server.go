@@ -25,11 +25,12 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/google/uuid"
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/websocket"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"github.com/google/uuid"
 )
 
 // Server is the gRPC server that handles agent connections.
@@ -40,6 +41,8 @@ type Server struct {
 
 	agentManager *agentmanager.Manager
 	agentRepo    repositories.AgentRepository
+	jobRepo      repositories.JobRepository
+	hub          *websocket.Hub
 	logger       *zap.Logger
 	agentToken   string // shared secret agents must present in gRPC metadata
 }
@@ -59,11 +62,15 @@ func New(
 	cfg Config,
 	agentManager *agentmanager.Manager,
 	agentRepo repositories.AgentRepository,
+	jobRepo repositories.JobRepository,
+	hub *websocket.Hub,
 	logger *zap.Logger,
 ) *Server {
 	return &Server{
 		agentManager: agentManager,
 		agentRepo:    agentRepo,
+		jobRepo:      jobRepo,
+		hub:          hub,
 		logger:       logger.Named("grpc"),
 		agentToken:   cfg.AgentToken,
 	}
@@ -301,16 +308,50 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 // ReportJobStatus handles job lifecycle updates from agents.
 // It persists the status change to the database so the GUI can display
 // real-time job progress.
-//
-// TODO(step-5): update job record in database via JobRepository.
-// TODO(step-7): publish status change event to WebSocket hub.
 func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport) (*proto.JobStatusResponse, error) {
-	s.logger.Info("job status report received",
+	jobID, err := uuid.Parse(req.JobId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid job_id")
+	}
+
+	now := time.Now().UTC()
+
+	switch req.Status {
+	case proto.JobStatus_JOB_STATUS_RUNNING:
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "running", nil, "")
+	case proto.JobStatus_JOB_STATUS_COMPLETED:
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "completed", &now, "")
+	case proto.JobStatus_JOB_STATUS_FAILED:
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "failed", &now, req.Message)
+	case proto.JobStatus_JOB_STATUS_CANCELLED:
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "cancelled", &now, req.Message)
+	default:
+		return nil, status.Error(codes.InvalidArgument, "unknown job status")
+	}
+
+	if err != nil {
+		s.logger.Error("failed to update job status",
+			zap.String("job_id", req.JobId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to update job status")
+	}
+
+	s.hub.Publish("job:"+req.JobId, websocket.Message{
+		Type: websocket.MsgJobStatus,
+		Payload: map[string]any{
+			"job_id":  req.JobId,
+			"status":  req.Status.String(),
+			"message": req.Message,
+		},
+	})
+
+	s.logger.Info("job status updated",
 		zap.String("job_id", req.JobId),
 		zap.String("agent_id", req.AgentId),
 		zap.String("status", req.Status.String()),
-		zap.String("message", req.Message),
 	)
+
 	return &proto.JobStatusResponse{Ok: true}, nil
 }
 
@@ -320,15 +361,12 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 // when the stream closes to avoid per-row INSERT overhead.
 //
 // See server/internal/repository/job.go for the BulkCreateLogs implementation.
-//
-// TODO(step-5): flush buffered entries via JobRepository.BulkCreateLogs.
 func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	var entries []*proto.LogEntry
 
 	for {
 		entry, err := stream.Recv()
 		if err == io.EOF {
-			// Agent closed the stream (job finished) — flush buffered logs.
 			break
 		}
 		if err != nil {
@@ -339,6 +377,52 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 			return status.Errorf(codes.Internal, "recv error: %v", err)
 		}
 		entries = append(entries, entry)
+
+		// Publish each log line to WebSocket in real-time so the GUI can
+		// display a live log tail without waiting for the job to complete.
+		s.hub.Publish("job:"+entry.JobId, websocket.Message{
+			Type: websocket.MsgJobLog,
+			Payload: map[string]any{
+				"job_id":  entry.JobId,
+				"level":   entry.Level.String(),
+				"message": entry.Message,
+			},
+		})
+	}
+
+	// Bulk insert all buffered log entries in a single DB call to avoid
+	// per-row INSERT overhead. Logs are not critical path — if this fails
+	// we log the error but still acknowledge the stream.
+	if len(entries) > 0 {
+		jobID, err := uuid.Parse(entries[0].JobId)
+		if err != nil {
+			s.logger.Error("StreamLogs: invalid job_id in log entries",
+				zap.String("job_id", entries[0].JobId),
+			)
+			return status.Error(codes.InvalidArgument, "invalid job_id in log entries")
+		}
+
+		logs := make([]db.JobLog, len(entries))
+		for i, e := range entries {
+			logs[i] = db.JobLog{
+				JobID:   jobID,
+				Level:   e.Level.String(),
+				Message: e.Message,
+			}
+			if e.Timestamp != nil {
+				logs[i].CreatedAt = e.Timestamp.AsTime()
+			}
+		}
+
+		if err := s.jobRepo.BulkCreateLogs(stream.Context(), logs); err != nil {
+			s.logger.Error("StreamLogs: failed to persist log entries",
+				zap.String("job_id", entries[0].JobId),
+				zap.Int("count", len(logs)),
+				zap.Error(err),
+			)
+			// Non-fatal: the backup completed — don't fail the RPC just
+			// because log persistence failed.
+		}
 	}
 
 	s.logger.Info("StreamLogs completed",
