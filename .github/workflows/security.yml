@@ -18,7 +18,7 @@ jobs:
           go-version: "1.26"
 
       - name: Run gosec
-        uses: securego/gosec@v2
+        uses: securego/gosec@2.23.0
         with:
           args: ./...
 
