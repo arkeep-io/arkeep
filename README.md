@@ -114,4 +114,4 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 ## License
 
 Arkeep core is licensed under [AGPLv3](LICENSE).
-Enterprise features are available under a commercial license — contact us at hello@arkeep.io.
+Enterprise features are available under a commercial license — contact us at crotti.business@gmail.com.
