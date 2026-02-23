@@ -18,7 +18,7 @@ jobs:
           go-version: "1.26"
 
       - name: Run gosec
-        uses: securego/gosec@master
+        uses: securego/gosec@v2
         with:
           args: ./...
 
@@ -35,7 +35,7 @@ jobs:
         run: docker build -f agent/Dockerfile -t arkeep-agent:scan .
 
       - name: Scan server image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.34.1
         with:
           image-ref: arkeep-server:scan
           format: table
@@ -43,7 +43,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan agent image
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.34.1
         with:
           image-ref: arkeep-agent:scan
           format: table
