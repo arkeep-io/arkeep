@@ -11,6 +11,8 @@ vars:
 
   # Versions of embedded third-party binaries.
   # Update these when you want to ship a newer restic or rclone.
+  # NOTE: these vars are kept here for documentation purposes — the actual
+  # version constants live in scripts/download_deps.go and must be kept in sync.
   RESTIC_VERSION: "0.18.1"
   RCLONE_VERSION: "1.73.1"
 
@@ -26,7 +28,7 @@ tasks:
     cmd: go build -ldflags="{{.LDFLAGS}}" -o ../bin/arkeep-server ./cmd/server
 
   build:agent:
-    desc: Build agent binary (embeds restic + rclone — run deps:download first)
+    desc: Build agent binary (embeds restic + rclone — downloads them first if missing)
     deps: [deps:download]
     dir: agent
     cmd: go build -ldflags="{{.LDFLAGS}}" -o ../bin/arkeep-agent ./cmd/agent
@@ -34,95 +36,19 @@ tasks:
   # ─── Embedded dependencies ──────────────────────────────────────────────────
   deps:download:
     desc: Download restic and rclone binaries for the current platform into agent/internal/restic/bin/
-    cmds:
-      - task: deps:download:restic
-      - task: deps:download:rclone
+    # Uses a pure-Go script so that the same command works identically on
+    # Linux, macOS, and Windows (cmd.exe) without requiring bash, curl,
+    # bzip2, or unzip. The script is idempotent: already-present binaries
+    # are skipped. To force a re-download, delete the bin/ directory first.
+    cmd: go run ./scripts/download_deps.go
 
   deps:download:restic:
-    desc: Download restic binary for the current platform
-    vars:
-      BIN_DIR: agent/internal/restic/bin
-      # GoReleaser sets GOOS/GOARCH; locally they default to the host platform.
-      GOOS:
-        sh: go env GOOS
-      GOARCH:
-        sh: go env GOARCH
-      RESTIC_ARCH: '{{if eq .GOARCH "amd64"}}amd64{{else if eq .GOARCH "arm64"}}arm64{{else}}{{.GOARCH}}{{end}}'
-      RESTIC_OS: '{{if eq .GOOS "windows"}}windows{{else if eq .GOOS "darwin"}}darwin{{else}}linux{{end}}'
-      RESTIC_EXT: '{{if eq .GOOS "windows"}}.exe{{end}}'
-      RESTIC_ARCHIVE: 'restic_{{.RESTIC_VERSION}}_{{.RESTIC_OS}}_{{.RESTIC_ARCH}}.bz2'
-      RESTIC_URL: 'https://github.com/restic/restic/releases/download/v{{.RESTIC_VERSION}}/{{.RESTIC_ARCHIVE}}'
-      RESTIC_OUT: '{{.BIN_DIR}}/restic_{{.RESTIC_OS}}_{{.RESTIC_ARCH}}{{.RESTIC_EXT}}'
-    cmds:
-      - cmd: mkdir -p {{.BIN_DIR}}
-        platforms: [linux, darwin]
-      - cmd: if not exist {{.BIN_DIR}} mkdir {{.BIN_DIR}}
-        platforms: [windows]
-      # Skip download if already present (idempotent).
-      - cmd: |
-          if [ ! -f "{{.RESTIC_OUT}}" ]; then
-            echo "Downloading restic {{.RESTIC_VERSION}} for {{.RESTIC_OS}}/{{.RESTIC_ARCH}}..."
-            curl -fsSL "{{.RESTIC_URL}}" | bunzip2 > "{{.RESTIC_OUT}}"
-            chmod +x "{{.RESTIC_OUT}}"
-          else
-            echo "restic already present: {{.RESTIC_OUT}}"
-          fi
-        platforms: [linux, darwin]
-      - cmd: |
-          if not exist "{{.RESTIC_OUT}}" (
-            echo Downloading restic {{.RESTIC_VERSION}} for {{.RESTIC_OS}}/{{.RESTIC_ARCH}}...
-            curl -fsSL "{{.RESTIC_URL}}" -o "{{.RESTIC_OUT}}.bz2"
-            tar -xjf "{{.RESTIC_OUT}}.bz2" -C "{{.BIN_DIR}}"
-            del "{{.RESTIC_OUT}}.bz2"
-          ) else (
-            echo restic already present: {{.RESTIC_OUT}}
-          )
-        platforms: [windows]
+    desc: Download restic binary for the current platform (delegates to the shared Go script)
+    cmd: go run ./scripts/download_deps.go
 
   deps:download:rclone:
-    desc: Download rclone binary for the current platform
-    vars:
-      BIN_DIR: agent/internal/restic/bin
-      GOOS:
-        sh: go env GOOS
-      GOARCH:
-        sh: go env GOARCH
-      RCLONE_ARCH: '{{if eq .GOARCH "amd64"}}amd64{{else if eq .GOARCH "arm64"}}arm64{{else}}{{.GOARCH}}{{end}}'
-      RCLONE_OS: '{{if eq .GOOS "windows"}}windows{{else if eq .GOOS "darwin"}}osx{{else}}linux{{end}}'
-      RCLONE_EXT: '{{if eq .GOOS "windows"}}.exe{{end}}'
-      RCLONE_ARCHIVE: 'rclone-v{{.RCLONE_VERSION}}-{{.RCLONE_OS}}-{{.RCLONE_ARCH}}'
-      RCLONE_URL: 'https://downloads.rclone.org/v{{.RCLONE_VERSION}}/{{.RCLONE_ARCHIVE}}.zip'
-      RCLONE_OUT: '{{.BIN_DIR}}/rclone_{{.RCLONE_OS}}_{{.RCLONE_ARCH}}{{.RCLONE_EXT}}'
-    cmds:
-      - cmd: mkdir -p {{.BIN_DIR}}
-        platforms: [linux, darwin]
-      - cmd: if not exist {{.BIN_DIR}} mkdir {{.BIN_DIR}}
-        platforms: [windows]
-      - cmd: |
-          if [ ! -f "{{.RCLONE_OUT}}" ]; then
-            echo "Downloading rclone {{.RCLONE_VERSION}} for {{.RCLONE_OS}}/{{.RCLONE_ARCH}}..."
-            TMP=$(mktemp -d)
-            curl -fsSL "{{.RCLONE_URL}}" -o "$TMP/rclone.zip"
-            unzip -j "$TMP/rclone.zip" "{{.RCLONE_ARCHIVE}}/rclone{{.RCLONE_EXT}}" -d "$TMP"
-            mv "$TMP/rclone{{.RCLONE_EXT}}" "{{.RCLONE_OUT}}"
-            chmod +x "{{.RCLONE_OUT}}"
-            rm -rf "$TMP"
-          else
-            echo "rclone already present: {{.RCLONE_OUT}}"
-          fi
-        platforms: [linux, darwin]
-      - cmd: |
-          if not exist "{{.RCLONE_OUT}}" (
-            echo Downloading rclone {{.RCLONE_VERSION}} for {{.RCLONE_OS}}/{{.RCLONE_ARCH}}...
-            curl -fsSL "{{.RCLONE_URL}}" -o "%TEMP%\rclone.zip"
-            tar -xf "%TEMP%\rclone.zip" -C "%TEMP%"
-            copy "%TEMP%\{{.RCLONE_ARCHIVE}}\rclone.exe" "{{.RCLONE_OUT}}"
-            rmdir /s /q "%TEMP%\{{.RCLONE_ARCHIVE}}"
-            del "%TEMP%\rclone.zip"
-          ) else (
-            echo rclone already present: {{.RCLONE_OUT}}
-          )
-        platforms: [windows]
+    desc: Download rclone binary for the current platform (delegates to the shared Go script)
+    cmd: go run ./scripts/download_deps.go
 
   # ─── Run (development) ──────────────────────────────────────────────────────
   run:server:
@@ -138,7 +64,7 @@ tasks:
     dir: agent
     cmd: go run ./cmd/agent --server-addr=localhost:9090 --log-level=debug
     env:
-      ARKEEP_AGENT_TOKEN: dev-token
+      ARKEEP_TOKEN: dev-token
 
   # ─── Test ───────────────────────────────────────────────────────────────────
   test:
@@ -191,6 +117,6 @@ tasks:
       - cmd: rm -rf bin/
         ignore_error: true
         platforms: [linux, darwin]
-      - cmd: if exist bin rmdir /s /q bin
+      - cmd: cmd /c "if exist bin rmdir /s /q bin"
         ignore_error: true
         platforms: [windows]

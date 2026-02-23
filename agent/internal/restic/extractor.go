@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 )
@@ -175,7 +176,10 @@ func embeddedPath(name string) (string, error) {
 	if goos == "windows" {
 		filename += ".exe"
 	}
-	return filepath.Join("bin", filename), nil
+	// embed.FS always uses forward slashes as path separators, regardless of
+	// the host OS. Using filepath.Join here would produce backslashes on Windows
+	// and cause Open() to fail with "file does not exist".
+	return path.Join("bin", filename), nil
 }
 
 // binaryName returns the destination filename on disk for the given binary.
