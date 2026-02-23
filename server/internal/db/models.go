@@ -11,7 +11,7 @@ import (
 // ID uses UUID v7 (time-ordered) for efficient B-tree indexing and natural
 // chronological ordering without a separate created_at sort. CreatedAt and
 // UpdatedAt are managed automatically by GORM.
-type base struct {
+type Base struct {
 	ID        uuid.UUID `gorm:"type:text;primaryKey"`
 	CreatedAt time.Time `gorm:"not null"`
 	UpdatedAt time.Time `gorm:"not null"`
@@ -19,7 +19,7 @@ type base struct {
 
 // BeforeCreate generates a new UUID v7 if the ID is not already set.
 // This ensures every record has a valid time-ordered ID before insertion.
-func (b *base) BeforeCreate(tx *gorm.DB) error {
+func (b *Base) BeforeCreate(tx *gorm.DB) error {
 	if b.ID == (uuid.UUID{}) {
 		id, err := uuid.NewV7()
 		if err != nil {
@@ -33,8 +33,8 @@ func (b *base) BeforeCreate(tx *gorm.DB) error {
 // softDelete extends base with a nullable DeletedAt field for soft deletion.
 // GORM automatically filters out soft-deleted records from all queries unless
 // Unscoped() is used explicitly.
-type softDelete struct {
-	base
+type SoftDelete struct {
+	Base
 	DeletedAt gorm.DeletedAt `gorm:"index"`
 }
 
@@ -46,7 +46,7 @@ type softDelete struct {
 // Password is only set for local accounts — OIDC users authenticate via the
 // provider and have an empty Password field.
 type User struct {
-	base
+	Base
 	Email        string          `gorm:"uniqueIndex;not null"`
 	Password     EncryptedString `gorm:"type:text"` // empty for OIDC users
 	DisplayName  string          `gorm:"not null"`
@@ -61,7 +61,7 @@ type User struct {
 // The raw token is never stored — only its SHA-256 hash. Tokens are rotated
 // on every use and expire after 7 days.
 type RefreshToken struct {
-	base
+	Base
 	UserID    uuid.UUID `gorm:"type:text;not null;index"`
 	TokenHash string    `gorm:"not null;uniqueIndex"` // SHA-256 hex of the raw token
 	ExpiresAt time.Time `gorm:"not null;index"`
@@ -74,7 +74,7 @@ type RefreshToken struct {
 // ClientSecret is encrypted at rest. Only one provider is supported at a time
 // in the open core tier.
 type OIDCProvider struct {
-	base
+	Base
 	Name         string          `gorm:"not null"`
 	Issuer       string          `gorm:"not null"`
 	ClientID     string          `gorm:"not null"`
@@ -93,7 +93,7 @@ type OIDCProvider struct {
 // do not expose any ports. The RegistrationToken is used only during the initial
 // handshake and is cleared after successful registration.
 type Agent struct {
-	softDelete
+	SoftDelete
 	Name              string     `gorm:"not null"`
 	Hostname          string     `gorm:"not null"`
 	IPAddress         string     `gorm:"not null;default:''"`
@@ -114,7 +114,7 @@ type Agent struct {
 // rest via EncryptedString. The Config field holds provider-specific settings
 // serialized as JSON (e.g. bucket name, endpoint, region for S3).
 type Destination struct {
-	base
+	Base
 	Name        string          `gorm:"not null"`
 	Type        string          `gorm:"not null"` // "local", "s3", "sftp", "rest", "rclone"
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
@@ -135,7 +135,7 @@ type Destination struct {
 // Related records are loaded via explicit queries in the repository layer
 // (see repository/policy.go: GetByIDWithDestinations).
 type Policy struct {
-	softDelete
+	SoftDelete
 	Name             string          `gorm:"not null"`
 	AgentID          uuid.UUID       `gorm:"type:text;not null;index"`
 	Schedule         string          `gorm:"not null"` // cron expression
@@ -161,7 +161,7 @@ type Policy struct {
 // Priority determines the order in which destinations are tried (lower = first).
 // This enables 3-2-1 backup rules with multiple destinations per policy.
 type PolicyDestination struct {
-	base
+	Base
 	PolicyID      uuid.UUID `gorm:"type:text;not null;index"`
 	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
 	Priority      int       `gorm:"not null;default:0"`
@@ -178,7 +178,7 @@ type PolicyDestination struct {
 // The gorm:"-" tag prevents GORM from attempting foreign key resolution on
 // these fields, which would fail with uuid.UUID primary keys.
 type Job struct {
-	base
+	Base
 	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
 	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed"
@@ -194,7 +194,7 @@ type Job struct {
 // JobDestination tracks the result of a backup job for each individual
 // destination. A job can partially succeed if some destinations fail.
 type JobDestination struct {
-	base
+	Base
 	JobID         uuid.UUID  `gorm:"type:text;not null;index"`
 	DestinationID uuid.UUID  `gorm:"type:text;not null;index"`
 	Status        string     `gorm:"not null;default:'pending'"` // mirrors Job.Status
@@ -209,7 +209,7 @@ type JobDestination struct {
 // Logs are inserted in bulk at job completion, not line by line during
 // execution, to avoid high-frequency write pressure on the database.
 type JobLog struct {
-	base
+	Base
 	JobID     uuid.UUID `gorm:"type:text;not null;index"`
 	Level     string    `gorm:"not null"` // "info", "warn", "error"
 	Message   string    `gorm:"type:text;not null"`
@@ -224,7 +224,7 @@ type JobLog struct {
 // Snapshots are synced from the engine after each successful job and cached
 // in the database for fast listing and filtering without hitting the engine.
 type Snapshot struct {
-	base
+	Base
 	PolicyID      uuid.UUID `gorm:"type:text;not null;index"`
 	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
 	JobID         uuid.UUID `gorm:"type:text;not null;index"`
@@ -242,7 +242,7 @@ type Snapshot struct {
 // Notification stores in-app notifications delivered to users via WebSocket.
 // Read notifications are kept for 30 days and then purged by a background job.
 type Notification struct {
-	base
+	Base
 	UserID  uuid.UUID `gorm:"type:text;not null;index"`
 	Type    string    `gorm:"not null"` // "job_success", "job_failure", "agent_offline", etc.
 	Title   string    `gorm:"not null"`
