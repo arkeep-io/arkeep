@@ -39,12 +39,12 @@ import { useAuthStore } from '@/stores/auth'
 
 const routes: RouteRecordRaw[] = [
   // ── Public ─────────────────────────────────────────────────────────────────
-  /* {
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/pages/LoginPage.vue'),
     meta: { public: true },
-  }, */
+  },
 
   // OIDC callback — the server handles the actual OAuth exchange and redirects
   // here with the access token. This page reads the token from the URL, stores
