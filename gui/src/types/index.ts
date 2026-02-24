@@ -13,8 +13,7 @@
 
 export const UserRole = {
   Admin: 'admin',
-  Operator: 'operator',
-  Viewer: 'viewer',
+  User: 'user',
 } as const
 export type UserRole = (typeof UserRole)[keyof typeof UserRole]
 
@@ -69,11 +68,12 @@ export type NotificationEventType =
 export interface User {
   id: string
   email: string
-  name: string
+  display_name: string
   role: UserRole
   is_active: boolean
-  created_at: string // ISO 8601
-  updated_at: string
+  is_oidc: boolean      // true for OIDC-provisioned accounts
+  last_login_at: string | null
+  created_at: string
 }
 
 export interface Agent {
@@ -316,7 +316,7 @@ export interface PaginatedResponse<T> {
   per_page: number
 }
 
-// Auth
+// Auth — login returns only the access token; user profile is a separate call
 export interface LoginRequest {
   email: string
   password: string
@@ -325,7 +325,6 @@ export interface LoginRequest {
 export interface TokenResponse {
   access_token: string
   expires_in: number
-  user: User
 }
 
 // Agents
@@ -369,24 +368,23 @@ export type UpdatePolicyRequest = Partial<CreatePolicyRequest>
 // Users
 export interface CreateUserRequest {
   email: string
-  name: string
   password: string
+  display_name: string
   role: UserRole
 }
 
 export interface UpdateUserRequest {
-  name?: string
-  email?: string
+  display_name?: string
   role?: UserRole
   is_active?: boolean
-  password?: string // optional — only set when changing password
+  password?: string
 }
 
-export interface UpdateProfileRequest {
-  name?: string
-  email?: string
-  current_password?: string
-  new_password?: string
+// Self-update — users can only change their own display_name and password.
+// OIDC users cannot change password (managed by the IdP).
+export interface UpdateMeRequest {
+  display_name?: string
+  password?: string
 }
 
 // ─── WebSocket message payloads ───────────────────────────────────────────────

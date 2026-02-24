@@ -57,7 +57,7 @@ const routes: RouteRecordRaw[] = [
   }, */
 
   // ── Protected shell ─────────────────────────────────────────────────────────
-  /* {
+  {
     path: '/',
     component: () => import('@/components/shared/AppLayout.vue'),
     meta: { requiresAuth: true },
@@ -73,7 +73,7 @@ const routes: RouteRecordRaw[] = [
       },
 
       // Agents
-      {
+      /* {
         path: 'agents',
         name: 'agents',
         component: () => import('@/pages/AgentsPage.vue'),
@@ -83,10 +83,10 @@ const routes: RouteRecordRaw[] = [
         name: 'agent-detail',
         component: () => import('@/pages/AgentDetailPage.vue'),
         props: true,
-      },
+      }, */
 
       // Policies
-      {
+      /* {
         path: 'policies',
         name: 'policies',
         component: () => import('@/pages/PoliciesPage.vue'),
@@ -102,8 +102,8 @@ const routes: RouteRecordRaw[] = [
         name: 'policy-detail',
         component: () => import('@/pages/PolicyDetailPage.vue'),
         props: true,
-      },
-      {
+      }, */
+      /* {
         path: 'policies/:id/edit',
         name: 'policy-edit',
         component: () => import('@/pages/PolicyFormPage.vue'),
@@ -143,10 +143,10 @@ const routes: RouteRecordRaw[] = [
         path: 'monitoring',
         name: 'monitoring',
         component: () => import('@/pages/MonitoringPage.vue'),
-      },
+      }, */
 
       // Settings — tabbed layout with nested routes
-      {
+      /* {
         path: 'settings',
         component: () => import('@/pages/SettingsPage.vue'),
         meta: { requiresRole: 'admin' },
@@ -177,9 +177,9 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/pages/settings/UsersSettings.vue'),
           },
         ],
-      },
+      }, */
     ],
-  }, */
+  },
 
   // ── Error pages ─────────────────────────────────────────────────────────────
   /* {
