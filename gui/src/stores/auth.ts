@@ -8,65 +8,60 @@
 //     never accessible from JS. The browser sends it automatically with
 //     requests to /api/v1/auth/refresh.
 //
-// Refresh flow:
-//   1. On app boot, attempt a silent refresh to restore the session.
-//   2. A timer fires 60s before the access token expires to refresh proactively.
-//   3. If any API call returns 401, the interceptor calls refresh() and retries.
+// Login flow:
+//   1. POST /api/v1/auth/login  → receives { access_token, expires_in }
+//   2. GET  /api/v1/users/me    → fetches user profile with the new token
+//
+// OIDC flow:
+//   1. window.location.href = /api/v1/auth/oidc/login  (server-side redirect)
+//   2. Server completes OAuth exchange, redirects to /?token=<access_token>
+//   3. OIDCCallbackPage reads token from URL, calls setTokenAndFetchUser()
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { ofetch } from 'ofetch'
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface User {
-  id: string
-  email: string
-  name: string
-  role: 'admin' | 'operator' | 'viewer'
-  is_active: boolean
-}
-
-interface TokenPair {
-  access_token: string
-  expires_in: number // seconds until expiry
-}
-
-// ─── Store ────────────────────────────────────────────────────────────────────
+import type { User, ApiResponse, TokenResponse } from '@/types'
 
 export const useAuthStore = defineStore('auth', () => {
-  // ─── State ─────────────────────────────────────────────────────────────────
+  // ─── State ──────────────────────────────────────────────────────────────────
 
   const accessToken = ref<string | null>(null)
   const user = ref<User | null>(null)
-  const isInitialized = ref(false) // true after the boot refresh attempt
 
-  // Timer ID for the proactive refresh scheduled before token expiry
+  // isInitialized becomes true after the first initialize() call completes.
+  // The router guard waits for this before making allow/redirect decisions,
+  // preventing a flash-redirect to /login on hard reload when a valid
+  // refresh token cookie exists.
+  const isInitialized = ref(false)
+
+  // Single in-flight initialize promise — prevents concurrent calls during
+  // rapid navigation before the first refresh completes.
+  let initPromise: Promise<void> | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
-  // ─── Getters ───────────────────────────────────────────────────────────────
+  // ─── Getters ─────────────────────────────────────────────────────────────────
 
   const isAuthenticated = computed(() => accessToken.value !== null)
   const isAdmin = computed(() => user.value?.role === 'admin')
 
-  // ─── Actions ───────────────────────────────────────────────────────────────
+  // ─── Actions ──────────────────────────────────────────────────────────────────
 
-  // login exchanges credentials for a token pair. The refresh token is set
-  // as an httpOnly cookie by the server — we only handle the access token.
+  // login exchanges email/password for an access token, then fetches the
+  // user profile. Throws on invalid credentials (HTTP 401).
   async function login(email: string, password: string): Promise<void> {
-    const data = await ofetch<TokenPair & { user: User }>('/api/v1/auth/login', {
+    const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/login', {
       method: 'POST',
       body: { email, password },
     })
-
-    _setSession(data.access_token, data.expires_in, data.user)
+    await setTokenAndFetchUser(res.data.access_token, res.data.expires_in)
   }
 
-  // logout invalidates the session server-side and clears local state.
+  // logout invalidates the refresh token server-side and clears local state.
   async function logout(): Promise<void> {
     try {
       await ofetch('/api/v1/auth/logout', {
         method: 'POST',
+        credentials: 'include',
         headers: _authHeader(),
       })
     } catch {
@@ -80,17 +75,11 @@ export const useAuthStore = defineStore('auth', () => {
   // access token. Returns true on success, false if the session has expired.
   async function refresh(): Promise<boolean> {
     try {
-      const data = await ofetch<TokenPair & { user: User }>(
-        '/api/v1/auth/refresh',
-        {
-          method: 'POST',
-          // credentials: 'include' is required for the httpOnly cookie to be
-          // sent cross-origin in dev (proxy doesn't always forward cookies)
-          credentials: 'include',
-        },
-      )
-
-      _setSession(data.access_token, data.expires_in, data.user)
+      const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/refresh', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      await setTokenAndFetchUser(res.data.access_token, res.data.expires_in)
       return true
     } catch {
       _clearSession()
@@ -98,36 +87,32 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  // initialize is called once on app boot. It attempts a silent token refresh
-  // to restore the session from the httpOnly cookie. The app should wait for
-  // this to complete before rendering protected routes.
+  // initialize is called once on app boot by the router navigation guard.
+  // Guards against concurrent calls during rapid navigation.
   async function initialize(): Promise<void> {
-    await refresh()
-    isInitialized.value = true
+    if (isInitialized.value) return
+    if (initPromise) return initPromise
+
+    initPromise = refresh().then(() => {}).finally(() => {
+      isInitialized.value = true
+      initPromise = null
+    })
+
+    return initPromise
   }
 
-  // authHeader returns the Authorization header for use in ofetch calls.
-  // Use the exported helper below for convenience.
-  function authHeader(): Record<string, string> {
-    return _authHeader()
-  }
-
-  // ─── Private helpers ───────────────────────────────────────────────────────
-
-  function _setSession(token: string, expiresIn: number, userData: User): void {
+  // setTokenAndFetchUser stores the access token in memory and fetches the
+  // current user profile. Exported so OIDCCallbackPage can call it directly.
+  async function setTokenAndFetchUser(token: string, expiresIn: number): Promise<void> {
     accessToken.value = token
-    user.value = userData
-
-    // Schedule a proactive refresh 60s before expiry so API calls never
-    // encounter a 401 due to an expired token in normal usage.
+    const res = await ofetch<ApiResponse<User>>('/api/v1/users/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    user.value = res.data
     _scheduleRefresh(expiresIn)
   }
 
-  function _clearSession(): void {
-    accessToken.value = null
-    user.value = null
-    _cancelRefresh()
-  }
+  // ─── Private ──────────────────────────────────────────────────────────────────
 
   function _scheduleRefresh(expiresInSeconds: number): void {
     _cancelRefresh()
@@ -135,8 +120,6 @@ export const useAuthStore = defineStore('auth', () => {
     refreshTimer = setTimeout(async () => {
       const ok = await refresh()
       if (!ok) {
-        // Session expired — redirect to login. We import the router lazily
-        // to avoid a circular dependency between the store and the router.
         const { router } = await import('@/router')
         router.push('/login')
       }
@@ -150,6 +133,12 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function _clearSession(): void {
+    accessToken.value = null
+    user.value = null
+    _cancelRefresh()
+  }
+
   function _authHeader(): Record<string, string> {
     return accessToken.value
       ? { Authorization: `Bearer ${accessToken.value}` }
@@ -157,18 +146,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    // State (readonly from outside)
     accessToken,
     user,
     isInitialized,
-    // Getters
     isAuthenticated,
     isAdmin,
-    // Actions
     login,
     logout,
     refresh,
     initialize,
-    authHeader,
+    setTokenAndFetchUser,
   }
 })

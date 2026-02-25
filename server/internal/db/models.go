@@ -52,8 +52,8 @@ type User struct {
 	DisplayName  string          `gorm:"not null"`
 	Role         string          `gorm:"not null;default:'user'"` // "admin" or "user"
 	IsActive     bool            `gorm:"not null;default:true"`   // false = account disabled
-	OIDCProvider string          `gorm:"default:''"`              // provider ID if OIDC user
-	OIDCSub      string          `gorm:"default:''"`              // subject claim from OIDC token
+	OIDCProvider string `gorm:"column:oidc_provider;default:''"` // provider ID if OIDC user
+    OIDCSub      string `gorm:"column:oidc_sub;default:''"` // subject claim from OIDC token
 	LastLoginAt  *time.Time
 }
 

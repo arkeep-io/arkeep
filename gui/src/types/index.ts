@@ -416,3 +416,8 @@ export interface AgentStatusPayload {
 export interface NotificationPayload {
   notification: Notification
 }
+
+// Standard response envelope returned by all server endpoints via Ok()
+export interface ApiResponse<T> {
+  data: T
+}
