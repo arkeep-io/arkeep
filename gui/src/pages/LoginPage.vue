@@ -1,53 +1,55 @@
 <script setup lang="ts">
 // LoginPage.vue — Authentication entry point.
 //
-// Handles two auth flows:
-//   1. Local: email/password validated with VeeValidate + Zod via <Field />
-//   2. OIDC: full-page redirect to /api/v1/auth/oidc/login
+// Form pattern: shadcn-vue Field/FieldLabel/FieldError for layout and styling,
+// vee-validate useField() for validation binding — no <Field> component from
+// vee-validate in the template to avoid naming conflicts with shadcn Field.
 //
-// On success, redirects to ?redirect= destination or /dashboard.
+// Auth flows:
+//   1. Local: email/password → POST /api/v1/auth/login
+//   2. OIDC:  full-page redirect to /api/v1/auth/oidc/login
 
-import { ref, computed } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { useForm, Field, ErrorMessage } from 'vee-validate'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
 import { useAuthStore } from '@/stores/auth'
-import { useTheme } from '@/composables/useTheme'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Separator } from '@/components/ui/separator'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 import {
-    Eye,
-    EyeOff,
-    AlertCircle,
-    Loader2,
-    Moon,
-    Sun,
-    Monitor,
-} from 'lucide-vue-next'
+    Field,
+    FieldError,
+    FieldGroup,
+    FieldLabel,
+    FieldSeparator,
+} from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from 'lucide-vue-next'
+import { useTheme } from '@/composables/useTheme'
 
-// ─── Validation ───────────────────────────────────────────────────────────────
+// ─── Validation schema ────────────────────────────────────────────────────────
 
-const { handleSubmit, isSubmitting } = useForm({
-    validationSchema: toTypedSchema(
-        z.object({
-            email: z.email('Enter a valid email address'),
-            password: z
-                .string('Password is required')
-                .min(1, 'Password is required'),
-        }),
-    ),
-})
+const schema = toTypedSchema(
+    z.object({
+        email: z.email('Enter a valid email address'),
+        password: z.string('Password is required').min(1, 'Password is required'),
+    }),
+)
+
+const { handleSubmit, isSubmitting } = useForm({ validationSchema: schema })
+
+// useField binds each input to vee-validate
+const { value: emailValue, errorMessage: emailError } = useField<string>('email')
+const { value: passwordValue, errorMessage: passwordError } = useField<string>('password')
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const auth = useAuthStore()
-const { mode, cycle } = useTheme()
 const router = useRouter()
 const route = useRoute()
+const { isDark, cycle, modeLabel } = useTheme()
 
 const serverError = ref<string | null>(null)
 const showPassword = ref(false)
@@ -56,19 +58,6 @@ const oidcLoading = ref(false)
 const redirectTo = computed(() =>
     typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard',
 )
-
-// Icon and label for the current color mode state
-const modeIcon = computed(() => {
-    if (mode.value === 'dark') return Moon
-    if (mode.value === 'light') return Sun
-    return Monitor
-})
-
-const modeLabel = computed(() => {
-    if (mode.value === 'dark') return 'Dark mode'
-    if (mode.value === 'light') return 'Light mode'
-    return 'System mode'
-})
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -84,118 +73,123 @@ const onSubmit = handleSubmit(async (values) => {
 
 function loginWithOIDC(): void {
     oidcLoading.value = true
-    // Full-page redirect — server handles OAuth flow and returns to
-    // /?token=<access_token> which OIDCCallbackPage processes.
     window.location.href = '/api/v1/auth/oidc/login'
 }
 </script>
 
 <template>
-    <div class="relative min-h-dvh flex items-center justify-center bg-background p-4">
-
-        <!-- Theme cycle button -->
-        <Button variant="ghost" size="icon" class="absolute top-4 right-4 text-muted-foreground hover:text-foreground"
-            :aria-label="modeLabel" @click="cycle()">
-            <component :is="modeIcon" class="size-4" />
+    <div class="relative flex flex-col items-center justify-center w-full p-6 min-h-svh md:p-10">
+        <!-- Background -->
+        <div class="absolute inset-0 z-0" :style="{
+            backgroundImage: `
+                linear-gradient(to right, ${isDark ? '#3f3f46' : '#d1d5db'} 1px, transparent 1px),
+                linear-gradient(to bottom, ${isDark ? '#3f3f46' : '#d1d5db'} 1px, transparent 1px)
+            `,
+            backgroundSize: '32px 32px',
+            WebkitMaskImage: 'radial-gradient(ellipse 60% 60% at 50% 50%, #000 30%, transparent 70%)',
+            maskImage: 'radial-gradient(ellipse 60% 60% at 50% 50%, #000 30%, transparent 70%)',
+        }" />
+        <!-- Theme toggle -->
+        <Button variant="ghost" size="icon"
+            class="absolute z-10 top-4 right-4 text-muted-foreground hover:text-foreground" :aria-label="modeLabel"
+            @click="cycle()">
+            <Sun v-if="isDark" class="size-4" />
+            <Moon v-else class="size-4" />
         </Button>
+        <div class="relative z-10 w-full max-w-sm md:max-w-4xl">
+            <div class="flex flex-col gap-6">
+                <Card class="p-0 overflow-hidden">
+                    <CardContent class="grid p-0 md:grid-cols-2">
+                        <!-- Form -->
+                        <form class="p-6 md:p-8" novalidate @submit="onSubmit">
+                            <FieldGroup>
+                                <!-- Title -->
+                                <div class="flex flex-col items-center gap-2 text-center">
+                                    <h1 class="text-2xl font-bold">Welcome back</h1>
+                                    <p class="text-sm text-muted-foreground text-balance">
+                                        Login to your Arkeep account
+                                    </p>
+                                </div>
+                                <!-- Server error -->
+                                <Transition enter-active-class="transition-all duration-200"
+                                    enter-from-class="-translate-y-1 opacity-0"
+                                    leave-active-class="transition-all duration-150"
+                                    leave-to-class="-translate-y-1 opacity-0">
+                                    <Alert v-if="serverError" variant="destructive">
+                                        <AlertCircle class="size-4" />
+                                        <AlertDescription>{{ serverError }}</AlertDescription>
+                                    </Alert>
+                                </Transition>
 
-        <div class="w-full max-w-sm">
+                                <!-- Email -->
+                                <Field>
+                                    <FieldLabel for="email">Email</FieldLabel>
+                                    <Input id="email" v-model="emailValue" type="email" placeholder="m@example.com"
+                                        autocomplete="email" autofocus spellcheck="false"
+                                        :class="emailError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                    <FieldError v-if="emailError">{{ emailError }}</FieldError>
+                                </Field>
 
-            <!-- Card -->
-            <div class="rounded-lg border border-border bg-card text-card-foreground shadow-sm p-8">
+                                <!-- Password -->
+                                <Field>
+                                    <div class="flex items-center">
+                                        <FieldLabel for="password">Password</FieldLabel>
+                                        <a href="#" class="ml-auto text-sm underline-offset-2 hover:underline">
+                                            Forgot password?
+                                        </a>
+                                    </div>
+                                    <div class="relative">
+                                        <Input id="password" v-model="passwordValue"
+                                            :type="showPassword ? 'text' : 'password'" placeholder="••••••••"
+                                            autocomplete="current-password" class="pr-10"
+                                            :class="passwordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                        <button type="button"
+                                            class="absolute transition-colors -translate-y-1/2 right-3 top-1/2 text-muted-foreground hover:text-foreground"
+                                            :aria-label="showPassword ? 'Hide password' : 'Show password'"
+                                            @click="showPassword = !showPassword">
+                                            <EyeOff v-if="showPassword" class="size-4" />
+                                            <Eye v-else class="size-4" />
+                                        </button>
+                                    </div>
+                                    <FieldError v-if="passwordError">{{ passwordError }}</FieldError>
+                                </Field>
 
-                <!-- Header -->
-                <div class="mb-8 text-center">
-                    <div
-                        class="inline-flex items-center justify-center size-10 rounded-lg bg-primary/10 border border-primary/20 mb-4">
-                        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                            <path d="M8 2L14 5.5V10.5L8 14L2 10.5V5.5L8 2Z" stroke="currentColor" stroke-width="1.25"
-                                stroke-linejoin="round" fill="none" class="text-primary" />
-                            <circle cx="8" cy="8" r="2" fill="currentColor" class="text-primary" />
-                        </svg>
-                    </div>
-                    <h1 class="text-lg font-semibold tracking-tight text-foreground">
-                        Arkeep
-                    </h1>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        Sign in to your workspace
-                    </p>
-                </div>
+                                <!-- Submit -->
+                                <Field>
+                                    <Button type="submit" :disabled="isSubmitting">
+                                        <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                                        {{ isSubmitting ? 'Signing in…' : 'Sign in' }}
+                                    </Button>
+                                </Field>
 
-                <!-- Server error -->
-                <Transition enter-active-class="transition-all duration-200" enter-from-class="opacity-0 -translate-y-1"
-                    leave-active-class="transition-all duration-150" leave-to-class="opacity-0 -translate-y-1">
-                    <Alert v-if="serverError" variant="destructive" class="mb-5">
-                        <AlertCircle class="size-4" />
-                        <AlertDescription>{{ serverError }}</AlertDescription>
-                    </Alert>
-                </Transition>
+                                <!-- Separator -->
+                                <FieldSeparator class="*:data-[slot=field-separator-content]:bg-card">
+                                    Or continue with
+                                </FieldSeparator>
 
-                <!-- Form -->
-                <form class="space-y-4" novalidate @submit="onSubmit">
+                                <!-- OIDC -->
+                                <Field>
+                                    <Button type="button" variant="outline" :disabled="oidcLoading"
+                                        @click="loginWithOIDC">
+                                        <Loader2 v-if="oidcLoading" class="size-4 animate-spin" />
+                                        Continue with SSO
+                                    </Button>
+                                </Field>
+                            </FieldGroup>
+                        </form>
 
-                    <!-- Email -->
-                    <div class="space-y-1.5">
-                        <Label for="email" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Email
-                        </Label>
-                        <Field v-slot="{ field, errors: fieldErrors }" name="email">
-                            <Input id="email" v-bind="field" type="email" placeholder="you@company.com"
-                                autocomplete="email" autofocus spellcheck="false"
-                                :class="fieldErrors.length ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        </Field>
-                        <ErrorMessage name="email" class="text-xs text-destructive" as="p" />
-                    </div>
+                        <!-- Decorative panel -->
+                        <div class="relative hidden bg-muted md:block">
+                            <img src="https://placehold.co/600x400" alt="Image"
+                                class="absolute inset-0 h-full w-full object-cover dark:brightness-[0.2] dark:grayscale" />
+                        </div>
 
-                    <!-- Password -->
-                    <div class="space-y-1.5">
-                        <Label for="password" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Password
-                        </Label>
-                        <Field v-slot="{ field, errors: fieldErrors }" name="password">
-                            <div class="relative">
-                                <Input id="password" v-bind="field" :type="showPassword ? 'text' : 'password'"
-                                    placeholder="••••••••" autocomplete="current-password" class="pr-10"
-                                    :class="fieldErrors.length ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                                <button type="button"
-                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                                    :aria-label="showPassword ? 'Hide password' : 'Show password'"
-                                    @click="showPassword = !showPassword">
-                                    <EyeOff v-if="showPassword" class="size-4" />
-                                    <Eye v-else class="size-4" />
-                                </button>
-                            </div>
-                        </Field>
-                        <ErrorMessage name="password" class="text-xs text-destructive" as="p" />
-                    </div>
-
-                    <Button type="submit" class="w-full mt-2" :disabled="isSubmitting">
-                        <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
-                        {{ isSubmitting ? 'Signing in…' : 'Sign in' }}
-                    </Button>
-
-                </form>
-
-                <!-- Divider -->
-                <div class="relative my-6 flex items-center gap-3">
-                    <Separator class="flex-1" />
-                    <span class="text-xs text-muted-foreground uppercase tracking-widest shrink-0">or</span>
-                    <Separator class="flex-1" />
-                </div>
-
-                <!-- OIDC -->
-                <Button type="button" variant="outline" class="w-full" :disabled="oidcLoading" @click="loginWithOIDC">
-                    <Loader2 v-if="oidcLoading" class="size-4 animate-spin" />
-                    Continue with SSO
-                </Button>
-
+                    </CardContent>
+                </Card>
+                <p class="px-6 text-sm text-center">
+                    Arkeep — open source backup management
+                </p>
             </div>
-
-            <!-- Footer -->
-            <p class="mt-6 text-center text-xs text-muted-foreground/50">
-                Arkeep — open source backup management
-            </p>
-
         </div>
     </div>
 </template>

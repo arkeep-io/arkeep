@@ -179,4 +179,16 @@
     @apply bg-background text-foreground;
     letter-spacing: var(--tracking-normal);
   }
+
+  button, [role="button"], [role="menu-item"] {
+      cursor: pointer;
+  }
+
+  [data-slot="dropdown-menu-item"] {
+    cursor: pointer !important;
+  }
+
+  :disabled {
+      cursor: default;
+  }
 }

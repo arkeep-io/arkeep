@@ -41,8 +41,8 @@ export function useTheme() {
   }
 
   const modeLabel = computed(() => {
-    if (mode.value === 'dark') return 'Dark'
-    return 'Light'
+    if (mode.value === 'dark') return 'Light Theme'
+    return 'Dark Theme'
   })
 
   return { mode, isDark, cycle, modeLabel }
