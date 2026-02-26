@@ -249,12 +249,9 @@ onUnmounted(teardownSubscriptions)
                     Machines registered for backup management
                 </p>
             </div>
-            <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchAgents">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
-                <AgentSheet @saved="fetchAgents" />
-            </div>
+            <Button variant="outline" size="icon" :disabled="loading" @click="fetchAgents">
+                <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
+            </Button>
         </div>
 
         <!-- Error banner -->
@@ -297,12 +294,11 @@ onUnmounted(teardownSubscriptions)
                                         <Server class="w-8 h-8 text-muted-foreground" />
                                     </div>
                                     <div>
-                                        <p class="font-medium">No agents registered</p>
+                                        <p class="font-medium">No agents connected</p>
                                         <p class="mt-1 text-sm text-muted-foreground">
-                                            Add your first agent to start managing backups.
+                                            Install and start the agent on a machine to see it appear here.
                                         </p>
                                     </div>
-                                    <AgentSheet @saved="fetchAgents" />
                                 </div>
                             </TableCell>
                         </TableRow>

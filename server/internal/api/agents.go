@@ -1,8 +1,6 @@
 package api
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
@@ -30,8 +28,6 @@ func NewAgentHandler(repo repositories.AgentRepository, logger *zap.Logger) *Age
 }
 
 // agentResponse is the JSON representation of an agent returned by the API.
-// RegistrationToken is intentionally excluded — it is only shown once at
-// creation time via agentCreateResponse.
 type agentResponse struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
@@ -44,13 +40,6 @@ type agentResponse struct {
 	Labels     string  `json:"labels"`
 	LastSeenAt *string `json:"last_seen_at"`
 	CreatedAt  string  `json:"created_at"`
-}
-
-// agentCreateResponse extends agentResponse with the registration token,
-// shown only once at creation. The token cannot be recovered after this.
-type agentCreateResponse struct {
-	agentResponse
-	RegistrationToken string `json:"registration_token"`
 }
 
 // agentToResponse converts a db.Agent to an agentResponse.
@@ -101,13 +90,22 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // createAgentRequest is the JSON body expected by POST /api/v1/agents.
+//
+// Agents use an auto-discovery model: when the agent binary starts, it
+// connects via gRPC and the server upserts the record using the hostname
+// reported by the agent itself. This REST endpoint exists so that admins
+// can pre-create a named placeholder before the agent connects for the
+// first time — useful for inventory purposes.
+//
+// Hostname and all system metadata are populated by the agent on first
+// gRPC connection (Register RPC) and updated on every subsequent reconnect.
 type createAgentRequest struct {
-	Name     string `json:"name"`
-	Hostname string `json:"hostname"`
+	Name string `json:"name"`
 }
 
 // Create handles POST /api/v1/agents.
-// Registers a new agent and returns it along with its one-time registration token.
+// Pre-creates a named agent placeholder. The agent populates hostname,
+// OS, arch, version and status automatically when it connects via gRPC.
 func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req createAgentRequest
 	if !decodeJSON(w, r, &req) {
@@ -118,24 +116,11 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "name is required")
 		return
 	}
-	if req.Hostname == "" {
-		ErrBadRequest(w, "hostname is required")
-		return
-	}
-
-	token, err := generateToken()
-	if err != nil {
-		h.logger.Error("failed to generate registration token", zap.Error(err))
-		ErrInternal(w)
-		return
-	}
 
 	agent := &db.Agent{
-		Name:              req.Name,
-		Hostname:          req.Hostname,
-		Status:            "offline",
-		RegistrationToken: token,
-		Labels:            "{}",
+		Name:   req.Name,
+		Status: "offline",
+		Labels: "{}",
 	}
 
 	if err := h.repo.Create(r.Context(), agent); err != nil {
@@ -144,10 +129,7 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Created(w, agentCreateResponse{
-		agentResponse:     agentToResponse(agent),
-		RegistrationToken: token,
-	})
+	Created(w, agentToResponse(agent))
 }
 
 // GetByID handles GET /api/v1/agents/{id}.
@@ -172,7 +154,7 @@ func (h *AgentHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateAgentRequest is the JSON body expected by PATCH /api/v1/agents/{id}.
-// All fields are optional — only non-empty values are applied.
+// All fields are optional — only non-nil values are applied.
 type updateAgentRequest struct {
 	Name   *string `json:"name"`
 	Labels *string `json:"labels"`
@@ -279,14 +261,4 @@ func paginationOpts(r *http.Request) repositories.ListOptions {
 	}
 
 	return repositories.ListOptions{Limit: limit, Offset: offset}
-}
-
-// generateToken generates a cryptographically secure 32-byte random hex string.
-// Used for agent registration tokens.
-func generateToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }
