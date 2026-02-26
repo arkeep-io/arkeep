@@ -17,16 +17,22 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import {
+    Field,
+    FieldError,
+    FieldGroup,
+    FieldLabel,
+} from '@/components/ui/field'
 import {
     Tabs,
     TabsContent,
     TabsList,
     TabsTrigger,
 } from '@/components/ui/tabs'
-import { Copy, Check, TriangleAlert, Plus } from 'lucide-vue-next'
+import { AlertCircle, Copy, Check, TriangleAlert, Plus, Loader2 } from 'lucide-vue-next'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -47,7 +53,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     'update:open': [value: boolean]
-    // Emitted after successful create or update so the parent can refresh.
     saved: []
 }>()
 
@@ -57,8 +62,6 @@ const emit = defineEmits<{
 
 const isEdit = computed(() => !!props.agent)
 
-// Internal open state used in new mode (self-contained trigger).
-// In edit mode the parent controls open via the `open` prop.
 const internalOpen = ref(false)
 
 const sheetOpen = computed(() => isEdit.value ? (props.open ?? false) : internalOpen.value)
@@ -73,41 +76,45 @@ function setOpen(value: boolean) {
 
 // ---------------------------------------------------------------------------
 // Form
+//
+// New mode:  name + hostname (both required — backend enforces hostname).
+// Edit mode: name only (hostname is set by the agent at gRPC registration
+//            and cannot be changed from the GUI).
 // ---------------------------------------------------------------------------
 
-const schema = computed(() =>
-    toTypedSchema(
-        z.object({
-            name: z.string('Name is required').min(1, 'Name is required'),
-            hostname: isEdit.value
-                ? z.string().optional()
-                : z.string('Hostname is required').min(1, 'Hostname is required'),
-        })
-    )
+const schema = toTypedSchema(
+    z.object({
+        name: z.string().min(1, 'Name is required'),
+    })
 )
 
-const { handleSubmit, resetForm, errors, setValues } = useForm({
+const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
     validationSchema: schema,
 })
 
-const { value: name } = useField<string>('name')
-const { value: hostname } = useField<string>('hostname')
+const { value: name, errorMessage: nameError } = useField<string>('name')
 
-// Prefill in edit mode whenever the sheet opens.
-watch(sheetOpen, (open) => {
-    if (open && isEdit.value && props.agent) {
-        setValues({ name: props.agent.name })
-    }
-})
+// Prefill form when sheet opens in edit mode.
+// immediate: true is required because the component is recreated by v-if
+// each time agentToEdit changes — by the time the watch activates,
+// props.open is already true and the transition would be missed without it.
+watch(
+    () => props.open,
+    (open) => {
+        if (open && isEdit.value && props.agent) {
+            setValues({ name: props.agent.name })
+        }
+    },
+    { immediate: true }
+)
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-const submitLoading = ref(false)
 const submitError = ref<string | null>(null)
 
-// New mode only — token dialog shown after creation.
+// New mode only — token dialog shown after successful creation.
 const tokenDialogOpen = ref(false)
 const registrationToken = ref('')
 const createdAgentName = ref('')
@@ -130,12 +137,10 @@ interface CreateAgentResponse {
 }
 
 const onSubmit = handleSubmit(async (values) => {
-    submitLoading.value = true
     submitError.value = null
 
     try {
         if (isEdit.value && props.agent) {
-            // Edit mode — PATCH, only name is editable.
             await api<ApiResponse<Agent>>(`/api/v1/agents/${props.agent.id}`, {
                 method: 'PATCH',
                 body: { name: values.name },
@@ -143,10 +148,9 @@ const onSubmit = handleSubmit(async (values) => {
             setOpen(false)
             emit('saved')
         } else {
-            // New mode — POST, show token dialog on success.
             const res = await api<ApiResponse<CreateAgentResponse>>('/api/v1/agents', {
                 method: 'POST',
-                body: { name: values.name, hostname: values.hostname ?? '' },
+                body: { name: values.name },
             })
             registrationToken.value = res.data.registration_token
             createdAgentName.value = res.data.name
@@ -158,8 +162,6 @@ const onSubmit = handleSubmit(async (values) => {
         resetForm()
     } catch (e: any) {
         submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save agent'
-    } finally {
-        submitLoading.value = false
     }
 })
 
@@ -202,7 +204,6 @@ const dockerSnippet = computed(() =>
     <!-- ── Sheet ────────────────────────────────────────────────────────────── -->
     <Sheet :open="sheetOpen" @update:open="onOpenChange">
 
-        <!-- Trigger only rendered in new mode — edit mode is controlled by parent -->
         <SheetTrigger v-if="!isEdit" as-child>
             <Button>
                 <Plus class="w-4 h-4" />
@@ -215,7 +216,8 @@ const dockerSnippet = computed(() =>
                 <SheetTitle>{{ isEdit ? 'Edit Agent' : 'Add Agent' }}</SheetTitle>
                 <SheetDescription>
                     <template v-if="isEdit">
-                        Update the display name for <strong>{{ props.agent?.hostname }}</strong>.
+                        Update the display name for
+                        <strong>{{ props.agent?.hostname }}</strong>.
                     </template>
                     <template v-else>
                         Register a new agent. A one-time token will be generated — use it to
@@ -224,111 +226,111 @@ const dockerSnippet = computed(() =>
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="flex flex-col gap-5 py-6" @submit.prevent="onSubmit">
+            <form class="py-6 px-4" novalidate @submit.prevent="onSubmit">
+                <FieldGroup>
+                    <!-- Server error -->
+                    <Transition enter-active-class="transition-all duration-200"
+                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                        leave-to-class="-translate-y-1 opacity-0">
+                        <Alert v-if="submitError" variant="destructive">
+                            <AlertCircle class="size-4" />
+                            <AlertDescription>{{ submitError }}</AlertDescription>
+                        </Alert>
+                    </Transition>
 
-                <!-- Name -->
-                <div class="flex flex-col gap-2 px-4">
-                    <Label for="agent-name">Name</Label>
-                    <Input id="agent-name" v-model="name" placeholder="e.g. prod-db-01" :disabled="submitLoading"
-                        autocomplete="off" />
-                    <p v-if="errors.name" class="text-sm text-destructive">{{ errors.name }}</p>
-                </div>
+                    <!-- Name -->
+                    <Field>
+                        <FieldLabel for="agent-name">Agent Name</FieldLabel>
+                        <Input id="agent-name" v-model="name" placeholder="e.g. prod-db-01" autocomplete="off"
+                            :disabled="isSubmitting"
+                            :class="nameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="nameError">{{ nameError }}</FieldError>
+                    </Field>
 
-                <!-- Hostname — new mode: editable, edit mode: read-only -->
-                <div class="flex flex-col gap-2 px-4">
-                    <Label for="agent-hostname">Hostname</Label>
-                    <template v-if="isEdit">
-                        <Input id="agent-hostname" :value="props.agent?.hostname" disabled
-                            class="text-muted-foreground" />
-                        <p class="text-xs text-muted-foreground">
-                            Hostname is set by the agent and cannot be changed.
-                        </p>
-                    </template>
-                    <template v-else>
-                        <Input id="agent-hostname" v-model="hostname" placeholder="e.g. db-01.internal"
-                            :disabled="submitLoading" autocomplete="off" />
-                        <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname }}</p>
-                    </template>
-                </div>
 
-                <p v-if="submitError" class="text-sm text-destructive">{{ submitError }}</p>
+                    <!-- Actions -->
+                    <SheetFooter class="mt-2 px-0">
+                        <Button type="button" variant="outline" :disabled="isSubmitting" @click="onOpenChange(false)">
+                            Cancel
+                        </Button>
+                        <Button type="submit" :disabled="isSubmitting">
+                            <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                            {{ isSubmitting
+                                ? (isEdit ? 'Saving…' : 'Creating…')
+                                : (isEdit ? 'Save Changes' : 'Create Agent') }}
+                        </Button>
+                    </SheetFooter>
 
-                <SheetFooter class="mt-2">
-                    <Button type="button" variant="outline" :disabled="submitLoading" @click="onOpenChange(false)">
-                        Cancel
-                    </Button>
-                    <Button type="submit" :disabled="submitLoading">
-                        {{ submitLoading ?
-                            (isEdit ? 'Saving…' : 'Creating…') :
-                            (isEdit ? 'Save Changes' : 'Create Agent')
-                        }}
-                    </Button>
-                </SheetFooter>
+                </FieldGroup>
             </form>
         </SheetContent>
     </Sheet>
 
     <!-- ── Token dialog (new mode only) ─────────────────────────────────────── -->
     <Dialog v-if="!isEdit" :open="tokenDialogOpen" @update:open="tokenDialogOpen = $event">
-        <DialogContent>
-            <DialogHeader>
-                <DialogTitle>Agent created</DialogTitle>
-                <DialogDescription>
-                    <strong>{{ createdAgentName }}</strong> has been registered. Copy the token
-                    below and use it to start the agent on the target machine.
-                </DialogDescription>
-            </DialogHeader>
+        <DialogContent class="sm:max-w-lg w-full flex flex-col max-h-[90vh] gap-0 p-0">
+            <div class="overflow-y-auto flex flex-col gap-4 p-6">
+                <DialogHeader>
+                    <DialogTitle>Agent created</DialogTitle>
+                    <DialogDescription>
+                        <strong>{{ createdAgentName }}</strong> has been registered. Copy the token
+                        below and use it to start the agent on the target machine.
+                    </DialogDescription>
+                </DialogHeader>
 
-            <div
-                class="flex items-start gap-3 px-4 py-3 text-sm text-yellow-700 border rounded-md border-yellow-500/30 bg-yellow-500/10 dark:text-yellow-400">
-                <TriangleAlert class="h-4 w-4 mt-0.5 shrink-0" />
-                <span>
-                    This token is shown <strong>only once</strong> and cannot be recovered.
-                    Copy it before closing this dialog.
-                </span>
+                <div
+                    class="flex items-start gap-3 px-4 py-3 text-sm text-yellow-700 border rounded-md border-yellow-500/30 bg-yellow-500/10 dark:text-yellow-400">
+                    <TriangleAlert class="h-4 w-4 mt-0.5 shrink-0" />
+                    <span>
+                        This token is shown <strong>only once</strong> and cannot be recovered.
+                        Copy it before closing this dialog.
+                    </span>
+                </div>
+
+                <div class="flex items-center gap-2 min-w-0">
+                    <code class="flex-1 min-w-0 px-3 py-2 font-mono text-sm break-all rounded-md select-all bg-muted">{{
+                        registrationToken }}</code>
+                    <Button variant="outline" size="icon" @click="copyToken">
+                        <Check v-if="copied" class="w-4 h-4 text-emerald-500" />
+                        <Copy v-else class="w-4 h-4" />
+                    </Button>
+                </div>
+
+                <div class="flex flex-col gap-2">
+                    <p class="text-sm font-medium">Start the agent</p>
+                    <Tabs default-value="cli">
+                        <TabsList class="w-full">
+                            <TabsTrigger value="cli" class="flex-1">CLI</TabsTrigger>
+                            <TabsTrigger value="env" class="flex-1">Env vars</TabsTrigger>
+                            <TabsTrigger value="docker" class="flex-1">Docker</TabsTrigger>
+                        </TabsList>
+                        <TabsContent value="cli">
+                            <pre
+                                class="px-4 py-3 overflow-x-auto font-mono text-xs whitespace-pre rounded-md bg-muted max-w-full">
+                            {{ cliSnippet }}</pre>
+                        </TabsContent>
+                        <TabsContent value="env">
+                            <pre
+                                class="px-4 py-3 overflow-x-auto font-mono text-xs whitespace-pre rounded-md bg-muted max-w-full">
+                            {{ envSnippet }}</pre>
+                        </TabsContent>
+                        <TabsContent value="docker">
+                            <pre
+                                class="px-4 py-3 overflow-x-auto font-mono text-xs whitespace-pre rounded-md bg-muted max-w-full">
+                            {{ dockerSnippet }}</pre>
+                            <p class="mt-2 text-xs text-muted-foreground">
+                                Mount additional volumes with <code class="px-1 rounded bg-muted">-v</code> as needed.
+                                The <code class="px-1 rounded bg-muted">-v /:/host:ro</code> above gives read-only
+                                access to the entire host filesystem.
+                            </p>
+                        </TabsContent>
+                    </Tabs>
+                </div>
+
+                <DialogFooter>
+                    <Button @click="tokenDialogOpen = false">Done</Button>
+                </DialogFooter>
             </div>
-
-            <div class="flex items-center gap-2">
-                <code class="flex-1 px-3 py-2 font-mono text-sm break-all rounded-md select-all bg-muted">
-                {{ registrationToken }}
-            </code>
-                <Button variant="outline" size="icon" @click="copyToken">
-                    <Check v-if="copied" class="w-4 h-4 text-emerald-500" />
-                    <Copy v-else class="w-4 h-4" />
-                </Button>
-            </div>
-
-            <div class="flex flex-col gap-2">
-                <p class="text-sm font-medium">Start the agent</p>
-                <Tabs default-value="cli">
-                    <TabsList class="w-full">
-                        <TabsTrigger value="cli" class="flex-1">CLI</TabsTrigger>
-                        <TabsTrigger value="env" class="flex-1">Env vars</TabsTrigger>
-                        <TabsTrigger value="docker" class="flex-1">Docker</TabsTrigger>
-                    </TabsList>
-                    <TabsContent value="cli">
-                        <pre class="px-4 py-3 overflow-x-auto font-mono text-xs whitespace-pre rounded-md bg-muted">{{
-                            cliSnippet }}</pre>
-                    </TabsContent>
-                    <TabsContent value="env">
-                        <pre class="px-4 py-3 overflow-x-auto font-mono text-xs whitespace-pre rounded-md bg-muted">{{
-                            envSnippet }}</pre>
-                    </TabsContent>
-                    <TabsContent value="docker">
-                        <pre class="px-4 py-3 overflow-x-auto font-mono text-xs whitespace-pre rounded-md bg-muted">{{
-                            dockerSnippet }}</pre>
-                        <p class="mt-2 text-xs text-muted-foreground">
-                            Mount additional volumes with <code class="px-1 rounded bg-muted">-v</code> as needed.
-                            The <code class="px-1 rounded bg-muted">-v /:/host:ro</code> above gives read-only
-                            access to the entire host filesystem.
-                        </p>
-                    </TabsContent>
-                </Tabs>
-            </div>
-
-            <DialogFooter>
-                <Button @click="tokenDialogOpen = false">Done</Button>
-            </DialogFooter>
         </DialogContent>
     </Dialog>
 </template>
