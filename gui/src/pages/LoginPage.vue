@@ -13,21 +13,30 @@ import { useForm, Field, ErrorMessage } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
 import { useAuthStore } from '@/stores/auth'
+import { useTheme } from '@/composables/useTheme'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
-import { Eye, EyeOff, AlertCircle, Loader2, Shield } from 'lucide-vue-next'
+import {
+    Eye,
+    EyeOff,
+    AlertCircle,
+    Loader2,
+    Moon,
+    Sun,
+    Monitor,
+} from 'lucide-vue-next'
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 const { handleSubmit, isSubmitting } = useForm({
     validationSchema: toTypedSchema(
         z.object({
-            email: z.email({ error: 'Enter a valid email address' }),
+            email: z.email('Enter a valid email address'),
             password: z
-                .string({ error: 'Password is required' })
+                .string('Password is required')
                 .min(1, 'Password is required'),
         }),
     ),
@@ -36,15 +45,30 @@ const { handleSubmit, isSubmitting } = useForm({
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const auth = useAuthStore()
+const { mode, cycle } = useTheme()
 const router = useRouter()
 const route = useRoute()
 
 const serverError = ref<string | null>(null)
 const showPassword = ref(false)
+const oidcLoading = ref(false)
 
 const redirectTo = computed(() =>
     typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard',
 )
+
+// Icon and label for the current color mode state
+const modeIcon = computed(() => {
+    if (mode.value === 'dark') return Moon
+    if (mode.value === 'light') return Sun
+    return Monitor
+})
+
+const modeLabel = computed(() => {
+    if (mode.value === 'dark') return 'Dark mode'
+    if (mode.value === 'light') return 'Light mode'
+    return 'System mode'
+})
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +83,7 @@ const onSubmit = handleSubmit(async (values) => {
 })
 
 function loginWithOIDC(): void {
+    oidcLoading.value = true
     // Full-page redirect — server handles OAuth flow and returns to
     // /?token=<access_token> which OIDCCallbackPage processes.
     window.location.href = '/api/v1/auth/oidc/login'
@@ -66,25 +91,33 @@ function loginWithOIDC(): void {
 </script>
 
 <template>
-    <div class="min-h-dvh bg-zinc-950 flex items-center justify-center p-4">
-        <!-- Subtle grid background -->
-        <div class="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-size-[48px_48px] mask-[radial-gradient(ellipse_80%_80%_at_50%_50%,black_30%,transparent_100%)]"
-            aria-hidden="true" />
+    <div class="relative min-h-dvh flex items-center justify-center bg-background p-4">
 
-        <div class="relative w-full max-w-sm">
-            <div
-                class="rounded-xl border border-zinc-800 bg-zinc-900/80 backdrop-blur-sm shadow-2xl shadow-black/50 p-8">
+        <!-- Theme cycle button -->
+        <Button variant="ghost" size="icon" class="absolute top-4 right-4 text-muted-foreground hover:text-foreground"
+            :aria-label="modeLabel" @click="cycle()">
+            <component :is="modeIcon" class="size-4" />
+        </Button>
+
+        <div class="w-full max-w-sm">
+
+            <!-- Card -->
+            <div class="rounded-lg border border-border bg-card text-card-foreground shadow-sm p-8">
 
                 <!-- Header -->
                 <div class="mb-8 text-center">
                     <div
-                        class="inline-flex items-center justify-center size-10 rounded-lg bg-blue-500/10 border border-blue-500/20 mb-4">
-                        <Shield class="size-5 text-blue-400" />
+                        class="inline-flex items-center justify-center size-10 rounded-lg bg-primary/10 border border-primary/20 mb-4">
+                        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                            <path d="M8 2L14 5.5V10.5L8 14L2 10.5V5.5L8 2Z" stroke="currentColor" stroke-width="1.25"
+                                stroke-linejoin="round" fill="none" class="text-primary" />
+                            <circle cx="8" cy="8" r="2" fill="currentColor" class="text-primary" />
+                        </svg>
                     </div>
-                    <h1 class="text-lg font-semibold tracking-tight text-zinc-100">
+                    <h1 class="text-lg font-semibold tracking-tight text-foreground">
                         Arkeep
                     </h1>
-                    <p class="mt-1 text-sm text-zinc-500">
+                    <p class="mt-1 text-sm text-muted-foreground">
                         Sign in to your workspace
                     </p>
                 </div>
@@ -92,8 +125,7 @@ function loginWithOIDC(): void {
                 <!-- Server error -->
                 <Transition enter-active-class="transition-all duration-200" enter-from-class="opacity-0 -translate-y-1"
                     leave-active-class="transition-all duration-150" leave-to-class="opacity-0 -translate-y-1">
-                    <Alert v-if="serverError" variant="destructive"
-                        class="mb-5 border-red-500/30 bg-red-500/10 text-red-400">
+                    <Alert v-if="serverError" variant="destructive" class="mb-5">
                         <AlertCircle class="size-4" />
                         <AlertDescription>{{ serverError }}</AlertDescription>
                     </Alert>
@@ -104,31 +136,29 @@ function loginWithOIDC(): void {
 
                     <!-- Email -->
                     <div class="space-y-1.5">
-                        <Label for="email" class="text-zinc-400 text-xs uppercase tracking-wide">
+                        <Label for="email" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             Email
                         </Label>
                         <Field v-slot="{ field, errors: fieldErrors }" name="email">
                             <Input id="email" v-bind="field" type="email" placeholder="you@company.com"
                                 autocomplete="email" autofocus spellcheck="false"
-                                class="bg-zinc-800/60 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-blue-500/40 focus-visible:border-blue-500/60"
-                                :class="fieldErrors.length ? 'border-red-500/60' : ''" />
+                                :class="fieldErrors.length ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                         </Field>
-                        <ErrorMessage name="email" class="text-xs text-red-400" as="p" />
+                        <ErrorMessage name="email" class="text-xs text-destructive" as="p" />
                     </div>
 
                     <!-- Password -->
                     <div class="space-y-1.5">
-                        <Label for="password" class="text-zinc-400 text-xs uppercase tracking-wide">
+                        <Label for="password" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             Password
                         </Label>
                         <Field v-slot="{ field, errors: fieldErrors }" name="password">
                             <div class="relative">
                                 <Input id="password" v-bind="field" :type="showPassword ? 'text' : 'password'"
-                                    placeholder="••••••••" autocomplete="current-password"
-                                    class="bg-zinc-800/60 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 focus-visible:ring-blue-500/40 focus-visible:border-blue-500/60 pr-10"
-                                    :class="fieldErrors.length ? 'border-red-500/60' : ''" />
+                                    placeholder="••••••••" autocomplete="current-password" class="pr-10"
+                                    :class="fieldErrors.length ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                 <button type="button"
-                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors"
+                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                                     :aria-label="showPassword ? 'Hide password' : 'Show password'"
                                     @click="showPassword = !showPassword">
                                     <EyeOff v-if="showPassword" class="size-4" />
@@ -136,11 +166,10 @@ function loginWithOIDC(): void {
                                 </button>
                             </div>
                         </Field>
-                        <ErrorMessage name="password" class="text-xs text-red-400" as="p" />
+                        <ErrorMessage name="password" class="text-xs text-destructive" as="p" />
                     </div>
 
-                    <Button type="submit" class="w-full bg-blue-600 hover:bg-blue-500 text-white border-0 mt-2"
-                        :disabled="isSubmitting">
+                    <Button type="submit" class="w-full mt-2" :disabled="isSubmitting">
                         <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
                         {{ isSubmitting ? 'Signing in…' : 'Sign in' }}
                     </Button>
@@ -148,26 +177,25 @@ function loginWithOIDC(): void {
                 </form>
 
                 <!-- Divider -->
-                <div class="relative my-6">
-                    <Separator class="bg-zinc-800" />
-                    <span
-                        class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-zinc-900 px-2 text-xs text-zinc-600 uppercase tracking-widest">
-                        or
-                    </span>
+                <div class="relative my-6 flex items-center gap-3">
+                    <Separator class="flex-1" />
+                    <span class="text-xs text-muted-foreground uppercase tracking-widest shrink-0">or</span>
+                    <Separator class="flex-1" />
                 </div>
 
                 <!-- OIDC -->
-                <Button type="button" variant="outline"
-                    class="w-full border-zinc-700 bg-zinc-800/40 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 hover:border-zinc-600"
-                    @click="loginWithOIDC">
+                <Button type="button" variant="outline" class="w-full" :disabled="oidcLoading" @click="loginWithOIDC">
+                    <Loader2 v-if="oidcLoading" class="size-4 animate-spin" />
                     Continue with SSO
                 </Button>
 
             </div>
 
-            <p class="mt-6 text-center text-xs text-zinc-700">
+            <!-- Footer -->
+            <p class="mt-6 text-center text-xs text-muted-foreground/50">
                 Arkeep — open source backup management
             </p>
+
         </div>
     </div>
 </template>

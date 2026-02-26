@@ -1,19 +1,21 @@
 <script setup lang="ts">
 // AppLayout.vue — Main application shell.
 //
-// Layout: fixed sidebar (left) + topbar (top) + scrollable main content area.
-// The sidebar is collapsible — icon-only at 56px, expanded with labels at 220px.
-// Collapse state is persisted in localStorage so it survives page refreshes.
+// Layout: collapsible sidebar (left) + topbar (top) + scrollable main area.
+// Collapse state is persisted in localStorage.
 //
-// Navigation is grouped into sections matching the main feature areas:
-//   - Core: Dashboard, Agents, Policies, Destinations
-//   - Data: Snapshots, Jobs
-//   - Ops: Monitoring, Settings (admin only)
+// Navigation sections:
+//   Overview:       Dashboard
+//   Infrastructure: Agents, Policies, Destinations
+//   Data:           Snapshots, Jobs
+//   Operations:     Monitoring, Settings (admin only)
 
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useTheme } from '@/composables/useTheme'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -41,8 +43,10 @@ import {
     ChevronRight,
     LogOut,
     User,
-    Bell,
     Circle,
+    Moon,
+    Sun,
+    Monitor,
 } from 'lucide-vue-next'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -95,9 +99,9 @@ const NAV: NavSection[] = [
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const auth = useAuthStore()
+const { mode, cycle } = useTheme()
 const router = useRouter()
 
-// Persist collapse state across reloads
 const COLLAPSE_KEY = 'arkeep:sidebar-collapsed'
 const collapsed = ref(localStorage.getItem(COLLAPSE_KEY) === 'true')
 
@@ -106,22 +110,32 @@ function toggleCollapse(): void {
     localStorage.setItem(COLLAPSE_KEY, String(collapsed.value))
 }
 
-// Filter nav sections — hide admin-only items for non-admins
-const visibleNav = computed < NavSection[] > (() =>
+const visibleNav = computed<NavSection[]>(() =>
     NAV.map((section) => ({
         ...section,
         items: section.items.filter((item) => !item.adminOnly || auth.isAdmin),
     })).filter((section) => section.items.length > 0),
 )
 
-const userInitials = computed(() => {
-    const name = auth.user?.name ?? ''
-    return name
+const userInitials = computed(() =>
+    (auth.user?.display_name ?? '')
         .split(' ')
         .map((w) => w[0])
         .slice(0, 2)
         .join('')
-        .toUpperCase() || '?'
+        .toUpperCase() || '?',
+)
+
+const modeIcon = computed(() => {
+    if (mode.value === 'dark') return Moon
+    if (mode.value === 'light') return Sun
+    return Monitor
+})
+
+const modeLabel = computed(() => {
+    if (mode.value === 'dark') return 'Dark'
+    if (mode.value === 'light') return 'Light'
+    return 'System'
 })
 
 async function logout(): Promise<void> {
@@ -131,29 +145,29 @@ async function logout(): Promise<void> {
 </script>
 
 <template>
-    <TooltipProvider :delay-duration="300">
-        <div class="flex h-dvh overflow-hidden bg-zinc-950 text-zinc-100">
+    <TooltipProvider :delay-duration="400">
+        <div class="flex h-dvh overflow-hidden bg-background text-foreground">
 
             <!-- ── Sidebar ──────────────────────────────────────────────────────── -->
             <aside
-                class="relative flex flex-col border-r border-zinc-800/60 bg-zinc-900 transition-all duration-200 ease-in-out shrink-0"
+                class="relative flex flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-in-out shrink-0"
                 :class="collapsed ? 'w-14' : 'w-55'">
                 <!-- Logo -->
-                <div class="flex h-14 items-center border-b border-zinc-800/60 px-3 shrink-0"
+                <div class="flex h-14 items-center border-b border-sidebar-border px-3 shrink-0"
                     :class="collapsed ? 'justify-center' : 'gap-2.5'">
                     <div
-                        class="flex size-7 shrink-0 items-center justify-center rounded-md bg-blue-500/10 border border-blue-500/20">
+                        class="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary/10 border border-primary/20">
                         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                            <path d="M8 2L14 5.5V10.5L8 14L2 10.5V5.5L8 2Z" stroke="#60a5fa" stroke-width="1.25"
-                                stroke-linejoin="round" fill="none" />
-                            <circle cx="8" cy="8" r="2" fill="#60a5fa" />
+                            <path d="M8 2L14 5.5V10.5L8 14L2 10.5V5.5L8 2Z" stroke="currentColor" stroke-width="1.25"
+                                stroke-linejoin="round" fill="none" class="text-primary" />
+                            <circle cx="8" cy="8" r="2" fill="currentColor" class="text-primary" />
                         </svg>
                     </div>
                     <Transition enter-active-class="transition-all duration-150 delay-75"
                         enter-from-class="opacity-0 -translate-x-2" leave-active-class="transition-all duration-100"
                         leave-to-class="opacity-0">
                         <span v-if="!collapsed"
-                            class="text-sm font-semibold tracking-tight text-zinc-100 whitespace-nowrap overflow-hidden">
+                            class="text-sm font-semibold tracking-tight text-sidebar-foreground whitespace-nowrap overflow-hidden">
                             arkeep
                         </span>
                     </Transition>
@@ -162,25 +176,23 @@ async function logout(): Promise<void> {
                 <!-- Nav -->
                 <nav class="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 space-y-4">
                     <div v-for="section in visibleNav" :key="section.label">
-                        <!-- Section label -->
                         <Transition enter-active-class="transition-all duration-150 delay-75"
                             enter-from-class="opacity-0" leave-active-class="transition-all duration-100"
                             leave-to-class="opacity-0">
                             <p v-if="!collapsed"
-                                class="mb-1 px-2 text-[10px] font-medium uppercase tracking-widest text-zinc-600 whitespace-nowrap">
+                                class="mb-1 px-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground whitespace-nowrap">
                                 {{ section.label }}
                             </p>
                         </Transition>
 
-                        <!-- Nav items -->
                         <ul class="space-y-0.5">
                             <li v-for="item in section.items" :key="item.to">
                                 <Tooltip :disabled="!collapsed">
                                     <TooltipTrigger as-child>
                                         <RouterLink :to="item.to"
-                                            class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition-colors outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                                            :class="[collapsed && 'justify-center']"
-                                            active-class="bg-zinc-800 text-zinc-100">
+                                            class="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+                                            :class="collapsed ? 'justify-center' : ''"
+                                            active-class="bg-sidebar-accent text-sidebar-accent-foreground font-medium">
                                             <component :is="item.icon" class="size-4 shrink-0" />
                                             <Transition enter-active-class="transition-all duration-150 delay-75"
                                                 enter-from-class="opacity-0 -translate-x-1"
@@ -193,7 +205,7 @@ async function logout(): Promise<void> {
                                             </Transition>
                                         </RouterLink>
                                     </TooltipTrigger>
-                                    <TooltipContent side="right" class="bg-zinc-800 text-zinc-100 border-zinc-700">
+                                    <TooltipContent side="right" :side-offset="8">
                                         {{ item.label }}
                                     </TooltipContent>
                                 </Tooltip>
@@ -203,30 +215,53 @@ async function logout(): Promise<void> {
                 </nav>
 
                 <!-- Bottom: user menu -->
-                <div class="shrink-0 border-t border-zinc-800/60 p-2">
+                <div class="shrink-0 border-t border-sidebar-border p-2 space-y-1">
+
+                    <!-- Theme cycle -->
+                    <Tooltip :disabled="!collapsed">
+                        <TooltipTrigger as-child>
+                            <button
+                                class="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+                                :class="collapsed ? 'justify-center' : ''" :aria-label="modeLabel" @click="cycle()">
+                                <component :is="modeIcon" class="size-4 shrink-0" />
+                                <Transition enter-active-class="transition-all duration-150 delay-75"
+                                    enter-from-class="opacity-0 -translate-x-1"
+                                    leave-active-class="transition-all duration-100" leave-to-class="opacity-0">
+                                    <span v-if="!collapsed" class="whitespace-nowrap">
+                                        {{ modeLabel }}
+                                    </span>
+                                </Transition>
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" :side-offset="8">
+                            {{ modeLabel }}
+                        </TooltipContent>
+                    </Tooltip>
+
+                    <Separator class="bg-sidebar-border" />
+
+                    <!-- User dropdown -->
                     <DropdownMenu>
                         <DropdownMenuTrigger as-child>
                             <button
-                                class="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/70 transition-colors outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                                :class="[collapsed && 'justify-center']">
-                                <!-- Avatar -->
+                                class="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors outline-none focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+                                :class="collapsed ? 'justify-center' : ''">
                                 <div class="relative shrink-0">
                                     <div
-                                        class="flex size-6 items-center justify-center rounded-full bg-blue-500/20 border border-blue-500/30 text-[10px] font-semibold text-blue-300">
+                                        class="flex size-6 items-center justify-center rounded-full bg-primary/15 border border-primary/25 text-[10px] font-semibold text-primary">
                                         {{ userInitials }}
                                     </div>
-                                    <!-- Online indicator -->
                                     <Circle
-                                        class="absolute -bottom-0.5 -right-0.5 size-2 fill-emerald-500 text-emerald-500" />
+                                        class="absolute -bottom-0.5 -right-0.5 size-2 fill-green-500 text-green-500" />
                                 </div>
                                 <Transition enter-active-class="transition-all duration-150 delay-75"
                                     enter-from-class="opacity-0 -translate-x-1"
                                     leave-active-class="transition-all duration-100" leave-to-class="opacity-0">
                                     <div v-if="!collapsed" class="min-w-0 text-left overflow-hidden">
-                                        <p class="truncate text-xs font-medium text-zinc-200">
-                                            {{ auth.user?.name }}
+                                        <p class="truncate text-xs font-medium text-sidebar-foreground">
+                                            {{ auth.user?.display_name }}
                                         </p>
-                                        <p class="truncate text-[10px] text-zinc-500">
+                                        <p class="truncate text-[10px] text-muted-foreground capitalize">
                                             {{ auth.user?.role }}
                                         </p>
                                     </div>
@@ -234,25 +269,19 @@ async function logout(): Promise<void> {
                             </button>
                         </DropdownMenuTrigger>
 
-                        <DropdownMenuContent side="right" align="end"
-                            class="w-48 bg-zinc-900 border-zinc-700 text-zinc-200">
-                            <DropdownMenuLabel class="text-xs text-zinc-500">
+                        <DropdownMenuContent side="right" align="end" class="w-48">
+                            <DropdownMenuLabel class="text-xs text-muted-foreground font-normal truncate">
                                 {{ auth.user?.email }}
                             </DropdownMenuLabel>
-                            <DropdownMenuSeparator class="bg-zinc-800" />
-                            <DropdownMenuItem class="gap-2 text-sm cursor-pointer focus:bg-zinc-800 focus:text-zinc-100"
-                                @click="router.push('/settings/profile')">
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem class="gap-2 text-sm cursor-pointer"
+                                @click="router.push('/settings/general')">
                                 <User class="size-3.5" />
                                 Profile
                             </DropdownMenuItem>
-                            <DropdownMenuItem class="gap-2 text-sm cursor-pointer focus:bg-zinc-800 focus:text-zinc-100"
-                                @click="router.push('/notifications')">
-                                <Bell class="size-3.5" />
-                                Notifications
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator class="bg-zinc-800" />
+                            <DropdownMenuSeparator />
                             <DropdownMenuItem
-                                class="gap-2 text-sm cursor-pointer text-red-400 focus:bg-red-500/10 focus:text-red-400"
+                                class="gap-2 text-sm cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10"
                                 @click="logout">
                                 <LogOut class="size-3.5" />
                                 Sign out
@@ -262,8 +291,8 @@ async function logout(): Promise<void> {
                 </div>
 
                 <!-- Collapse toggle -->
-                <Button variant="ghost" size="icon"
-                    class="absolute -right-3 top-14.5 size-6 rounded-full border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 shadow-sm z-10"
+                <Button variant="outline" size="icon"
+                    class="absolute -right-3 top-14.5 size-6 rounded-full bg-background border-border hover:bg-accent text-muted-foreground hover:text-foreground shadow-sm z-10"
                     @click="toggleCollapse">
                     <ChevronLeft v-if="!collapsed" class="size-3" />
                     <ChevronRight v-else class="size-3" />
@@ -275,18 +304,10 @@ async function logout(): Promise<void> {
 
                 <!-- Topbar -->
                 <header
-                    class="flex h-14 shrink-0 items-center justify-between border-b border-zinc-800/60 bg-zinc-900/50 backdrop-blur-sm px-5">
-                    <!-- Breadcrumb via slot — pages can inject their own title/actions -->
+                    class="flex h-14 shrink-0 items-center justify-between border-b border-border bg-background/80 backdrop-blur-sm px-5">
                     <div class="flex items-center gap-2 min-w-0">
-                        <slot name="topbar-left">
-                            <RouterLink to="/dashboard"
-                                class="text-xs text-zinc-600 hover:text-zinc-400 transition-colors">
-                                Arkeep
-                            </RouterLink>
-                        </slot>
+                        <slot name="topbar-left" />
                     </div>
-
-                    <!-- Right side actions -->
                     <div class="flex items-center gap-2">
                         <slot name="topbar-right" />
                     </div>
