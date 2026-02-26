@@ -13,22 +13,22 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: gui/package-lock.json
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: gui/pnpm-lock.yaml
 
       - name: Build GUI
-        run: cd gui && npm ci && npm run build
+        run: cd gui && pnpm ci && pnpm build
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -44,7 +44,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: latest

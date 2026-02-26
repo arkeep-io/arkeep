@@ -68,15 +68,15 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
-          cache: "npm"
-          cache-dependency-path: gui/package-lock.json
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: gui/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: cd gui && npm ci
+        run: cd gui && pnpm ci
 
       - name: Type check
-        run: cd gui && npm run type-check
+        run: cd gui && pnpm type-check
 
       - name: Build
-        run: cd gui && npm run build
+        run: cd gui && pnpm build
