@@ -36,9 +36,9 @@
   --sidebar-accent-foreground: oklch(0.6871 0.1896 43.0679);
   --sidebar-border: oklch(0.9271 0.0101 238.5177);
   --sidebar-ring: oklch(0.6871 0.1896 43.0679);
-  --font-sans: Open Sans, sans-serif;
-  --font-serif: Georgia, serif;
-  --font-mono: Menlo, monospace;
+  --font-sans: Be Vietnam Pro, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Domine, ui-serif, serif;
+  --font-mono: JetBrains Mono, ui-monospace, monospace;
   --radius: 0.4rem;
   --shadow-x: 0px;
   --shadow-y: 2px;
@@ -91,9 +91,9 @@
   --sidebar-accent-foreground: oklch(0.6871 0.1896 43.0679);
   --sidebar-border: oklch(0.3795 0.0220 240.5943);
   --sidebar-ring: oklch(0.6871 0.1896 43.0679);
-  --font-sans: Open Sans, sans-serif;
-  --font-serif: Georgia, serif;
-  --font-mono: Menlo, monospace;
+  --font-sans: Be Vietnam Pro, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: Domine, ui-serif, serif;
+  --font-mono: JetBrains Mono, ui-monospace, monospace;
   --radius: 0.4rem;
   --shadow-x: 0px;
   --shadow-y: 2px;
@@ -177,7 +177,6 @@
   }
   body {
     @apply bg-background text-foreground;
-    letter-spacing: var(--tracking-normal);
   }
 
   button, [role="button"], [role="menu-item"] {

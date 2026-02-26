@@ -29,7 +29,7 @@ defineProps<{
             <SidebarMenu v-for="item in items" :key="item.title" as-child>
                 <SidebarGroupLabel>{{ item.title }}</SidebarGroupLabel>
                 <SidebarMenuItem v-for="obj in item.items" :key="obj.url">
-                    <SidebarMenuButton as-child size="sm" :is-active="obj.isActive">
+                    <SidebarMenuButton as-child :is-active="obj.isActive">
                         <a :href="obj.url">
                             <component :is="obj.icon" />
                             <span>{{ obj.title }}</span>
