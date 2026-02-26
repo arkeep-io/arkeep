@@ -310,10 +310,8 @@ export interface PaginationParams {
 
 // Standard paginated list envelope
 export interface PaginatedResponse<T> {
-  data: T[]
+  items: T[]
   total: number
-  page: number
-  per_page: number
 }
 
 // Auth — login returns only the access token; user profile is a separate call

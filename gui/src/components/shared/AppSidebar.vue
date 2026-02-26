@@ -36,7 +36,6 @@ interface NavItem {
     title: string
     url: string
     icon: typeof LayoutDashboard
-    isActive?: boolean
     adminOnly?: boolean
 }
 
@@ -50,7 +49,7 @@ const nav: NavSection[] = [
     {
         title: 'Overview',
         items: [
-            { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard, isActive: true },
+            { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard },
         ],
     },
     {
@@ -102,11 +101,11 @@ const userInitials = computed(() =>
                     <SidebarMenuButton size="lg" as-child>
                         <a href="#">
                             <div
-                                class="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+                                class="flex items-center justify-center rounded-lg aspect-square size-8 bg-sidebar-primary text-sidebar-primary-foreground">
                                 <Command class="size-4" />
                             </div>
-                            <div class="grid flex-1 text-left text-sm leading-tight">
-                                <span class="truncate font-medium">Arkeep</span>
+                            <div class="grid flex-1 text-sm leading-tight text-left">
+                                <span class="font-medium truncate">Arkeep</span>
                             </div>
                         </a>
                     </SidebarMenuButton>

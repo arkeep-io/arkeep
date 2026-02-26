@@ -42,7 +42,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'login',
-    component: () => import('@/pages/LoginPage.vue'),
+    component: () => import('@/pages/auth/LoginPage.vue'),
     meta: { public: true },
   },
 
@@ -69,21 +69,29 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'dashboard',
         name: 'dashboard',
-        component: () => import('@/pages/DashboardPage.vue'),
+        component: () => import('@/pages/dashboard/DashboardPage.vue'),
+        meta: { breadcrumb: "Dashboard" },
       },
 
       // Agents
-      /* {
-        path: 'agents',
-        name: 'agents',
-        component: () => import('@/pages/AgentsPage.vue'),
-      },
       {
-        path: 'agents/:id',
-        name: 'agent-detail',
-        component: () => import('@/pages/AgentDetailPage.vue'),
-        props: true,
-      }, */
+        path: "agents",
+        meta: { breadcrumb: "Agents" },
+        children: [
+          {
+            path: "",
+            name: "agents",
+            component: () => import("@/pages/agents/AgentsPage.vue"),
+          },
+          {
+            path: ":id",
+            name: "agent-detail",
+            component: () => import("@/pages/agents/AgentDetailPage.vue"),
+            props: true,
+            meta: { breadcrumb: "Agent Details" },
+          },
+        ],
+      },
 
       // Policies
       /* {
