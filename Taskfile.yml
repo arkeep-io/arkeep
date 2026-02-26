@@ -56,7 +56,7 @@ tasks:
     dir: server
     cmd: go run ./cmd/server --log-level=debug
     env:
-      ARKEEP_SECRET_KEY: dev-secret-key-do-not-use-in-production
+      ARKEEP_SECRET_KEY: dev-secret-key-00000000000000000
 
   run:agent:
     desc: Run agent in development mode (downloads deps if needed)
@@ -65,6 +65,15 @@ tasks:
     cmd: go run ./cmd/agent --server-addr=localhost:9090 --log-level=debug
     env:
       ARKEEP_TOKEN: dev-token
+  
+  run:gui:
+    desc: Run GUI in development mode
+    dir: gui
+    cmd: pnpm dev
+
+  run:dev:
+    desc: Run server + GUI in development mode
+    deps: [run:server, run:gui]
 
   # ─── Test ───────────────────────────────────────────────────────────────────
   test:
@@ -120,3 +129,11 @@ tasks:
       - cmd: cmd /c "if exist bin rmdir /s /q bin"
         ignore_error: true
         platforms: [windows]
+
+  # ─── Seed ──────────────────────────────────────────────────────────────────
+  seed:
+    desc: Create a test admin user in the development database
+    dir: server
+    cmd: go run ./cmd/seed --email admin@test.com --password secret --name "Admin" --role admin
+    env:
+      ARKEEP_SECRET_KEY: dev-secret-key-00000000000000000
