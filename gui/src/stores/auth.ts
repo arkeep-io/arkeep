@@ -53,7 +53,7 @@ export const useAuthStore = defineStore('auth', () => {
       method: 'POST',
       body: { email, password },
     })
-    await setTokenAndFetchUser(res.data.access_token, 900)
+    await setTokenAndFetchUser(res.data.access_token, res.data.expires_in)
   }
 
   // logout invalidates the refresh token server-side and clears local state.
@@ -79,7 +79,7 @@ export const useAuthStore = defineStore('auth', () => {
         method: 'POST',
         credentials: 'include',
       })
-      await setTokenAndFetchUser(res.data.access_token, 900)
+      await setTokenAndFetchUser(res.data.access_token, res.data.expires_in)
       return true
     } catch {
       _clearSession()

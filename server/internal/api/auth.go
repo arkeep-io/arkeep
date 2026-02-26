@@ -57,8 +57,11 @@ type loginRequest struct {
 
 // loginResponse is the JSON body returned on successful login.
 // The refresh token is not included here — it is set as an httpOnly cookie.
+// ExpiresIn is the access token TTL in seconds, derived from the JWT claims
+// so the frontend can schedule a proactive refresh without hardcoding the TTL.
 type loginResponse struct {
 	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
 }
 
 // Login handles POST /api/v1/auth/login.
@@ -92,7 +95,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.setRefreshCookie(w, pair.RefreshToken, pair.RefreshTokenExpiresAt)
-	Ok(w, loginResponse{AccessToken: pair.AccessToken})
+	Ok(w, loginResponse{
+		AccessToken: pair.AccessToken,
+		ExpiresIn:   int(time.Until(pair.AccessTokenExpiresAt).Seconds()),
+	})
 }
 
 // Logout handles POST /api/v1/auth/logout.
@@ -131,7 +137,10 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.setRefreshCookie(w, pair.RefreshToken, pair.RefreshTokenExpiresAt)
-	Ok(w, loginResponse{AccessToken: pair.AccessToken})
+	Ok(w, loginResponse{
+		AccessToken: pair.AccessToken,
+		ExpiresIn:   int(time.Until(pair.AccessTokenExpiresAt).Seconds()),
+	})
 }
 
 // -----------------------------------------------------------------------------

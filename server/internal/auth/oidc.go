@@ -8,8 +8,8 @@ import (
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
-	"golang.org/x/oauth2"
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -296,6 +296,7 @@ func (p *OIDCAuthProvider) issueTokenPair(ctx context.Context, userID uuid.UUID,
 
 	return &TokenPair{
 		AccessToken:           accessToken,
+		AccessTokenExpiresAt:  time.Now().Add(accessTokenDuration),
 		RefreshToken:          rawRefresh,
 		RefreshTokenExpiresAt: expiresAt,
 	}, nil

@@ -83,6 +83,10 @@ type OIDCCallbackRequest struct {
 type TokenPair struct {
 	AccessToken string
 
+	// AccessTokenExpiresAt is used by the HTTP layer to compute expires_in
+	// in the response body so the frontend can schedule proactive refreshes.
+	AccessTokenExpiresAt time.Time
+
 	// RefreshToken is the raw opaque token string. The HTTP handler is
 	// responsible for setting it as a cookie; this struct does not carry
 	// cookie metadata (path, domain, SameSite) to keep the auth layer

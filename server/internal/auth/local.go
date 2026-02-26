@@ -168,6 +168,7 @@ func (p *LocalAuthProvider) issueTokenPair(ctx context.Context, userID uuid.UUID
 
 	return &TokenPair{
 		AccessToken:           accessToken,
+		AccessTokenExpiresAt:  time.Now().Add(accessTokenDuration),
 		RefreshToken:          rawRefresh,
 		RefreshTokenExpiresAt: expiresAt,
 	}, nil
