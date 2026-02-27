@@ -43,21 +43,6 @@ func (r *gormAgentRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Ag
 	return &agent, nil
 }
 
-// GetByRegistrationToken retrieves an agent by its registration token.
-// Used during the initial agent handshake to verify identity before clearing
-// the token. Returns ErrNotFound if no matching agent exists.
-func (r *gormAgentRepository) GetByRegistrationToken(ctx context.Context, token string) (*db.Agent, error) {
-	var agent db.Agent
-	err := r.db.WithContext(ctx).First(&agent, "registration_token = ?", token).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("agents: get by registration token: %w", err)
-	}
-	return &agent, nil
-}
-
 // Update persists all fields of an existing agent record.
 func (r *gormAgentRepository) Update(ctx context.Context, agent *db.Agent) error {
 	result := r.db.WithContext(ctx).Save(agent)

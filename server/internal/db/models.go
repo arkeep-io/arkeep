@@ -102,7 +102,6 @@ type Agent struct {
 	Version           string     `gorm:"not null;default:''"`
 	Status            string     `gorm:"not null;default:'offline'"` // "online", "offline", "error"
 	LastSeenAt        *time.Time
-	RegistrationToken string `gorm:"default:''"` // cleared after registration
 	Labels            string `gorm:"type:text;default:'{}'"` // JSON key-value pairs for filtering
 }
 

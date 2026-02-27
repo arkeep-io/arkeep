@@ -84,7 +84,6 @@ CREATE TABLE IF NOT EXISTS agents (
     version             TEXT        NOT NULL DEFAULT '',
     status              TEXT        NOT NULL DEFAULT 'offline',
     last_seen_at        DATETIME,
-    registration_token  TEXT        NOT NULL DEFAULT '',
     labels              TEXT        NOT NULL DEFAULT '{}',
 
     CONSTRAINT agents_status_check CHECK (status IN ('online', 'offline', 'error'))
