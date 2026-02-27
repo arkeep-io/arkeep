@@ -118,8 +118,10 @@ func saveState(stateDir string, s agentState) error {
 type Config struct {
 	// ServerAddr is the gRPC server address (e.g. "localhost:9090").
 	ServerAddr string
-	// AgentToken is the shared secret sent in gRPC metadata for authentication.
-	AgentToken string
+	// SharedSecret is the shared secret sent in gRPC metadata for authentication.
+	// Must match the ARKEEP_AGENT_SECRET configured on the server.
+	// If empty, no authentication header is sent (server must also have it empty).
+	SharedSecret string
 	// StateDir is the directory where agent-state.json is persisted.
 	StateDir string
 	// Version is the agent binary version, sent during registration.
@@ -199,10 +201,10 @@ func (m *Manager) connect(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	// Attach the agent token to every outgoing RPC via metadata.
+	// Attach the shared secret to every outgoing RPC via metadata.
 	// This is equivalent to an HTTP Authorization header — the server's
 	// auth interceptor validates it on every call.
-	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("agent-token", m.cfg.AgentToken))
+	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("agent-secret", m.cfg.SharedSecret))
 
 	client := proto.NewAgentServiceClient(conn)
 	m.mu.Lock()

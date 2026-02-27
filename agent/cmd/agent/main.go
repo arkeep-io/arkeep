@@ -37,7 +37,7 @@ var (
 
 type config struct {
 	serverAddr   string
-	agentToken   string
+	sharedSecret string
 	stateDir     string
 	dockerSocket string
 	logLevel     string
@@ -67,7 +67,7 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.AddCommand(newVersionCmd())
 
 	root.PersistentFlags().StringVar(&cfg.serverAddr, "server-addr", envOrDefault("ARKEEP_SERVER", "localhost:9090"), "Arkeep server gRPC address (host:port)")
-	root.PersistentFlags().StringVar(&cfg.agentToken, "token", envOrDefault("ARKEEP_TOKEN", ""), "Agent registration token (required)")
+	root.PersistentFlags().StringVar(&cfg.sharedSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC authentication (must match server ARKEEP_AGENT_SECRET)")
 	root.PersistentFlags().StringVar(&cfg.stateDir, "state-dir", envOrDefault("ARKEEP_STATE_DIR", defaultStateDir()), "Directory for agent state (agent-state.json, extracted binaries)")
 	root.PersistentFlags().StringVar(&cfg.dockerSocket, "docker-socket", envOrDefault("ARKEEP_DOCKER_SOCKET", ""), "Docker socket path (empty = platform default)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
@@ -92,8 +92,8 @@ func run(ctx context.Context, cfg *config) error {
 	}
 	defer logger.Sync() //nolint:errcheck
 
-	if cfg.agentToken == "" {
-		return fmt.Errorf("agent token is required — set --token or ARKEEP_TOKEN")
+	if cfg.sharedSecret == "" {
+		logger.Warn("agent-secret not configured — gRPC connection is unauthenticated (set ARKEEP_AGENT_SECRET in production)")
 	}
 
 	logger.Info("starting arkeep agent",
@@ -151,10 +151,10 @@ func run(ctx context.Context, cfg *config) error {
 
 	// --- Connection manager ---
 	connCfg := connection.Config{
-		ServerAddr: cfg.serverAddr,
-		AgentToken: cfg.agentToken,
-		StateDir:   cfg.stateDir,
-		Version:    version,
+		ServerAddr:      cfg.serverAddr,
+		SharedSecret:    cfg.sharedSecret,
+		StateDir:        cfg.stateDir,
+		Version:         version,
 		DockerAvailable: dockerAvailable,
 	}
 

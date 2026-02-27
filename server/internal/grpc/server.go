@@ -44,17 +44,17 @@ type Server struct {
 	jobRepo      repositories.JobRepository
 	hub          *websocket.Hub
 	logger       *zap.Logger
-	agentToken   string // shared secret agents must present in gRPC metadata
+	sharedSecret string // shared secret agents must present in gRPC metadata
 }
 
 // Config holds the configuration for the gRPC server.
 type Config struct {
 	// ListenAddr is the address the gRPC server binds to (e.g. ":9090").
 	ListenAddr string
-	// AgentToken is the shared secret agents must send in the "agent-token"
-	// metadata key to authenticate. If empty, authentication is disabled
-	// (development mode only — never leave empty in production).
-	AgentToken string
+	// SharedSecret is the shared secret agents must send in the "agent-secret"
+	// metadata key to authenticate. If empty, a warning is logged and
+	// authentication is disabled (development mode only — always set in production).
+	SharedSecret string
 }
 
 // New creates a new Server instance with the given dependencies.
@@ -72,7 +72,7 @@ func New(
 		jobRepo:      jobRepo,
 		hub:          hub,
 		logger:       logger.Named("grpc"),
-		agentToken:   cfg.AgentToken,
+		sharedSecret: cfg.SharedSecret,
 	}
 }
 
@@ -139,14 +139,15 @@ func (s *Server) authStreamInterceptor(
 	return handler(srv, ss)
 }
 
-// validateToken extracts the "agent-token" key from gRPC metadata and
+// validateToken extracts the "agent-secret" key from gRPC metadata and
 // compares it to the configured shared secret.
 //
 // Metadata in gRPC is the equivalent of HTTP headers — agents set it
-// when creating the ClientConn (see agent/internal/connection/client.go).
+// when creating the ClientConn (see agent/internal/connection/manager.go).
 func (s *Server) validateToken(ctx context.Context) error {
-	// If no token is configured, auth is disabled (development mode).
-	if s.agentToken == "" {
+	// If no secret is configured, auth is disabled (development mode).
+	// A warning is logged at startup — see cmd/server/main.go.
+	if s.sharedSecret == "" {
 		return nil
 	}
 
@@ -155,9 +156,9 @@ func (s *Server) validateToken(ctx context.Context) error {
 		return status.Error(codes.Unauthenticated, "missing metadata")
 	}
 
-	values := md.Get("agent-token")
-	if len(values) == 0 || values[0] != s.agentToken {
-		return status.Error(codes.Unauthenticated, "invalid agent token")
+	values := md.Get("agent-secret")
+	if len(values) == 0 || values[0] != s.sharedSecret {
+		return status.Error(codes.Unauthenticated, "invalid agent secret")
 	}
 
 	return nil

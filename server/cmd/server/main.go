@@ -40,7 +40,7 @@ type config struct {
 	secretKey  string
 	logLevel   string
 	dataDir    string
-	agentToken string
+	agentSecret string
 	secureCookies bool
 }
 
@@ -74,7 +74,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.secretKey, "secret-key", envOrDefault("ARKEEP_SECRET_KEY", ""), "Master secret key for encrypting credentials at rest (required)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
-	root.PersistentFlags().StringVar(&cfg.agentToken, "agent-token", envOrDefault("ARKEEP_AGENT_TOKEN", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
+	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 
 	return root
@@ -99,6 +99,12 @@ func run(ctx context.Context, cfg *config) error {
 
 	if cfg.secretKey == "" {
 		return fmt.Errorf("secret key is required — set --secret-key or ARKEEP_SECRET_KEY")
+	}
+
+	// Warn if agent secret is not configured — the gRPC port will accept
+	// connections from any agent. Always set ARKEEP_AGENT_SECRET in production.
+	if cfg.agentSecret == "" {
+		logger.Warn("agent-secret not configured — gRPC port is open to any agent (set ARKEEP_AGENT_SECRET in production)")
 	}
 
 	logger.Info("starting arkeep server",
@@ -204,7 +210,7 @@ func run(ctx context.Context, cfg *config) error {
 	grpcSrv := grpcserver.New(
 		grpcserver.Config{
 			ListenAddr: cfg.grpcAddr,
-			AgentToken: cfg.agentToken,
+			SharedSecret: cfg.agentSecret,
 		},
 		agentMgr,
 		agentRepo,
