@@ -117,17 +117,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/pages/PolicyFormPage.vue'),
         props: true,
         meta: { requiresRole: 'admin' },
-      },
+      }, */
 
       // Destinations
       {
         path: 'destinations',
         name: 'destinations',
-        component: () => import('@/pages/DestinationsPage.vue'),
+        component: () => import('@/pages/destinations/DestinationsPage.vue'),
+        meta: { breadcrumb: "Destinations" },
       },
 
       // Snapshots
-      {
+      /*{
         path: 'snapshots',
         name: 'snapshots',
         component: () => import('@/pages/SnapshotsPage.vue'),
