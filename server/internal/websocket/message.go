@@ -25,6 +25,12 @@ const (
 	// MsgAgentStatus is sent when an agent connects, disconnects, or errors.
 	MsgAgentStatus MessageType = "agent.status"
 
+	// MsgAgentMetrics is sent on every agent heartbeat with a snapshot of
+	// current host resource utilization (CPU, memory, disk percentages).
+	// Published on the "agent:<uuid>" topic so the detail page can display
+	// live gauges without polling the REST API.
+	MsgAgentMetrics MessageType = "agent.metrics"
+
 	// MsgNotification is sent when a new in-app notification is created for
 	// the subscribed user.
 	MsgNotification MessageType = "notification"
@@ -52,6 +58,7 @@ type Message struct {
 	//   - job.status:    {"status":"running","started_at":"..."}
 	//   - job.log:       {"level":"info","message":"...","timestamp":"..."}
 	//   - agent.status:  {"status":"online","ip_address":"..."}
+	//   - agent.metrics: {"cpu_percent":12.5,"mem_percent":60.1,"disk_percent":45.0}
 	//   - notification:  {"id":"...","type":"...","title":"...","body":"..."}
 	//   - ping:          {} (empty)
 	Payload any `json:"payload"`

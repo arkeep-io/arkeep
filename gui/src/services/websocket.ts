@@ -89,7 +89,7 @@ class ArkeepWebSocketClient {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
 
-    const url = new URL(`${protocol}//${host}/ws`)
+    const url = new URL(`${protocol}//${host}/api/v1/ws`)
     if (token) url.searchParams.set('token', token)
 
     // Merge explicitly-requested topics with topics derived from active subscriptions

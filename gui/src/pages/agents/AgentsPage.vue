@@ -26,6 +26,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -255,10 +256,9 @@ onUnmounted(teardownSubscriptions)
         </div>
 
         <!-- Error banner -->
-        <div v-if="error"
-            class="px-4 py-3 text-sm border rounded-md border-destructive/50 bg-destructive/10 text-destructive">
-            {{ error }}
-        </div>
+        <Alert v-if="error" variant="destructive">
+            <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
 
         <!-- Table -->
         <div class="border rounded-md">

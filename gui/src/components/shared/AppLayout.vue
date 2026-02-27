@@ -43,10 +43,10 @@ const breadcrumbs = computed<Crumb[]>(() => {
 </script>
 
 <template>
-    <SidebarProvider>
+    <SidebarProvider class="h-screen overflow-hidden">
         <AppSidebar />
-        <SidebarInset>
-            <header class="flex items-center h-16 gap-2 shrink-0">
+        <SidebarInset class="flex flex-col min-h-0">
+            <header class="flex items-center h-16 gap-2 shrink-0 border-b">
                 <div class="flex items-center gap-2 px-4">
                     <SidebarTrigger class="-ml-1" />
                     <Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
@@ -72,7 +72,7 @@ const breadcrumbs = computed<Crumb[]>(() => {
                     </Breadcrumb>
                 </div>
             </header>
-            <div class="flex flex-col flex-1 gap-4 p-4 pt-0">
+            <div class="flex-1 overflow-y-auto">
                 <RouterView />
             </div>
         </SidebarInset>

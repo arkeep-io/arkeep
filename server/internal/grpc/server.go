@@ -226,7 +226,10 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 }
 
 // Heartbeat handles periodic liveness signals from agents.
-// It updates the agent's status to "online" and last_seen_at to now.
+// It updates the agent's status to "online" and last_seen_at to now,
+// then publishes the received system metrics to the WebSocket hub so the
+// GUI can display live resource utilization on the agent detail page.
+//
 // Using UpdateStatus with "online" is intentional: if an agent is sending
 // heartbeats it is by definition online, so we can skip a read of the
 // current status and update both fields in a single query.
@@ -243,6 +246,20 @@ func (s *Server) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (*p
 			zap.String("agent_id", req.AgentId),
 			zap.Error(err),
 		)
+	}
+
+	// Publish metrics to the WebSocket hub so the GUI detail page can
+	// display live CPU, memory and disk utilization.
+	// Metrics are optional — older agent versions may not send them.
+	if req.Metrics != nil {
+		s.hub.Publish("agent:"+req.AgentId, websocket.Message{
+			Type: websocket.MsgAgentMetrics,
+			Payload: map[string]any{
+				"cpu_percent":  req.Metrics.CpuPercent,
+				"mem_percent":  req.Metrics.MemPercent,
+				"disk_percent": req.Metrics.DiskPercent,
+			},
+		})
 	}
 
 	// has_pending_jobs is always false for now — the scheduler (step 5) will

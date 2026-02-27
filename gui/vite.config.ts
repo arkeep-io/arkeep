@@ -63,7 +63,6 @@ export default defineConfig({
         navigateFallbackDenylist: [
           // Never intercept API calls or WebSocket upgrades
           /^\/api\//,
-          /^\/ws/,
         ],
 
         // Skip waiting so the new SW activates immediately on deploy
@@ -129,7 +128,7 @@ export default defineConfig({
         changeOrigin: true,
       },
       // Proxy WebSocket connections to the Go server in dev
-      '/ws': {
+      '/api/v1/ws': {
         target: 'ws://localhost:8080',
         ws: true,
         changeOrigin: true,
