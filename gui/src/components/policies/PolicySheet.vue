@@ -10,6 +10,14 @@
  *  5. Retention    — keep_daily / weekly / monthly / yearly
  *  6. Destinations — ordered checklist with up/down priority controls
  *  7. Hooks        — collapsible pre / post backup commands
+ *
+ * NOTE on type mapping:
+ *  The frontend Policy type uses:
+ *    - sources: Source[] (already parsed, SourceType uses "docker-volume" with a hyphen)
+ *    - retention: { keep_daily, keep_weekly, keep_monthly, keep_yearly, ... }
+ *    - hook_pre_backup / hook_post_backup: not present on the list payload —
+ *      the sheet only writes them; it does not read them back on edit.
+ *  The backend accepts flat fields: retention_daily, hook_pre_backup (JSON string), etc.
  */
 import { ref, computed, watch } from 'vue'
 import { useForm, useField, useFieldArray } from 'vee-validate'
@@ -63,9 +71,9 @@ const isEdit = computed(() => !!props.policy)
 // Remote data — agents and destinations loaded when sheet opens
 // ---------------------------------------------------------------------------
 
-const agents            = ref<Agent[]>([])
+const agents                = ref<Agent[]>([])
 const availableDestinations = ref<Destination[]>([])
-const loadingData       = ref(false)
+const loadingData           = ref(false)
 
 async function loadRemoteData() {
   loadingData.value = true
@@ -87,8 +95,13 @@ async function loadRemoteData() {
 // Zod schema
 // ---------------------------------------------------------------------------
 
+// Source type values as used by the frontend SourceType enum.
+// Note: Docker volume uses a hyphen ("docker-volume"), not an underscore.
+const SOURCE_TYPES = ['directory', 'docker-volume'] as const
+type SourceTypeValue = typeof SOURCE_TYPES[number]
+
 const sourceItemSchema = z.object({
-  type:  z.enum(['directory', 'docker_volume']),
+  type:  z.enum(SOURCE_TYPES),
   path:  z.string().min(1, 'Path is required'),
   label: z.string().optional(),
 })
@@ -97,7 +110,8 @@ const hookFieldSchema = z.object({
   enabled:      z.boolean(),
   name:         z.string().optional(),
   command:      z.string().optional(),
-  // args as a space-separated string for easy editing; split on submit
+  // Args are stored as a single space-separated string for ease of editing;
+  // they are split on submit before sending to the API.
   args:         z.string().optional(),
   timeout_secs: z.coerce.number().int().min(0).optional(),
 })
@@ -107,7 +121,7 @@ const schema = z.object({
   agent_id: z.string().min(1, 'Agent is required'),
   enabled:  z.boolean(),
 
-  // write-only password — required on create, optional on edit
+  // Write-only — required on create, optional on edit (blank = keep existing).
   repo_password:         z.string().optional(),
   repo_password_confirm: z.string().optional(),
 
@@ -115,13 +129,13 @@ const schema = z.object({
 
   sources: z.array(sourceItemSchema).min(1, 'At least one source is required'),
 
-  // Retention — nested to match the Policy.retention shape
+  // Retention keep counts — match Policy.retention nested shape.
   retention_keep_daily:   z.coerce.number().int().min(0),
   retention_keep_weekly:  z.coerce.number().int().min(0),
   retention_keep_monthly: z.coerce.number().int().min(0),
   retention_keep_yearly:  z.coerce.number().int().min(0),
 
-  // Destination IDs ordered by priority (index 0 = priority 1)
+  // Destination IDs ordered by priority (index 0 = priority 1).
   ordered_destination_ids: z.array(z.string()),
 
   hook_pre:  hookFieldSchema,
@@ -171,9 +185,9 @@ const { handleSubmit, resetForm, setValues } = useForm<FormValues>({
 })
 
 // General
-const { value: nameValue,    errorMessage: nameError    } = useField<string>('name')
-const { value: agentValue,   errorMessage: agentError   } = useField<string>('agent_id')
-const { value: enabledValue                              } = useField<boolean>('enabled')
+const { value: nameValue,  errorMessage: nameError  } = useField<string>('name')
+const { value: agentValue, errorMessage: agentError } = useField<string>('agent_id')
+const { value: enabledValue }                          = useField<boolean>('enabled')
 
 // Repository password
 const { value: repoPassValue,        errorMessage: repoPassError        } = useField<string>('repo_password')
@@ -225,16 +239,20 @@ function toggleDest(id: string) {
 }
 
 function moveDestUp(index: number) {
-  const arr = [...orderedDestIds.value]
+  const arr = [...(orderedDestIds.value ?? [])]
   if (index === 0) return
-  ;[arr[index - 1], arr[index]] = [arr[index], arr[index - 1]]
+  const tmp = arr[index - 1] as string
+  arr[index - 1] = arr[index] as string
+  arr[index] = tmp
   orderedDestIds.value = arr
 }
 
 function moveDestDown(index: number) {
-  const arr = [...orderedDestIds.value]
+  const arr = [...(orderedDestIds.value ?? [])]
   if (index >= arr.length - 1) return
-  ;[arr[index], arr[index + 1]] = [arr[index + 1], arr[index]]
+  const tmp = arr[index] as string
+  arr[index] = arr[index + 1] as string
+  arr[index + 1] = tmp
   orderedDestIds.value = arr
 }
 
@@ -250,7 +268,7 @@ function destByIdName(id: string): string {
   return availableDestinations.value.find(d => d.id === id)?.name ?? id
 }
 
-// Hooks (collapsible section)
+// Hooks (collapsible)
 const { value: hookPreEnabled  } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName     } = useField<string>('hook_pre.name')
 const { value: hookPreCommand  } = useField<string>('hook_pre.command')
@@ -288,23 +306,6 @@ function defaultValues(): FormValues {
   }
 }
 
-/**
- * Parses a Hook object (from Policy) into hook form fields.
- * Returns disabled defaults when hook is null/empty.
- */
-function parseHookToField(hook: Policy['hook_pre_backup'] | undefined): z.infer<typeof hookFieldSchema> {
-  if (!hook || !hook.command) {
-    return { enabled: false, name: '', command: '', args: '', timeout_secs: 30 }
-  }
-  return {
-    enabled:      true,
-    name:         hook.name     ?? '',
-    command:      hook.command,
-    args:         (hook.args ?? []).join(' '),
-    timeout_secs: hook.timeout_secs ?? 30,
-  }
-}
-
 watch(() => props.open, async (open) => {
   if (!open) return
 
@@ -317,41 +318,44 @@ watch(() => props.open, async (open) => {
   if (props.policy) {
     const p = props.policy
 
-    // Build ordered destination IDs from the policy's destinations array
+    // Build ordered destination IDs sorted by priority.
     const preDestIds = (p.destinations ?? [])
       .sort((a, b) => a.priority - b.priority)
       .map(d => d.destination_id)
 
+    // Map Policy.sources (Source[]) to form items.
+    // SourceType uses "docker-volume" (hyphen) so we pass it through directly.
+    const mappedSources = (p.sources ?? []).map(s => ({
+      type:  s.type as SourceTypeValue,
+      path:  s.path  ?? '',
+      label: (s as any).label as string | undefined ?? '',
+    }))
+
+    // hooks_pre_backup / hook_post_backup are not present on the list endpoint
+    // payload — on edit we leave the hook fields disabled/blank.
+    // The backend keeps the existing hook if hook_pre_backup is omitted from PATCH.
+
     setValues({
-      name:                  p.name,
-      agent_id:              p.agent_id,
-      enabled:               p.enabled,
-      repo_password:         '',
-      repo_password_confirm: '',
-      schedule:              p.schedule,
-      // sources is already Source[] on the Policy type
-      sources:               p.sources.map(s => ({
-        type:  s.type,
-        path:  s.path ?? '',
-        label: s.label ?? '',
-      })),
+      name:                    p.name,
+      agent_id:                p.agent_id,
+      enabled:                 p.enabled,
+      repo_password:           '',
+      repo_password_confirm:   '',
+      schedule:                p.schedule,
+      sources:                 mappedSources.length > 0
+        ? mappedSources
+        : [{ type: 'directory', path: '', label: '' }],
       retention_keep_daily:   p.retention.keep_daily,
       retention_keep_weekly:  p.retention.keep_weekly,
       retention_keep_monthly: p.retention.keep_monthly,
       retention_keep_yearly:  p.retention.keep_yearly,
       ordered_destination_ids: preDestIds,
-      hook_pre:  parseHookToField(p.hook_pre_backup),
-      hook_post: parseHookToField(p.hook_post_backup),
-    } as FormValues)
+      hook_pre:  { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
+      hook_post: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
+    } as unknown as FormValues)
 
-    // Pre-select the matching schedule preset if any
     const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
     selectedPreset.value = match?.value ?? ''
-
-    // Auto-open hooks collapsible if any hook is configured
-    if (p.hook_pre_backup?.command || p.hook_post_backup?.command) {
-      hooksOpen.value = true
-    }
   } else {
     resetForm({ values: defaultValues() })
     selectedPreset.value = '0 2 * * *'
@@ -366,16 +370,17 @@ const submitting  = ref(false)
 const submitError = ref<string | null>(null)
 
 /**
- * Converts a hook form section to the API Hook object, or null when disabled.
+ * Converts a hook form section to a JSON string for the API.
+ * Returns an empty string when the hook is disabled or has no command.
  */
-function buildHookPayload(hook: z.infer<typeof hookFieldSchema>): object | null {
-  if (!hook.enabled || !hook.command) return null
-  return {
+function serialiseHook(hook: z.infer<typeof hookFieldSchema>): string {
+  if (!hook.enabled || !hook.command) return ''
+  return JSON.stringify({
     name:         hook.name ?? '',
     command:      hook.command,
     args:         hook.args ? hook.args.split(/\s+/).filter(Boolean) : [],
     timeout_secs: hook.timeout_secs ?? 30,
-  }
+  })
 }
 
 const onSubmit = handleSubmit(async (values) => {
@@ -388,25 +393,28 @@ const onSubmit = handleSubmit(async (values) => {
       priority:       idx + 1,
     }))
 
+    // Sources sent as a JSON string — the backend stores them that way.
+    const sourcesJson = JSON.stringify(values.sources)
+
     const body: Record<string, unknown> = {
-      name:     values.name,
-      agent_id: values.agent_id,
-      enabled:  values.enabled,
-      schedule: values.schedule,
-      // Send sources as a JSON string — the backend stores it that way
-      sources:  JSON.stringify(values.sources),
+      name:              values.name,
+      agent_id:          values.agent_id,
+      enabled:           values.enabled,
+      schedule:          values.schedule,
+      sources:           sourcesJson,
       retention_daily:   values.retention_keep_daily,
       retention_weekly:  values.retention_keep_weekly,
       retention_monthly: values.retention_keep_monthly,
       retention_yearly:  values.retention_keep_yearly,
-      hook_pre_backup:   buildHookPayload(values.hook_pre)  ?? '',
-      hook_post_backup:  buildHookPayload(values.hook_post) ?? '',
+      hook_pre_backup:   serialiseHook(values.hook_pre),
+      hook_post_backup:  serialiseHook(values.hook_post),
       destinations:      destinationsPayload,
     }
 
     if (!isEdit.value) {
-      body.repo_password = values.repo_password
+      body.repo_password = values.repo_password ?? ''
     } else if (values.repo_password) {
+      // Only send on edit if the user typed a new password.
       body.repo_password = values.repo_password
     }
 
@@ -481,7 +489,10 @@ function onOpenChange(value: boolean) {
 
             <Field>
               <FieldLabel for="agent">Agent <span class="text-destructive">*</span></FieldLabel>
-              <Select :model-value="agentValue" @update:model-value="agentValue = $event">
+              <Select
+                :model-value="agentValue ?? ''"
+                @update:model-value="agentValue = $event as string"
+              >
                 <SelectTrigger
                   id="agent"
                   :disabled="loadingData"
@@ -511,7 +522,11 @@ function onOpenChange(value: boolean) {
                   When disabled, scheduled runs are paused.
                 </p>
               </div>
-              <Switch id="enabled" :checked="enabledValue" @update:checked="enabledValue = $event" />
+              <Switch
+                id="enabled"
+                :checked="enabledValue ?? true"
+                @update:checked="enabledValue = $event"
+              />
             </div>
           </div>
 
@@ -620,15 +635,15 @@ function onOpenChange(value: boolean) {
                 <div class="flex flex-col gap-1">
                   <Label :for="`source-type-${idx}`" class="text-xs">Type</Label>
                   <Select
-                    :model-value="(field.value as any).type"
-                    @update:model-value="(field.value as any).type = $event"
+                    :model-value="(field.value as any).type as string"
+                    @update:model-value="(field.value as any).type = $event as SourceTypeValue"
                   >
                     <SelectTrigger :id="`source-type-${idx}`" class="h-8 text-sm">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="directory">Directory</SelectItem>
-                      <SelectItem value="docker_volume">Docker Volume</SelectItem>
+                      <SelectItem value="docker-volume">Docker Volume</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -640,7 +655,7 @@ function onOpenChange(value: boolean) {
                   </Label>
                   <Input
                     :id="`source-label-${idx}`"
-                    :model-value="(field.value as any).label"
+                    :model-value="(field.value as any).label as string"
                     class="h-8 text-sm"
                     placeholder="e.g. postgres-data"
                     @update:model-value="(field.value as any).label = $event"
@@ -651,13 +666,13 @@ function onOpenChange(value: boolean) {
               <!-- Path / Volume name -->
               <div class="flex flex-col gap-1">
                 <Label :for="`source-path-${idx}`" class="text-xs">
-                  {{ (field.value as any).type === 'docker_volume' ? 'Volume Name' : 'Path' }}
+                  {{ (field.value as any).type === 'docker-volume' ? 'Volume Name' : 'Path' }}
                 </Label>
                 <Input
                   :id="`source-path-${idx}`"
-                  :model-value="(field.value as any).path"
+                  :model-value="(field.value as any).path as string"
                   class="h-8 text-sm font-mono"
-                  :placeholder="(field.value as any).type === 'docker_volume'
+                  :placeholder="(field.value as any).type === 'docker-volume'
                     ? 'e.g. postgres_data'
                     : 'e.g. /var/lib/data'"
                   @update:model-value="(field.value as any).path = $event"
@@ -679,7 +694,6 @@ function onOpenChange(value: boolean) {
               </p>
             </div>
 
-            <!-- Preset shortcuts -->
             <div class="flex flex-wrap gap-2">
               <button
                 v-for="preset in SCHEDULE_PRESETS"
@@ -724,7 +738,7 @@ function onOpenChange(value: boolean) {
               <h3 class="text-sm font-semibold">Retention</h3>
               <p class="mt-0.5 text-xs text-muted-foreground">
                 How many snapshots to keep per period.
-                <code class="font-mono">0</code> uses the server default (7/4/6/1).
+                <code class="font-mono">0</code> uses the server default (7 / 4 / 6 / 1).
               </p>
             </div>
 
@@ -810,7 +824,6 @@ function onOpenChange(value: boolean) {
                 @click="toggleDest(dest.id)"
               >
                 <div class="flex items-center gap-2.5">
-                  <!-- Custom checkbox -->
                   <div
                     class="w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors"
                     :class="isDestSelected(dest.id)
@@ -843,7 +856,7 @@ function onOpenChange(value: boolean) {
               </div>
             </div>
 
-            <!-- Priority order list (shown only when ≥1 destination selected) -->
+            <!-- Priority order list — shown only when ≥1 destination is selected -->
             <div
               v-if="orderedDestIds && orderedDestIds.length > 0"
               class="flex flex-col gap-1 mt-1"
@@ -911,7 +924,10 @@ function onOpenChange(value: boolean) {
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <Label class="text-sm font-medium">Pre-backup Hook</Label>
-                    <Switch :checked="hookPreEnabled" @update:checked="hookPreEnabled = $event" />
+                    <Switch
+                      :checked="hookPreEnabled ?? false"
+                      @update:checked="hookPreEnabled = $event"
+                    />
                   </div>
                   <template v-if="hookPreEnabled">
                     <div class="grid grid-cols-2 gap-2">
@@ -962,7 +978,10 @@ function onOpenChange(value: boolean) {
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <Label class="text-sm font-medium">Post-backup Hook</Label>
-                    <Switch :checked="hookPostEnabled" @update:checked="hookPostEnabled = $event" />
+                    <Switch
+                      :checked="hookPostEnabled ?? false"
+                      @update:checked="hookPostEnabled = $event"
+                    />
                   </div>
                   <template v-if="hookPostEnabled">
                     <div class="grid grid-cols-2 gap-2">
