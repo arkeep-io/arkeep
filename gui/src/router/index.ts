@@ -94,12 +94,12 @@ const routes: RouteRecordRaw[] = [
       },
 
       // Policies
-      /* {
+      {
         path: 'policies',
         name: 'policies',
-        component: () => import('@/pages/PoliciesPage.vue'),
+        component: () => import('@/pages/policies/PoliciesPage.vue'),
       },
-      {
+      /*{
         path: 'policies/new',
         name: 'policy-create',
         component: () => import('@/pages/PolicyFormPage.vue'),
@@ -110,7 +110,7 @@ const routes: RouteRecordRaw[] = [
         name: 'policy-detail',
         component: () => import('@/pages/PolicyDetailPage.vue'),
         props: true,
-      }, */
+      },*/
       /* {
         path: 'policies/:id/edit',
         name: 'policy-edit',

@@ -221,6 +221,10 @@ onMounted(fetchDestinations)
                       Create a destination to start storing your backups.
                     </p>
                   </div>
+                  <Button size="sm" @click="openCreate">
+                    <Plus class="w-4 h-4" />
+                    New Destination
+                  </Button>
                 </div>
               </TableCell>
             </TableRow>
