@@ -102,46 +102,14 @@ export interface AgentMetrics {
 
 // ─── Destination ──────────────────────────────────────────────────────────────
 
-// DestinationConfig holds the type-specific connection parameters.
-// The server encrypts sensitive fields (passwords, secret keys) at rest;
-// the API returns masked values ("***") for those fields on read.
-export interface DestinationConfig {
-  // Local filesystem
-  path?: string
-
-  // S3-compatible
-  bucket?: string
-  endpoint?: string
-  region?: string
-  access_key_id?: string
-  secret_access_key?: string // masked on read: "***"
-  path_style?: boolean
-
-  // SFTP
-  host?: string
-  port?: number
-  username?: string
-  password?: string // masked on read: "***"
-  private_key?: string // masked on read: "***"
-  remote_path?: string
-
-  // Restic REST Server
-  url?: string
-  rest_username?: string
-  rest_password?: string // masked on read: "***"
-
-  // Rclone
-  rclone_remote?: string
-  rclone_path?: string
-}
-
 export interface Destination {
   id: string
   name: string
   type: DestinationType
-  config: DestinationConfig
+  config: string
   // repository_password is always masked ("***") on read
   repository_password: string
+  enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -343,7 +311,7 @@ export interface AgentRegistrationToken {
 export interface CreateDestinationRequest {
   name: string
   type: DestinationType
-  config: DestinationConfig
+  config: string
   repository_password: string
 }
 

@@ -1,26 +1,62 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { Plus, HardDrive, Server, Globe, Network, Cloud, Pencil, Trash2 } from 'lucide-vue-next'
-import { api } from '@/services/api'
-import type { Destination, ApiResponse, PaginatedResponse } from '@/types'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from '@/components/ui/table'
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Plus,
+  MoreHorizontal,
+  PencilLine,
+  Trash2,
+  HardDrive,
+  Server,
+  Globe,
+  Network,
+  Cloud,
+} from 'lucide-vue-next'
+import { api } from '@/services/api'
+import type { Destination, ApiResponse } from '@/types'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 
-// ─── State ───────────────────────────────────────────────────────────────────
+interface DestinationListResponse {
+  items: Destination[]
+  total: number
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 
 const destinations = ref<Destination[]>([])
 const total = ref(0)
-const loading = ref(false)
-const error = ref('')
+const loading = ref(true)
+const error = ref<string | null>(null)
 
 // Sheet
 const sheetOpen = ref(false)
@@ -28,13 +64,14 @@ const editingDestination = ref<Destination | null>(null)
 
 // Delete dialog
 const deleteDialogOpen = ref(false)
-const deletingDestination = ref<Destination | null>(null)
+const destinationToDelete = ref<Destination | null>(null)
 const deleteLoading = ref(false)
-const deleteError = ref('')
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-const typeIcon = (type: string) => {
+function typeIcon(type: string) {
   switch (type) {
     case 'local': return HardDrive
     case 's3': return Cloud
@@ -45,7 +82,7 @@ const typeIcon = (type: string) => {
   }
 }
 
-const typeLabel = (type: string) => {
+function typeLabel(type: string): string {
   switch (type) {
     case 'local': return 'Local'
     case 's3': return 'S3'
@@ -56,88 +93,99 @@ const typeLabel = (type: string) => {
   }
 }
 
-// ─── Fetch ───────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Data fetching
+// ---------------------------------------------------------------------------
 
 async function fetchDestinations() {
   loading.value = true
-  error.value = ''
+  error.value = null
   try {
-    const res = await api<ApiResponse<PaginatedResponse<Destination>>>('/api/v1/destinations')
+    const res = await api<ApiResponse<DestinationListResponse>>('/api/v1/destinations')
     destinations.value = res.data.items
     total.value = res.data.total
-  } catch {
-    error.value = 'Failed to load destinations.'
+  } catch (e: any) {
+    error.value = e?.message ?? 'Failed to load destinations'
   } finally {
     loading.value = false
   }
 }
 
-onMounted(fetchDestinations)
-
-// ─── Sheet ───────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Sheet
+// ---------------------------------------------------------------------------
 
 function openCreate() {
   editingDestination.value = null
   sheetOpen.value = true
 }
 
-function openEdit(dest: Destination) {
+function openEditSheet(dest: Destination) {
   editingDestination.value = dest
   sheetOpen.value = true
 }
 
 function onSaved() {
-  sheetOpen.value = false
   fetchDestinations()
 }
 
-// ─── Delete ──────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Delete
+// ---------------------------------------------------------------------------
 
-function openDelete(dest: Destination) {
-  deletingDestination.value = dest
-  deleteError.value = ''
+function openDeleteDialog(dest: Destination) {
+  destinationToDelete.value = dest
   deleteDialogOpen.value = true
 }
 
 async function confirmDelete() {
-  if (!deletingDestination.value) return
+  if (!destinationToDelete.value) return
   deleteLoading.value = true
-  deleteError.value = ''
   try {
-    await api(`/api/v1/destinations/${deletingDestination.value.id}`, { method: 'DELETE' })
+    await api(`/api/v1/destinations/${destinationToDelete.value.id}`, { method: 'DELETE' })
     deleteDialogOpen.value = false
-    fetchDestinations()
-  } catch (err: any) {
-    deleteError.value = err?.data?.error ?? 'Failed to delete destination.'
+    destinationToDelete.value = null
+    await fetchDestinations()
+  } catch (e: any) {
+    error.value = e?.message ?? 'Failed to delete destination'
   } finally {
     deleteLoading.value = false
   }
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+onMounted(fetchDestinations)
 </script>
 
 <template>
   <div class="flex flex-col gap-6 p-6">
+
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">Destinations</h1>
-        <p class="text-muted-foreground text-sm mt-1">
+        <p class="mt-1 text-sm text-muted-foreground">
           Manage storage targets for your backups.
         </p>
       </div>
-      <Button @click="openCreate">
-        <Plus class="size-4 mr-2" />
-        New Destination
-      </Button>
+      <div class="flex items-center gap-2">
+        <Button @click="openCreate">
+          <Plus class="w-4 h-4" />
+          New Destination
+        </Button>
+      </div>
     </div>
 
-    <!-- Error -->
+    <!-- Error banner -->
     <Alert v-if="error" variant="destructive">
       <AlertDescription>{{ error }}</AlertDescription>
     </Alert>
 
     <!-- Table -->
-    <div class="rounded-lg border">
+    <div class="border rounded-md">
       <Table>
         <TableHeader>
           <TableRow>
@@ -145,83 +193,111 @@ async function confirmDelete() {
             <TableHead>Type</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Created</TableHead>
-            <TableHead class="w-20" />
+            <TableHead class="w-13" />
           </TableRow>
         </TableHeader>
+
         <TableBody>
-          <TableRow v-if="loading">
-            <TableCell colspan="5" class="text-center text-muted-foreground py-10">
-              Loading...
-            </TableCell>
-          </TableRow>
-          <TableRow v-else-if="destinations.length === 0">
-            <TableCell colspan="5" class="text-center text-muted-foreground py-10">
-              No destinations yet. Create one to get started.
-            </TableCell>
-          </TableRow>
-          <TableRow v-for="dest in destinations" :key="dest.id">
-            <TableCell class="font-medium">{{ dest.name }}</TableCell>
-            <TableCell>
-              <div class="flex items-center gap-2 text-sm">
-                <component :is="typeIcon(dest.type)" class="size-4 text-muted-foreground" />
-                {{ typeLabel(dest.type) }}
-              </div>
-            </TableCell>
-            <TableCell>
-              <Badge :variant="dest.enabled ? 'default' : 'secondary'">
-                {{ dest.enabled ? 'Enabled' : 'Disabled' }}
-              </Badge>
-            </TableCell>
-            <TableCell class="text-muted-foreground text-sm">
-              {{ new Date(dest.created_at).toLocaleDateString() }}
-            </TableCell>
-            <TableCell>
-              <div class="flex items-center gap-1">
-                <Button variant="ghost" size="icon" @click="openEdit(dest)">
-                  <Pencil class="size-4" />
-                </Button>
-                <Button variant="ghost" size="icon" @click="openDelete(dest)">
-                  <Trash2 class="size-4 text-destructive" />
-                </Button>
-              </div>
-            </TableCell>
-          </TableRow>
+          <!-- Loading skeletons -->
+          <template v-if="loading">
+            <TableRow v-for="n in 5" :key="n">
+              <TableCell v-for="col in 5" :key="col">
+                <Skeleton class="w-full h-4" />
+              </TableCell>
+            </TableRow>
+          </template>
+
+          <!-- Empty state -->
+          <template v-else-if="destinations.length === 0">
+            <TableRow>
+              <TableCell colspan="5">
+                <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                  <div class="p-4 rounded-full bg-muted">
+                    <HardDrive class="w-8 h-8 text-muted-foreground" />
+                  </div>
+                  <div>
+                    <p class="font-medium">No destinations configured</p>
+                    <p class="mt-1 text-sm text-muted-foreground">
+                      Create a destination to start storing your backups.
+                    </p>
+                  </div>
+                </div>
+              </TableCell>
+            </TableRow>
+          </template>
+
+          <!-- Data rows -->
+          <template v-else>
+            <TableRow v-for="dest in destinations" :key="dest.id">
+              <TableCell class="font-medium">{{ dest.name }}</TableCell>
+              <TableCell>
+                <div class="flex items-center gap-2 text-sm text-muted-foreground">
+                  <component :is="typeIcon(dest.type)" class="w-4 h-4" />
+                  {{ typeLabel(dest.type) }}
+                </div>
+              </TableCell>
+              <TableCell>
+                <Badge :variant="dest.enabled ? 'default' : 'secondary'">
+                  {{ dest.enabled ? 'Enabled' : 'Disabled' }}
+                </Badge>
+              </TableCell>
+              <TableCell class="text-sm text-muted-foreground">
+                {{ new Date(dest.created_at).toLocaleDateString() }}
+              </TableCell>
+
+              <!-- Actions dropdown -->
+              <TableCell>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <Button variant="ghost" size="icon" class="w-8 h-8">
+                      <MoreHorizontal class="w-4 h-4" />
+                      <span class="sr-only">Open actions</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem @click="openEditSheet(dest)">
+                      <PencilLine class="w-4 h-4 mr-2" />
+                      Edit
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem class="text-destructive focus:text-destructive" @click="openDeleteDialog(dest)">
+                      <Trash2 class="w-4 h-4 mr-2" />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </TableCell>
+            </TableRow>
+          </template>
         </TableBody>
       </Table>
     </div>
 
-    <!-- Delete Dialog -->
-    <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete destination?</AlertDialogTitle>
-          <AlertDialogDescription>
-            <span class="font-medium">{{ deletingDestination?.name }}</span> will be permanently
-            deleted. This action cannot be undone.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <Alert v-if="deleteError" variant="destructive" class="mt-2">
-          <AlertDescription>{{ deleteError }}</AlertDescription>
-        </Alert>
-        <AlertDialogFooter>
-          <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            :disabled="deleteLoading"
-            @click.prevent="confirmDelete"
-          >
-            {{ deleteLoading ? 'Deleting...' : 'Delete' }}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-
-    <!-- Sheet -->
-    <DestinationSheet
-      :open="sheetOpen"
-      :destination="editingDestination"
-      @update:open="sheetOpen = $event"
-      @saved="onSaved"
-    />
   </div>
+
+  <!-- Edit / create sheet -->
+  <DestinationSheet :destination="editingDestination" :open="sheetOpen" @update:open="sheetOpen = $event"
+    @saved="onSaved" />
+
+  <!-- Delete confirmation dialog -->
+  <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Delete destination?</AlertDialogTitle>
+        <AlertDialogDescription>
+          <span v-if="destinationToDelete">
+            <strong>{{ destinationToDelete.name }}</strong> will be permanently deleted.
+            This action cannot be undone.
+          </span>
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
+        <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          :disabled="deleteLoading" @click="confirmDelete">
+          {{ deleteLoading ? 'Deleting…' : 'Delete' }}
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>

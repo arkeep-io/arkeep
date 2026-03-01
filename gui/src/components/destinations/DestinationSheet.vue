@@ -4,19 +4,36 @@ import { z } from 'zod'
 import { api } from '@/services/api'
 import type { Destination } from '@/types'
 import {
-    Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
+    Sheet,
+    SheetContent,
+    SheetDescription,
+    SheetFooter,
+    SheetHeader,
+    SheetTitle,
 } from '@/components/ui/sheet'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
-    Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    Field,
+    FieldError,
+    FieldGroup,
+    FieldLabel,
+} from '@/components/ui/field'
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
+import { AlertCircle, Loader2 } from 'lucide-vue-next'
 
-// ─── Props / Emits ───────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Props / emits
+// ---------------------------------------------------------------------------
 
 const props = defineProps<{
     open: boolean
@@ -30,7 +47,9 @@ const emit = defineEmits<{
 
 const isEdit = computed(() => !!props.destination)
 
-// ─── Destination types ────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Destination types
+// ---------------------------------------------------------------------------
 
 type DestType = 'local' | 's3' | 'sftp' | 'rest' | 'rclone'
 
@@ -42,7 +61,9 @@ const DEST_TYPES: { value: DestType; label: string }[] = [
     { value: 'rclone', label: 'Rclone' },
 ]
 
-// ─── Per-type Zod schemas ─────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Per-type Zod schemas
+// ---------------------------------------------------------------------------
 
 // Config schemas (stored unencrypted)
 const configSchemas: Record<DestType, z.ZodObject<any>> = {
@@ -88,10 +109,12 @@ const credSchemas: Record<DestType, z.ZodObject<any>> = {
     rclone: z.object({}),
 }
 
-// ─── Form state ───────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Form state
+// ---------------------------------------------------------------------------
 
 const selectedType = ref<DestType>('local')
-const submitError = ref('')
+const submitError = ref<string | null>(null)
 const submitting = ref(false)
 
 // Base fields
@@ -119,16 +142,18 @@ const restPassword = ref('')
 const rcloneRemote = ref('')
 const rclonePath = ref('')
 
-// Per-field errors (simple approach — no vee-validate on dynamic fields)
+// Per-field errors — simple approach, no vee-validate on dynamic fields
 const fieldErrors = ref<Record<string, string>>({})
 
-// ─── Reset / populate ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Reset / populate
+// ---------------------------------------------------------------------------
 
 function resetFields() {
     name.value = ''
     nameError.value = ''
     enabled.value = true
-    submitError.value = ''
+    submitError.value = null
     fieldErrors.value = {}
     localPath.value = ''
     s3Bucket.value = s3Endpoint.value = s3Region.value = s3Prefix.value = ''
@@ -144,7 +169,7 @@ function populateFromDestination(dest: Destination) {
     name.value = dest.name
     enabled.value = dest.enabled
 
-    // Parse config JSON
+    // Parse config JSON — credentials are write-only and never populated
     let config: Record<string, string> = {}
     try { config = JSON.parse(dest.config || '{}') } catch { /* ignore */ }
 
@@ -172,27 +197,33 @@ function populateFromDestination(dest: Destination) {
             rclonePath.value = config.path ?? ''
             break
     }
-    // Credentials are write-only — never populated from server
 }
 
-watch(() => props.open, (open) => {
-    if (open) {
-        resetFields()
-        if (props.destination) {
-            populateFromDestination(props.destination)
-        } else {
-            selectedType.value = 'local'
+// Prefill or reset when the sheet opens
+watch(
+    () => props.open,
+    (open) => {
+        if (open) {
+            resetFields()
+            if (props.destination) {
+                populateFromDestination(props.destination)
+            } else {
+                selectedType.value = 'local'
+            }
         }
-    }
-})
+    },
+    { immediate: true }
+)
 
-// Reset field errors when type changes
+// Clear field errors when type changes
 watch(selectedType, () => {
     fieldErrors.value = {}
-    submitError.value = ''
+    submitError.value = null
 })
 
-// ─── Build payload ────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Build payload
+// ---------------------------------------------------------------------------
 
 function buildConfigAndCreds(): { config: Record<string, string>; creds: Record<string, string> } {
     switch (selectedType.value) {
@@ -223,7 +254,9 @@ function buildConfigAndCreds(): { config: Record<string, string>; creds: Record<
     }
 }
 
-// ─── Validate ─────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Validate
+// ---------------------------------------------------------------------------
 
 function validate(): boolean {
     fieldErrors.value = {}
@@ -241,13 +274,13 @@ function validate(): boolean {
 
     if (!configResult.success) {
         for (const issue of configResult.error.issues) {
-            fieldErrors.value[issue.path[0] as string] = issue.message
+            fieldErrors.value[String(issue.path[0])] = issue.message
         }
         valid = false
     }
     if (!credsResult.success) {
         for (const issue of credsResult.error.issues) {
-            fieldErrors.value[`cred_${issue.path[0]}`] = issue.message
+            fieldErrors.value[`cred_${String(issue.path[0])}`] = issue.message
         }
         valid = false
     }
@@ -255,19 +288,21 @@ function validate(): boolean {
     return valid
 }
 
-// ─── Submit ───────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Submit
+// ---------------------------------------------------------------------------
 
 async function onSubmit() {
     if (!validate()) return
 
     submitting.value = true
-    submitError.value = ''
+    submitError.value = null
 
     const { config, creds } = buildConfigAndCreds()
 
     try {
         if (isEdit.value && props.destination) {
-            // PATCH — only send what changed; credentials always sent (write-only)
+            // PATCH — credentials always sent because they are write-only
             await api(`/api/v1/destinations/${props.destination.id}`, {
                 method: 'PATCH',
                 body: {
@@ -288,17 +323,25 @@ async function onSubmit() {
                 },
             })
         }
+        emit('update:open', false)
         emit('saved')
-    } catch (err: any) {
-        submitError.value = err?.data?.error ?? 'An unexpected error occurred.'
+    } catch (e: any) {
+        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save destination'
     } finally {
         submitting.value = false
     }
 }
+
+function onOpenChange(value: boolean) {
+    if (!value) {
+        resetFields()
+    }
+    emit('update:open', value)
+}
 </script>
 
 <template>
-    <Sheet :open="open" @update:open="emit('update:open', $event)">
+    <Sheet :open="props.open" @update:open="onOpenChange">
         <SheetContent class="sm:max-w-lg overflow-y-auto">
             <SheetHeader>
                 <SheetTitle>{{ isEdit ? 'Edit Destination' : 'New Destination' }}</SheetTitle>
@@ -307,201 +350,227 @@ async function onSubmit() {
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="flex flex-col gap-5 py-6" @submit.prevent="onSubmit">
+            <form class="py-6 px-4" novalidate @submit.prevent="onSubmit">
+                <FieldGroup>
 
-                <!-- Name -->
-                <div class="flex flex-col gap-1.5">
-                    <Label for="dest-name">Name</Label>
-                    <Input id="dest-name" v-model="name" placeholder="My S3 Bucket" />
-                    <p v-if="nameError" class="text-destructive text-xs">{{ nameError }}</p>
-                </div>
+                    <!-- Error banner -->
+                    <Transition enter-active-class="transition-all duration-200"
+                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                        leave-to-class="-translate-y-1 opacity-0">
+                        <Alert v-if="submitError" variant="destructive">
+                            <AlertCircle class="size-4" />
+                            <AlertDescription>{{ submitError }}</AlertDescription>
+                        </Alert>
+                    </Transition>
 
-                <!-- Type (disabled in edit mode) -->
-                <div class="flex flex-col gap-1.5">
-                    <Label>Type</Label>
-                    <Select :model-value="selectedType" :disabled="isEdit"
-                        @update:model-value="selectedType = $event as DestType">
-                        <SelectTrigger>
-                            <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem v-for="t in DEST_TYPES" :key="t.value" :value="t.value">
-                                {{ t.label }}
-                            </SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <p v-if="isEdit" class="text-muted-foreground text-xs">Type cannot be changed after creation.</p>
-                </div>
+                    <!-- Name -->
+                    <Field>
+                        <FieldLabel for="dest-name">Name</FieldLabel>
+                        <Input id="dest-name" v-model="name" placeholder="e.g. Primary S3 Bucket" autocomplete="off"
+                            :class="nameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="nameError">{{ nameError }}</FieldError>
+                    </Field>
 
-                <Separator />
+                    <!-- Type — disabled in edit mode -->
+                    <Field>
+                        <FieldLabel>Type</FieldLabel>
+                        <Select :model-value="selectedType" :disabled="isEdit"
+                            @update:model-value="selectedType = $event as DestType">
+                            <SelectTrigger>
+                                <SelectValue placeholder="Select type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem v-for="t in DEST_TYPES" :key="t.value" :value="t.value">
+                                    {{ t.label }}
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <p v-if="isEdit" class="text-muted-foreground text-xs">
+                            Type cannot be changed after creation.
+                        </p>
+                    </Field>
 
-                <!-- ── Local ── -->
-                <template v-if="selectedType === 'local'">
-                    <div class="flex flex-col gap-1.5">
-                        <Label for="local-path">Path</Label>
-                        <Input id="local-path" v-model="localPath" placeholder="/mnt/backups" />
-                        <p v-if="fieldErrors.path" class="text-destructive text-xs">{{ fieldErrors.path }}</p>
-                    </div>
-                </template>
+                    <Separator />
 
-                <!-- ── S3 ── -->
-                <template v-if="selectedType === 's3'">
-                    <div class="flex flex-col gap-4">
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="s3-bucket">Bucket</Label>
-                            <Input id="s3-bucket" v-model="s3Bucket" placeholder="my-backup-bucket" />
-                            <p v-if="fieldErrors.bucket" class="text-destructive text-xs">{{ fieldErrors.bucket }}</p>
-                        </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="s3-endpoint">Endpoint <span
-                                    class="text-muted-foreground">(optional)</span></Label>
+                    <!-- ── Local ── -->
+                    <template v-if="selectedType === 'local'">
+                        <Field>
+                            <FieldLabel for="local-path">Path</FieldLabel>
+                            <Input id="local-path" v-model="localPath" placeholder="/mnt/backups"
+                                :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
+                        </Field>
+                    </template>
+
+                    <!-- ── S3 ── -->
+                    <template v-if="selectedType === 's3'">
+                        <Field>
+                            <FieldLabel for="s3-bucket">Bucket</FieldLabel>
+                            <Input id="s3-bucket" v-model="s3Bucket" placeholder="my-backup-bucket"
+                                :class="fieldErrors.bucket ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.bucket">{{ fieldErrors.bucket }}</FieldError>
+                        </Field>
+                        <Field>
+                            <FieldLabel for="s3-endpoint">
+                                Endpoint <span class="text-muted-foreground font-normal">(optional)</span>
+                            </FieldLabel>
                             <Input id="s3-endpoint" v-model="s3Endpoint"
                                 placeholder="https://s3.us-east-1.amazonaws.com" />
-                        </div>
+                        </Field>
                         <div class="grid grid-cols-2 gap-3">
-                            <div class="flex flex-col gap-1.5">
-                                <Label for="s3-region">Region <span
-                                        class="text-muted-foreground">(optional)</span></Label>
+                            <Field>
+                                <FieldLabel for="s3-region">
+                                    Region <span class="text-muted-foreground font-normal">(optional)</span>
+                                </FieldLabel>
                                 <Input id="s3-region" v-model="s3Region" placeholder="us-east-1" />
-                            </div>
-                            <div class="flex flex-col gap-1.5">
-                                <Label for="s3-prefix">Prefix <span
-                                        class="text-muted-foreground">(optional)</span></Label>
+                            </Field>
+                            <Field>
+                                <FieldLabel for="s3-prefix">
+                                    Prefix <span class="text-muted-foreground font-normal">(optional)</span>
+                                </FieldLabel>
                                 <Input id="s3-prefix" v-model="s3Prefix" placeholder="backups/" />
-                            </div>
+                            </Field>
                         </div>
-                    </div>
 
-                    <Separator />
-                    <p class="text-sm font-medium">Credentials</p>
-                    <div class="flex flex-col gap-4">
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="s3-access-key">Access Key ID</Label>
-                            <Input id="s3-access-key" v-model="s3AccessKey" autocomplete="off" />
-                            <p v-if="fieldErrors.cred_access_key" class="text-destructive text-xs">{{
-                                fieldErrors.cred_access_key }}</p>
-                        </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="s3-secret-key">Secret Access Key</Label>
-                            <Input id="s3-secret-key" v-model="s3SecretKey" type="password" autocomplete="off" />
-                            <p v-if="fieldErrors.cred_secret_key" class="text-destructive text-xs">{{
-                                fieldErrors.cred_secret_key }}</p>
-                        </div>
-                    </div>
-                </template>
+                        <Separator />
+                        <p class="text-sm font-medium">Credentials</p>
 
-                <!-- ── SFTP ── -->
-                <template v-if="selectedType === 'sftp'">
-                    <div class="flex flex-col gap-4">
+                        <Field>
+                            <FieldLabel for="s3-access-key">Access Key ID</FieldLabel>
+                            <Input id="s3-access-key" v-model="s3AccessKey" autocomplete="off"
+                                :class="fieldErrors.cred_access_key ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.cred_access_key">{{ fieldErrors.cred_access_key }}
+                            </FieldError>
+                        </Field>
+                        <Field>
+                            <FieldLabel for="s3-secret-key">Secret Access Key</FieldLabel>
+                            <Input id="s3-secret-key" v-model="s3SecretKey" type="password" autocomplete="off"
+                                :class="fieldErrors.cred_secret_key ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.cred_secret_key">{{ fieldErrors.cred_secret_key }}
+                            </FieldError>
+                        </Field>
+                    </template>
+
+                    <!-- ── SFTP ── -->
+                    <template v-if="selectedType === 'sftp'">
                         <div class="grid grid-cols-3 gap-3">
-                            <div class="col-span-2 flex flex-col gap-1.5">
-                                <Label for="sftp-host">Host</Label>
-                                <Input id="sftp-host" v-model="sftpHost" placeholder="backup.example.com" />
-                                <p v-if="fieldErrors.host" class="text-destructive text-xs">{{ fieldErrors.host }}</p>
-                            </div>
-                            <div class="flex flex-col gap-1.5">
-                                <Label for="sftp-port">Port <span class="text-muted-foreground">(opt.)</span></Label>
+                            <Field class="col-span-2">
+                                <FieldLabel for="sftp-host">Host</FieldLabel>
+                                <Input id="sftp-host" v-model="sftpHost" placeholder="backup.example.com"
+                                    :class="fieldErrors.host ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                <FieldError v-if="fieldErrors.host">{{ fieldErrors.host }}</FieldError>
+                            </Field>
+                            <Field>
+                                <FieldLabel for="sftp-port">
+                                    Port <span class="text-muted-foreground font-normal">(opt.)</span>
+                                </FieldLabel>
                                 <Input id="sftp-port" v-model="sftpPort" placeholder="22" />
-                            </div>
+                            </Field>
                         </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="sftp-user">Username</Label>
-                            <Input id="sftp-user" v-model="sftpUser" placeholder="backup-user" />
-                            <p v-if="fieldErrors.user" class="text-destructive text-xs">{{ fieldErrors.user }}</p>
-                        </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="sftp-path">Remote Path</Label>
-                            <Input id="sftp-path" v-model="sftpPath" placeholder="/home/backup-user/restic" />
-                            <p v-if="fieldErrors.path" class="text-destructive text-xs">{{ fieldErrors.path }}</p>
-                        </div>
-                    </div>
+                        <Field>
+                            <FieldLabel for="sftp-user">Username</FieldLabel>
+                            <Input id="sftp-user" v-model="sftpUser" placeholder="backup-user"
+                                :class="fieldErrors.user ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.user">{{ fieldErrors.user }}</FieldError>
+                        </Field>
+                        <Field>
+                            <FieldLabel for="sftp-path">Remote Path</FieldLabel>
+                            <Input id="sftp-path" v-model="sftpPath" placeholder="/home/backup-user/restic"
+                                :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
+                        </Field>
 
-                    <Separator />
-                    <p class="text-sm font-medium">Authentication <span
-                            class="text-muted-foreground font-normal">(password or private key)</span></p>
-                    <div class="flex flex-col gap-4">
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="sftp-password">Password <span
-                                    class="text-muted-foreground">(optional)</span></Label>
+                        <Separator />
+                        <p class="text-sm font-medium">
+                            Authentication
+                            <span class="text-muted-foreground font-normal"> (password or private key)</span>
+                        </p>
+
+                        <Field>
+                            <FieldLabel for="sftp-password">
+                                Password <span class="text-muted-foreground font-normal">(optional)</span>
+                            </FieldLabel>
                             <Input id="sftp-password" v-model="sftpPassword" type="password" autocomplete="off" />
-                        </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="sftp-key">Private Key (PEM) <span
-                                    class="text-muted-foreground">(optional)</span></Label>
+                        </Field>
+                        <Field>
+                            <FieldLabel for="sftp-key">
+                                Private Key (PEM) <span class="text-muted-foreground font-normal">(optional)</span>
+                            </FieldLabel>
                             <textarea id="sftp-key" v-model="sftpPrivateKey" rows="4"
                                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                                 class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] focus-visible:ring-[3px] resize-none font-mono" />
-                        </div>
-                    </div>
-                </template>
+                        </Field>
+                    </template>
 
-                <!-- ── REST ── -->
-                <template v-if="selectedType === 'rest'">
-                    <div class="flex flex-col gap-4">
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="rest-url">REST Server URL</Label>
-                            <Input id="rest-url" v-model="restUrl" placeholder="https://rest.example.com/repo" />
-                            <p v-if="fieldErrors.url" class="text-destructive text-xs">{{ fieldErrors.url }}</p>
-                        </div>
-                    </div>
+                    <!-- ── REST ── -->
+                    <template v-if="selectedType === 'rest'">
+                        <Field>
+                            <FieldLabel for="rest-url">REST Server URL</FieldLabel>
+                            <Input id="rest-url" v-model="restUrl" placeholder="https://rest.example.com/repo"
+                                :class="fieldErrors.url ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.url">{{ fieldErrors.url }}</FieldError>
+                        </Field>
 
-                    <Separator />
-                    <p class="text-sm font-medium">Credentials <span
-                            class="text-muted-foreground font-normal">(optional)</span></p>
-                    <div class="flex flex-col gap-4">
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="rest-user">Username</Label>
-                            <Input id="rest-user" v-model="restUser" autocomplete="off" />
-                        </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="rest-password">Password</Label>
-                            <Input id="rest-password" v-model="restPassword" type="password" autocomplete="off" />
-                        </div>
-                    </div>
-                </template>
-
-                <!-- ── Rclone ── -->
-                <template v-if="selectedType === 'rclone'">
-                    <div class="flex flex-col gap-4">
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="rclone-remote">Remote Name</Label>
-                            <Input id="rclone-remote" v-model="rcloneRemote" placeholder="myremote" />
-                            <p class="text-muted-foreground text-xs">Must match a remote configured in your rclone.conf
-                                on the agent.</p>
-                            <p v-if="fieldErrors.remote" class="text-destructive text-xs">{{ fieldErrors.remote }}</p>
-                        </div>
-                        <div class="flex flex-col gap-1.5">
-                            <Label for="rclone-path">Path</Label>
-                            <Input id="rclone-path" v-model="rclonePath" placeholder="bucket/backups" />
-                            <p v-if="fieldErrors.path" class="text-destructive text-xs">{{ fieldErrors.path }}</p>
-                        </div>
-                    </div>
-                </template>
-
-                <Separator />
-
-                <!-- Enabled toggle (edit only) -->
-                <div v-if="isEdit" class="flex items-center justify-between">
-                    <div>
-                        <p class="text-sm font-medium">Enabled</p>
-                        <p class="text-muted-foreground text-xs">Disabled destinations are skipped during backup jobs.
+                        <Separator />
+                        <p class="text-sm font-medium">
+                            Credentials
+                            <span class="text-muted-foreground font-normal"> (optional)</span>
                         </p>
-                    </div>
-                    <Switch :model-value="enabled" @update:model-value="enabled = $event" />
-                </div>
 
-                <!-- Submit error -->
-                <Alert v-if="submitError" variant="destructive">
-                    <AlertDescription>{{ submitError }}</AlertDescription>
-                </Alert>
+                        <Field>
+                            <FieldLabel for="rest-user">Username</FieldLabel>
+                            <Input id="rest-user" v-model="restUser" autocomplete="off" />
+                        </Field>
+                        <Field>
+                            <FieldLabel for="rest-password">Password</FieldLabel>
+                            <Input id="rest-password" v-model="restPassword" type="password" autocomplete="off" />
+                        </Field>
+                    </template>
 
-                <!-- Footer -->
-                <SheetFooter class="mt-2">
-                    <Button type="button" variant="outline" @click="emit('update:open', false)">Cancel</Button>
-                    <Button type="submit" :disabled="submitting">
-                        {{ submitting ? 'Saving...' : (isEdit ? 'Save Changes' : 'Create Destination') }}
-                    </Button>
-                </SheetFooter>
+                    <!-- ── Rclone ── -->
+                    <template v-if="selectedType === 'rclone'">
+                        <Field>
+                            <FieldLabel for="rclone-remote">Remote Name</FieldLabel>
+                            <Input id="rclone-remote" v-model="rcloneRemote" placeholder="myremote"
+                                :class="fieldErrors.remote ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <p class="text-muted-foreground text-xs">
+                                Must match a remote configured in rclone.conf on the agent.
+                            </p>
+                            <FieldError v-if="fieldErrors.remote">{{ fieldErrors.remote }}</FieldError>
+                        </Field>
+                        <Field>
+                            <FieldLabel for="rclone-path">Path</FieldLabel>
+                            <Input id="rclone-path" v-model="rclonePath" placeholder="bucket/backups"
+                                :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
+                        </Field>
+                    </template>
+
+                    <!-- Enabled toggle — edit mode only -->
+                    <template v-if="isEdit">
+                        <Separator />
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium">Enabled</p>
+                                <p class="text-muted-foreground text-xs">
+                                    Disabled destinations are skipped during backup jobs.
+                                </p>
+                            </div>
+                            <Switch :model-value="enabled" @update:model-value="enabled = $event" />
+                        </div>
+                    </template>
+
+                    <SheetFooter class="mt-2 px-0">
+                        <Button type="button" variant="outline" :disabled="submitting" @click="onOpenChange(false)">
+                            Cancel
+                        </Button>
+                        <Button type="submit" :disabled="submitting">
+                            <Loader2 v-if="submitting" class="size-4 animate-spin" />
+                            {{ submitting ? 'Saving…' : (isEdit ? 'Save Changes' : 'Create Destination') }}
+                        </Button>
+                    </SheetFooter>
+
+                </FieldGroup>
             </form>
         </SheetContent>
     </Sheet>
