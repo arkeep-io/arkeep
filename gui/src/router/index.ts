@@ -98,26 +98,8 @@ const routes: RouteRecordRaw[] = [
         path: 'policies',
         name: 'policies',
         component: () => import('@/pages/policies/PoliciesPage.vue'),
+        meta: { breadcrumb: "Policies" },
       },
-      /*{
-        path: 'policies/new',
-        name: 'policy-create',
-        component: () => import('@/pages/PolicyFormPage.vue'),
-        meta: { requiresRole: 'admin' },
-      },
-      {
-        path: 'policies/:id',
-        name: 'policy-detail',
-        component: () => import('@/pages/PolicyDetailPage.vue'),
-        props: true,
-      },*/
-      /* {
-        path: 'policies/:id/edit',
-        name: 'policy-edit',
-        component: () => import('@/pages/PolicyFormPage.vue'),
-        props: true,
-        meta: { requiresRole: 'admin' },
-      }, */
 
       // Destinations
       {
