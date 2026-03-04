@@ -314,7 +314,13 @@ watch(
     await loadRemoteData()
 
     if (props.policy) {
-      const p = props.policy
+      // Fetch the full policy to get destinations — the list endpoint
+      // returns destinations: [] to keep list queries lightweight.
+      let p = props.policy
+      try {
+        const full = await api<ApiResponse<Policy>>(`/api/v1/policies/${props.policy.id}`)
+        p = full.data
+      } catch { /* fallback to list payload */ }
 
       const preDestIds = (p.destinations ?? [])
         .sort((a, b) => a.priority - b.priority)
@@ -466,7 +472,8 @@ function onOpenChange(value: boolean) {
           <!-- Name -->
           <Field>
             <FieldLabel for="policy-name">Name</FieldLabel>
-            <Input id="policy-name" v-model="nameValue" placeholder="e.g. Daily Database Backup" autocomplete="off"
+            <Input id="policy-name" v-model="nameValue" placeholder="e.g. Daily Database Backup"
+              autocomplete="new-password"
               :class="nameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
             <FieldError v-if="nameError">{{ nameError }}</FieldError>
           </Field>
@@ -495,48 +502,41 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         2. REPOSITORY PASSWORD
+                         2. REPOSITORY PASSWORD (create only)
                     ══════════════════════════════════════════════════ -->
-          <p class="text-sm font-medium">
-            Repository Password
-          </p>
-          <p class="text-muted-foreground text-xs -mt-3">
-            {{ isEdit
-              ? 'Leave blank to keep the existing password. Restic uses this to encrypt the repository.'
-              : 'Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.' }}
-          </p>
+          <template v-if="!isEdit">
+            <p class="text-sm font-medium">Repository Password</p>
+            <p class="text-muted-foreground text-xs -mt-3">
+              Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
+            </p>
 
-          <Field>
-            <FieldLabel for="repo_password">
-              Password
-              <span v-if="!isEdit" class="text-destructive">*</span>
-            </FieldLabel>
-            <div class="relative">
-              <Input id="repo_password" v-model="repoPassValue" :type="showPassword ? 'text' : 'password'"
-                autocomplete="new-password" placeholder="min. 8 characters"
-                :class="['pr-10', repoPassError ? 'border-destructive focus-visible:ring-destructive/30' : '']" />
-              <button type="button"
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                @click="showPassword = !showPassword">
-                <EyeOff v-if="showPassword" class="size-4" />
-                <Eye v-else class="size-4" />
-              </button>
-            </div>
-            <FieldError v-if="repoPassError">{{ repoPassError }}</FieldError>
-          </Field>
+            <Field>
+              <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
+              <div class="relative">
+                <Input id="repo_password" v-model="repoPassValue" :type="showPassword ? 'text' : 'password'"
+                  autocomplete="new-password" placeholder="min. 8 characters"
+                  :class="['pr-10', repoPassError ? 'border-destructive focus-visible:ring-destructive/30' : '']" />
+                <button type="button"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  @click="showPassword = !showPassword">
+                  <EyeOff v-if="showPassword" class="size-4" />
+                  <Eye v-else class="size-4" />
+                </button>
+              </div>
+              <FieldError v-if="repoPassError">{{ repoPassError }}</FieldError>
+            </Field>
 
-          <Field>
-            <FieldLabel for="repo_password_confirm">
-              Confirm Password
-              <span v-if="!isEdit" class="text-destructive">*</span>
-            </FieldLabel>
-            <Input id="repo_password_confirm" v-model="repoPassConfirmValue" :type="showPassword ? 'text' : 'password'"
-              autocomplete="new-password" placeholder="repeat password"
-              :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-            <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
-          </Field>
+            <Field>
+              <FieldLabel for="repo_password_confirm">Confirm Password <span class="text-destructive">*</span>
+              </FieldLabel>
+              <Input id="repo_password_confirm" v-model="repoPassConfirmValue"
+                :type="showPassword ? 'text' : 'password'" autocomplete="new-password" placeholder="repeat password"
+                :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+              <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
+            </Field>
 
-          <Separator />
+            <Separator />
+          </template>
 
           <!-- ══════════════════════════════════════════════════
                          3. SOURCES
