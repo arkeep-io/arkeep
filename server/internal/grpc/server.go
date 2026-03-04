@@ -338,7 +338,7 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 	case proto.JobStatus_JOB_STATUS_RUNNING:
 		err = s.jobRepo.UpdateStatus(ctx, jobID, "running", nil, "")
 	case proto.JobStatus_JOB_STATUS_COMPLETED:
-		err = s.jobRepo.UpdateStatus(ctx, jobID, "completed", &now, "")
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "succeeded", &now, "")
 	case proto.JobStatus_JOB_STATUS_FAILED:
 		err = s.jobRepo.UpdateStatus(ctx, jobID, "failed", &now, req.Message)
 	case proto.JobStatus_JOB_STATUS_CANCELLED:
@@ -402,7 +402,7 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 			Type: websocket.MsgJobLog,
 			Payload: map[string]any{
 				"job_id":  entry.JobId,
-				"level":   entry.Level.String(),
+				"level":   protoLevelToString(entry.Level),
 				"message": entry.Message,
 			},
 		})
@@ -424,7 +424,7 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 		for i, e := range entries {
 			logs[i] = db.JobLog{
 				JobID:   jobID,
-				Level:   e.Level.String(),
+				Level:   protoLevelToString(e.Level),
 				Message: e.Message,
 			}
 			if e.Timestamp != nil {
@@ -462,4 +462,18 @@ func parseAgentID(raw string) (uuid.UUID, error) {
 		return uuid.UUID{}, fmt.Errorf("invalid agent ID %q: %w", raw, err)
 	}
 	return id, nil
+}
+
+// protoLevelToString converts a proto LogLevel enum to the string values
+// accepted by the job_logs_level_check constraint ("info", "warn", "error").
+// DEBUG is collapsed to "info" since the DB constraint does not include it.
+func protoLevelToString(l proto.LogLevel) string {
+	switch l {
+	case proto.LogLevel_LOG_LEVEL_WARN:
+		return "warn"
+	case proto.LogLevel_LOG_LEVEL_ERROR:
+		return "error"
+	default:
+		return "info"
+	}
 }

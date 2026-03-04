@@ -132,6 +132,16 @@ func NewWrapper(extractor *Extractor) (*Wrapper, error) {
 	}, nil
 }
 
+// Init initialises the restic repository at dest if it does not exist yet.
+// Idempotent: if the repository is already initialised the error is silenced.
+func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
+	err := w.run(ctx, dest, []string{"init"})
+	if err != nil && strings.Contains(err.Error(), "already") {
+		return nil
+	}
+	return err
+}
+
 // Backup runs a restic backup for the given destination and sources.
 // Progress events are forwarded to onProgress as they arrive on stdout.
 // onProgress may be nil if the caller does not need live progress.
@@ -139,6 +149,10 @@ func NewWrapper(extractor *Extractor) (*Wrapper, error) {
 // Returns an error if the backup fails. A non-zero restic exit code is
 // always wrapped in the returned error with the stderr output included.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) error {
+	if err := w.Init(ctx, dest); err != nil {
+		return fmt.Errorf("restic: failed to init repository: %w", err)
+	}
+
 	args := []string{"backup", "--json"}
 
 	for _, tag := range opts.Tags {

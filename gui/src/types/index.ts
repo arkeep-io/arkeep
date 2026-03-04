@@ -146,16 +146,21 @@ export interface Policy {
   id: string
   name: string
   agent_id: string
-  agent_name: string // denormalized for display
-  sources: PolicySource[]
-  schedule: string // cron expression, e.g. "0 2 * * *"
-  retention: RetentionConfig
-  hooks: HookConfig
+  agent_name: string
+  sources: string           // JSON string — parse client-side when needed
+  schedule: string
+  retention_daily: number
+  retention_weekly: number
+  retention_monthly: number
+  retention_yearly: number
+  hook_pre_backup: string   // JSON string or empty
+  hook_post_backup: string  // JSON string or empty
   enabled: boolean
-  destinations: PolicyDestination[] // populated only on GetByID / Create / Update
+  destinations: PolicyDestination[]
+  last_run_at: string | null
+  next_run_at: string | null
   created_at: string
   updated_at: string
-  // deleted_at is omitted — soft-deleted policies are not returned by the API
 }
 
 // PolicyListItem is the leaner shape returned by the list endpoint.

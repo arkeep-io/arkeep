@@ -144,6 +144,7 @@ type Manager struct {
 	// agentID is the stable ID returned by the server after registration.
 	// Stored here so SendLog and ReportStatus can include it in RPCs.
 	agentID    string
+	sessionCtx context.Context // authenticated context for out-of-band RPCs
 }
 
 // New creates a Manager. Call Run to start the connection loop.
@@ -205,6 +206,12 @@ func (m *Manager) connect(ctx context.Context) error {
 	// This is equivalent to an HTTP Authorization header — the server's
 	// auth interceptor validates it on every call.
 	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs("agent-secret", m.cfg.SharedSecret))
+
+	// Store the authenticated context so out-of-band RPCs (openLogStream,
+	// ReportStatus) can include the metadata without receiving ctx as a parameter.
+	m.mu.Lock()
+	m.sessionCtx = ctx
+	m.mu.Unlock()
 
 	client := proto.NewAgentServiceClient(conn)
 	m.mu.Lock()
@@ -391,7 +398,7 @@ func (m *Manager) openLogStream(jobID string) {
 
 	// Use a background context so the log stream is not tied to any per-job
 	// deadline — it must stay open until we explicitly close it.
-	stream, err := client.StreamLogs(context.Background())
+	stream, err := client.StreamLogs(m.sessionCtx)
 	if err != nil {
 		m.logger.Warn("openLogStream: failed to open stream",
 			zap.String("job_id", jobID),
@@ -440,7 +447,7 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 	m.mu.RUnlock()
 
 	if client != nil {
-		_, err := client.ReportJobStatus(context.Background(), &proto.JobStatusReport{
+		_, err := client.ReportJobStatus(m.sessionCtx, &proto.JobStatusReport{
 			JobId:     jobID,
 			AgentId:   agentID,
 			Status:    statusToProto(status),

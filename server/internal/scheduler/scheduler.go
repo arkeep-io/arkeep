@@ -375,8 +375,13 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []db.Po
 		})
 	}
 
+	sourcesFlat, err := buildSourcesList(policy.Sources)
+	if err != nil {
+		return fmt.Errorf("failed to build sources list: %w", err)
+	}
+
 	payload := backupPayload{
-		Sources:      policy.Sources,
+		Sources:      sourcesFlat,
 		RepoPassword: string(policy.RepoPassword), // decrypted
 		Destinations: destPayloads,
 		Retention: retentionPayload{
@@ -518,4 +523,31 @@ func buildEnv(dest *db.Destination) map[string]string {
 	}
 
 	return env
+}
+
+// buildSourcesList converts the policy sources JSON (array of source objects
+// saved by the GUI) into the flat string array the agent executor expects.
+// Directory sources become plain paths; docker-volume sources become
+// "docker-volume://<volume-name>" URIs.
+func buildSourcesList(sourcesJSON string) (string, error) {
+	var sources []struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(sourcesJSON), &sources); err != nil {
+		return "", fmt.Errorf("invalid sources JSON: %w", err)
+	}
+	paths := make([]string, 0, len(sources))
+	for _, s := range sources {
+		if s.Type == "docker-volume" {
+			paths = append(paths, "docker-volume://"+s.Path)
+		} else {
+			paths = append(paths, s.Path)
+		}
+	}
+	out, err := json.Marshal(paths)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }

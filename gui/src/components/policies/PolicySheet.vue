@@ -82,7 +82,7 @@ async function loadRemoteData() {
       api<ApiResponse<{ items: Destination[]; total: number }>>('/api/v1/destinations'),
     ])
     agents.value = agentsRes.data.items ?? []
-    availableDestinations.value = destRes.data.items ?? []
+    availableDestinations.value = (destRes.data.items ?? []).filter(d => d.enabled)
   } catch {
     // Non-fatal — selects will render empty.
   } finally {
@@ -140,14 +140,14 @@ const schema = z.object({
   if (!isEdit.value) {
     if (!data.repo_password || data.repo_password.length < 8) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['repo_password'],
         message: 'Repository password must be at least 8 characters',
       })
     }
     if (data.repo_password !== data.repo_password_confirm) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['repo_password_confirm'],
         message: 'Passwords do not match',
       })
@@ -155,14 +155,14 @@ const schema = z.object({
   } else if (data.repo_password && data.repo_password.length > 0) {
     if (data.repo_password.length < 8) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['repo_password'],
         message: 'Repository password must be at least 8 characters',
       })
     }
     if (data.repo_password !== data.repo_password_confirm) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['repo_password_confirm'],
         message: 'Passwords do not match',
       })
@@ -320,10 +320,15 @@ watch(
         .sort((a, b) => a.priority - b.priority)
         .map(d => d.destination_id)
 
-      const mappedSources = (p.sources ?? []).map(s => ({
+      // sources is stored as a JSON string in the API response — parse it first.
+      let parsedSources: { type: string; path: string; label?: string }[] = []
+      try {
+        parsedSources = typeof p.sources === 'string' ? JSON.parse(p.sources) : (p.sources ?? [])
+      } catch { /* fallback to empty */ }
+      const mappedSources = parsedSources.map(s => ({
         type: s.type as SourceTypeValue,
         path: s.path ?? '',
-        label: (s as any).label as string | undefined ?? '',
+        label: s.label ?? '',
       }))
 
       setValues({
@@ -336,10 +341,10 @@ watch(
         sources: mappedSources.length > 0
           ? mappedSources
           : [{ type: 'directory', path: '', label: '' }],
-        retention_keep_daily: p.retention.keep_daily,
-        retention_keep_weekly: p.retention.keep_weekly,
-        retention_keep_monthly: p.retention.keep_monthly,
-        retention_keep_yearly: p.retention.keep_yearly,
+        retention_keep_daily: p.retention_daily ?? 7,
+        retention_keep_weekly: p.retention_weekly ?? 4,
+        retention_keep_monthly: p.retention_monthly ?? 6,
+        retention_keep_yearly: p.retention_yearly ?? 1,
         ordered_destination_ids: preDestIds,
         hook_pre: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
         hook_post: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
@@ -388,8 +393,6 @@ const onSubmit = handleSubmit(async (values) => {
 
     const body: Record<string, unknown> = {
       name: values.name,
-      agent_id: values.agent_id,
-      enabled: values.enabled,
       schedule: values.schedule,
       sources: JSON.stringify(values.sources),
       retention_daily: values.retention_keep_daily,
@@ -398,13 +401,17 @@ const onSubmit = handleSubmit(async (values) => {
       retention_yearly: values.retention_keep_yearly,
       hook_pre_backup: serialiseHook(values.hook_pre),
       hook_post_backup: serialiseHook(values.hook_post),
-      destinations: destinationsPayload,
     }
 
-    if (!isEdit.value) {
+    if (isEdit.value) {
+      // PATCH-only: enabled, optional new password
+      body.enabled = values.enabled
+      if (values.repo_password) body.repo_password = values.repo_password
+    } else {
+      // POST-only: agent, password (required), destinations
+      body.agent_id = values.agent_id
       body.repo_password = values.repo_password ?? ''
-    } else if (values.repo_password) {
-      body.repo_password = values.repo_password
+      body.destinations = destinationsPayload
     }
 
     if (isEdit.value && props.policy) {
@@ -458,8 +465,8 @@ function onOpenChange(value: boolean) {
 
           <!-- Name -->
           <Field>
-            <FieldLabel for="name">Name</FieldLabel>
-            <Input id="name" v-model="nameValue" placeholder="e.g. Daily Database Backup" autocomplete="off"
+            <FieldLabel for="policy-name">Name</FieldLabel>
+            <Input id="policy-name" v-model="nameValue" placeholder="e.g. Daily Database Backup" autocomplete="off"
               :class="nameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
             <FieldError v-if="nameError">{{ nameError }}</FieldError>
           </Field>
