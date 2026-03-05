@@ -96,9 +96,21 @@ const routes: RouteRecordRaw[] = [
       // Policies
       {
         path: 'policies',
-        name: 'policies',
-        component: () => import('@/pages/policies/PoliciesPage.vue'),
         meta: { breadcrumb: "Policies" },
+        children: [
+          {
+            path: "",
+            name: 'policies',
+            component: () => import('@/pages/policies/PoliciesPage.vue'),
+          },
+          {
+            path: ":id",
+            name: "policy-detail",
+            component: () => import("@/pages/policies/PolicyDetailPage.vue"),
+            props: true,
+            meta: { breadcrumb: "Policy Details" },
+          },
+        ]
       },
 
       // Destinations
@@ -173,19 +185,19 @@ const routes: RouteRecordRaw[] = [
   },
 
   // ── Error pages ─────────────────────────────────────────────────────────────
-  /* {
+  {
     path: '/403',
     name: 'forbidden',
     component: () => import('@/pages/ForbiddenPage.vue'),
     meta: { public: true },
-  }, */
-  /* {
+  },
+  {
     // Catch-all — must be last
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/pages/NotFoundPage.vue'),
     meta: { public: true },
-  }, */
+  },
 ]
 
 // ─── Router instance ──────────────────────────────────────────────────────────
