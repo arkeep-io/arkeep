@@ -179,9 +179,9 @@ function loginWithOIDC(): void {
                         </form>
 
                         <!-- Decorative panel -->
-                        <div class="relative hidden bg-muted md:block">
-                            <img src="https://placehold.co/600x400" alt="Image"
-                                class="absolute inset-0 h-full w-full object-cover dark:brightness-[0.2] dark:grayscale" />
+                        <div class="relative hidden bg-black md:block overflow-hidden">
+                            <video src="/login-bg.mp4" class="absolute inset-0 h-full w-full object-fit scale-130"
+                                autoplay loop muted playsinline />
                         </div>
 
                     </CardContent>
@@ -189,7 +189,10 @@ function loginWithOIDC(): void {
             </div>
         </div>
     </div>
+
+    <!-- Footer -->
     <p class="fixed bottom-0 left-0 right-0 text-center text-xs text-muted-foreground pb-6">
         Arkeep — open source backup management
     </p>
+
 </template>
