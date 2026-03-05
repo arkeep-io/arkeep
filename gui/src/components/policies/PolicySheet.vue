@@ -159,8 +159,14 @@ type SourceTypeValue = typeof SOURCE_TYPES[number]
 
 const sourceItemSchema = z.object({
   type: z.enum(SOURCE_TYPES),
-  path: z.string().min(1, 'Path is required'),
+  // path is required for directory; for docker-volume the selection lives in
+  // selectedVolumes and path stays empty until serialisation.
+  path: z.string().optional().default(''),
   label: z.string().optional(),
+}).superRefine((val, ctx) => {
+  if (val.type === 'directory' && (!val.path || val.path.trim() === '')) {
+    ctx.addIssue({ code: 'custom', path: ['path'], message: 'Path is required' })
+  }
 })
 
 const hookFieldSchema = z.object({
@@ -265,10 +271,10 @@ watch(
 )
 
 // Called when a source's type changes. Triggers a volume fetch if needed.
-function onSourceTypeChange(idx: number, newType: string, key: string) {
+function onSourceTypeChange(idx: number, newType: string) {
   ; (sourceFields.value[idx]!.value as any).path = ''
   // Clear any previous volume selection for this row
-  selectedVolumes.value = { ...selectedVolumes.value, [key]: new Set() }
+  selectedVolumes.value = { ...selectedVolumes.value, [String(idx)]: new Set() }
   if (newType === 'docker-volume' && agentValue.value) {
     if (agentVolumes.value.length === 0 && !volumesLoading.value) {
       fetchVolumes()
@@ -288,6 +294,19 @@ const { fields: sourceFields, push: pushSource, remove: removeSource } =
 
 function addSource() {
   pushSource({ type: 'directory', path: '', label: '' })
+}
+
+function removeSourceRow(idx: number) {
+  removeSource(idx)
+  // Re-index selectedVolumes: shift keys > idx down by one and drop the removed key.
+  const rebuilt: Record<string, Set<string>> = {}
+  for (const [k, v] of Object.entries(selectedVolumes.value)) {
+    const n = Number(k)
+    if (n < idx) rebuilt[k] = v
+    else if (n > idx) rebuilt[String(n - 1)] = v
+    // n === idx is dropped
+  }
+  selectedVolumes.value = rebuilt
 }
 
 // Schedule
@@ -452,11 +471,51 @@ function populateForm(p: Policy) {
     parsedSources = typeof p.sources === 'string' ? JSON.parse(p.sources) : (p.sources ?? [])
   } catch { /* fallback to empty */ }
 
-  const mappedSources = parsedSources.map(s => ({
+  // Re-group docker-volume entries that were expanded on save back into a
+  // single source row per group. Two entries belong to the same group when
+  // they are adjacent, share the same type "docker-volume", and have the
+  // same label. directory entries are kept as-is (one entry = one row).
+  type RawSource = { type: string; path: string; label?: string }
+  const grouped: RawSource[] = []
+  const volumesByRowIndex: Record<number, string[]> = {}
+
+  for (const src of parsedSources) {
+    if (src.type !== 'docker-volume') {
+      grouped.push(src)
+      continue
+    }
+    // Find an existing docker-volume row with the same label to merge into.
+    let existingIdx = -1
+    for (let i = grouped.length - 1; i >= 0; i--) {
+      if (grouped[i]!.type === 'docker-volume' && (grouped[i]!.label ?? '') === (src.label ?? '')) {
+        existingIdx = i
+        break
+      }
+    }
+    if (existingIdx !== -1) {
+      // Merge into existing row — accumulate volume name.
+      if (!volumesByRowIndex[existingIdx]) volumesByRowIndex[existingIdx] = []
+      volumesByRowIndex[existingIdx]!.push(src.path)
+    } else {
+      // New row — record this as a new group.
+      const newIdx = grouped.length
+      grouped.push({ type: src.type, path: '', label: src.label ?? '' })
+      volumesByRowIndex[newIdx] = [src.path]
+    }
+  }
+
+  const mappedSources = grouped.map(s => ({
     type: s.type as SourceTypeValue,
     path: s.path ?? '',
     label: s.label ?? '',
   }))
+
+  // Build the new selectedVolumes map indexed by source row position.
+  const newSelectedVolumes: Record<string, Set<string>> = {}
+  for (const [idxStr, names] of Object.entries(volumesByRowIndex)) {
+    newSelectedVolumes[idxStr] = new Set(names)
+  }
+  selectedVolumes.value = newSelectedVolumes
 
   const preDestIds = (p.destinations ?? [])
     .sort((a, b) => a.priority - b.priority)
@@ -484,7 +543,7 @@ function populateForm(p: Policy) {
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
   selectedPreset.value = match?.value ?? ''
 
-  // Pre-fetch volumes if any source is docker-volume type.
+  // Pre-fetch volumes if any source row is docker-volume type.
   if (mappedSources.some(s => s.type === 'docker-volume') && p.agent_id) {
     fetchVolumes()
   }
@@ -512,6 +571,18 @@ function serialiseHook(hook: z.infer<typeof hookFieldSchema>): string {
 }
 
 const onSubmit = handleSubmit(async (values) => {
+  // Validate that every docker-volume source has at least one volume selected.
+  for (let idx = 0; idx < values.sources.length; idx++) {
+    const s = values.sources[idx]
+    if (s?.type === 'docker-volume') {
+      const sel = selectedVolumes.value[String(idx)]
+      if (!sel || sel.size === 0) {
+        submitError.value = `Source ${idx + 1}: select at least one Docker volume.`
+        return
+      }
+    }
+  }
+
   submitting.value = true
   submitError.value = null
 
@@ -526,10 +597,9 @@ const onSubmit = handleSubmit(async (values) => {
       schedule: values.schedule,
       sources: JSON.stringify(
         values.sources.flatMap((s, idx) => {
-          const field = sourceFields.value[idx]
-          if (s.type !== 'docker-volume' || !field) return [s]
-          const sel = selectedVolumes.value[field.key]
-          if (!sel || sel.size === 0) return [s]
+          if (s.type !== 'docker-volume') return [s]
+          const sel = selectedVolumes.value[String(idx)]
+          if (!sel || sel.size === 0) return [{ ...s, path: s.path || '' }]
           // Expand each selected volume into its own source entry
           return Array.from(sel).map(name => ({ type: s.type, path: name, label: s.label ?? '' }))
         })
@@ -691,7 +761,7 @@ function onOpenChange(value: boolean) {
             <div class="flex items-center justify-between">
               <span class="text-xs font-medium text-muted-foreground">Source {{ idx + 1 }}</span>
               <Button type="button" variant="ghost" size="icon"
-                class="w-6 h-6 text-muted-foreground hover:text-destructive" @click="removeSource(idx)">
+                class="w-6 h-6 text-muted-foreground hover:text-destructive" @click="removeSourceRow(idx)">
                 <Trash2 class="w-3.5 h-3.5" />
               </Button>
             </div>
@@ -700,7 +770,7 @@ function onOpenChange(value: boolean) {
             <div class="flex flex-col gap-1.5">
               <Label :for="`source-type-${idx}`" class="text-sm">Type</Label>
               <Select :model-value="(field.value as any).type as string"
-                @update:model-value="(v) => { (field.value as any).type = v as SourceTypeValue; onSourceTypeChange(idx, v as string, String(field.key)) }">
+                @update:model-value="(v) => { (field.value as any).type = v as SourceTypeValue; onSourceTypeChange(idx, v as string) }">
                 <SelectTrigger :id="`source-type-${idx}`" class="w-full">
                   <SelectValue />
                 </SelectTrigger>
@@ -749,23 +819,22 @@ function onOpenChange(value: boolean) {
                     <label v-for="vol in agentVolumes" :key="vol.name"
                       class="flex items-center gap-2.5 rounded px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors">
                       <div class="w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors"
-                        :class="getSelectedVolumes(String(field.key)).has(vol.name)
+                        :class="getSelectedVolumes(String(idx)).has(vol.name)
                           ? 'bg-primary border-primary'
                           : 'border-muted-foreground/40'">
-                        <svg v-if="getSelectedVolumes(String(field.key)).has(vol.name)"
+                        <svg v-if="getSelectedVolumes(String(idx)).has(vol.name)"
                           class="w-2.5 h-2.5 text-primary-foreground" viewBox="0 0 10 10" fill="none">
                           <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" stroke-width="1.5"
                             stroke-linecap="round" stroke-linejoin="round" />
                         </svg>
                       </div>
-                      <input type="checkbox" class="sr-only"
-                        :checked="getSelectedVolumes(String(field.key)).has(vol.name)"
-                        @change="toggleVolume(String(field.key), vol.name)" />
+                      <input type="checkbox" class="sr-only" :checked="getSelectedVolumes(String(idx)).has(vol.name)"
+                        @change="toggleVolume(String(idx), vol.name)" />
                       <span class="font-mono text-sm truncate max-w-[60%]">{{ vol.name }}</span>
                       <span class="text-xs text-muted-foreground ml-auto shrink-0">{{ vol.driver }}</span>
                     </label>
                   </div>
-                  <p v-if="getSelectedVolumes(String(field.key)).size === 0" class="text-xs text-muted-foreground">
+                  <p v-if="getSelectedVolumes(String(idx)).size === 0" class="text-xs text-muted-foreground">
                     Select at least one volume.
                   </p>
                 </template>
@@ -949,7 +1018,8 @@ function onOpenChange(value: boolean) {
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <p class="text-sm font-medium">Pre-backup</p>
-                    <Switch :checked="hookPreEnabled ?? false" @update:checked="hookPreEnabled = $event" />
+                    <Switch :checked="hookPreEnabled ?? false"
+                      @update:model-value="(v: boolean) => hookPreEnabled = v" />
                   </div>
                   <template v-if="hookPreEnabled">
                     <div class="grid grid-cols-2 gap-3">
@@ -981,7 +1051,8 @@ function onOpenChange(value: boolean) {
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <p class="text-sm font-medium">Post-backup</p>
-                    <Switch :checked="hookPostEnabled ?? false" @update:checked="hookPostEnabled = $event" />
+                    <Switch :checked="hookPostEnabled ?? false"
+                      @update:model-value="(v: boolean) => hookPostEnabled = v" />
                   </div>
                   <template v-if="hookPostEnabled">
                     <div class="grid grid-cols-2 gap-3">
