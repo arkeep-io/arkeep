@@ -186,10 +186,10 @@ function loginWithOIDC(): void {
 
                     </CardContent>
                 </Card>
-                <p class="px-6 text-sm text-center">
-                    Arkeep — open source backup management
-                </p>
             </div>
         </div>
     </div>
+    <p class="fixed bottom-0 left-0 right-0 text-center text-xs text-muted-foreground pb-6">
+        Arkeep — open source backup management
+    </p>
 </template>
