@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Register_FullMethodName        = "/agent.AgentService/Register"
-	AgentService_Heartbeat_FullMethodName       = "/agent.AgentService/Heartbeat"
-	AgentService_StreamJobs_FullMethodName      = "/agent.AgentService/StreamJobs"
-	AgentService_ReportJobStatus_FullMethodName = "/agent.AgentService/ReportJobStatus"
-	AgentService_StreamLogs_FullMethodName      = "/agent.AgentService/StreamLogs"
+	AgentService_Register_FullMethodName         = "/agent.AgentService/Register"
+	AgentService_Heartbeat_FullMethodName        = "/agent.AgentService/Heartbeat"
+	AgentService_StreamJobs_FullMethodName       = "/agent.AgentService/StreamJobs"
+	AgentService_ReportJobStatus_FullMethodName  = "/agent.AgentService/ReportJobStatus"
+	AgentService_StreamLogs_FullMethodName       = "/agent.AgentService/StreamLogs"
+	AgentService_ReportVolumeList_FullMethodName = "/agent.AgentService/ReportVolumeList"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -75,6 +76,11 @@ type AgentServiceClient interface {
 	// This avoids N individual INSERT calls during execution.
 	// See server/internal/repository/job.go for the bulk insert implementation.
 	StreamLogs(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogEntry, LogStreamResponse], error)
+	// ReportVolumeList is called by the agent in response to a JOB_TYPE_LIST_VOLUMES
+	// assignment. The agent lists Docker volumes on its host and sends the results
+	// back to the server, which correlates the response to the waiting REST request
+	// via the correlation_id carried in the job_id field of the JobAssignment.
+	ReportVolumeList(ctx context.Context, in *VolumeListReport, opts ...grpc.CallOption) (*VolumeListResponse, error)
 }
 
 type agentServiceClient struct {
@@ -147,6 +153,16 @@ func (c *agentServiceClient) StreamLogs(ctx context.Context, opts ...grpc.CallOp
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_StreamLogsClient = grpc.ClientStreamingClient[LogEntry, LogStreamResponse]
 
+func (c *agentServiceClient) ReportVolumeList(ctx context.Context, in *VolumeListReport, opts ...grpc.CallOption) (*VolumeListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VolumeListResponse)
+	err := c.cc.Invoke(ctx, AgentService_ReportVolumeList_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -196,6 +212,11 @@ type AgentServiceServer interface {
 	// This avoids N individual INSERT calls during execution.
 	// See server/internal/repository/job.go for the bulk insert implementation.
 	StreamLogs(grpc.ClientStreamingServer[LogEntry, LogStreamResponse]) error
+	// ReportVolumeList is called by the agent in response to a JOB_TYPE_LIST_VOLUMES
+	// assignment. The agent lists Docker volumes on its host and sends the results
+	// back to the server, which correlates the response to the waiting REST request
+	// via the correlation_id carried in the job_id field of the JobAssignment.
+	ReportVolumeList(context.Context, *VolumeListReport) (*VolumeListResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -220,6 +241,9 @@ func (UnimplementedAgentServiceServer) ReportJobStatus(context.Context, *JobStat
 }
 func (UnimplementedAgentServiceServer) StreamLogs(grpc.ClientStreamingServer[LogEntry, LogStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
+}
+func (UnimplementedAgentServiceServer) ReportVolumeList(context.Context, *VolumeListReport) (*VolumeListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportVolumeList not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -314,6 +338,24 @@ func _AgentService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_StreamLogsServer = grpc.ClientStreamingServer[LogEntry, LogStreamResponse]
 
+func _AgentService_ReportVolumeList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VolumeListReport)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ReportVolumeList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ReportVolumeList_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ReportVolumeList(ctx, req.(*VolumeListReport))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -332,6 +374,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportJobStatus",
 			Handler:    _AgentService_ReportJobStatus_Handler,
+		},
+		{
+			MethodName: "ReportVolumeList",
+			Handler:    _AgentService_ReportVolumeList_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

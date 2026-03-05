@@ -15,14 +15,16 @@ import (
 // PolicyHandler groups all policy-related HTTP handlers.
 type PolicyHandler struct {
 	repo      repositories.PolicyRepository
+	agentRepo repositories.AgentRepository
 	scheduler *scheduler.Scheduler
 	logger    *zap.Logger
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repositories.PolicyRepository, sched *scheduler.Scheduler, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, sched *scheduler.Scheduler, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
+		agentRepo: agentRepo,
 		scheduler: sched,
 		logger:    logger.Named("policy_handler"),
 	}
@@ -45,6 +47,7 @@ type policyResponse struct {
 	ID               string                      `json:"id"`
 	Name             string                      `json:"name"`
 	AgentID          string                      `json:"agent_id"`
+	AgentName        string                      `json:"agent_name"`
 	Schedule         string                      `json:"schedule"`
 	Enabled          bool                        `json:"enabled"`
 	Sources          string                      `json:"sources"`
@@ -63,11 +66,13 @@ type policyResponse struct {
 // policyToResponse converts a db.Policy and its associated PolicyDestination
 // slice to a policyResponse. The destinations are passed separately because
 // they are no longer embedded in the Policy struct (see db/models.go).
-func policyToResponse(p *db.Policy, destinations []db.PolicyDestination) policyResponse {
+// agentName is passed in from the caller to avoid an extra DB lookup per policy.
+func policyToResponse(p *db.Policy, destinations []db.PolicyDestination, agentName string) policyResponse {
 	resp := policyResponse{
 		ID:               p.ID.String(),
 		Name:             p.Name,
 		AgentID:          p.AgentID.String(),
+		AgentName:        agentName,
 		Schedule:         p.Schedule,
 		Enabled:          p.Enabled,
 		Sources:          p.Sources,
@@ -124,10 +129,25 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build a deduplicated set of agent IDs, then fetch their names in one
+	// query to avoid N+1 lookups while keeping the list endpoint fast.
+	agentNameByID := make(map[string]string, len(policies))
+	for i := range policies {
+		agentNameByID[policies[i].AgentID.String()] = ""
+	}
+	for agentID := range agentNameByID {
+		id, err := uuid.Parse(agentID)
+		if err != nil {
+			continue
+		}
+		if agent, err := h.agentRepo.GetByID(r.Context(), id); err == nil {
+			agentNameByID[agentID] = agent.Name
+		}
+	}
+
 	items := make([]policyResponse, len(policies))
 	for i := range policies {
-		// Pass an empty slice — destinations are not fetched in list view.
-		items[i] = policyToResponse(&policies[i], nil)
+		items[i] = policyToResponse(&policies[i], nil, agentNameByID[policies[i].AgentID.String()])
 	}
 
 	Ok(w, listPoliciesResponse{Items: items, Total: total})
@@ -252,7 +272,11 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	Created(w, policyToResponse(full, destinations))
+	agentName := ""
+	if agent, err := h.agentRepo.GetByID(r.Context(), policy.AgentID); err == nil {
+		agentName = agent.Name
+	}
+	Created(w, policyToResponse(full, destinations, agentName))
 }
 
 // GetByID handles GET /api/v1/policies/{id}.
@@ -274,7 +298,12 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, policyToResponse(policy, destinations))
+	agentName := ""
+	if agent, err := h.agentRepo.GetByID(r.Context(), policy.AgentID); err == nil {
+		agentName = agent.Name
+	}
+
+	Ok(w, policyToResponse(policy, destinations, agentName))
 }
 
 // updatePolicyRequest is the JSON body for PATCH /api/v1/policies/{id}.
@@ -375,7 +404,7 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	Ok(w, policyToResponse(policy, destinations))
+	Ok(w, policyToResponse(policy, destinations, ""))
 }
 
 // Delete handles DELETE /api/v1/policies/{id}.

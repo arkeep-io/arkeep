@@ -184,10 +184,13 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 
 	if existing != nil {
 		// Agent already known — update its metadata in case the version,
-		// OS, or arch changed since the last connection (e.g. after an upgrade).
+		// OS, arch, or capabilities changed since the last connection.
 		existing.Version = req.Version
 		existing.OS = req.Os
 		existing.Arch = req.Arch
+		if req.Capabilities != nil {
+			existing.DockerAvailable = req.Capabilities.Docker
+		}
 
 		if err := s.agentRepo.Update(ctx, existing); err != nil {
 			logger.Error("failed to update agent record", zap.Error(err))
@@ -204,13 +207,15 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 	// First-time registration: create a new agent record.
 	// The ID is a UUIDv7 generated in the BeforeCreate hook (see db/models.go).
 	// Default display name is the hostname — the user can rename it in the GUI.
+	dockerAvailable := req.Capabilities != nil && req.Capabilities.Docker
 	agent := &db.Agent{
-		Name:     req.Hostname,
-		Hostname: req.Hostname,
-		Version:  req.Version,
-		OS:       req.Os,
-		Arch:     req.Arch,
-		Status:   "offline", // will transition to "online" when StreamJobs opens
+		Name:            req.Hostname,
+		Hostname:        req.Hostname,
+		Version:         req.Version,
+		OS:              req.Os,
+		Arch:            req.Arch,
+		Status:          "offline", // will transition to "online" when StreamJobs opens
+		DockerAvailable: dockerAvailable,
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
@@ -299,8 +304,9 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 	}
 
 	// Register the agent in the in-memory manager so the scheduler can
-	// dispatch jobs to it by calling manager.Dispatch(agentID, job).
-	s.agentManager.Register(req.AgentId, agent.Hostname, stream)
+	// dispatch jobs to it. DockerAvailable is read from the DB record which
+	// was updated during the Register RPC above.
+	s.agentManager.Register(req.AgentId, agent.Hostname, agent.DockerAvailable, stream)
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
@@ -450,6 +456,25 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	return stream.SendAndClose(&proto.LogStreamResponse{
 		EntriesReceived: uint32(len(entries)),
 	})
+}
+
+// ReportVolumeList handles the agent's response to a JOB_TYPE_LIST_VOLUMES
+// assignment. It delivers the volume list to the REST handler waiting in
+// RequestVolumeList via the agentmanager's correlation channel.
+func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListReport) (*proto.VolumeListResponse, error) {
+	if req.CorrelationId == "" {
+		return nil, status.Error(codes.InvalidArgument, "correlation_id is required")
+	}
+
+	s.agentManager.DeliverVolumeList(req)
+
+	s.logger.Debug("volume list delivered",
+		zap.String("agent_id", req.AgentId),
+		zap.String("correlation_id", req.CorrelationId),
+		zap.Int("volumes", len(req.Volumes)),
+	)
+
+	return &proto.VolumeListResponse{Ok: true}, nil
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

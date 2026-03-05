@@ -46,9 +46,10 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  RefreshCw,
 } from 'lucide-vue-next'
 import { api } from '@/services/api'
-import type { ApiResponse, Policy, Agent, Destination } from '@/types'
+import type { ApiResponse, Policy, Agent, Destination, VolumeInfo } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Props / emits
@@ -89,6 +90,64 @@ async function loadRemoteData() {
     loadingData.value = false
   }
 }
+
+// ---------------------------------------------------------------------------
+// Docker volume auto-discovery
+// ---------------------------------------------------------------------------
+
+// Volumes are fetched lazily when the user selects a docker-volume source
+// type. The list is cached per agent for the duration of the sheet session
+// and cleared on close to avoid stale data.
+const agentVolumes = ref<VolumeInfo[]>([])
+const volumesLoading = ref(false)
+const volumesError = ref('')
+
+// selectedVolumes maps field.key -> Set of selected volume names.
+// Used for the multi-select UI when source type is docker-volume.
+// On submit, each source with multiple selected volumes is expanded into
+// separate source entries so the backend receives one path per entry.
+const selectedVolumes = ref<Record<string, Set<string>>>({})
+
+function getSelectedVolumes(key: string): Set<string> {
+  if (!selectedVolumes.value[key]) {
+    selectedVolumes.value[key] = new Set()
+  }
+  return selectedVolumes.value[key]!
+}
+
+function toggleVolume(key: string, name: string) {
+  const set = getSelectedVolumes(key)
+  if (set.has(name)) set.delete(name)
+  else set.add(name)
+  // Trigger reactivity — replace the set reference
+  selectedVolumes.value = { ...selectedVolumes.value, [key]: new Set(set) }
+}
+
+
+async function fetchVolumes() {
+  if (!agentValue.value) return
+  agentVolumes.value = []
+  volumesError.value = ''
+  volumesLoading.value = true
+  try {
+    const res = await api<ApiResponse<VolumeInfo[]>>(`/api/v1/agents/${agentValue.value}/volumes`)
+    agentVolumes.value = res.data
+  } catch (err: any) {
+    const code = err?.data?.error?.code
+    if (code === 'conflict') {
+      volumesError.value = 'Agent is not connected'
+    } else if (code === 'docker_unavailable') {
+      volumesError.value = 'Docker is not available on this agent'
+    } else if (code === 'timeout') {
+      volumesError.value = 'Agent did not respond in time'
+    } else {
+      volumesError.value = 'Could not load volumes'
+    }
+  } finally {
+    volumesLoading.value = false
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -183,6 +242,39 @@ const { handleSubmit, resetForm, setValues } = useForm<FormValues>({
 // General
 const { value: nameValue, errorMessage: nameError } = useField<string>('name')
 const { value: agentValue, errorMessage: agentError } = useField<string>('agent_id')
+
+// The agent currently selected in the form — used to decide whether
+// to show the Docker Volume option and to fetch volumes on demand.
+const selectedAgent = computed<Agent | null>(() =>
+  agents.value.find(a => a.id === agentValue.value) ?? null
+)
+
+// When the agent selection changes, clear the cached volume list.
+// It will be re-fetched on demand when the user opens a docker-volume source.
+watch(
+  () => agentValue.value,
+  (newId) => {
+    agentVolumes.value = []
+    volumesError.value = ''
+    selectedVolumes.value = {}
+    // Auto-fetch if there's already a docker-volume source row
+    if (newId && sourceFields.value.some(f => (f.value as any).type === 'docker-volume')) {
+      fetchVolumes()
+    }
+  }
+)
+
+// Called when a source's type changes. Triggers a volume fetch if needed.
+function onSourceTypeChange(idx: number, newType: string, key: string) {
+  ; (sourceFields.value[idx]!.value as any).path = ''
+  // Clear any previous volume selection for this row
+  selectedVolumes.value = { ...selectedVolumes.value, [key]: new Set() }
+  if (newType === 'docker-volume' && agentValue.value) {
+    if (agentVolumes.value.length === 0 && !volumesLoading.value) {
+      fetchVolumes()
+    }
+  }
+}
 const { value: enabledValue } = useField<boolean>('enabled')
 
 // Repository password
@@ -305,66 +397,98 @@ function defaultValues(): FormValues {
 watch(
   () => props.open,
   async (open) => {
-    if (!open) return
+    if (!open) {
+      // Clear volume cache on close to avoid stale data next time.
+      agentVolumes.value = []
+      volumesError.value = ''
+      selectedVolumes.value = {}
+      return
+    }
 
     selectedPreset.value = ''
     hooksOpen.value = false
     showPassword.value = false
 
-    await loadRemoteData()
-
+    // Reset the form immediately with whatever data is already available so
+    // the sheet never shows stale values from a previous session while the
+    // async fetches are in flight.
     if (props.policy) {
-      // Fetch the full policy to get destinations — the list endpoint
-      // returns destinations: [] to keep list queries lightweight.
-      let p = props.policy
-      try {
-        const full = await api<ApiResponse<Policy>>(`/api/v1/policies/${props.policy.id}`)
-        p = full.data
-      } catch { /* fallback to list payload */ }
-
-      const preDestIds = (p.destinations ?? [])
-        .sort((a, b) => a.priority - b.priority)
-        .map(d => d.destination_id)
-
-      // sources is stored as a JSON string in the API response — parse it first.
-      let parsedSources: { type: string; path: string; label?: string }[] = []
-      try {
-        parsedSources = typeof p.sources === 'string' ? JSON.parse(p.sources) : (p.sources ?? [])
-      } catch { /* fallback to empty */ }
-      const mappedSources = parsedSources.map(s => ({
-        type: s.type as SourceTypeValue,
-        path: s.path ?? '',
-        label: s.label ?? '',
-      }))
-
-      setValues({
-        name: p.name,
-        agent_id: p.agent_id,
-        enabled: p.enabled,
-        repo_password: '',
-        repo_password_confirm: '',
-        schedule: p.schedule,
-        sources: mappedSources.length > 0
-          ? mappedSources
-          : [{ type: 'directory', path: '', label: '' }],
-        retention_keep_daily: p.retention_daily ?? 7,
-        retention_keep_weekly: p.retention_weekly ?? 4,
-        retention_keep_monthly: p.retention_monthly ?? 6,
-        retention_keep_yearly: p.retention_yearly ?? 1,
-        ordered_destination_ids: preDestIds,
-        hook_pre: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
-        hook_post: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
-      } as unknown as FormValues)
-
-      const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
-      selectedPreset.value = match?.value ?? ''
+      populateForm(props.policy)
     } else {
       resetForm({ values: defaultValues() })
       selectedPreset.value = '0 2 * * *'
     }
+
+    // Load agents/destinations and — for edit mode — the full policy record
+    // (which includes destinations) concurrently to minimise total wait time.
+    const remoteDataPromise = loadRemoteData()
+
+    if (props.policy) {
+      const [, fullRes] = await Promise.allSettled([
+        remoteDataPromise,
+        api<ApiResponse<Policy>>(`/api/v1/policies/${props.policy.id}`),
+      ])
+
+      // Re-populate with the complete record once both fetches are done.
+      if (fullRes.status === 'fulfilled') {
+        populateForm(fullRes.value.data)
+      }
+    } else {
+      await remoteDataPromise
+    }
   },
   { immediate: true }
 )
+
+// ---------------------------------------------------------------------------
+// populateForm — fills the form from a Policy object.
+// Called immediately on open with the list payload (fast, no destinations),
+// then again once the full record arrives (adds destinations + volumes).
+// ---------------------------------------------------------------------------
+
+function populateForm(p: Policy) {
+  let parsedSources: { type: string; path: string; label?: string }[] = []
+  try {
+    parsedSources = typeof p.sources === 'string' ? JSON.parse(p.sources) : (p.sources ?? [])
+  } catch { /* fallback to empty */ }
+
+  const mappedSources = parsedSources.map(s => ({
+    type: s.type as SourceTypeValue,
+    path: s.path ?? '',
+    label: s.label ?? '',
+  }))
+
+  const preDestIds = (p.destinations ?? [])
+    .sort((a, b) => a.priority - b.priority)
+    .map(d => d.destination_id)
+
+  setValues({
+    name: p.name,
+    agent_id: p.agent_id,
+    enabled: p.enabled,
+    repo_password: '',
+    repo_password_confirm: '',
+    schedule: p.schedule,
+    sources: mappedSources.length > 0
+      ? mappedSources
+      : [{ type: 'directory', path: '', label: '' }],
+    retention_keep_daily: p.retention_daily ?? 7,
+    retention_keep_weekly: p.retention_weekly ?? 4,
+    retention_keep_monthly: p.retention_monthly ?? 6,
+    retention_keep_yearly: p.retention_yearly ?? 1,
+    ordered_destination_ids: preDestIds,
+    hook_pre: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
+    hook_post: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
+  } as unknown as FormValues)
+
+  const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
+  selectedPreset.value = match?.value ?? ''
+
+  // Pre-fetch volumes if any source is docker-volume type.
+  if (mappedSources.some(s => s.type === 'docker-volume') && p.agent_id) {
+    fetchVolumes()
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Submit
@@ -400,7 +524,16 @@ const onSubmit = handleSubmit(async (values) => {
     const body: Record<string, unknown> = {
       name: values.name,
       schedule: values.schedule,
-      sources: JSON.stringify(values.sources),
+      sources: JSON.stringify(
+        values.sources.flatMap((s, idx) => {
+          const field = sourceFields.value[idx]
+          if (s.type !== 'docker-volume' || !field) return [s]
+          const sel = selectedVolumes.value[field.key]
+          if (!sel || sel.size === 0) return [s]
+          // Expand each selected volume into its own source entry
+          return Array.from(sel).map(name => ({ type: s.type, path: name, label: s.label ?? '' }))
+        })
+      ),
       retention_daily: values.retention_keep_daily,
       retention_weekly: values.retention_keep_weekly,
       retention_monthly: values.retention_keep_monthly,
@@ -563,38 +696,109 @@ function onOpenChange(value: boolean) {
               </Button>
             </div>
 
-            <div class="grid grid-cols-2 gap-3">
-              <div class="flex flex-col gap-1.5">
-                <Label :for="`source-type-${idx}`" class="text-sm">Type</Label>
-                <Select :model-value="(field.value as any).type as string"
-                  @update:model-value="(field.value as any).type = $event as SourceTypeValue">
-                  <SelectTrigger :id="`source-type-${idx}`">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="directory">Directory</SelectItem>
-                    <SelectItem value="docker-volume">Docker Volume</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div class="flex flex-col gap-1.5">
-                <Label :for="`source-label-${idx}`" class="text-sm">
-                  Label
-                  <span class="text-muted-foreground font-normal">(optional)</span>
-                </Label>
-                <Input :id="`source-label-${idx}`" :model-value="(field.value as any).label as string"
-                  placeholder="e.g. postgres-data" @update:model-value="(field.value as any).label = $event" />
-              </div>
+            <!-- Type — full width -->
+            <div class="flex flex-col gap-1.5">
+              <Label :for="`source-type-${idx}`" class="text-sm">Type</Label>
+              <Select :model-value="(field.value as any).type as string"
+                @update:model-value="(v) => { (field.value as any).type = v as SourceTypeValue; onSourceTypeChange(idx, v as string, String(field.key)) }">
+                <SelectTrigger :id="`source-type-${idx}`" class="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="directory">Directory</SelectItem>
+                  <SelectItem value="docker-volume"
+                    :disabled="selectedAgent !== null && !selectedAgent.docker_available">
+                    Docker Volume
+                    <span v-if="selectedAgent && !selectedAgent.docker_available"
+                      class="text-xs text-muted-foreground ml-1">(unavailable)</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
+            <!-- Label — full width -->
             <div class="flex flex-col gap-1.5">
-              <Label :for="`source-path-${idx}`" class="text-sm">
-                {{ (field.value as any).type === 'docker-volume' ? 'Volume Name' : 'Path' }}
+              <Label :for="`source-label-${idx}`" class="text-sm">
+                Label
+                <span class="text-muted-foreground font-normal">(optional)</span>
               </Label>
-              <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string" class="font-mono"
-                :placeholder="(field.value as any).type === 'docker-volume'
-                  ? 'e.g. postgres_data'
-                  : 'e.g. /var/lib/data'" @update:model-value="(field.value as any).path = $event" />
+              <Input :id="`source-label-${idx}`" :model-value="(field.value as any).label as string" class="w-full"
+                placeholder="e.g. postgres-data" @update:model-value="(field.value as any).label = $event" />
+            </div>
+
+            <!-- Path / Volumes — full width -->
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between">
+                <Label class="text-sm">
+                  {{ (field.value as any).type === 'docker-volume' ? 'Volumes' : 'Path' }}
+                </Label>
+                <button v-if="(field.value as any).type === 'docker-volume' && agentValue" type="button"
+                  class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  :disabled="volumesLoading" @click="fetchVolumes">
+                  <RefreshCw class="w-3 h-3" :class="{ 'animate-spin': volumesLoading }" />
+                  Refresh
+                </button>
+              </div>
+
+              <!-- docker-volume -->
+              <template v-if="(field.value as any).type === 'docker-volume'">
+
+                <!-- Volumes loaded — multi-select checklist -->
+                <template v-if="agentVolumes.length > 0">
+                  <div class="flex flex-col gap-1 rounded-md border p-2">
+                    <label v-for="vol in agentVolumes" :key="vol.name"
+                      class="flex items-center gap-2.5 rounded px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors">
+                      <div class="w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors"
+                        :class="getSelectedVolumes(String(field.key)).has(vol.name)
+                          ? 'bg-primary border-primary'
+                          : 'border-muted-foreground/40'">
+                        <svg v-if="getSelectedVolumes(String(field.key)).has(vol.name)"
+                          class="w-2.5 h-2.5 text-primary-foreground" viewBox="0 0 10 10" fill="none">
+                          <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" stroke-width="1.5"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                      </div>
+                      <input type="checkbox" class="sr-only"
+                        :checked="getSelectedVolumes(String(field.key)).has(vol.name)"
+                        @change="toggleVolume(String(field.key), vol.name)" />
+                      <span class="font-mono text-sm truncate max-w-[60%]">{{ vol.name }}</span>
+                      <span class="text-xs text-muted-foreground ml-auto shrink-0">{{ vol.driver }}</span>
+                    </label>
+                  </div>
+                  <p v-if="getSelectedVolumes(String(field.key)).size === 0" class="text-xs text-muted-foreground">
+                    Select at least one volume.
+                  </p>
+                </template>
+
+                <!-- Loading / error / no agent state -->
+                <template v-else>
+                  <div v-if="volumesLoading" class="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                    <Loader2 class="size-4 animate-spin" />
+                    Loading volumes…
+                  </div>
+                  <template v-else>
+                    <p v-if="volumesError" class="text-xs text-destructive">
+                      {{ volumesError }}.
+                      <button type="button" class="underline hover:no-underline" @click="fetchVolumes">Retry</button>
+                      or enter names manually below.
+                    </p>
+                    <p v-else-if="!agentValue" class="text-xs text-muted-foreground">
+                      Select an agent first to load available volumes.
+                    </p>
+                    <!-- Manual fallback input (always shown when no list) -->
+                    <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
+                      class="font-mono w-full" placeholder="e.g. postgres_data"
+                      @update:model-value="(field.value as any).path = $event" />
+                  </template>
+                </template>
+              </template>
+
+              <!-- directory: plain path input -->
+              <template v-else>
+                <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
+                  class="font-mono w-full" placeholder="e.g. /var/lib/data"
+                  @update:model-value="(field.value as any).path = $event" />
+              </template>
             </div>
           </div>
 
@@ -605,13 +809,12 @@ function onOpenChange(value: boolean) {
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Schedule</p>
 
-          <!-- Preset shortcuts -->
-          <div class="flex flex-wrap gap-2">
+          <!-- Preset buttons -->
+          <div class="flex flex-wrap gap-1.5">
             <button v-for="preset in SCHEDULE_PRESETS" :key="preset.value" type="button"
-              class="text-xs px-2.5 py-1 rounded-full border transition-colors" :class="selectedPreset === preset.value
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'border-border text-muted-foreground hover:border-foreground hover:text-foreground'"
-              @click="applyPreset(preset.value)">
+              class="rounded-full border px-2.5 py-0.5 text-xs transition-colors" :class="selectedPreset === preset.value
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border hover:border-primary/50 hover:bg-muted'" @click="applyPreset(preset.value)">
               {{ preset.label }}
             </button>
           </div>
@@ -619,11 +822,7 @@ function onOpenChange(value: boolean) {
           <Field>
             <FieldLabel for="schedule">Cron Expression</FieldLabel>
             <Input id="schedule" v-model="scheduleValue" class="font-mono" placeholder="0 2 * * *"
-              :class="scheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''"
-              @input="selectedPreset = ''" />
-            <p class="text-muted-foreground text-xs">
-              Format: <code class="font-mono">minute hour day month weekday</code> (UTC)
-            </p>
+              :class="scheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
             <FieldError v-if="scheduleError">{{ scheduleError }}</FieldError>
           </Field>
 
@@ -634,11 +833,10 @@ function onOpenChange(value: boolean) {
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Retention</p>
           <p class="text-muted-foreground text-xs -mt-3">
-            How many snapshots to keep per period.
-            <code class="font-mono">0</code> uses the server default (7 / 4 / 6 / 1).
+            Number of snapshots to keep per period. Set to 0 to disable that tier.
           </p>
 
-          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div class="grid grid-cols-2 gap-3">
             <Field>
               <FieldLabel for="ret-daily">Daily</FieldLabel>
               <Input id="ret-daily" v-model="retDailyValue" type="number" min="0"

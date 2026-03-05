@@ -12,6 +12,7 @@ package agentmanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -20,6 +21,17 @@ import (
 
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
+
+// ErrAgentNotConnected is returned when an operation targets an agent that has
+// no active gRPC connection.
+var ErrAgentNotConnected = errors.New("agent not connected")
+
+// ErrVolumeListTimeout is returned when the agent does not respond to a
+// LIST_VOLUMES request within the deadline.
+var ErrVolumeListTimeout = errors.New("volume list request timed out")
+
+// volumeListTimeout is how long RequestVolumeList waits for the agent to reply.
+const volumeListTimeout = 10 * time.Second
 
 // ConnectedAgent represents an agent that has an active gRPC connection
 // and an open StreamJobs stream through which jobs can be dispatched.
@@ -36,13 +48,21 @@ type ConnectedAgent struct {
 	// Reset on every reconnect — not the same as the DB CreatedAt field.
 	ConnectedAt time.Time
 
+	// DockerAvailable mirrors the AgentCapabilities.docker field advertised
+	// during Register. Stored here so the REST handler can check it without
+	// a database lookup.
+	DockerAvailable bool
+
 	// stream is the open server-side StreamJobs stream for this agent.
 	// Jobs are dispatched by calling stream.Send(). The stream is closed
 	// when the agent disconnects or the context is cancelled.
-	//
-	// Using the generated gRPC server stream interface allows the manager
-	// to remain independent of the concrete gRPC server implementation.
 	stream proto.AgentService_StreamJobsServer
+}
+
+// VolumeListResult carries the outcome of a JOB_TYPE_LIST_VOLUMES request.
+type VolumeListResult struct {
+	Volumes []*proto.VolumeInfo
+	Err     string // non-empty when the agent reported an error
 }
 
 // Manager is the in-memory registry of currently connected agents.
@@ -54,13 +74,21 @@ type Manager struct {
 	mu     sync.RWMutex
 	agents map[string]*ConnectedAgent // keyed by agent ID
 	logger *zap.Logger
+
+	// pendingVolumeLists maps correlation IDs to response channels.
+	// When the REST handler calls RequestVolumeList, it registers a channel here.
+	// When the agent calls ReportVolumeList via gRPC, DeliverVolumeList sends
+	// the result on the matching channel and removes the entry.
+	pendingMu          sync.Mutex
+	pendingVolumeLists map[string]chan VolumeListResult // keyed by correlation ID
 }
 
 // New creates a new Manager instance.
 func New(logger *zap.Logger) *Manager {
 	return &Manager{
-		agents: make(map[string]*ConnectedAgent),
-		logger: logger.Named("agentmanager"),
+		agents:             make(map[string]*ConnectedAgent),
+		pendingVolumeLists: make(map[string]chan VolumeListResult),
+		logger:             logger.Named("agentmanager"),
 	}
 }
 
@@ -70,13 +98,11 @@ func New(logger *zap.Logger) *Manager {
 // a warning is logged.
 //
 // Called by the gRPC server when an agent opens a StreamJobs stream.
-func (m *Manager) Register(agentID, hostname string, stream proto.AgentService_StreamJobsServer) {
+func (m *Manager) Register(agentID, hostname string, dockerAvailable bool, stream proto.AgentService_StreamJobsServer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if _, exists := m.agents[agentID]; exists {
-		// This can happen if the agent reconnects before the server detects
-		// the previous connection as dead (e.g. after a network blip).
 		m.logger.Warn("replacing existing agent connection",
 			zap.String("agent_id", agentID),
 			zap.String("hostname", hostname),
@@ -84,29 +110,29 @@ func (m *Manager) Register(agentID, hostname string, stream proto.AgentService_S
 	}
 
 	m.agents[agentID] = &ConnectedAgent{
-		ID:          agentID,
-		Hostname:    hostname,
-		ConnectedAt: time.Now().UTC(),
-		stream:      stream,
+		ID:              agentID,
+		Hostname:        hostname,
+		ConnectedAt:     time.Now().UTC(),
+		DockerAvailable: dockerAvailable,
+		stream:          stream,
 	}
 
 	m.logger.Info("agent connected",
 		zap.String("agent_id", agentID),
 		zap.String("hostname", hostname),
+		zap.Bool("docker", dockerAvailable),
 		zap.Int("total_connected", len(m.agents)),
 	)
 }
 
 // Deregister removes an agent from the in-memory registry.
-// Called by the gRPC server when the StreamJobs stream closes (agent
-// disconnects, network drop, or server-side context cancellation).
+// Called by the gRPC server when the StreamJobs stream closes.
 func (m *Manager) Deregister(agentID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	agent, exists := m.agents[agentID]
 	if !exists {
-		// Already removed — can happen in race between disconnect and timeout.
 		return
 	}
 
@@ -124,8 +150,6 @@ func (m *Manager) Deregister(agentID string) {
 // Returns an error if the agent is not connected or if the send fails.
 //
 // Called by the scheduler when it decides a job should run on this agent.
-// If the send fails, the scheduler is responsible for retrying or marking
-// the job as failed — this method does not retry internally.
 func (m *Manager) Dispatch(agentID string, job *proto.JobAssignment) error {
 	m.mu.RLock()
 	agent, exists := m.agents[agentID]
@@ -149,8 +173,7 @@ func (m *Manager) Dispatch(agentID string, job *proto.JobAssignment) error {
 }
 
 // IsConnected reports whether an agent with the given ID currently has
-// an active connection. Used by the scheduler to decide whether to
-// dispatch immediately or defer the job.
+// an active connection.
 func (m *Manager) IsConnected(agentID string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -158,18 +181,23 @@ func (m *Manager) IsConnected(agentID string) bool {
 	return exists
 }
 
+// DockerAvailable reports whether the connected agent advertised Docker support.
+// Returns false if the agent is not connected.
+func (m *Manager) DockerAvailable(agentID string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	a, exists := m.agents[agentID]
+	return exists && a.DockerAvailable
+}
+
 // ConnectedAgents returns a snapshot of all currently connected agents.
 // The returned slice is a copy — modifications do not affect the registry.
-//
-// Used by the REST API to populate the agent list with online/offline status.
 func (m *Manager) ConnectedAgents() []*ConnectedAgent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	result := make([]*ConnectedAgent, 0, len(m.agents))
 	for _, a := range m.agents {
-		// Shallow copy is safe: ConnectedAgent fields are either value types
-		// or read-only after registration (stream is never replaced in place).
 		cp := *a
 		result = append(result, &cp)
 	}
@@ -177,10 +205,7 @@ func (m *Manager) ConnectedAgents() []*ConnectedAgent {
 }
 
 // WaitForAgent blocks until the agent with the given ID connects or the
-// context is cancelled. Useful in tests and in the scheduler when a job
-// is triggered manually for an agent that might be reconnecting.
-//
-// Polls every 500ms — not a hot loop, acceptable for this use case.
+// context is cancelled.
 func (m *Manager) WaitForAgent(ctx context.Context, agentID string) error {
 	for {
 		if m.IsConnected(agentID) {
@@ -190,7 +215,91 @@ func (m *Manager) WaitForAgent(ctx context.Context, agentID string) error {
 		case <-ctx.Done():
 			return fmt.Errorf("timed out waiting for agent %s to connect: %w", agentID, ctx.Err())
 		case <-time.After(500 * time.Millisecond):
-			// poll again
 		}
+	}
+}
+
+// RequestVolumeList sends a JOB_TYPE_LIST_VOLUMES assignment to the agent and
+// blocks until the agent responds via ReportVolumeList or the request times out.
+//
+// correlationID must be unique per call — a UUID is recommended. The agent
+// echoes it back in VolumeListReport.correlation_id so the response can be
+// matched to this waiting goroutine.
+//
+// Returns ErrAgentNotConnected if the agent is offline, or ErrVolumeListTimeout
+// if the agent does not respond within volumeListTimeout.
+func (m *Manager) RequestVolumeList(ctx context.Context, agentID, correlationID string) (VolumeListResult, error) {
+	m.mu.RLock()
+	agent, exists := m.agents[agentID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return VolumeListResult{}, ErrAgentNotConnected
+	}
+
+	// Register the response channel before sending the request to avoid a race
+	// where the agent responds before we start listening.
+	ch := make(chan VolumeListResult, 1)
+	m.pendingMu.Lock()
+	m.pendingVolumeLists[correlationID] = ch
+	m.pendingMu.Unlock()
+
+	defer func() {
+		m.pendingMu.Lock()
+		delete(m.pendingVolumeLists, correlationID)
+		m.pendingMu.Unlock()
+	}()
+
+	// Send the request via the existing StreamJobs stream. The job_id field
+	// carries the correlation_id — the agent echoes it back in VolumeListReport.
+	assignment := &proto.JobAssignment{
+		JobId: correlationID,
+		Type:  proto.JobType_JOB_TYPE_LIST_VOLUMES,
+	}
+	if err := agent.stream.Send(assignment); err != nil {
+		return VolumeListResult{}, fmt.Errorf("failed to send volume list request to agent %s: %w", agentID, err)
+	}
+
+	m.logger.Debug("volume list request sent",
+		zap.String("agent_id", agentID),
+		zap.String("correlation_id", correlationID),
+	)
+
+	// Wait for the agent to respond or the deadline to expire.
+	timeout := time.NewTimer(volumeListTimeout)
+	defer timeout.Stop()
+
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-timeout.C:
+		return VolumeListResult{}, ErrVolumeListTimeout
+	case <-ctx.Done():
+		return VolumeListResult{}, ctx.Err()
+	}
+}
+
+// DeliverVolumeList is called by the gRPC server when it receives a
+// ReportVolumeList RPC from an agent. It matches the report to the waiting
+// RequestVolumeList call via the correlation_id and delivers the result.
+//
+// If no waiter is found (e.g. the REST request already timed out), the
+// report is silently discarded.
+func (m *Manager) DeliverVolumeList(report *proto.VolumeListReport) {
+	m.pendingMu.Lock()
+	ch, ok := m.pendingVolumeLists[report.CorrelationId]
+	m.pendingMu.Unlock()
+
+	if !ok {
+		m.logger.Warn("DeliverVolumeList: no waiter for correlation_id, discarding",
+			zap.String("correlation_id", report.CorrelationId),
+			zap.String("agent_id", report.AgentId),
+		)
+		return
+	}
+
+	ch <- VolumeListResult{
+		Volumes: report.Volumes,
+		Err:     report.Error,
 	}
 }

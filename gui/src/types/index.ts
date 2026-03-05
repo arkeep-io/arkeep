@@ -84,6 +84,7 @@ export interface Agent {
   arch: string
   status: AgentStatus
   version: string
+  docker_available: boolean
   last_seen_at: string | null
   created_at: string
   updated_at: string
@@ -98,6 +99,14 @@ export interface AgentMetrics {
   ram_total_bytes: number
   disk_used_bytes: number
   disk_total_bytes: number
+}
+
+// VolumeInfo is returned by GET /api/v1/agents/{id}/volumes.
+// Mirrors the Docker volume metadata exposed by the agent's docker package.
+export interface VolumeInfo {
+  name: string
+  mountpoint: string
+  driver: string
 }
 
 // ─── Destination ──────────────────────────────────────────────────────────────

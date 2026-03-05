@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
@@ -18,10 +19,11 @@ import (
 // passed to NewRouter as a single struct to keep the constructor signature
 // manageable as the number of dependencies grows.
 type RouterConfig struct {
-	AuthService *auth.AuthService
-	Scheduler   *scheduler.Scheduler
-	Logger      *zap.Logger
-	Hub         *websocket.Hub
+	AuthService  *auth.AuthService
+	Scheduler    *scheduler.Scheduler
+	AgentManager *agentmanager.Manager
+	Logger       *zap.Logger
+	Hub          *websocket.Hub
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
 	Users         repositories.UserRepository
@@ -62,9 +64,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	// --- Initialize handlers ---
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
-	agentHandler := NewAgentHandler(cfg.Agents, cfg.Logger)
+	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Logger)
 	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Logger)
-	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Scheduler, cfg.Logger)
+	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Logger)
 	userHandler := NewUserHandler(cfg.Users, cfg.Logger)
@@ -110,6 +112,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Get("/agents/{id}", agentHandler.GetByID)
 			r.Patch("/agents/{id}", agentHandler.Update)
 			r.Delete("/agents/{id}", agentHandler.Delete)
+			r.Get("/agents/{id}/volumes", agentHandler.ListVolumes)
 
 			// Destinations
 			r.Get("/destinations", destinationHandler.List)

@@ -34,6 +34,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/arkeep-io/arkeep/agent/internal/docker"
 	"github.com/arkeep-io/arkeep/agent/internal/executor"
 	"github.com/arkeep-io/arkeep/agent/internal/metrics"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -135,6 +136,7 @@ type Config struct {
 type Manager struct {
 	cfg    Config
 	exec   *executor.Executor
+	docker *docker.Client // may be nil if Docker is unavailable on this host
 	logger *zap.Logger
 
 	// mu protects client and logStreams — both are replaced on every reconnect.
@@ -148,12 +150,15 @@ type Manager struct {
 }
 
 // New creates a Manager. Call Run to start the connection loop.
-func New(cfg Config, exec *executor.Executor, logger *zap.Logger) *Manager {
+// dockerClient may be nil — if it is, LIST_VOLUMES requests are answered
+// with an error instead of crashing.
+func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, logger *zap.Logger) *Manager {
 	return &Manager{
-		cfg:       cfg,
-		exec:      exec,
-		logger:    logger.Named("connection"),
-		logStreams: make(map[string]proto.AgentService_StreamLogsClient),
+		cfg:        cfg,
+		exec:       exec,
+		docker:     dockerClient,
+		logger:     logger.Named("connection"),
+		logStreams:  make(map[string]proto.AgentService_StreamLogsClient),
 	}
 }
 
@@ -334,6 +339,14 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			return fmt.Errorf("StreamJobs recv: %w", err)
 		}
 
+		// LIST_VOLUMES is a synthetic request that does not go through the
+		// executor — it is handled inline and the result is sent back immediately
+		// via the ReportVolumeList RPC.
+		if assignment.Type == proto.JobType_JOB_TYPE_LIST_VOLUMES {
+			go m.handleVolumeListRequest(assignment.JobId, agentID)
+			continue
+		}
+
 		job, err := m.protoToJob(assignment)
 		if err != nil {
 			m.logger.Error("failed to parse job assignment",
@@ -349,6 +362,53 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 				zap.Error(err),
 			)
 		}
+	}
+}
+
+// handleVolumeListRequest executes a Docker volume listing and reports the
+// result back to the server via the ReportVolumeList RPC. Runs in its own
+// goroutine so it does not block the job stream loop.
+func (m *Manager) handleVolumeListRequest(correlationID, agentID string) {
+	m.mu.RLock()
+	client := m.client
+	ctx := m.sessionCtx
+	m.mu.RUnlock()
+
+	if client == nil {
+		m.logger.Warn("handleVolumeListRequest: no active client, cannot respond",
+			zap.String("correlation_id", correlationID),
+		)
+		return
+	}
+
+	report := &proto.VolumeListReport{
+		AgentId:       agentID,
+		CorrelationId: correlationID,
+	}
+
+	if m.docker == nil {
+		report.Error = "Docker is unavailable on this agent"
+	} else {
+		volumes, err := m.docker.ListVolumes(ctx, "")
+		if err != nil {
+			report.Error = err.Error()
+		} else {
+			report.Volumes = make([]*proto.VolumeInfo, len(volumes))
+			for i, v := range volumes {
+				report.Volumes[i] = &proto.VolumeInfo{
+					Name:       v.Name,
+					Mountpoint: v.Mountpoint,
+					Driver:     v.Driver,
+				}
+			}
+		}
+	}
+
+	if _, err := client.ReportVolumeList(ctx, report); err != nil {
+		m.logger.Warn("handleVolumeListRequest: ReportVolumeList RPC failed",
+			zap.String("correlation_id", correlationID),
+			zap.Error(err),
+		)
 	}
 }
 
@@ -475,7 +535,8 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 
 // protoToJob converts a proto.JobAssignment to an executor.JobAssignment.
 // The payload bytes are passed through as-is — the executor deserializes them
-// according to the job type.
+// according to the job type. LIST_VOLUMES assignments never reach this function
+// because they are intercepted earlier in jobStreamLoop.
 func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, error) {
 	if p.JobId == "" {
 		return executor.JobAssignment{}, errors.New("job assignment missing job_id")

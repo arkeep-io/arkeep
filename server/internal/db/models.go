@@ -94,15 +94,19 @@ type OIDCProvider struct {
 // handshake and is cleared after successful registration.
 type Agent struct {
 	SoftDelete
-	Name              string     `gorm:"not null"`
-	Hostname          string     `gorm:"not null"`
-	IPAddress         string     `gorm:"not null;default:''"`
-	OS                string     `gorm:"not null;default:''"`
-	Arch              string     `gorm:"not null;default:''"`
-	Version           string     `gorm:"not null;default:''"`
-	Status            string     `gorm:"not null;default:'offline'"` // "online", "offline", "error"
-	LastSeenAt        *time.Time
-	Labels            string `gorm:"type:text;default:'{}'"` // JSON key-value pairs for filtering
+	Name            string     `gorm:"not null"`
+	Hostname        string     `gorm:"not null"`
+	IPAddress       string     `gorm:"not null;default:''"`
+	OS              string     `gorm:"not null;default:''"`
+	Arch            string     `gorm:"not null;default:''"`
+	Version         string     `gorm:"not null;default:''"`
+	Status          string     `gorm:"not null;default:'offline'"` // "online", "offline", "error"
+	LastSeenAt      *time.Time
+	Labels          string `gorm:"type:text;default:'{}'"` // JSON key-value pairs for filtering
+	// DockerAvailable is true when the agent can reach the Docker daemon on its host.
+	// Advertised by the agent in the Register RPC via AgentCapabilities.docker.
+	// Used by the GUI to show or hide the Docker volume source option in the policy form.
+	DockerAvailable bool `gorm:"not null;default:false"`
 }
 
 // -----------------------------------------------------------------------------

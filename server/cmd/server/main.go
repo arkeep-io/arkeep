@@ -20,10 +20,10 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
-	"github.com/arkeep-io/arkeep/server/internal/notification"
 )
 
 var (
@@ -230,6 +230,7 @@ func run(ctx context.Context, cfg *config) error {
 	router := api.NewRouter(api.RouterConfig{
 		AuthService:   authService,
 		Scheduler:     sched,
+		AgentManager:  agentMgr,
 		Logger:        logger,
 		Hub:           wsHub,
 		Users:         userRepo,

@@ -9,52 +9,57 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // AgentHandler groups all agent-related HTTP handlers.
 type AgentHandler struct {
-	repo   repositories.AgentRepository
-	logger *zap.Logger
+	repo    repositories.AgentRepository
+	manager *agentmanager.Manager
+	logger  *zap.Logger
 }
 
 // NewAgentHandler creates a new AgentHandler.
-func NewAgentHandler(repo repositories.AgentRepository, logger *zap.Logger) *AgentHandler {
+func NewAgentHandler(repo repositories.AgentRepository, manager *agentmanager.Manager, logger *zap.Logger) *AgentHandler {
 	return &AgentHandler{
-		repo:   repo,
-		logger: logger.Named("agent_handler"),
+		repo:    repo,
+		manager: manager,
+		logger:  logger.Named("agent_handler"),
 	}
 }
 
 // agentResponse is the JSON representation of an agent returned by the API.
 type agentResponse struct {
-	ID         string  `json:"id"`
-	Name       string  `json:"name"`
-	Hostname   string  `json:"hostname"`
-	IPAddress  string  `json:"ip_address"`
-	OS         string  `json:"os"`
-	Arch       string  `json:"arch"`
-	Version    string  `json:"version"`
-	Status     string  `json:"status"`
-	Labels     string  `json:"labels"`
-	LastSeenAt *string `json:"last_seen_at"`
-	CreatedAt  string  `json:"created_at"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Hostname        string  `json:"hostname"`
+	IPAddress       string  `json:"ip_address"`
+	OS              string  `json:"os"`
+	Arch            string  `json:"arch"`
+	Version         string  `json:"version"`
+	Status          string  `json:"status"`
+	Labels          string  `json:"labels"`
+	DockerAvailable bool    `json:"docker_available"`
+	LastSeenAt      *string `json:"last_seen_at"`
+	CreatedAt       string  `json:"created_at"`
 }
 
 // agentToResponse converts a db.Agent to an agentResponse.
 func agentToResponse(a *db.Agent) agentResponse {
 	resp := agentResponse{
-		ID:        a.ID.String(),
-		Name:      a.Name,
-		Hostname:  a.Hostname,
-		IPAddress: a.IPAddress,
-		OS:        a.OS,
-		Arch:      a.Arch,
-		Version:   a.Version,
-		Status:    a.Status,
-		Labels:    a.Labels,
-		CreatedAt: a.CreatedAt.UTC().String(),
+		ID:              a.ID.String(),
+		Name:            a.Name,
+		Hostname:        a.Hostname,
+		IPAddress:       a.IPAddress,
+		OS:              a.OS,
+		Arch:            a.Arch,
+		Version:         a.Version,
+		Status:          a.Status,
+		Labels:          a.Labels,
+		DockerAvailable: a.DockerAvailable,
+		CreatedAt:       a.CreatedAt.UTC().String(),
 	}
 	if a.LastSeenAt != nil {
 		s := a.LastSeenAt.UTC().String()
@@ -222,6 +227,68 @@ func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	NoContent(w)
+}
+
+// volumeInfoResponse is the JSON shape of a single Docker volume returned by
+// GET /api/v1/agents/{id}/volumes.
+type volumeInfoResponse struct {
+	Name       string `json:"name"`
+	Mountpoint string `json:"mountpoint"`
+	Driver     string `json:"driver"`
+}
+
+// ListVolumes handles GET /api/v1/agents/{id}/volumes.
+// It asks the connected agent to enumerate its Docker volumes and returns the
+// results. Returns 409 if the agent is not connected, 503 if Docker is
+// unavailable on the agent host, and 504 if the agent does not respond in time.
+func (h *AgentHandler) ListVolumes(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	agentID := id.String()
+
+	if !h.manager.IsConnected(agentID) {
+		ErrConflict(w, "agent is not connected")
+		return
+	}
+
+	correlationID := uuid.New().String()
+
+	result, err := h.manager.RequestVolumeList(r.Context(), agentID, correlationID)
+	if err != nil {
+		switch err {
+		case agentmanager.ErrAgentNotConnected:
+			ErrConflict(w, "agent is not connected")
+		case agentmanager.ErrVolumeListTimeout:
+			errJSON(w, http.StatusGatewayTimeout, "agent did not respond in time", "timeout")
+		default:
+			h.logger.Error("volume list request failed",
+				zap.String("agent_id", agentID),
+				zap.Error(err),
+			)
+			ErrInternal(w)
+		}
+		return
+	}
+
+	// The agent may report a Docker-level error (e.g. daemon unavailable).
+	if result.Err != "" {
+		errJSON(w, http.StatusServiceUnavailable, result.Err, "docker_unavailable")
+		return
+	}
+
+	volumes := make([]volumeInfoResponse, len(result.Volumes))
+	for i, v := range result.Volumes {
+		volumes[i] = volumeInfoResponse{
+			Name:       v.Name,
+			Mountpoint: v.Mountpoint,
+			Driver:     v.Driver,
+		}
+	}
+
+	Ok(w, volumes)
 }
 
 // -----------------------------------------------------------------------------
