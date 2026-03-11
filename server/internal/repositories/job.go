@@ -50,9 +50,15 @@ func (r *gormJobRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Job,
 //
 // Logs are ordered by timestamp ascending so the caller can replay execution
 // order without additional sorting.
-func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*db.Job, []db.JobDestination, []db.JobLog, error) {
-	var job db.Job
-	err := r.db.WithContext(ctx).First(&job, "id = ?", id).Error
+func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []db.JobDestination, []db.JobLog, error) {
+	var job JobWithNames
+	err := r.db.WithContext(ctx).
+		Table("jobs").
+		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
+		Joins("JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Where("jobs.id = ?", id).
+		First(&job).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil, nil, ErrNotFound
@@ -90,18 +96,34 @@ func (r *gormJobRepository) Update(ctx context.Context, job *db.Job) error {
 	return nil
 }
 
-// UpdateStatus updates only the status, ended_at and error fields of a job.
-// Called at the end of job execution to avoid overwriting fields updated
-// during the run (e.g. destinations, logs).
-func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string, endedAt *time.Time, errMsg string) error {
+// UpdateStatus updates the status, started_at, ended_at and error fields of a
+// job. Called by the gRPC server on each agent status report:
+//   - running:   startedAt = &now, endedAt = nil
+//   - succeeded: startedAt = nil (already set), endedAt = &now
+//   - failed:    startedAt = nil (already set), endedAt = &now
+//
+// A nil pointer is skipped by GORM — passing nil for startedAt on terminal
+// transitions preserves the value already written when the job started running.
+func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error {
+	updates := map[string]interface{}{
+		"status": status,
+		"error":  errMsg,
+	}
+	// Only set started_at when explicitly provided — avoids overwriting the
+	// value on subsequent status transitions (running → succeeded/failed).
+	if startedAt != nil {
+		updates["started_at"] = startedAt
+	}
+	// Only set ended_at when explicitly provided — avoids nullifying it on
+	// earlier transitions (pending → running).
+	if endedAt != nil {
+		updates["ended_at"] = endedAt
+	}
+
 	result := r.db.WithContext(ctx).
 		Model(&db.Job{}).
 		Where("id = ?", id).
-		Updates(map[string]interface{}{
-			"status":   status,
-			"ended_at": endedAt,
-			"error":    errMsg,
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("jobs: update status: %w", result.Error)
 	}
@@ -111,21 +133,26 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 	return nil
 }
 
+const jobJoins = "JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL " +
+	"JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL"
+
 // List returns a paginated list of jobs and the total count,
 // ordered by creation time descending (most recent first).
-func (r *gormJobRepository) List(ctx context.Context, opts ListOptions) ([]db.Job, int64, error) {
-	var jobs []db.Job
+func (r *gormJobRepository) List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error) {
 	var total int64
-
-	if err := r.db.WithContext(ctx).Model(&db.Job{}).Count(&total).Error; err != nil {
+	if err := r.db.WithContext(ctx).Table("jobs").Joins(jobJoins).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list count: %w", err)
 	}
 
+	var jobs []JobWithNames
 	if err := r.db.WithContext(ctx).
+		Table("jobs").
+		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
+		Joins(jobJoins).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at DESC").
-		Find(&jobs).Error; err != nil {
+		Order("jobs.created_at DESC").
+		Scan(&jobs).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list: %w", err)
 	}
 
@@ -134,23 +161,26 @@ func (r *gormJobRepository) List(ctx context.Context, opts ListOptions) ([]db.Jo
 
 // ListByPolicy returns a paginated list of jobs for a given policy,
 // ordered by creation time descending.
-func (r *gormJobRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]db.Job, int64, error) {
-	var jobs []db.Job
+func (r *gormJobRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
 	var total int64
-
 	if err := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Where("policy_id = ?", policyID).
+		Table("jobs").
+		Joins(jobJoins).
+		Where("jobs.policy_id = ?", policyID).
 		Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by policy count: %w", err)
 	}
 
+	var jobs []JobWithNames
 	if err := r.db.WithContext(ctx).
-		Where("policy_id = ?", policyID).
+		Table("jobs").
+		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
+		Joins(jobJoins).
+		Where("jobs.policy_id = ?", policyID).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at DESC").
-		Find(&jobs).Error; err != nil {
+		Order("jobs.created_at DESC").
+		Scan(&jobs).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by policy: %w", err)
 	}
 
@@ -159,23 +189,26 @@ func (r *gormJobRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID
 
 // ListByAgent returns a paginated list of jobs for a given agent,
 // ordered by creation time descending.
-func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]db.Job, int64, error) {
-	var jobs []db.Job
+func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
 	var total int64
-
 	if err := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Where("agent_id = ?", agentID).
+		Table("jobs").
+		Joins(jobJoins).
+		Where("jobs.agent_id = ?", agentID).
 		Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by agent count: %w", err)
 	}
 
+	var jobs []JobWithNames
 	if err := r.db.WithContext(ctx).
-		Where("agent_id = ?", agentID).
+		Table("jobs").
+		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
+		Joins(jobJoins).
+		Where("jobs.agent_id = ?", agentID).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at DESC").
-		Find(&jobs).Error; err != nil {
+		Order("jobs.created_at DESC").
+		Scan(&jobs).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by agent: %w", err)
 	}
 

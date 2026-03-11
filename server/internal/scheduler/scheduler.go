@@ -225,7 +225,7 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 			continue
 		}
 
-		if err := s.dispatch(j, policy, destinations); err != nil {
+		if err := s.dispatch(&j.Job, policy, destinations); err != nil {
 			s.logger.Warn("failed to dispatch pending job to reconnected agent",
 				zap.String("job_id", j.ID.String()),
 				zap.String("agent_id", agentID.String()),

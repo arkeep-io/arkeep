@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/google/uuid"
 )
 
 // -----------------------------------------------------------------------------
@@ -114,6 +114,14 @@ type PolicyRepository interface {
 // JobRepository
 // -----------------------------------------------------------------------------
 
+// JobWithNames extends db.Job with denormalized policy and agent name fields.
+// Returned by list and detail queries that JOIN with the policies and agents tables.
+type JobWithNames struct {
+	db.Job
+	PolicyName string
+	AgentName  string
+}
+
 type JobRepository interface {
 	Create(ctx context.Context, job *db.Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
@@ -122,13 +130,13 @@ type JobRepository interface {
 	// JobLog records. All three are returned as separate values to avoid
 	// embedding slice associations in the Job struct (see Policy for rationale).
 	// Logs are ordered by timestamp ascending.
-	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*db.Job, []db.JobDestination, []db.JobLog, error)
+	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []db.JobDestination, []db.JobLog, error)
 
 	Update(ctx context.Context, job *db.Job) error
-	UpdateStatus(ctx context.Context, id uuid.UUID, status string, endedAt *time.Time, errMsg string) error
-	List(ctx context.Context, opts ListOptions) ([]db.Job, int64, error)
-	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]db.Job, int64, error)
-	ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]db.Job, int64, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
+	List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
+	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+	ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
 
 	// JobDestination
 	CreateDestination(ctx context.Context, jd *db.JobDestination) error

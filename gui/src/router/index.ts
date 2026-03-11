@@ -126,23 +126,30 @@ const routes: RouteRecordRaw[] = [
         path: 'snapshots',
         name: 'snapshots',
         component: () => import('@/pages/SnapshotsPage.vue'),
-      },
+      },*/
 
       // Jobs
       {
         path: 'jobs',
-        name: 'jobs',
-        component: () => import('@/pages/JobsPage.vue'),
-      },
-      {
-        path: 'jobs/:id',
-        name: 'job-detail',
-        component: () => import('@/pages/JobDetailPage.vue'),
-        props: true,
+        meta: { breadcrumb: "Jobs" },
+        children: [
+          {
+            path: '',
+            name: 'jobs',
+            component: () => import('@/pages/jobs/JobsPage.vue'),
+          },
+          {
+            path: ':id',
+            name: 'job-detail',
+            component: () => import('@/pages/jobs/JobDetailPage.vue'),
+            props: true,
+            meta: { breadcrumb: "Job Details" },
+          },
+        ]
       },
 
       // Monitoring
-      {
+      /*{
         path: 'monitoring',
         name: 'monitoring',
         component: () => import('@/pages/MonitoringPage.vue'),

@@ -208,10 +208,9 @@ export interface Job {
   agent_id: string
   agent_name: string // denormalized for display
   status: JobStatus
-  triggered_by: 'scheduler' | 'manual'
   error_message: string
   started_at: string | null
-  finished_at: string | null
+  ended_at: string | null
   created_at: string
   updated_at: string
   // Populated only on GetByID

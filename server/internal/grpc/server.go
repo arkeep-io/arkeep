@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -45,6 +46,14 @@ type Server struct {
 	hub          *websocket.Hub
 	logger       *zap.Logger
 	sharedSecret string // shared secret agents must present in gRPC metadata
+
+	// capabilitiesMu guards capabilitiesCache.
+	capabilitiesMu sync.Mutex
+	// capabilitiesCache stores the AgentCapabilities reported during Register,
+	// keyed by agent ID string. StreamJobs reads docker availability from here
+	// because StreamJobsRequest does not carry capability fields and the DB
+	// model does not persist them.
+	capabilitiesCache map[string]*proto.AgentCapabilities
 }
 
 // Config holds the configuration for the gRPC server.
@@ -67,12 +76,13 @@ func New(
 	logger *zap.Logger,
 ) *Server {
 	return &Server{
-		agentManager: agentManager,
-		agentRepo:    agentRepo,
-		jobRepo:      jobRepo,
-		hub:          hub,
-		logger:       logger.Named("grpc"),
-		sharedSecret: cfg.SharedSecret,
+		agentManager:      agentManager,
+		agentRepo:         agentRepo,
+		jobRepo:           jobRepo,
+		hub:               hub,
+		logger:            logger.Named("grpc"),
+		sharedSecret:      cfg.SharedSecret,
+		capabilitiesCache: make(map[string]*proto.AgentCapabilities),
 	}
 }
 
@@ -184,18 +194,19 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 
 	if existing != nil {
 		// Agent already known — update its metadata in case the version,
-		// OS, arch, or capabilities changed since the last connection.
+		// OS, or arch changed since the last connection (e.g. after an upgrade).
 		existing.Version = req.Version
 		existing.OS = req.Os
 		existing.Arch = req.Arch
-		if req.Capabilities != nil {
-			existing.DockerAvailable = req.Capabilities.Docker
-		}
 
 		if err := s.agentRepo.Update(ctx, existing); err != nil {
 			logger.Error("failed to update agent record", zap.Error(err))
 			return nil, status.Error(codes.Internal, "registration failed")
 		}
+
+		// Cache the capabilities so StreamJobs can read docker availability
+		// without an additional DB lookup (the DB model does not persist them).
+		s.cacheCapabilities(existing.ID.String(), req.Capabilities)
 
 		logger.Info("agent re-registered", zap.String("agent_id", existing.ID.String()))
 		return &proto.RegisterResponse{
@@ -207,21 +218,22 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 	// First-time registration: create a new agent record.
 	// The ID is a UUIDv7 generated in the BeforeCreate hook (see db/models.go).
 	// Default display name is the hostname — the user can rename it in the GUI.
-	dockerAvailable := req.Capabilities != nil && req.Capabilities.Docker
 	agent := &db.Agent{
-		Name:            req.Hostname,
-		Hostname:        req.Hostname,
-		Version:         req.Version,
-		OS:              req.Os,
-		Arch:            req.Arch,
-		Status:          "offline", // will transition to "online" when StreamJobs opens
-		DockerAvailable: dockerAvailable,
+		Name:     req.Hostname,
+		Hostname: req.Hostname,
+		Version:  req.Version,
+		OS:       req.Os,
+		Arch:     req.Arch,
+		Status:   "offline", // will transition to "online" when StreamJobs opens
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		logger.Error("failed to create agent record", zap.Error(err))
 		return nil, status.Error(codes.Internal, "registration failed")
 	}
+
+	// Cache the capabilities so StreamJobs can read docker availability.
+	s.cacheCapabilities(agent.ID.String(), req.Capabilities)
 
 	logger.Info("agent registered for the first time", zap.String("agent_id", agent.ID.String()))
 	return &proto.RegisterResponse{
@@ -304,9 +316,10 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 	}
 
 	// Register the agent in the in-memory manager so the scheduler can
-	// dispatch jobs to it. DockerAvailable is read from the DB record which
-	// was updated during the Register RPC above.
-	s.agentManager.Register(req.AgentId, agent.Hostname, agent.DockerAvailable, stream)
+	// dispatch jobs to it by calling manager.Dispatch(agentID, job).
+	// Docker availability is read from the capabilities cached during the
+	// Register RPC — StreamJobsRequest does not carry capability fields.
+	s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
@@ -342,13 +355,13 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 
 	switch req.Status {
 	case proto.JobStatus_JOB_STATUS_RUNNING:
-		err = s.jobRepo.UpdateStatus(ctx, jobID, "running", nil, "")
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "running", &now, nil, "")
 	case proto.JobStatus_JOB_STATUS_COMPLETED:
-		err = s.jobRepo.UpdateStatus(ctx, jobID, "succeeded", &now, "")
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "succeeded", nil, &now, "")
 	case proto.JobStatus_JOB_STATUS_FAILED:
-		err = s.jobRepo.UpdateStatus(ctx, jobID, "failed", &now, req.Message)
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "failed", nil, &now, req.Message)
 	case proto.JobStatus_JOB_STATUS_CANCELLED:
-		err = s.jobRepo.UpdateStatus(ctx, jobID, "cancelled", &now, req.Message)
+		err = s.jobRepo.UpdateStatus(ctx, jobID, "cancelled", nil, &now, req.Message)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown job status")
 	}
@@ -458,25 +471,6 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	})
 }
 
-// ReportVolumeList handles the agent's response to a JOB_TYPE_LIST_VOLUMES
-// assignment. It delivers the volume list to the REST handler waiting in
-// RequestVolumeList via the agentmanager's correlation channel.
-func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListReport) (*proto.VolumeListResponse, error) {
-	if req.CorrelationId == "" {
-		return nil, status.Error(codes.InvalidArgument, "correlation_id is required")
-	}
-
-	s.agentManager.DeliverVolumeList(req)
-
-	s.logger.Debug("volume list delivered",
-		zap.String("agent_id", req.AgentId),
-		zap.String("correlation_id", req.CorrelationId),
-		zap.Int("volumes", len(req.Volumes)),
-	)
-
-	return &proto.VolumeListResponse{Ok: true}, nil
-}
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // parseAgentID parses a string UUID sent by the agent over gRPC into the
@@ -501,4 +495,26 @@ func protoLevelToString(l proto.LogLevel) string {
 	default:
 		return "info"
 	}
+}
+
+// cacheCapabilities stores the agent capabilities reported during Register.
+// A nil capabilities pointer is stored as an empty struct so the cache always
+// has an entry after a successful registration.
+func (s *Server) cacheCapabilities(agentID string, caps *proto.AgentCapabilities) {
+	s.capabilitiesMu.Lock()
+	defer s.capabilitiesMu.Unlock()
+	if caps == nil {
+		caps = &proto.AgentCapabilities{}
+	}
+	s.capabilitiesCache[agentID] = caps
+}
+
+// dockerAvailable returns true if the agent advertised Docker support during
+// its most recent Register call. Returns false if the agent has not registered
+// yet or sent a nil capabilities struct.
+func (s *Server) dockerAvailable(agentID string) bool {
+	s.capabilitiesMu.Lock()
+	defer s.capabilitiesMu.Unlock()
+	caps, ok := s.capabilitiesCache[agentID]
+	return ok && caps.Docker
 }

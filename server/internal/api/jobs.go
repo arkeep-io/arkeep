@@ -48,7 +48,9 @@ type jobDestinationResponse struct {
 type jobResponse struct {
 	ID           string                   `json:"id"`
 	PolicyID     string                   `json:"policy_id"`
+	PolicyName   string                   `json:"policy_name"`
 	AgentID      string                   `json:"agent_id"`
+	AgentName    string                   `json:"agent_name"`
 	Status       string                   `json:"status"`
 	Error        string                   `json:"error"`
 	StartedAt    *string                  `json:"started_at"`
@@ -65,15 +67,17 @@ type jobLogResponse struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// jobToResponse converts a db.Job and its associated slices to a jobResponse.
-// destinations and logs are passed separately because they are no longer
-// embedded in the Job struct (see db/models.go for rationale).
+// jobToResponse converts a JobWithNames and its associated slices to a
+// jobResponse. destinations and logs are passed separately because they are
+// not embedded in the Job struct (see db/models.go for rationale).
 // Pass nil for both when building list responses where details are not needed.
-func jobToResponse(j *db.Job, destinations []db.JobDestination, logs []db.JobLog) jobResponse {
+func jobToResponse(j *repositories.JobWithNames, destinations []db.JobDestination, logs []db.JobLog) jobResponse {
 	resp := jobResponse{
 		ID:           j.ID.String(),
 		PolicyID:     j.PolicyID.String(),
+		PolicyName:   j.PolicyName,
 		AgentID:      j.AgentID.String(),
+		AgentName:    j.AgentName,
 		Status:       j.Status,
 		Error:        j.Error,
 		Destinations: make([]jobDestinationResponse, len(destinations)),
@@ -109,9 +113,8 @@ func jobToResponse(j *db.Job, destinations []db.JobDestination, logs []db.JobLog
 		resp.Destinations[i] = d
 	}
 
-	// logs is unused in the job response body — they are served separately via
-	// GET /jobs/{id}/logs. The parameter is accepted here to keep the function
-	// signature consistent with GetByIDWithDetails, but ignored intentionally.
+	// logs is unused in the job response body — served separately via
+	// GET /jobs/{id}/logs. Accepted here to keep the call sites uniform.
 	_ = logs
 
 	return resp
@@ -176,8 +179,9 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetByID handles GET /api/v1/jobs/{id}.
-// Returns the job with its destinations preloaded. Logs are served separately
-// via GET /api/v1/jobs/{id}/logs to keep this response compact.
+// Returns the job (with policy and agent names) and its destinations.
+// Logs are served separately via GET /api/v1/jobs/{id}/logs to keep this
+// response compact.
 func (h *JobHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -253,9 +257,9 @@ func (h *JobHandler) ListByPolicy(w http.ResponseWriter, r *http.Request) {
 // Internal helpers
 // -----------------------------------------------------------------------------
 
-// writeJobList converts a slice of db.Job to a listJobsResponse and writes it.
+// writeJobList converts a slice of JobWithNames to a listJobsResponse and writes it.
 // Destinations are not included in list responses — only in single-job detail.
-func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []db.Job, total int64) {
+func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.JobWithNames, total int64) {
 	items := make([]jobResponse, len(jobs))
 	for i := range jobs {
 		items[i] = jobToResponse(&jobs[i], nil, nil)
