@@ -19,12 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Register_FullMethodName         = "/agent.AgentService/Register"
-	AgentService_Heartbeat_FullMethodName        = "/agent.AgentService/Heartbeat"
-	AgentService_StreamJobs_FullMethodName       = "/agent.AgentService/StreamJobs"
-	AgentService_ReportJobStatus_FullMethodName  = "/agent.AgentService/ReportJobStatus"
-	AgentService_StreamLogs_FullMethodName       = "/agent.AgentService/StreamLogs"
-	AgentService_ReportVolumeList_FullMethodName = "/agent.AgentService/ReportVolumeList"
+	AgentService_Register_FullMethodName                = "/agent.AgentService/Register"
+	AgentService_Heartbeat_FullMethodName               = "/agent.AgentService/Heartbeat"
+	AgentService_StreamJobs_FullMethodName              = "/agent.AgentService/StreamJobs"
+	AgentService_ReportJobStatus_FullMethodName         = "/agent.AgentService/ReportJobStatus"
+	AgentService_ReportDestinationStatus_FullMethodName = "/agent.AgentService/ReportDestinationStatus"
+	AgentService_StreamLogs_FullMethodName              = "/agent.AgentService/StreamLogs"
+	AgentService_ReportVolumeList_FullMethodName        = "/agent.AgentService/ReportVolumeList"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -69,6 +70,10 @@ type AgentServiceClient interface {
 	// transitions: RUNNING when execution starts, then COMPLETED or FAILED when done.
 	// Intermediate RUNNING calls can carry a progress message for the UI.
 	ReportJobStatus(ctx context.Context, in *JobStatusReport, opts ...grpc.CallOption) (*JobStatusResponse, error)
+	// ReportDestinationStatus is called by the agent once per destination after
+	// the backup to that destination completes or fails. It carries the restic
+	// snapshot ID and byte counts extracted from the restic --json summary event.
+	ReportDestinationStatus(ctx context.Context, in *DestinationStatusReport, opts ...grpc.CallOption) (*DestinationStatusResponse, error)
 	// StreamLogs ships log lines produced during job execution to the server in
 	// real-time using client-streaming. The server buffers entries in memory and
 	// flushes them to the database in bulk when the stream closes (job done).
@@ -140,6 +145,16 @@ func (c *agentServiceClient) ReportJobStatus(ctx context.Context, in *JobStatusR
 	return out, nil
 }
 
+func (c *agentServiceClient) ReportDestinationStatus(ctx context.Context, in *DestinationStatusReport, opts ...grpc.CallOption) (*DestinationStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DestinationStatusResponse)
+	err := c.cc.Invoke(ctx, AgentService_ReportDestinationStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) StreamLogs(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[LogEntry, LogStreamResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[1], AgentService_StreamLogs_FullMethodName, cOpts...)
@@ -205,6 +220,10 @@ type AgentServiceServer interface {
 	// transitions: RUNNING when execution starts, then COMPLETED or FAILED when done.
 	// Intermediate RUNNING calls can carry a progress message for the UI.
 	ReportJobStatus(context.Context, *JobStatusReport) (*JobStatusResponse, error)
+	// ReportDestinationStatus is called by the agent once per destination after
+	// the backup to that destination completes or fails. It carries the restic
+	// snapshot ID and byte counts extracted from the restic --json summary event.
+	ReportDestinationStatus(context.Context, *DestinationStatusReport) (*DestinationStatusResponse, error)
 	// StreamLogs ships log lines produced during job execution to the server in
 	// real-time using client-streaming. The server buffers entries in memory and
 	// flushes them to the database in bulk when the stream closes (job done).
@@ -238,6 +257,9 @@ func (UnimplementedAgentServiceServer) StreamJobs(*StreamJobsRequest, grpc.Serve
 }
 func (UnimplementedAgentServiceServer) ReportJobStatus(context.Context, *JobStatusReport) (*JobStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportJobStatus not implemented")
+}
+func (UnimplementedAgentServiceServer) ReportDestinationStatus(context.Context, *DestinationStatusReport) (*DestinationStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportDestinationStatus not implemented")
 }
 func (UnimplementedAgentServiceServer) StreamLogs(grpc.ClientStreamingServer[LogEntry, LogStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
@@ -331,6 +353,24 @@ func _AgentService_ReportJobStatus_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_ReportDestinationStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DestinationStatusReport)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ReportDestinationStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ReportDestinationStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ReportDestinationStatus(ctx, req.(*DestinationStatusReport))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(AgentServiceServer).StreamLogs(&grpc.GenericServerStream[LogEntry, LogStreamResponse]{ServerStream: stream})
 }
@@ -374,6 +414,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportJobStatus",
 			Handler:    _AgentService_ReportJobStatus_Handler,
+		},
+		{
+			MethodName: "ReportDestinationStatus",
+			Handler:    _AgentService_ReportDestinationStatus_Handler,
 		},
 		{
 			MethodName: "ReportVolumeList",

@@ -172,10 +172,9 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
         const p = msg.payload
         logs.value.push({
             id: crypto.randomUUID(),
-            job_id: p.job_id,
             level: p.level,
             message: p.message,
-            created_at: p.timestamp,
+            timestamp: p.timestamp,
         })
     }
 
@@ -293,9 +292,9 @@ onMounted(fetchJob)
         </div>
 
         <!-- Error message (only for failed jobs) -->
-        <Alert v-if="!loading && job?.status === 'failed' && job.error_message" variant="destructive">
+        <Alert v-if="!loading && job?.status === 'failed' && job.error" variant="destructive">
             <XCircle class="w-4 h-4" />
-            <AlertDescription>{{ job.error_message }}</AlertDescription>
+            <AlertDescription>{{ job.error }}</AlertDescription>
         </Alert>
 
         <Separator />
@@ -345,10 +344,10 @@ onMounted(fetchJob)
                                     </Badge>
                                 </TableCell>
                                 <TableCell class="text-sm font-mono text-muted-foreground">
-                                    {{ formatBytes(dest.bytes_total) }}
+                                    {{ formatBytes(dest.size_bytes) }}
                                 </TableCell>
                                 <TableCell class="text-sm font-mono text-muted-foreground">
-                                    {{ formatDuration(null, null) }}
+                                    {{ formatDuration(dest.started_at, dest.ended_at) }}
                                 </TableCell>
                             </TableRow>
                         </template>
@@ -389,7 +388,7 @@ onMounted(fetchJob)
                     <div v-for="log in logs" :key="log.id" class="flex items-start gap-2">
                         <!-- Timestamp -->
                         <span class="text-muted-foreground shrink-0 pt-px">
-                            {{ formatTime(log.created_at) }}
+                            {{ formatTime(log.timestamp) }}
                         </span>
                         <!-- Level badge -->
                         <Badge :variant="logLevelVariant(log.level)" class="text-[10px] px-1 py-0 h-4 shrink-0">

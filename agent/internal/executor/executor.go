@@ -38,6 +38,10 @@ type LogSink interface {
 // server. Implemented by the connection manager.
 type StatusReporter interface {
 	ReportStatus(jobID, status, message string)
+	// ReportDestinationResult reports the outcome of a backup to a single
+	// destination. Called once per destination after it completes or fails.
+	// sizeBytes is TotalBytesProcessed from the restic summary event.
+	ReportDestinationResult(jobID, destinationID, status, snapshotID string, sizeBytes int64, errMsg string)
 }
 
 // JobAssignment is the internal representation of a job received from the server.
@@ -227,19 +231,31 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 			Tags:    payload.Tags,
 		}
 
-		err := e.wrapper.Backup(ctx, d, opts, func(ev restic.ProgressEvent) error {
+		result, err := e.wrapper.Backup(ctx, d, opts, func(ev restic.ProgressEvent) error {
 			if data, err := json.Marshal(ev); err == nil {
 				sink.SendLog(job.JobID, "info", string(data))
 			}
 			return nil
 		})
 		if err != nil {
-			log("error", fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err))
+			errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
+			log("error", errMsg)
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", 0, err.Error())
 			backupFailed = true
 			continue
 		}
 
-		log("info", fmt.Sprintf("backup to destination %s completed", dest.DestinationID))
+		log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, size: %d bytes)",
+			dest.DestinationID, result.SnapshotID, result.TotalBytesProcessed))
+
+		reporter.ReportDestinationResult(
+			job.JobID,
+			dest.DestinationID,
+			"succeeded",
+			result.SnapshotID,
+			int64(result.TotalBytesProcessed),
+			"",
+		)
 
 		// Apply retention policy — non-fatal if it fails (backup data is safe).
 		retention := restic.RetentionPolicy{

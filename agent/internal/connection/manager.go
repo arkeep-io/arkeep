@@ -533,6 +533,43 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 	}
 }
 
+// ReportDestinationResult implements executor.StatusReporter. It calls
+// ReportDestinationStatus via gRPC to persist the per-destination outcome
+// (snapshot ID, size, status) after each destination backup completes or fails.
+func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, sizeBytes int64, errMsg string) {
+	m.mu.RLock()
+	client := m.client
+	agentID := m.agentID
+	m.mu.RUnlock()
+
+	if client == nil {
+		m.logger.Warn("ReportDestinationResult: no active client, result lost",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.String("status", status),
+		)
+		return
+	}
+
+	_, err := client.ReportDestinationStatus(m.sessionCtx, &proto.DestinationStatusReport{
+		JobId:         jobID,
+		AgentId:       agentID,
+		DestinationId: destinationID,
+		Status:        status,
+		SnapshotId:    snapshotID,
+		SizeBytes:     sizeBytes,
+		Error:         errMsg,
+	})
+	if err != nil {
+		m.logger.Warn("ReportDestinationResult: RPC failed",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.String("status", status),
+			zap.Error(err),
+		)
+	}
+}
+
 // protoToJob converts a proto.JobAssignment to an executor.JobAssignment.
 // The payload bytes are passed through as-is — the executor deserializes them
 // according to the job type. LIST_VOLUMES assignments never reach this function

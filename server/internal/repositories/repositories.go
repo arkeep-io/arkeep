@@ -114,23 +114,16 @@ type PolicyRepository interface {
 // JobRepository
 // -----------------------------------------------------------------------------
 
-// JobWithNames extends db.Job with denormalized policy and agent name fields.
-// Returned by list and detail queries that JOIN with the policies and agents tables.
-type JobWithNames struct {
-	db.Job
-	PolicyName string
-	AgentName  string
-}
-
 type JobRepository interface {
 	Create(ctx context.Context, job *db.Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
 
-	// GetByIDWithDetails retrieves a job together with its JobDestination and
-	// JobLog records. All three are returned as separate values to avoid
-	// embedding slice associations in the Job struct (see Policy for rationale).
-	// Logs are ordered by timestamp ascending.
-	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []db.JobDestination, []db.JobLog, error)
+	// GetByIDWithDetails retrieves a job (with denormalised policy and agent
+	// names) together with its JobDestination and JobLog records. All three
+	// are returned as separate values to avoid embedding slice associations in
+	// the Job struct (see Policy for rationale). Logs are ordered by timestamp
+	// ascending.
+	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
 
 	Update(ctx context.Context, job *db.Job) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
@@ -140,7 +133,7 @@ type JobRepository interface {
 
 	// JobDestination
 	CreateDestination(ctx context.Context, jd *db.JobDestination) error
-	ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestination, error)
+	ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
 	UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
 	// JobLog

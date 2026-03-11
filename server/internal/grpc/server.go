@@ -417,12 +417,19 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 
 		// Publish each log line to WebSocket in real-time so the GUI can
 		// display a live log tail without waiting for the job to complete.
+		// timestamp is included so the frontend can display the correct time
+		// even for live entries that have not yet been persisted to the DB.
+		ts := time.Now().UTC()
+		if entry.Timestamp != nil {
+			ts = entry.Timestamp.AsTime().UTC()
+		}
 		s.hub.Publish("job:"+entry.JobId, websocket.Message{
 			Type: websocket.MsgJobLog,
 			Payload: map[string]any{
-				"job_id":  entry.JobId,
-				"level":   protoLevelToString(entry.Level),
-				"message": entry.Message,
+				"job_id":    entry.JobId,
+				"level":     protoLevelToString(entry.Level),
+				"message":   entry.Message,
+				"timestamp": ts.Format(time.RFC3339),
 			},
 		})
 	}
@@ -447,7 +454,7 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 				Message: e.Message,
 			}
 			if e.Timestamp != nil {
-				logs[i].CreatedAt = e.Timestamp.AsTime()
+				logs[i].Timestamp = e.Timestamp.AsTime()
 			}
 		}
 
@@ -469,6 +476,70 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	return stream.SendAndClose(&proto.LogStreamResponse{
 		EntriesReceived: uint32(len(entries)),
 	})
+}
+
+// ReportDestinationStatus handles per-destination result reports from agents.
+// Called once per destination after the backup to that destination completes
+// or fails. Persists the restic snapshot ID, byte count, and final status so
+// the GUI can show per-destination outcomes on the job detail page.
+func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.DestinationStatusReport) (*proto.DestinationStatusResponse, error) {
+	jobID, err := uuid.Parse(req.JobId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid job_id")
+	}
+
+	destID, err := uuid.Parse(req.DestinationId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid destination_id")
+	}
+
+	// Find the JobDestination record that matches this job + destination pair.
+	// UpdateDestinationStatus identifies the row by JobDestination.ID (not
+	// DestinationID), so we need to resolve it first.
+	destinations, err := s.jobRepo.ListDestinationsByJob(ctx, jobID)
+	if err != nil {
+		s.logger.Error("ReportDestinationStatus: failed to list destinations",
+			zap.String("job_id", req.JobId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to look up job destinations")
+	}
+
+	var jobDestID uuid.UUID
+	for _, d := range destinations {
+		if d.DestinationID == destID {
+			jobDestID = d.ID
+			break
+		}
+	}
+
+	if jobDestID == (uuid.UUID{}) {
+		s.logger.Warn("ReportDestinationStatus: no matching job destination found",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+		)
+		return nil, status.Error(codes.NotFound, "job destination not found")
+	}
+
+	now := time.Now().UTC()
+	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobDestID, req.Status, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
+		s.logger.Error("ReportDestinationStatus: failed to update destination status",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to update destination status")
+	}
+
+	s.logger.Info("destination status updated",
+		zap.String("job_id", req.JobId),
+		zap.String("destination_id", req.DestinationId),
+		zap.String("status", req.Status),
+		zap.String("snapshot_id", req.SnapshotId),
+		zap.Int64("size_bytes", req.SizeBytes),
+	)
+
+	return &proto.DestinationStatusResponse{Ok: true}, nil
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

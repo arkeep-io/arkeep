@@ -180,46 +180,40 @@ export type PolicyListItem = Omit<Policy, 'destinations'>
 
 export interface JobDestination {
   id: string
-  job_id: string
   destination_id: string
-  destination_name: string // denormalized for display
+  destination_name: string  // denormalized via JOIN in the API layer
   status: JobStatus
-  error_message: string
-  bytes_added: number
-  bytes_total: number
-  files_new: number
-  files_changed: number
-  files_unmodified: number
-  duration_seconds: number
+  snapshot_id: string       // opaque ID returned by the backup engine
+  size_bytes: number        // total repository size after backup (SizeBytes in DB)
+  started_at: string | null
+  ended_at: string | null
+  error: string
 }
 
 export interface JobLog {
   id: string
-  job_id: string
   level: 'debug' | 'info' | 'warn' | 'error'
   message: string
-  created_at: string
+  timestamp: string   // maps to Timestamp field in db.JobLog
 }
 
 export interface Job {
   id: string
   policy_id: string
-  policy_name: string // denormalized for display
+  policy_name: string   // denormalized via JOIN in the API layer
   agent_id: string
-  agent_name: string // denormalized for display
+  agent_name: string    // denormalized via JOIN in the API layer
   status: JobStatus
-  error_message: string
+  error: string
   started_at: string | null
   ended_at: string | null
   created_at: string
-  updated_at: string
-  // Populated only on GetByID
+  // Populated only on GetByID (detail endpoint)
   destinations?: JobDestination[]
-  logs?: JobLog[]
 }
 
 // JobListItem is the leaner shape returned by the list endpoint.
-export type JobListItem = Omit<Job, 'destinations' | 'logs'>
+export type JobListItem = Omit<Job, 'destinations'>
 
 // ─── Snapshot ─────────────────────────────────────────────────────────────────
 
@@ -373,7 +367,7 @@ export interface UpdateMeRequest {
 export interface JobStatusPayload {
   job_id: string
   status: JobStatus
-  error_message?: string
+  error?: string
   started_at?: string
   finished_at?: string
 }

@@ -43,33 +43,38 @@ func (r *gormJobRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Job,
 	return &job, nil
 }
 
-// GetByIDWithDetails retrieves a job together with its JobDestination and
-// JobLog records using three separate queries. All values are returned
-// independently rather than embedded in the Job struct, because GORM cannot
-// auto-resolve UUID-typed foreign keys (see db/models.go for rationale).
+// GetByIDWithDetails retrieves a job (with policy and agent names) together
+// with its JobDestination and JobLog records. Names are resolved via LEFT JOIN
+// so the response is display-ready without additional lookups. All values are
+// returned independently rather than embedded in the Job struct, because GORM
+// cannot auto-resolve UUID-typed foreign keys (see db/models.go for rationale).
 //
 // Logs are ordered by timestamp ascending so the caller can replay execution
 // order without additional sorting.
-func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []db.JobDestination, []db.JobLog, error) {
-	var job JobWithNames
+func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error) {
+	var row JobWithNames
 	err := r.db.WithContext(ctx).
-		Table("jobs").
-		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
-		Joins("JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
-		Joins("JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
 		Where("jobs.id = ?", id).
-		First(&job).Error
+		Scan(&row).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, nil, ErrNotFound
-		}
 		return nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
 	}
+	// GORM Scan does not set ErrRecordNotFound — detect a missing row via zero UUID.
+	if row.ID == (uuid.UUID{}) {
+		return nil, nil, nil, ErrNotFound
+	}
 
-	var destinations []db.JobDestination
+	var destinations []JobDestinationWithName
 	if err := r.db.WithContext(ctx).
+		Model(&db.JobDestination{}).
+		Select(listDestinationsJoin).
+		Joins("LEFT JOIN destinations ON destinations.id = job_destinations.destination_id").
 		Where("job_id = ?", id).
-		Find(&destinations).Error; err != nil {
+		Scan(&destinations).Error; err != nil {
 		return nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
 	}
 
@@ -81,7 +86,7 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		return nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
 	}
 
-	return &job, destinations, logs, nil
+	return &row, destinations, logs, nil
 }
 
 // Update persists all fields of an existing job record.
@@ -102,20 +107,16 @@ func (r *gormJobRepository) Update(ctx context.Context, job *db.Job) error {
 //   - succeeded: startedAt = nil (already set), endedAt = &now
 //   - failed:    startedAt = nil (already set), endedAt = &now
 //
-// A nil pointer is skipped by GORM — passing nil for startedAt on terminal
-// transitions preserves the value already written when the job started running.
+// A nil pointer is skipped — passing nil for startedAt on terminal transitions
+// preserves the value already written when the job started running.
 func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error {
 	updates := map[string]interface{}{
 		"status": status,
 		"error":  errMsg,
 	}
-	// Only set started_at when explicitly provided — avoids overwriting the
-	// value on subsequent status transitions (running → succeeded/failed).
 	if startedAt != nil {
 		updates["started_at"] = startedAt
 	}
-	// Only set ended_at when explicitly provided — avoids nullifying it on
-	// earlier transitions (pending → running).
 	if endedAt != nil {
 		updates["ended_at"] = endedAt
 	}
@@ -133,86 +134,104 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 	return nil
 }
 
-const jobJoins = "JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL " +
-	"JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL"
+// JobWithNames extends db.Job with denormalised policy and agent names.
+// Populated via LEFT JOIN in the List* methods so the API can return
+// display-ready responses without per-row lookups. LEFT JOIN ensures jobs
+// whose policy or agent has been soft-deleted still appear (names = "").
+type JobWithNames struct {
+	db.Job
+	PolicyName string
+	AgentName  string
+}
 
-// List returns a paginated list of jobs and the total count,
-// ordered by creation time descending (most recent first).
+// JobDestinationWithName extends db.JobDestination with the destination's
+// display name, resolved via LEFT JOIN in ListDestinationsByJob.
+// LEFT JOIN ensures rows survive even if the destination was deleted.
+type JobDestinationWithName struct {
+	db.JobDestination
+	DestinationName string
+}
+
+// listDestinationsJoin is the shared SELECT fragment for destination queries.
+const listDestinationsJoin = `job_destinations.*,
+	COALESCE(destinations.name, '') AS destination_name`
+// Extracted as a constant to avoid repetition and keep the join clause in sync.
+const listJobsJoin = `jobs.*,
+	COALESCE(policies.name, '') AS policy_name,
+	COALESCE(agents.name, '')   AS agent_name`
+
+// List returns a paginated list of jobs (with policy and agent names) and the
+// total count, ordered by creation time descending (most recent first).
 func (r *gormJobRepository) List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error) {
 	var total int64
-	if err := r.db.WithContext(ctx).Table("jobs").Joins(jobJoins).Count(&total).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&db.Job{}).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list count: %w", err)
 	}
 
-	var jobs []JobWithNames
+	var rows []JobWithNames
 	if err := r.db.WithContext(ctx).
-		Table("jobs").
-		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
-		Joins(jobJoins).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
 		Limit(opts.Limit).
 		Offset(opts.Offset).
 		Order("jobs.created_at DESC").
-		Scan(&jobs).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list: %w", err)
 	}
 
-	return jobs, total, nil
+	return rows, total, nil
 }
 
 // ListByPolicy returns a paginated list of jobs for a given policy,
-// ordered by creation time descending.
+// with policy and agent names, ordered by creation time descending.
 func (r *gormJobRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
 	var total int64
-	if err := r.db.WithContext(ctx).
-		Table("jobs").
-		Joins(jobJoins).
-		Where("jobs.policy_id = ?", policyID).
-		Count(&total).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&db.Job{}).Where("policy_id = ?", policyID).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by policy count: %w", err)
 	}
 
-	var jobs []JobWithNames
+	var rows []JobWithNames
 	if err := r.db.WithContext(ctx).
-		Table("jobs").
-		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
-		Joins(jobJoins).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
 		Where("jobs.policy_id = ?", policyID).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
 		Order("jobs.created_at DESC").
-		Scan(&jobs).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by policy: %w", err)
 	}
 
-	return jobs, total, nil
+	return rows, total, nil
 }
 
 // ListByAgent returns a paginated list of jobs for a given agent,
-// ordered by creation time descending.
+// with policy and agent names, ordered by creation time descending.
 func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
 	var total int64
-	if err := r.db.WithContext(ctx).
-		Table("jobs").
-		Joins(jobJoins).
-		Where("jobs.agent_id = ?", agentID).
-		Count(&total).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&db.Job{}).Where("agent_id = ?", agentID).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by agent count: %w", err)
 	}
 
-	var jobs []JobWithNames
+	var rows []JobWithNames
 	if err := r.db.WithContext(ctx).
-		Table("jobs").
-		Select("jobs.*, policies.name as policy_name, agents.name as agent_name").
-		Joins(jobJoins).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
 		Where("jobs.agent_id = ?", agentID).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
 		Order("jobs.created_at DESC").
-		Scan(&jobs).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by agent: %w", err)
 	}
 
-	return jobs, total, nil
+	return rows, total, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -228,14 +247,16 @@ func (r *gormJobRepository) CreateDestination(ctx context.Context, jd *db.JobDes
 	return nil
 }
 
-// ListDestinationsByJob returns all JobDestination records for a given job.
-// Used internally by GetByIDWithDetails and directly by callers that need
-// only destinations without the full job detail view.
-func (r *gormJobRepository) ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestination, error) {
-	var destinations []db.JobDestination
+// ListDestinationsByJob returns all JobDestination records for a given job,
+// with the destination display name resolved via LEFT JOIN.
+func (r *gormJobRepository) ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error) {
+	var destinations []JobDestinationWithName
 	if err := r.db.WithContext(ctx).
+		Model(&db.JobDestination{}).
+		Select(listDestinationsJoin).
+		Joins("LEFT JOIN destinations ON destinations.id = job_destinations.destination_id").
 		Where("job_id = ?", jobID).
-		Find(&destinations).Error; err != nil {
+		Scan(&destinations).Error; err != nil {
 		return nil, fmt.Errorf("jobs: list destinations by job: %w", err)
 	}
 	return destinations, nil

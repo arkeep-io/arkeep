@@ -857,6 +857,154 @@ func (x *JobStatusResponse) GetOk() bool {
 	return false
 }
 
+// DestinationStatusReport is sent by the agent once per destination after the
+// backup to that destination completes or fails. Carries restic summary data.
+type DestinationStatusReport struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// job_id links this report to the parent job record.
+	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	// agent_id identifies the reporting agent.
+	AgentId string `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// destination_id is the UUID of the destination this report refers to.
+	DestinationId string `protobuf:"bytes,3,opt,name=destination_id,json=destinationId,proto3" json:"destination_id,omitempty"`
+	// status is either "succeeded" or "failed".
+	Status string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	// snapshot_id is the full restic snapshot ID created by this backup run.
+	// Empty when status is "failed".
+	SnapshotId string `protobuf:"bytes,5,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	// size_bytes is the total bytes processed (TotalBytesProcessed from restic
+	// summary). Zero when status is "failed".
+	SizeBytes int64 `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	// error is the error message when status is "failed". Empty on success.
+	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DestinationStatusReport) Reset() {
+	*x = DestinationStatusReport{}
+	mi := &file_agent_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DestinationStatusReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DestinationStatusReport) ProtoMessage() {}
+
+func (x *DestinationStatusReport) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DestinationStatusReport.ProtoReflect.Descriptor instead.
+func (*DestinationStatusReport) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *DestinationStatusReport) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *DestinationStatusReport) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *DestinationStatusReport) GetDestinationId() string {
+	if x != nil {
+		return x.DestinationId
+	}
+	return ""
+}
+
+func (x *DestinationStatusReport) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *DestinationStatusReport) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *DestinationStatusReport) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *DestinationStatusReport) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// DestinationStatusResponse acknowledges receipt of the destination report.
+type DestinationStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DestinationStatusResponse) Reset() {
+	*x = DestinationStatusResponse{}
+	mi := &file_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DestinationStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DestinationStatusResponse) ProtoMessage() {}
+
+func (x *DestinationStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DestinationStatusResponse.ProtoReflect.Descriptor instead.
+func (*DestinationStatusResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *DestinationStatusResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 // LogEntry is a single log line produced by the agent during job execution.
 // Entries are streamed in order and buffered server-side for bulk DB insert.
 type LogEntry struct {
@@ -879,7 +1027,7 @@ type LogEntry struct {
 
 func (x *LogEntry) Reset() {
 	*x = LogEntry{}
-	mi := &file_agent_proto_msgTypes[10]
+	mi := &file_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -891,7 +1039,7 @@ func (x *LogEntry) String() string {
 func (*LogEntry) ProtoMessage() {}
 
 func (x *LogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[10]
+	mi := &file_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -904,7 +1052,7 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{10}
+	return file_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *LogEntry) GetJobId() string {
@@ -954,7 +1102,7 @@ type LogStreamResponse struct {
 
 func (x *LogStreamResponse) Reset() {
 	*x = LogStreamResponse{}
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -966,7 +1114,7 @@ func (x *LogStreamResponse) String() string {
 func (*LogStreamResponse) ProtoMessage() {}
 
 func (x *LogStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,7 +1127,7 @@ func (x *LogStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamResponse.ProtoReflect.Descriptor instead.
 func (*LogStreamResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{11}
+	return file_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LogStreamResponse) GetEntriesReceived() uint32 {
@@ -1005,7 +1153,7 @@ type VolumeInfo struct {
 
 func (x *VolumeInfo) Reset() {
 	*x = VolumeInfo{}
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +1165,7 @@ func (x *VolumeInfo) String() string {
 func (*VolumeInfo) ProtoMessage() {}
 
 func (x *VolumeInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +1178,7 @@ func (x *VolumeInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeInfo.ProtoReflect.Descriptor instead.
 func (*VolumeInfo) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *VolumeInfo) GetName() string {
@@ -1075,7 +1223,7 @@ type VolumeListReport struct {
 
 func (x *VolumeListReport) Reset() {
 	*x = VolumeListReport{}
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1087,7 +1235,7 @@ func (x *VolumeListReport) String() string {
 func (*VolumeListReport) ProtoMessage() {}
 
 func (x *VolumeListReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1100,7 +1248,7 @@ func (x *VolumeListReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeListReport.ProtoReflect.Descriptor instead.
 func (*VolumeListReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *VolumeListReport) GetAgentId() string {
@@ -1141,7 +1289,7 @@ type VolumeListResponse struct {
 
 func (x *VolumeListResponse) Reset() {
 	*x = VolumeListResponse{}
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1153,7 +1301,7 @@ func (x *VolumeListResponse) String() string {
 func (*VolumeListResponse) ProtoMessage() {}
 
 func (x *VolumeListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1166,7 +1314,7 @@ func (x *VolumeListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeListResponse.ProtoReflect.Descriptor instead.
 func (*VolumeListResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *VolumeListResponse) GetOk() bool {
@@ -1221,6 +1369,18 @@ const file_agent_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x128\n" +
 	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"#\n" +
 	"\x11JobStatusResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xe0\x01\n" +
+	"\x17DestinationStatusReport\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
+	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12%\n" +
+	"\x0edestination_id\x18\x03 \x01(\tR\rdestinationId\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x1f\n" +
+	"\vsnapshot_id\x18\x05 \x01(\tR\n" +
+	"snapshotId\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x06 \x01(\x03R\tsizeBytes\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error\"+\n" +
+	"\x19DestinationStatusResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xb7\x01\n" +
 	"\bLogEntry\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
@@ -1262,13 +1422,14 @@ const file_agent_proto_rawDesc = "" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x02\x12\x12\n" +
 	"\x0eLOG_LEVEL_WARN\x10\x03\x12\x13\n" +
-	"\x0fLOG_LEVEL_ERROR\x10\x042\x93\x03\n" +
+	"\x0fLOG_LEVEL_ERROR\x10\x042\xf0\x03\n" +
 	"\fAgentService\x12;\n" +
 	"\bRegister\x12\x16.agent.RegisterRequest\x1a\x17.agent.RegisterResponse\x12>\n" +
 	"\tHeartbeat\x12\x17.agent.HeartbeatRequest\x1a\x18.agent.HeartbeatResponse\x12>\n" +
 	"\n" +
 	"StreamJobs\x12\x18.agent.StreamJobsRequest\x1a\x14.agent.JobAssignment0\x01\x12C\n" +
-	"\x0fReportJobStatus\x12\x16.agent.JobStatusReport\x1a\x18.agent.JobStatusResponse\x129\n" +
+	"\x0fReportJobStatus\x12\x16.agent.JobStatusReport\x1a\x18.agent.JobStatusResponse\x12[\n" +
+	"\x17ReportDestinationStatus\x12\x1e.agent.DestinationStatusReport\x1a .agent.DestinationStatusResponse\x129\n" +
 	"\n" +
 	"StreamLogs\x12\x0f.agent.LogEntry\x1a\x18.agent.LogStreamResponse(\x01\x12F\n" +
 	"\x10ReportVolumeList\x12\x17.agent.VolumeListReport\x1a\x19.agent.VolumeListResponseB*Z(github.com/arkeep-io/arkeep/shared/protob\x06proto3"
@@ -1286,52 +1447,56 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_agent_proto_goTypes = []any{
-	(JobType)(0),                  // 0: agent.JobType
-	(JobStatus)(0),                // 1: agent.JobStatus
-	(LogLevel)(0),                 // 2: agent.LogLevel
-	(*RegisterRequest)(nil),       // 3: agent.RegisterRequest
-	(*AgentCapabilities)(nil),     // 4: agent.AgentCapabilities
-	(*RegisterResponse)(nil),      // 5: agent.RegisterResponse
-	(*HeartbeatRequest)(nil),      // 6: agent.HeartbeatRequest
-	(*SystemMetrics)(nil),         // 7: agent.SystemMetrics
-	(*HeartbeatResponse)(nil),     // 8: agent.HeartbeatResponse
-	(*StreamJobsRequest)(nil),     // 9: agent.StreamJobsRequest
-	(*JobAssignment)(nil),         // 10: agent.JobAssignment
-	(*JobStatusReport)(nil),       // 11: agent.JobStatusReport
-	(*JobStatusResponse)(nil),     // 12: agent.JobStatusResponse
-	(*LogEntry)(nil),              // 13: agent.LogEntry
-	(*LogStreamResponse)(nil),     // 14: agent.LogStreamResponse
-	(*VolumeInfo)(nil),            // 15: agent.VolumeInfo
-	(*VolumeListReport)(nil),      // 16: agent.VolumeListReport
-	(*VolumeListResponse)(nil),    // 17: agent.VolumeListResponse
-	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
+	(JobType)(0),                      // 0: agent.JobType
+	(JobStatus)(0),                    // 1: agent.JobStatus
+	(LogLevel)(0),                     // 2: agent.LogLevel
+	(*RegisterRequest)(nil),           // 3: agent.RegisterRequest
+	(*AgentCapabilities)(nil),         // 4: agent.AgentCapabilities
+	(*RegisterResponse)(nil),          // 5: agent.RegisterResponse
+	(*HeartbeatRequest)(nil),          // 6: agent.HeartbeatRequest
+	(*SystemMetrics)(nil),             // 7: agent.SystemMetrics
+	(*HeartbeatResponse)(nil),         // 8: agent.HeartbeatResponse
+	(*StreamJobsRequest)(nil),         // 9: agent.StreamJobsRequest
+	(*JobAssignment)(nil),             // 10: agent.JobAssignment
+	(*JobStatusReport)(nil),           // 11: agent.JobStatusReport
+	(*JobStatusResponse)(nil),         // 12: agent.JobStatusResponse
+	(*DestinationStatusReport)(nil),   // 13: agent.DestinationStatusReport
+	(*DestinationStatusResponse)(nil), // 14: agent.DestinationStatusResponse
+	(*LogEntry)(nil),                  // 15: agent.LogEntry
+	(*LogStreamResponse)(nil),         // 16: agent.LogStreamResponse
+	(*VolumeInfo)(nil),                // 17: agent.VolumeInfo
+	(*VolumeListReport)(nil),          // 18: agent.VolumeListReport
+	(*VolumeListResponse)(nil),        // 19: agent.VolumeListResponse
+	(*timestamppb.Timestamp)(nil),     // 20: google.protobuf.Timestamp
 }
 var file_agent_proto_depIdxs = []int32{
 	4,  // 0: agent.RegisterRequest.capabilities:type_name -> agent.AgentCapabilities
 	7,  // 1: agent.HeartbeatRequest.metrics:type_name -> agent.SystemMetrics
 	0,  // 2: agent.JobAssignment.type:type_name -> agent.JobType
-	18, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
+	20, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
 	1,  // 4: agent.JobStatusReport.status:type_name -> agent.JobStatus
-	18, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
+	20, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
 	2,  // 6: agent.LogEntry.level:type_name -> agent.LogLevel
-	18, // 7: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	15, // 8: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
+	20, // 7: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	17, // 8: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
 	3,  // 9: agent.AgentService.Register:input_type -> agent.RegisterRequest
 	6,  // 10: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
 	9,  // 11: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
 	11, // 12: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
-	13, // 13: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
-	16, // 14: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
-	5,  // 15: agent.AgentService.Register:output_type -> agent.RegisterResponse
-	8,  // 16: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // 17: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
-	12, // 18: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
-	14, // 19: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
-	17, // 20: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
-	15, // [15:21] is the sub-list for method output_type
-	9,  // [9:15] is the sub-list for method input_type
+	13, // 13: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
+	15, // 14: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
+	18, // 15: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
+	5,  // 16: agent.AgentService.Register:output_type -> agent.RegisterResponse
+	8,  // 17: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
+	10, // 18: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
+	12, // 19: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
+	14, // 20: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
+	16, // 21: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
+	19, // 22: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
+	16, // [16:23] is the sub-list for method output_type
+	9,  // [9:16] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -1348,7 +1513,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   15,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

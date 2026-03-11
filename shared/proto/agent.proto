@@ -50,6 +50,11 @@ service AgentService {
   // Intermediate RUNNING calls can carry a progress message for the UI.
   rpc ReportJobStatus(JobStatusReport) returns (JobStatusResponse);
 
+  // ReportDestinationStatus is called by the agent once per destination after
+  // the backup to that destination completes or fails. It carries the restic
+  // snapshot ID and byte counts extracted from the restic --json summary event.
+  rpc ReportDestinationStatus(DestinationStatusReport) returns (DestinationStatusResponse);
+
   // StreamLogs ships log lines produced during job execution to the server in
   // real-time using client-streaming. The server buffers entries in memory and
   // flushes them to the database in bulk when the stream closes (job done).
@@ -226,6 +231,34 @@ enum JobStatus {
 // JobStatusResponse acknowledges receipt of the status report.
 message JobStatusResponse {
   // ok is true when the server successfully persisted the status update.
+  bool ok = 1;
+}
+
+// ─── ReportDestinationStatus ─────────────────────────────────────────────────
+
+// DestinationStatusReport is sent by the agent once per destination after the
+// backup to that destination completes or fails. Carries restic summary data.
+message DestinationStatusReport {
+  // job_id links this report to the parent job record.
+  string job_id          = 1;
+  // agent_id identifies the reporting agent.
+  string agent_id        = 2;
+  // destination_id is the UUID of the destination this report refers to.
+  string destination_id  = 3;
+  // status is either "succeeded" or "failed".
+  string status          = 4;
+  // snapshot_id is the full restic snapshot ID created by this backup run.
+  // Empty when status is "failed".
+  string snapshot_id     = 5;
+  // size_bytes is the total bytes processed (TotalBytesProcessed from restic
+  // summary). Zero when status is "failed".
+  int64 size_bytes       = 6;
+  // error is the error message when status is "failed". Empty on success.
+  string error           = 7;
+}
+
+// DestinationStatusResponse acknowledges receipt of the destination report.
+message DestinationStatusResponse {
   bool ok = 1;
 }
 

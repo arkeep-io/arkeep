@@ -34,9 +34,10 @@ func NewJobHandler(repo repositories.JobRepository, logger *zap.Logger) *JobHand
 
 // jobDestinationResponse represents the result of a job on a single destination.
 type jobDestinationResponse struct {
-	ID            string  `json:"id"`
-	DestinationID string  `json:"destination_id"`
-	Status        string  `json:"status"`
+	ID              string  `json:"id"`
+	DestinationID   string  `json:"destination_id"`
+	DestinationName string  `json:"destination_name"`
+	Status          string  `json:"status"`
 	SnapshotID    string  `json:"snapshot_id"`
 	SizeBytes     int64   `json:"size_bytes"`
 	StartedAt     *string `json:"started_at"`
@@ -71,7 +72,7 @@ type jobLogResponse struct {
 // jobResponse. destinations and logs are passed separately because they are
 // not embedded in the Job struct (see db/models.go for rationale).
 // Pass nil for both when building list responses where details are not needed.
-func jobToResponse(j *repositories.JobWithNames, destinations []db.JobDestination, logs []db.JobLog) jobResponse {
+func jobToResponse(j *repositories.JobWithNames, destinations []repositories.JobDestinationWithName, logs []db.JobLog) jobResponse {
 	resp := jobResponse{
 		ID:           j.ID.String(),
 		PolicyID:     j.PolicyID.String(),
@@ -95,12 +96,13 @@ func jobToResponse(j *repositories.JobWithNames, destinations []db.JobDestinatio
 
 	for i, jd := range destinations {
 		d := jobDestinationResponse{
-			ID:            jd.ID.String(),
-			DestinationID: jd.DestinationID.String(),
-			Status:        jd.Status,
-			SnapshotID:    jd.SnapshotID,
-			SizeBytes:     jd.SizeBytes,
-			Error:         jd.Error,
+			ID:              jd.ID.String(),
+			DestinationID:   jd.DestinationID.String(),
+			DestinationName: jd.DestinationName,
+			Status:          jd.Status,
+			SnapshotID:      jd.SnapshotID,
+			SizeBytes:       jd.SizeBytes,
+			Error:           jd.Error,
 		}
 		if jd.StartedAt != nil {
 			s := jd.StartedAt.UTC().String()

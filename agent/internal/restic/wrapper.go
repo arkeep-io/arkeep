@@ -96,8 +96,30 @@ type ProgressEvent struct {
 	BytesDone    uint64  `json:"bytes_done"`
 	TotalFiles   uint64  `json:"total_files"`
 	TotalBytes   uint64  `json:"total_bytes"`
+
+	// Summary-only fields — only present when MessageType == "summary".
+	// SnapshotID is the full SHA256 ID of the snapshot created by this backup run.
+	SnapshotID          string `json:"snapshot_id"`
+	// TotalBytesProcessed is the total size of all source files examined.
+	TotalBytesProcessed uint64 `json:"total_bytes_processed"`
+	// DataAdded is the number of new bytes added to the repository (deduplicated).
+	DataAdded           uint64 `json:"data_added"`
+
 	// Raw is the original JSON line, forwarded as-is to the log stream.
-	Raw          string  `json:"-"`
+	Raw string `json:"-"`
+}
+
+// BackupResult holds the outcome of a completed backup run, extracted from
+// the restic --json summary event. It is returned by Backup() alongside any
+// error so the caller can report per-destination metrics to the server.
+type BackupResult struct {
+	// SnapshotID is the full ID of the snapshot created by this run.
+	// Empty if the backup failed before creating a snapshot.
+	SnapshotID string
+	// TotalBytesProcessed is the total size of all files examined.
+	TotalBytesProcessed uint64
+	// DataAdded is the net bytes added to the repository after deduplication.
+	DataAdded uint64
 }
 
 // ProgressFunc is called for each progress event emitted during a long-running
@@ -146,11 +168,12 @@ func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
 // Progress events are forwarded to onProgress as they arrive on stdout.
 // onProgress may be nil if the caller does not need live progress.
 //
-// Returns an error if the backup fails. A non-zero restic exit code is
-// always wrapped in the returned error with the stderr output included.
-func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) error {
+// Returns a BackupResult with snapshot metadata extracted from the restic
+// summary event, and an error if the backup fails. A non-zero restic exit
+// code is always wrapped in the returned error with stderr included.
+func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
 	if err := w.Init(ctx, dest); err != nil {
-		return fmt.Errorf("restic: failed to init repository: %w", err)
+		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
 	}
 
 	args := []string{"backup", "--json"}
@@ -163,7 +186,27 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 	}
 	args = append(args, opts.Sources...)
 
-	return w.runWithProgress(ctx, dest, args, onProgress)
+	var result BackupResult
+
+	// Wrap the caller's onProgress to intercept the summary event and extract
+	// snapshot metadata. The summary event is the last event emitted by restic
+	// on successful completion — it carries snapshot_id and byte counts.
+	intercepted := func(ev ProgressEvent) error {
+		if ev.MessageType == "summary" {
+			result.SnapshotID = ev.SnapshotID
+			result.TotalBytesProcessed = ev.TotalBytesProcessed
+			result.DataAdded = ev.DataAdded
+		}
+		if onProgress != nil {
+			return onProgress(ev)
+		}
+		return nil
+	}
+
+	if err := w.runWithProgress(ctx, dest, args, intercepted); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // Forget runs restic forget --prune to apply the retention policy.
