@@ -34,6 +34,7 @@ type RouterConfig struct {
 	Snapshots     repositories.SnapshotRepository
 	Notifications repositories.NotificationRepository
 	OIDCProviders repositories.OIDCProviderRepository
+	Dashboard     repositories.DashboardRepository
 
 	// Secure controls whether auth cookies are set with the Secure flag.
 	// Set to true in production (HTTPS), false in local development.
@@ -63,16 +64,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	// --- Initialize handlers ---
-	authHandler := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
-	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Logger)
-	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Logger)
-	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Logger)
-	jobHandler := NewJobHandler(cfg.Jobs, cfg.Logger)
-	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Logger)
-	userHandler := NewUserHandler(cfg.Users, cfg.Logger)
+	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
+	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Logger)
+	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Logger)
+	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Logger)
+	jobHandler          := NewJobHandler(cfg.Jobs, cfg.Logger)
+	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Logger)
+	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Logger)
-	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
+	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Logger)
+	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
+	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 
 	// jwtMgr is used by the Authenticate middleware to validate Bearer tokens.
 	jwtMgr := cfg.AuthService.JWTManager()
@@ -98,6 +100,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// --- Authenticated routes (valid JWT required) ---
 		r.Group(func(r chi.Router) {
 			r.Use(Authenticate(jwtMgr))
+
+			// Dashboard — single aggregated endpoint for the overview page.
+			r.Get("/dashboard", dashboardHandler.Get)
 
 			// Auth
 			r.Post("/auth/logout", authHandler.Logout)

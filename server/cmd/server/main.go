@@ -156,6 +156,7 @@ func run(ctx context.Context, cfg *config) error {
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
+	dashboardRepo := repositories.NewDashboardRepository(gormDB)
 
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
@@ -243,6 +244,7 @@ func run(ctx context.Context, cfg *config) error {
 		Notifications: notificationRepo,
 		OIDCProviders: oidcProviderRepo,
 		Secure:        cfg.secureCookies,
+		Dashboard:     dashboardRepo,
 	})
 
 	httpSrv := &http.Server{
