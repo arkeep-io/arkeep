@@ -127,12 +127,28 @@ const routes: RouteRecordRaw[] = [
         ]
       },
 
+      // Users — admin only
+      {
+        path: 'users',
+        name: 'users',
+        component: () => import('@/pages/users/UsersPage.vue'),
+        meta: { breadcrumb: 'Users', requiresRole: 'admin' },
+      },
+
       // Settings — single page with OIDC + SMTP tabs, admin only
       {
         path: 'settings',
         name: 'settings',
         component: () => import('@/pages/settings/SettingsPage.vue'),
         meta: { breadcrumb: 'Settings', requiresRole: 'admin' },
+      },
+
+      // Profile — accessible to all authenticated users
+      {
+        path: 'profile',
+        name: 'profile',
+        component: () => import('@/pages/users/ProfilePage.vue'),
+        meta: { breadcrumb: 'Profile' },
       },
     ],
   },

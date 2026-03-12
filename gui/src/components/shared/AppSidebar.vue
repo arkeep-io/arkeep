@@ -10,6 +10,7 @@ import {
     Server,
     Settings,
     Shield,
+    Users,
 } from "lucide-vue-next"
 
 import NavMain from "@/components/shared/NavMain.vue"
@@ -69,6 +70,7 @@ const nav: NavSection[] = [
     {
         title: 'Operations',
         items: [
+            { title: 'Users', url: '/users', icon: Users, adminOnly: true },
             { title: 'Settings', url: '/settings', icon: Settings, adminOnly: true },
         ],
     },

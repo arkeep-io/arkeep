@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import {
     BadgeCheck,
-    Bell,
     ChevronsUpDown,
     LogOut,
     Moon,
-    Sparkles,
     Sun,
 } from "lucide-vue-next"
 
@@ -82,29 +80,22 @@ async function logout(): Promise<void> {
                         </div>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
-                    <DropdownMenuGroup>
+                    <!-- <DropdownMenuGroup>
                         <DropdownMenuItem>
                             <Sparkles />
                             Upgrade to Pro
                         </DropdownMenuItem>
                     </DropdownMenuGroup>
-                    <DropdownMenuSeparator />
+                    <DropdownMenuSeparator /> -->
                     <DropdownMenuGroup>
                         <DropdownMenuItem @click="cycle()">
                             <Moon v-if="mode === 'light'" />
                             <Sun v-else />
                             {{ modeLabel }}
                         </DropdownMenuItem>
-                    </DropdownMenuGroup>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuGroup>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem @click="router.push({ name: 'profile' })">
                             <BadgeCheck />
-                            Account
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
-                            <Bell />
-                            Notifications
+                            Profile
                         </DropdownMenuItem>
                     </DropdownMenuGroup>
                     <DropdownMenuSeparator />
