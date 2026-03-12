@@ -215,6 +215,7 @@ func run(ctx context.Context, cfg *config) error {
 		agentMgr,
 		agentRepo,
 		jobRepo,
+		snapshotRepo,
 		wsHub,
 		logger,
 	)

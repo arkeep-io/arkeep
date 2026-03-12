@@ -3,10 +3,10 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
@@ -32,40 +32,46 @@ func NewSnapshotHandler(repo repositories.SnapshotRepository, logger *zap.Logger
 // Response types
 // -----------------------------------------------------------------------------
 
-// snapshotResponse is the JSON representation of a snapshot.
+// snapshotResponse is the JSON representation of a snapshot returned by the API.
+// Field names match the TypeScript Snapshot interface in gui/src/types/index.ts.
+//
+// Key naming decisions:
+//   - restic_snapshot_id: the opaque hash returned by restic (not the internal UUID)
+//   - policy_name / destination_name: denormalised via JOIN for display without extra requests
+//   - created_at: the GUI sorts and displays by this field; SnapshotAt is aliased here
 type snapshotResponse struct {
-	ID            string `json:"id"`
-	PolicyID      string `json:"policy_id"`
-	DestinationID string `json:"destination_id"`
-	JobID         string `json:"job_id"`
-	SnapshotID    string `json:"snapshot_id"` // opaque ID from the backup engine
-	SizeBytes     int64  `json:"size_bytes"`
-	FileCount     int64  `json:"file_count"`
-	Tags          string `json:"tags"`
-	SnapshotAt    string `json:"snapshot_at"`
-	CreatedAt     string `json:"created_at"`
-}
-
-// snapshotToResponse converts a db.Snapshot to a snapshotResponse.
-func snapshotToResponse(s *db.Snapshot) snapshotResponse {
-	return snapshotResponse{
-		ID:            s.ID.String(),
-		PolicyID:      s.PolicyID.String(),
-		DestinationID: s.DestinationID.String(),
-		JobID:         s.JobID.String(),
-		SnapshotID:    s.SnapshotID,
-		SizeBytes:     s.SizeBytes,
-		FileCount:     s.FileCount,
-		Tags:          s.Tags,
-		SnapshotAt:    s.SnapshotAt.UTC().String(),
-		CreatedAt:     s.CreatedAt.UTC().String(),
-	}
+	ID              string `json:"id"`
+	PolicyID        string `json:"policy_id"`
+	PolicyName      string `json:"policy_name"`
+	DestinationID   string `json:"destination_id"`
+	DestinationName string `json:"destination_name"`
+	JobID           string `json:"job_id"`
+	ResticSnapshotID string `json:"restic_snapshot_id"` // matches Snapshot.restic_snapshot_id in types/index.ts
+	SizeBytes       int64  `json:"size_bytes"`
+	Tags            string `json:"tags"`
+	CreatedAt       string `json:"created_at"` // mapped from SnapshotAt for frontend compatibility
 }
 
 // listSnapshotsResponse wraps a paginated list of snapshots.
 type listSnapshotsResponse struct {
 	Items []snapshotResponse `json:"items"`
 	Total int64              `json:"total"`
+}
+
+// snapshotWithNamesToResponse converts a SnapshotWithNames to a snapshotResponse.
+func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotResponse {
+	return snapshotResponse{
+		ID:               s.ID.String(),
+		PolicyID:         s.PolicyID.String(),
+		PolicyName:       s.PolicyName,
+		DestinationID:    s.DestinationID.String(),
+		DestinationName:  s.DestinationName,
+		JobID:            s.JobID.String(),
+		ResticSnapshotID: s.SnapshotID,
+		SizeBytes:        s.SizeBytes,
+		Tags:             s.Tags,
+		CreatedAt:        s.SnapshotAt.UTC().Format(time.RFC3339),
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -137,7 +143,19 @@ func (h *SnapshotHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, snapshotToResponse(snapshot))
+	// GetByID returns a plain db.Snapshot without names — wrap it minimally.
+	// Names are only needed for list views; the detail endpoint is used
+	// for single-snapshot operations where the caller already has context.
+	Ok(w, snapshotResponse{
+		ID:               snapshot.ID.String(),
+		PolicyID:         snapshot.PolicyID.String(),
+		DestinationID:    snapshot.DestinationID.String(),
+		JobID:            snapshot.JobID.String(),
+		ResticSnapshotID: snapshot.SnapshotID,
+		SizeBytes:        snapshot.SizeBytes,
+		Tags:             snapshot.Tags,
+		CreatedAt:        snapshot.SnapshotAt.UTC().Format(time.RFC3339),
+	})
 }
 
 // Delete handles DELETE /api/v1/snapshots/{id}.
@@ -167,11 +185,11 @@ func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // Internal helpers
 // -----------------------------------------------------------------------------
 
-// writeSnapshotList converts a slice of db.Snapshot and writes the response.
-func (h *SnapshotHandler) writeSnapshotList(w http.ResponseWriter, snapshots []db.Snapshot, total int64) {
+// writeSnapshotList converts a slice of SnapshotWithNames and writes the paginated response.
+func (h *SnapshotHandler) writeSnapshotList(w http.ResponseWriter, snapshots []repositories.SnapshotWithNames, total int64) {
 	items := make([]snapshotResponse, len(snapshots))
 	for i := range snapshots {
-		items[i] = snapshotToResponse(&snapshots[i])
+		items[i] = snapshotWithNamesToResponse(snapshots[i])
 	}
 	Ok(w, listSnapshotsResponse{Items: items, Total: total})
 }

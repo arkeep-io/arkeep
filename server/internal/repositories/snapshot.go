@@ -10,6 +10,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// SnapshotWithNames extends db.Snapshot with denormalised display names
+// resolved via JOIN. Used by list endpoints so the GUI does not need
+// separate requests to resolve policy and destination names.
+type SnapshotWithNames struct {
+	db.Snapshot
+	PolicyName      string
+	DestinationName string
+}
+
 // gormSnapshotRepository is the GORM implementation of SnapshotRepository.
 type gormSnapshotRepository struct {
 	db *gorm.DB
@@ -59,33 +68,40 @@ func (r *gormSnapshotRepository) Delete(ctx context.Context, id uuid.UUID) error
 	return nil
 }
 
-// List returns a paginated list of snapshots and the total count,
-// ordered by snapshot_at descending (most recent first).
-func (r *gormSnapshotRepository) List(ctx context.Context, opts ListOptions) ([]db.Snapshot, int64, error) {
-	var snapshots []db.Snapshot
-	var total int64
+// listWithNamesQuery returns a base query that JOINs policies and destinations
+// to resolve display names. The SELECT clause maps the joined columns to the
+// SnapshotWithNames fields. All list methods share this base.
+func (r *gormSnapshotRepository) listWithNamesQuery(ctx context.Context) *gorm.DB {
+	return r.db.WithContext(ctx).
+		Table("snapshots").
+		Select(`snapshots.*,
+			policies.name   AS policy_name,
+			destinations.name AS destination_name`).
+		Joins("LEFT JOIN policies ON policies.id = snapshots.policy_id").
+		Joins("LEFT JOIN destinations ON destinations.id = snapshots.destination_id").
+		Order("snapshots.snapshot_at DESC")
+}
 
+// List returns a paginated list of snapshots with resolved names and the total count.
+func (r *gormSnapshotRepository) List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error) {
+	var total int64
 	if err := r.db.WithContext(ctx).Model(&db.Snapshot{}).Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("snapshots: list count: %w", err)
 	}
 
-	if err := r.db.WithContext(ctx).
+	var rows []SnapshotWithNames
+	if err := r.listWithNamesQuery(ctx).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("snapshot_at DESC").
-		Find(&snapshots).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("snapshots: list: %w", err)
 	}
-
-	return snapshots, total, nil
+	return rows, total, nil
 }
 
-// ListByPolicy returns a paginated list of snapshots for a given policy,
-// ordered by snapshot_at descending.
-func (r *gormSnapshotRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]db.Snapshot, int64, error) {
-	var snapshots []db.Snapshot
+// ListByPolicy returns a paginated list of snapshots for a given policy with resolved names.
+func (r *gormSnapshotRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error) {
 	var total int64
-
 	if err := r.db.WithContext(ctx).
 		Model(&db.Snapshot{}).
 		Where("policy_id = ?", policyID).
@@ -93,24 +109,20 @@ func (r *gormSnapshotRepository) ListByPolicy(ctx context.Context, policyID uuid
 		return nil, 0, fmt.Errorf("snapshots: list by policy count: %w", err)
 	}
 
-	if err := r.db.WithContext(ctx).
-		Where("policy_id = ?", policyID).
+	var rows []SnapshotWithNames
+	if err := r.listWithNamesQuery(ctx).
+		Where("snapshots.policy_id = ?", policyID).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("snapshot_at DESC").
-		Find(&snapshots).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("snapshots: list by policy: %w", err)
 	}
-
-	return snapshots, total, nil
+	return rows, total, nil
 }
 
-// ListByDestination returns a paginated list of snapshots for a given destination,
-// ordered by snapshot_at descending.
-func (r *gormSnapshotRepository) ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]db.Snapshot, int64, error) {
-	var snapshots []db.Snapshot
+// ListByDestination returns a paginated list of snapshots for a given destination with resolved names.
+func (r *gormSnapshotRepository) ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error) {
 	var total int64
-
 	if err := r.db.WithContext(ctx).
 		Model(&db.Snapshot{}).
 		Where("destination_id = ?", destinationID).
@@ -118,16 +130,15 @@ func (r *gormSnapshotRepository) ListByDestination(ctx context.Context, destinat
 		return nil, 0, fmt.Errorf("snapshots: list by destination count: %w", err)
 	}
 
-	if err := r.db.WithContext(ctx).
-		Where("destination_id = ?", destinationID).
+	var rows []SnapshotWithNames
+	if err := r.listWithNamesQuery(ctx).
+		Where("snapshots.destination_id = ?", destinationID).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("snapshot_at DESC").
-		Find(&snapshots).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("snapshots: list by destination: %w", err)
 	}
-
-	return snapshots, total, nil
+	return rows, total, nil
 }
 
 // DeleteBySnapshotID removes a snapshot record by the opaque engine snapshot ID.

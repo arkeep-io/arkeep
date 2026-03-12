@@ -149,10 +149,10 @@ type SnapshotRepository interface {
 	Create(ctx context.Context, snapshot *db.Snapshot) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Snapshot, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	List(ctx context.Context, opts ListOptions) ([]db.Snapshot, int64, error)
-	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]db.Snapshot, int64, error)
-	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]db.Snapshot, int64, error)
 	DeleteBySnapshotID(ctx context.Context, snapshotID string) error
+	List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error)
+	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)
+	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)
 }
 
 // -----------------------------------------------------------------------------

@@ -43,6 +43,7 @@ type Server struct {
 	agentManager *agentmanager.Manager
 	agentRepo    repositories.AgentRepository
 	jobRepo      repositories.JobRepository
+	snapshotRepo repositories.SnapshotRepository
 	hub          *websocket.Hub
 	logger       *zap.Logger
 	sharedSecret string // shared secret agents must present in gRPC metadata
@@ -72,6 +73,7 @@ func New(
 	agentManager *agentmanager.Manager,
 	agentRepo repositories.AgentRepository,
 	jobRepo repositories.JobRepository,
+	snapshotRepo repositories.SnapshotRepository,
 	hub *websocket.Hub,
 	logger *zap.Logger,
 ) *Server {
@@ -79,6 +81,7 @@ func New(
 		agentManager:      agentManager,
 		agentRepo:         agentRepo,
 		jobRepo:           jobRepo,
+		snapshotRepo:      snapshotRepo,
 		hub:               hub,
 		logger:            logger.Named("grpc"),
 		sharedSecret:      cfg.SharedSecret,
@@ -482,6 +485,9 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 // Called once per destination after the backup to that destination completes
 // or fails. Persists the restic snapshot ID, byte count, and final status so
 // the GUI can show per-destination outcomes on the job detail page.
+//
+// On success, a Snapshot record is also created so the snapshot appears in
+// the snapshots list without requiring a separate restic catalog scan.
 func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.DestinationStatusReport) (*proto.DestinationStatusResponse, error) {
 	jobID, err := uuid.Parse(req.JobId)
 	if err != nil {
@@ -537,6 +543,47 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 			zap.Error(err),
 		)
 		return nil, status.Error(codes.Internal, "failed to update destination status")
+	}
+
+	// If the backup to this destination succeeded and the agent reported a
+	// restic snapshot ID, persist a Snapshot record. This is the primary way
+	// snapshots are created — there is no separate catalog sync step.
+	//
+	// The job record is fetched to resolve PolicyID, which is not carried in
+	// the DestinationStatusReport proto message.
+	// Snapshot creation is non-fatal: a failure here does not roll back the
+	// destination status update that already succeeded above.
+	if req.Status == "succeeded" && req.SnapshotId != "" {
+		job, err := s.jobRepo.GetByID(ctx, jobID)
+		if err != nil {
+			s.logger.Warn("ReportDestinationStatus: could not fetch job for snapshot creation",
+				zap.String("job_id", req.JobId),
+				zap.Error(err),
+			)
+		} else {
+			snap := &db.Snapshot{
+				PolicyID:      job.PolicyID,
+				DestinationID: destID,
+				JobID:         jobID,
+				SnapshotID:    req.SnapshotId,
+				SizeBytes:     req.SizeBytes,
+				Tags:          "[]",
+				SnapshotAt:    now,
+			}
+			if err := s.snapshotRepo.Create(ctx, snap); err != nil {
+				s.logger.Error("ReportDestinationStatus: failed to create snapshot record",
+					zap.String("job_id", req.JobId),
+					zap.String("snapshot_id", req.SnapshotId),
+					zap.Error(err),
+				)
+			} else {
+				s.logger.Info("snapshot record created",
+					zap.String("job_id", req.JobId),
+					zap.String("destination_id", req.DestinationId),
+					zap.String("snapshot_id", req.SnapshotId),
+				)
+			}
+		}
 	}
 
 	s.logger.Info("destination status updated",

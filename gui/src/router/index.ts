@@ -122,11 +122,12 @@ const routes: RouteRecordRaw[] = [
       },
 
       // Snapshots
-      /*{
+      {
         path: 'snapshots',
         name: 'snapshots',
-        component: () => import('@/pages/SnapshotsPage.vue'),
-      },*/
+        component: () => import('@/pages/snapshots/SnapshotsPage.vue'),
+        meta: { breadcrumb: "Snapshots" },
+      },
 
       // Jobs
       {
