@@ -43,7 +43,8 @@ desktop.ini
 *.env
 
 # ─── Embedded binaries (populated by task deps:download, not committed) ───────
-agent/internal/restic/bin/restic
-agent/internal/restic/bin/rclone
-agent/internal/restic/bin/restic.exe
-agent/internal/restic/bin/rclone.exe
+# Ignore all binaries in the bin/ directory except .gitkeep.
+# Binaries are named with platform suffixes (e.g. restic_linux_amd64) so
+# we ignore by pattern rather than explicit names.
+agent/internal/restic/bin/*
+!agent/internal/restic/bin/.gitkeep
