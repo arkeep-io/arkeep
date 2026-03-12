@@ -117,8 +117,8 @@ and manage everything from a single web interface.
 ### Docker Compose
 
 The simplest way to get started. All images are published to both
-[GitHub Container Registry](https://ghcr.io/arkeep-io/arkeep) and
-[Docker Hub](https://hub.docker.com/u/arkeep).
+[GitHub Packages](https://github.com/orgs/arkeep-io/packages?repo_name=arkeep) and
+[Docker Hub](https://hub.docker.com/repositories/arkeepio).
 
 **Server only** (GUI included):
 
