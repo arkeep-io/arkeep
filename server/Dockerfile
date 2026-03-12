@@ -24,7 +24,7 @@ COPY server/  ./server/
 # Download server dependencies as a separate layer so Docker can cache
 # them across source-only changes.
 WORKDIR /src/server
-RUN go mod download
+RUN GOWORK=off go mod download
 
 # Build a fully static binary.
 # CGO_ENABLED=0 is safe because the SQLite driver (modernc.org/sqlite) is

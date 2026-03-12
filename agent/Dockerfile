@@ -45,7 +45,7 @@ COPY agent/   ./agent/
 COPY --from=downloader /src/agent/internal/restic/bin/ ./agent/internal/restic/bin/
 
 WORKDIR /src/agent
-RUN go mod download
+RUN GOWORK=off go mod download
 
 WORKDIR /src
 ARG VERSION=dev
