@@ -1,0 +1,88 @@
+name: Bug Report
+description: Something is not working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug.
+        Please fill in as much detail as possible to help us reproduce and fix the issue.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Arkeep is affected?
+      options:
+        - Server
+        - Agent
+        - GUI
+        - Docker / deployment
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the issue.
+      placeholder: |
+        1. Go to ...
+        2. Click on ...
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Arkeep Version
+      description: Run `arkeep-server version` or check the footer in the GUI.
+      placeholder: "e.g. v0.3.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment Method
+      options:
+        - Docker Compose
+        - Standalone binary
+        - systemd
+        - Built from source
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: |
+        Paste relevant log output here. Set `--log-level debug` to get more detail.
+        **Remove any credentials or sensitive data before posting.**
+      render: text
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Anything else that might be relevant — OS, database driver, agent OS, etc.

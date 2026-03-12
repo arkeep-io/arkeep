@@ -1,0 +1,56 @@
+name: Feature Request
+description: Suggest an idea or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement to Arkeep.
+        Before submitting, please check the [open issues](https://github.com/arkeep-io/arkeep/issues)
+        to see if your idea is already being discussed.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: |
+        What problem does this solve? Who is affected and how often?
+        A clear problem statement helps us understand the value of the feature.
+      placeholder: "e.g. I manage 20 agents and there's no way to group them by environment..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How do you imagine this working? Be as specific as you can.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you found any workarounds or alternative approaches?
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server
+        - Agent
+        - GUI
+        - API
+        - Deployment / infrastructure
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, mockups, or references that might help.
