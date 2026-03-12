@@ -103,22 +103,20 @@ checksum:
   algorithm: sha256
 
 # ─── Docker images ────────────────────────────────────────────────────────────
-# dockers_v2 is the current API — builds multi-arch images directly via buildx
-# without needing separate per-arch entries and a docker_manifests section.
 
-dockers_v2:
-  - id: server
+dockers:
+  # Server — linux/amd64
+  - id: server-amd64
     ids: [server]
+    goos: linux
+    goarch: amd64
     image_templates:
-      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}"
-      - "ghcr.io/arkeep-io/arkeep-server:latest"
-      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}"
-      - "docker.io/arkeepio/arkeep-server:latest"
+      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}-amd64"
+      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}-amd64"
     dockerfile: server/Dockerfile.goreleaser
     use: buildx
-    goarch: [amd64, arm64]
-    goos: linux
     build_flag_templates:
+      - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title=arkeep-server"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
@@ -126,24 +124,107 @@ dockers_v2:
       - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
       - "--label=org.opencontainers.image.licenses=AGPL-3.0"
 
-  - id: agent
-    ids: [agent]
+  # Server — linux/arm64
+  - id: server-arm64
+    ids: [server]
+    goos: linux
+    goarch: arm64
     image_templates:
-      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}"
-      - "ghcr.io/arkeep-io/arkeep-agent:latest"
-      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}"
-      - "docker.io/arkeepio/arkeep-agent:latest"
+      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}-arm64"
+      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}-arm64"
+    dockerfile: server/Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=arkeep-server"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
+      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+
+  # Agent — linux/amd64
+  - id: agent-amd64
+    ids: [agent]
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-amd64"
+      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-amd64"
     dockerfile: agent/Dockerfile.goreleaser
     use: buildx
-    goarch: [amd64, arm64]
-    goos: linux
     build_flag_templates:
+      - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title=arkeep-agent"
       - "--label=org.opencontainers.image.version={{ .Version }}"
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
       - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+
+  # Agent — linux/arm64
+  - id: agent-arm64
+    ids: [agent]
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-arm64"
+      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-arm64"
+    dockerfile: agent/Dockerfile.goreleaser
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title=arkeep-agent"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
+      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+
+# ─── Docker manifests (multi-arch) ────────────────────────────────────────────
+# Combines the per-arch images into a single manifest list so users can pull
+# without specifying the architecture suffix.
+
+docker_manifests:
+  - name_template: "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}-amd64"
+      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/arkeep-io/arkeep-server:latest"
+    image_templates:
+      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}-amd64"
+      - "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}-arm64"
+
+  - name_template: "docker.io/arkeepio/arkeep-server:{{ .Tag }}"
+    image_templates:
+      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}-amd64"
+      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}-arm64"
+
+  - name_template: "docker.io/arkeepio/arkeep-server:latest"
+    image_templates:
+      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}-amd64"
+      - "docker.io/arkeepio/arkeep-server:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-amd64"
+      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-arm64"
+
+  - name_template: "ghcr.io/arkeep-io/arkeep-agent:latest"
+    image_templates:
+      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-amd64"
+      - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-arm64"
+
+  - name_template: "docker.io/arkeepio/arkeep-agent:{{ .Tag }}"
+    image_templates:
+      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-amd64"
+      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-arm64"
+
+  - name_template: "docker.io/arkeepio/arkeep-agent:latest"
+    image_templates:
+      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-amd64"
+      - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-arm64"
 
 # ─── Release notes ────────────────────────────────────────────────────────────
 
