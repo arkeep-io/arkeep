@@ -2,40 +2,67 @@ name: Security
 
 on:
   schedule:
-    - cron: "0 8 * * 1"
+    - cron: "0 8 * * 1"   # every Monday at 08:00 UTC
   push:
     branches: [main]
 
 jobs:
+  # ─── Go static security analysis ────────────────────────────────────────────
   gosec:
     name: Go Security Scan
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [shared, server, agent]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
 
-      - name: Run gosec
+      - name: Download agent deps (restic + rclone) for agent module
+        if: matrix.module == 'agent'
+        run: cd agent && go run ./scripts/download_deps.go
+
+      - name: Run gosec on ${{ matrix.module }}
         uses: securego/gosec@master
         with:
-          args: ./...
+          args: ./${{ matrix.module }}/...
 
+  # ─── Container vulnerability scan ───────────────────────────────────────────
   trivy:
     name: Container Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+
+      - name: Download agent deps (restic + rclone)
+        run: cd agent && go run ./scripts/download_deps.go
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build server image
-        run: docker build -f server/Dockerfile -t arkeep-server:scan .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/server/Dockerfile
+          tags: arkeep-server:scan
+          load: true
+          push: false
 
       - name: Build agent image
-        run: docker build -f agent/Dockerfile -t arkeep-agent:scan .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/agent/Dockerfile
+          tags: arkeep-agent:scan
+          load: true
+          push: false
 
       - name: Scan server image
-        uses: aquasecurity/trivy-action@0.34.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: arkeep-server:scan
           format: table
@@ -43,7 +70,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan agent image
-        uses: aquasecurity/trivy-action@0.34.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: arkeep-agent:scan
           format: table

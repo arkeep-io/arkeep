@@ -7,13 +7,14 @@ on:
     branches: [main]
 
 jobs:
+  # ─── Go tests ───────────────────────────────────────────────────────────────
   test-go:
     name: Test Go
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
           cache-dependency-path: |
@@ -37,6 +38,9 @@ jobs:
             -I shared/proto \
             shared/proto/agent.proto
 
+      - name: Download agent deps (restic + rclone)
+        run: cd agent && go run ./scripts/download_deps.go
+
       - name: Test shared
         run: cd shared && go test -v -race -count=1 ./...
 
@@ -46,34 +50,52 @@ jobs:
       - name: Test agent
         run: cd agent && go test -v -race -count=1 ./...
 
+  # ─── Go lint ────────────────────────────────────────────────────────────────
+  # golangci-lint does not support go.work multi-module workspaces with ./...
+  # from the root. We run it once per module so each module's go.mod is used
+  # as the lint root, which avoids the "directory prefix does not contain
+  # modules listed in go.work" error.
   lint-go:
     name: Lint Go
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [shared, server, agent]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
 
-      - uses: golangci/golangci-lint-action@v9
+      - name: Download agent deps (restic + rclone) for agent module
+        if: matrix.module == 'agent'
+        run: cd agent && go run ./scripts/download_deps.go
+
+      - name: Lint ${{ matrix.module }}
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          working-directory: ${{ matrix.module }}
 
+  # ─── GUI ────────────────────────────────────────────────────────────────────
   test-gui:
     name: Test GUI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - name: Enable Corepack (pnpm)
+        run: corepack enable
+
+      - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: "pnpm"
           cache-dependency-path: gui/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: cd gui && pnpm ci
+        run: cd gui && pnpm install --frozen-lockfile
 
       - name: Type check
         run: cd gui && pnpm type-check
