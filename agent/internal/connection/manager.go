@@ -535,8 +535,8 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 
 // ReportDestinationResult implements executor.StatusReporter. It calls
 // ReportDestinationStatus via gRPC to persist the per-destination outcome
-// (snapshot ID, size, status) after each destination backup completes or fails.
-func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, sizeBytes int64, errMsg string) {
+// (snapshot ID, size, status, started_at) after each destination backup completes or fails.
+func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
 	m.mu.RLock()
 	client := m.client
 	agentID := m.agentID
@@ -559,6 +559,7 @@ func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshot
 		SnapshotId:    snapshotID,
 		SizeBytes:     sizeBytes,
 		Error:         errMsg,
+		StartedAt:     timestamppb.New(startedAt),
 	})
 	if err != nil {
 		m.logger.Warn("ReportDestinationResult: RPC failed",

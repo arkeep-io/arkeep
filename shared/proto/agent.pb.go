@@ -876,7 +876,11 @@ type DestinationStatusReport struct {
 	// summary). Zero when status is "failed".
 	SizeBytes int64 `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	// error is the error message when status is "failed". Empty on success.
-	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	// started_at is when the agent began the backup to this destination.
+	// Recorded immediately before invoking restic so the server can persist
+	// an accurate started_at on the JobDestination row.
+	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -958,6 +962,13 @@ func (x *DestinationStatusReport) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *DestinationStatusReport) GetStartedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.StartedAt
+	}
+	return nil
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.
@@ -1369,7 +1380,7 @@ const file_agent_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x128\n" +
 	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"#\n" +
 	"\x11JobStatusResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xe0\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x9b\x02\n" +
 	"\x17DestinationStatusReport\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12%\n" +
@@ -1379,7 +1390,9 @@ const file_agent_proto_rawDesc = "" +
 	"snapshotId\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x06 \x01(\x03R\tsizeBytes\x12\x14\n" +
-	"\x05error\x18\a \x01(\tR\x05error\"+\n" +
+	"\x05error\x18\a \x01(\tR\x05error\x129\n" +
+	"\n" +
+	"started_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"+\n" +
 	"\x19DestinationStatusResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xb7\x01\n" +
 	"\bLogEntry\x12\x15\n" +
@@ -1478,28 +1491,29 @@ var file_agent_proto_depIdxs = []int32{
 	20, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
 	1,  // 4: agent.JobStatusReport.status:type_name -> agent.JobStatus
 	20, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
-	2,  // 6: agent.LogEntry.level:type_name -> agent.LogLevel
-	20, // 7: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	17, // 8: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
-	3,  // 9: agent.AgentService.Register:input_type -> agent.RegisterRequest
-	6,  // 10: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
-	9,  // 11: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
-	11, // 12: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
-	13, // 13: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
-	15, // 14: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
-	18, // 15: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
-	5,  // 16: agent.AgentService.Register:output_type -> agent.RegisterResponse
-	8,  // 17: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // 18: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
-	12, // 19: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
-	14, // 20: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
-	16, // 21: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
-	19, // 22: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
-	16, // [16:23] is the sub-list for method output_type
-	9,  // [9:16] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	20, // 6: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
+	2,  // 7: agent.LogEntry.level:type_name -> agent.LogLevel
+	20, // 8: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	17, // 9: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
+	3,  // 10: agent.AgentService.Register:input_type -> agent.RegisterRequest
+	6,  // 11: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
+	9,  // 12: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
+	11, // 13: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
+	13, // 14: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
+	15, // 15: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
+	18, // 16: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
+	5,  // 17: agent.AgentService.Register:output_type -> agent.RegisterResponse
+	8,  // 18: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
+	10, // 19: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
+	12, // 20: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
+	14, // 21: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
+	16, // 22: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
+	19, // 23: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
+	17, // [17:24] is the sub-list for method output_type
+	10, // [10:17] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }

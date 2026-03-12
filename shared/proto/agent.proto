@@ -255,6 +255,10 @@ message DestinationStatusReport {
   int64 size_bytes       = 6;
   // error is the error message when status is "failed". Empty on success.
   string error           = 7;
+  // started_at is when the agent began the backup to this destination.
+  // Recorded immediately before invoking restic so the server can persist
+  // an accurate started_at on the JobDestination row.
+  google.protobuf.Timestamp started_at = 8;
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -41,7 +42,7 @@ type StatusReporter interface {
 	// ReportDestinationResult reports the outcome of a backup to a single
 	// destination. Called once per destination after it completes or fails.
 	// sizeBytes is TotalBytesProcessed from the restic summary event.
-	ReportDestinationResult(jobID, destinationID, status, snapshotID string, sizeBytes int64, errMsg string)
+	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string)
 }
 
 // JobAssignment is the internal representation of a job received from the server.
@@ -219,6 +220,10 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 
 		log("info", fmt.Sprintf("backing up to destination %s (type: %s)", dest.DestinationID, dest.Type))
 
+		// Record the start time before invoking restic so the server can persist
+		// an accurate started_at on the JobDestination row.
+		destStartedAt := time.Now().UTC()
+
 		d := restic.Destination{
 			Type:     restic.DestinationType(dest.Type),
 			RepoURL:  dest.RepoURL,
@@ -240,7 +245,7 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 		if err != nil {
 			errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
 			log("error", errMsg)
-			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", 0, err.Error())
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, err.Error())
 			backupFailed = true
 			continue
 		}
@@ -253,6 +258,7 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 			dest.DestinationID,
 			"succeeded",
 			result.SnapshotID,
+			destStartedAt,
 			int64(result.TotalBytesProcessed),
 			"",
 		)

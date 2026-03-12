@@ -522,7 +522,15 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	}
 
 	now := time.Now().UTC()
-	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobDestID, req.Status, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
+
+	// started_at is sent by the agent as the moment restic was invoked for this
+	// destination. Fall back to now if the field is absent (older agents).
+	startedAt := now
+	if req.StartedAt != nil {
+		startedAt = req.StartedAt.AsTime().UTC()
+	}
+
+	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobDestID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
 		s.logger.Error("ReportDestinationStatus: failed to update destination status",
 			zap.String("job_id", req.JobId),
 			zap.String("destination_id", req.DestinationId),

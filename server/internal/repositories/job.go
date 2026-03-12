@@ -264,12 +264,13 @@ func (r *gormJobRepository) ListDestinationsByJob(ctx context.Context, jobID uui
 
 // UpdateDestinationStatus updates the result fields of a job destination
 // after the backup to that destination completes or fails.
-func (r *gormJobRepository) UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error {
+func (r *gormJobRepository) UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.JobDestination{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"status":      status,
+			"started_at":  startedAt,
 			"ended_at":    endedAt,
 			"snapshot_id": snapshotID,
 			"size_bytes":  sizeBytes,
