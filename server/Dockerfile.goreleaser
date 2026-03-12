@@ -1,0 +1,30 @@
+# server/Dockerfile.goreleaser
+#
+# Dockerfile used exclusively by GoReleaser for Docker image builds.
+# GoReleaser compiles the binary before invoking Docker, so this is a
+# single-stage runtime-only image — no Go toolchain needed.
+#
+# The binary is copied from the GoReleaser dist/ directory by the
+# docker.extra_files or via the COPY instruction below.
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S arkeep && \
+    adduser  -S -G arkeep arkeep
+
+# GoReleaser places the compiled binary at the root of the build context
+# with the name matching the `binary` field in .goreleaser.yml.
+COPY arkeep-server /usr/local/bin/arkeep-server
+
+RUN mkdir -p /var/lib/arkeep/data && \
+    chown -R arkeep:arkeep /var/lib/arkeep
+
+USER arkeep
+
+EXPOSE 8080
+EXPOSE 9090
+
+VOLUME ["/var/lib/arkeep"]
+
+ENTRYPOINT ["arkeep-server"]

@@ -1,0 +1,180 @@
+# values.yaml — default configuration for the Arkeep Helm chart.
+# Override any value with --set or a custom values file:
+#   helm install arkeep arkeep/arkeep -f my-values.yaml
+
+# ─── Image ────────────────────────────────────────────────────────────────────
+
+image:
+  repository: ghcr.io/arkeep-io/arkeep-server
+  pullPolicy: IfNotPresent
+  # Defaults to the chart's appVersion when empty.
+  tag: ""
+
+imagePullSecrets: []
+
+# ─── Replicas ─────────────────────────────────────────────────────────────────
+
+replicaCount: 1
+
+# ─── Server configuration ─────────────────────────────────────────────────────
+
+config:
+  # Log level: debug, info, warn, error
+  logLevel: info
+
+  # Database driver: sqlite or postgres.
+  # Use "postgres" with postgresql.enabled=true or externalPostgresql configured.
+  dbDriver: sqlite
+
+  # Set Secure flag on auth cookies. Enable when serving over HTTPS (recommended
+  # in production).
+  secureCookies: true
+
+  # HTTP and gRPC listen addresses inside the container.
+  # Change only if you have a specific reason — the Service ports below must match.
+  httpAddr: ":8080"
+  grpcAddr: ":9090"
+
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+#
+# Option A (simple): provide values here — the chart creates a Secret.
+# Option B (advanced): create a Secret yourself and reference it with existingSecret.
+#
+# The secret key is used for AES-256-GCM credential encryption. Once set it must
+# never change — rotating it invalidates all stored destination credentials.
+# Generate with: openssl rand -hex 32
+
+secret:
+  # Reference an existing Secret instead of creating one.
+  # The Secret must contain the keys: ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET
+  existingSecret: ""
+
+  # Used only when existingSecret is empty.
+  secretKey: ""
+  agentSecret: ""
+
+# ─── Persistence ──────────────────────────────────────────────────────────────
+
+persistence:
+  enabled: true
+  # Storage class — leave empty to use the cluster default.
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  # Mount path inside the container.
+  mountPath: /var/lib/arkeep
+
+# ─── Service ──────────────────────────────────────────────────────────────────
+
+service:
+  type: ClusterIP
+  # HTTP port (GUI + REST API)
+  httpPort: 8080
+  # gRPC port (agents)
+  grpcPort: 9090
+
+# ─── Ingress ──────────────────────────────────────────────────────────────────
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: arkeep.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: arkeep-tls
+  #    hosts:
+  #      - arkeep.example.com
+
+# ─── PostgreSQL (subchart) ────────────────────────────────────────────────────
+# Deploys a PostgreSQL instance alongside Arkeep.
+# Set config.dbDriver=postgres to use it.
+
+postgresql:
+  enabled: false
+  auth:
+    username: arkeep
+    password: ""
+    database: arkeep
+  primary:
+    persistence:
+      enabled: true
+      size: 8Gi
+
+# ─── External PostgreSQL ──────────────────────────────────────────────────────
+# Used when postgresql.enabled=false and config.dbDriver=postgres.
+# Format: postgres://user:password@host:5432/dbname?sslmode=require
+
+externalPostgresql:
+  # Full DSN. If set, takes precedence over the individual fields below.
+  url: ""
+  host: ""
+  port: 5432
+  database: arkeep
+  username: arkeep
+  password: ""
+  sslMode: require
+
+# ─── Resources ────────────────────────────────────────────────────────────────
+
+resources: {}
+  # Recommended starting point for production:
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # limits:
+  #   cpu: 500m
+  #   memory: 512Mi
+
+# ─── Probes ───────────────────────────────────────────────────────────────────
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+# ─── Pod configuration ────────────────────────────────────────────────────────
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ─── Service Account ──────────────────────────────────────────────────────────
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""

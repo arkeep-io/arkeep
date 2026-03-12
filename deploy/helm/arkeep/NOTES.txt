@@ -1,0 +1,40 @@
+Arkeep has been deployed successfully.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{{- if .Values.ingress.enabled }}
+  GUI: https://{{ (first .Values.ingress.hosts).host }}
+{{- else if eq .Values.service.type "NodePort" }}
+  export NODE_PORT=$(kubectl get svc {{ include "arkeep.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}")
+  export NODE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
+  GUI: http://$NODE_IP:$NODE_PORT
+{{- else }}
+  # Port-forward to access the GUI locally:
+  kubectl port-forward svc/{{ include "arkeep.fullname" . }} 8080:8080 -n {{ .Release.Namespace }}
+  GUI: http://localhost:8080
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FIRST LOGIN
+  Create an admin user with the seed command:
+
+  kubectl exec -it deploy/{{ include "arkeep.fullname" . }} -n {{ .Release.Namespace }} -- \
+    arkeep-server seed \
+      --email admin@example.com \
+      --password changeme \
+      --role admin
+
+AGENT CONNECTION
+  Agents connect to the gRPC port ({{ .Values.service.grpcPort }}).
+  {{- if .Values.ingress.enabled }}
+  Expose the gRPC port separately (TCP passthrough, not HTTP) or use a LoadBalancer Service.
+  {{- else }}
+  kubectl port-forward svc/{{ include "arkeep.fullname" . }} 9090:9090 -n {{ .Release.Namespace }}
+  {{- end }}
+
+  Agent secret: stored in Secret "{{ include "arkeep.secretName" . }}" under key ARKEEP_AGENT_SECRET
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For documentation and support: https://github.com/arkeep-io/arkeep

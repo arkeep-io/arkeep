@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "arkeep.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "arkeep.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "arkeep.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "arkeep.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "arkeep.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: arkeep-server
+          image: "{{ .Values.image.repository }}:{{ include "arkeep.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: grpc
+              containerPort: 9090
+              protocol: TCP
+
+          env:
+            - name: ARKEEP_HTTP_ADDR
+              value: {{ .Values.config.httpAddr | quote }}
+            - name: ARKEEP_GRPC_ADDR
+              value: {{ .Values.config.grpcAddr | quote }}
+            - name: ARKEEP_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            - name: ARKEEP_SECURE_COOKIES
+              value: {{ .Values.config.secureCookies | quote }}
+            - name: ARKEEP_DATA_DIR
+              value: {{ printf "%s/data" .Values.persistence.mountPath | quote }}
+
+            # Database driver
+            - name: ARKEEP_DB_DRIVER
+              value: {{ .Values.config.dbDriver | quote }}
+
+            # Database DSN
+            {{- if eq .Values.config.dbDriver "sqlite" }}
+            - name: ARKEEP_DB_DSN
+              value: {{ printf "%s/arkeep.db" .Values.persistence.mountPath | quote }}
+            {{- else if or .Values.postgresql.enabled .Values.externalPostgresql.host .Values.externalPostgresql.url }}
+            - name: ARKEEP_DB_DSN
+              value: {{ include "arkeep.postgresDSN" . | quote }}
+            {{- else }}
+            # DSN from secret (set when externalPostgresql.password is provided via existingSecret)
+            - name: ARKEEP_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "arkeep.secretName" . }}
+                  key: ARKEEP_DB_DSN
+            {{- end }}
+
+            # Credentials from Secret
+            - name: ARKEEP_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "arkeep.secretName" . }}
+                  key: ARKEEP_SECRET_KEY
+            - name: ARKEEP_AGENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "arkeep.secretName" . }}
+                  key: ARKEEP_AGENT_SECRET
+
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "arkeep.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

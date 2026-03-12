@@ -1,0 +1,28 @@
+apiVersion: v2
+name: arkeep
+description: Centralized backup management for self-hosted infrastructure
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - backup
+  - restic
+  - self-hosted
+  - infrastructure
+
+home: https://github.com/arkeep-io/arkeep
+sources:
+  - https://github.com/arkeep-io/arkeep
+
+maintainers:
+  - name: arkeep-io
+    url: https://github.com/arkeep-io
+
+dependencies:
+  # PostgreSQL subchart — enabled only when postgresql.enabled is true.
+  # When disabled, configure an external database via externalPostgresql.
+  - name: postgresql
+    version: "16.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

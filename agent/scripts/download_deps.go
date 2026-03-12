@@ -1,10 +1,16 @@
 //go:build ignore
 
 // download_deps.go is a standalone Go script (not part of any module) that
-// downloads the restic and rclone binaries for the current platform into
-// agent/internal/restic/bin/. It is invoked by the Taskfile:
+// downloads the restic and rclone binaries into agent/internal/restic/bin/.
+// It is invoked by the Taskfile and by GoReleaser's before hook.
 //
+// Usage:
+//
+//	# Current platform only (Taskfile / local development)
 //	go run ./scripts/download_deps.go
+//
+//	# All release platforms (GoReleaser before hook)
+//	go run ./scripts/download_deps.go --all-platforms
 //
 // Using a Go script instead of shell/cmd.exe commands guarantees identical
 // behaviour on Linux, macOS, and Windows without any external tools beyond
@@ -37,27 +43,61 @@ const (
 	binDir        = "internal/restic/bin"
 )
 
+// platform represents a target OS/arch combination for binary downloads.
+type platform struct {
+	goos   string
+	goarch string
+}
+
+// releasePlatforms lists all platforms for which binaries are embedded in the
+// agent for release builds. Must stay in sync with the goarch/goos matrices
+// in .goreleaser.yml.
+//
+// Note: windows/arm64 is excluded because restic does not publish a
+// windows/arm64 binary.
+var releasePlatforms = []platform{
+	{"linux", "amd64"},
+	{"linux", "arm64"},
+	{"darwin", "amd64"},
+	{"darwin", "arm64"},
+	{"windows", "amd64"},
+}
+
 func main() {
+	allPlatforms := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--all-platforms" {
+			allPlatforms = true
+		}
+	}
+
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		fatalf("create bin dir: %v", err)
 	}
 
-	if err := downloadRestic(); err != nil {
-		fatalf("restic: %v", err)
+	var platforms []platform
+	if allPlatforms {
+		fmt.Println("Downloading binaries for all release platforms...")
+		platforms = releasePlatforms
+	} else {
+		platforms = []platform{{runtime.GOOS, runtime.GOARCH}}
 	}
 
-	if err := downloadRclone(); err != nil {
-		fatalf("rclone: %v", err)
+	for _, p := range platforms {
+		if err := downloadRestic(p.goos, p.goarch); err != nil {
+			fatalf("restic %s/%s: %v", p.goos, p.goarch, err)
+		}
+		if err := downloadRclone(p.goos, p.goarch); err != nil {
+			fatalf("rclone %s/%s: %v", p.goos, p.goarch, err)
+		}
 	}
 }
 
 // ─── restic ──────────────────────────────────────────────────────────────────
 
-func downloadRestic() error {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
+func downloadRestic(goos, goarch string) error {
 	resticOS := normalizeOS(goos)
-	ext := exeExt()
+	ext := exeExtFor(goos)
 	out := filepath.Join(binDir, fmt.Sprintf("restic_%s_%s%s", resticOS, goarch, ext))
 
 	if fileExists(out) {
@@ -68,11 +108,8 @@ func downloadRestic() error {
 	fmt.Printf("Downloading restic %s for %s/%s...\n", resticVersion, resticOS, goarch)
 
 	if goos == "windows" {
-		// Windows ships a zip archive containing restic.exe directly.
 		return downloadResticZip(resticOS, goarch, out)
 	}
-
-	// Linux and macOS ship a bzip2-compressed single binary (not a tar).
 	return downloadResticBz2(resticOS, goarch, out)
 }
 
@@ -94,8 +131,6 @@ func downloadResticBz2(resticOS, goarch, out string) error {
 }
 
 func downloadResticZip(resticOS, goarch, out string) error {
-	// Windows zip name: restic_0.18.1_windows_amd64.zip
-	// The zip contains a single file: restic_0.18.1_windows_amd64\restic.exe
 	archiveName := fmt.Sprintf("restic_%s_%s_%s", resticVersion, resticOS, goarch)
 	url := fmt.Sprintf("https://github.com/restic/restic/releases/download/v%s/%s.zip", resticVersion, archiveName)
 
@@ -117,11 +152,9 @@ func downloadResticZip(resticOS, goarch, out string) error {
 
 // ─── rclone ──────────────────────────────────────────────────────────────────
 
-func downloadRclone() error {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
+func downloadRclone(goos, goarch string) error {
 	rcloneOS := rclonePlatform(goos)
-	ext := exeExt()
+	ext := exeExtFor(goos)
 	out := filepath.Join(binDir, fmt.Sprintf("rclone_%s_%s%s", rcloneOS, goarch, ext))
 
 	if fileExists(out) {
@@ -129,7 +162,6 @@ func downloadRclone() error {
 		return nil
 	}
 
-	// rclone-v1.73.1-windows-amd64.zip
 	archiveName := fmt.Sprintf("rclone-v%s-%s-%s", rcloneVersion, rcloneOS, goarch)
 	url := fmt.Sprintf("https://downloads.rclone.org/v%s/%s.zip", rcloneVersion, archiveName)
 
@@ -152,13 +184,12 @@ func downloadRclone() error {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-// fetch downloads url and returns the raw bytes.
 func fetch(url string) ([]byte, error) {
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
@@ -171,8 +202,6 @@ func fetch(url string) ([]byte, error) {
 	return data, nil
 }
 
-// extractFromZip finds a file by exact path inside a zip archive and returns
-// its contents. Path separators are normalised before comparison.
 func extractFromZip(data []byte, target string) ([]byte, error) {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -186,7 +215,7 @@ func extractFromZip(data []byte, target string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 			return io.ReadAll(rc)
 		}
 	}
@@ -198,10 +227,6 @@ func extractFromZip(data []byte, target string) ([]byte, error) {
 	return nil, fmt.Errorf("file %q not found in zip; available: %s", target, strings.Join(names, ", "))
 }
 
-// extractFromZipBySuffix finds the first file whose name ends with suffix
-// (case-insensitive) and returns its contents. Useful when the enclosing
-// directory name is not known in advance (e.g. restic Windows zip layout
-// changed between releases).
 func extractFromZipBySuffix(data []byte, suffix string) ([]byte, error) {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -215,7 +240,7 @@ func extractFromZipBySuffix(data []byte, suffix string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 			return io.ReadAll(rc)
 		}
 	}
@@ -227,7 +252,6 @@ func extractFromZipBySuffix(data []byte, suffix string) ([]byte, error) {
 	return nil, fmt.Errorf("no file ending with %q found in zip; available: %s", suffix, strings.Join(names, ", "))
 }
 
-// writeExecutable writes data to path and sets the executable bit on Unix.
 func writeExecutable(path string, data []byte) error {
 	if err := os.WriteFile(path, data, 0o755); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
@@ -241,14 +265,13 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func exeExt() string {
-	if runtime.GOOS == "windows" {
+func exeExtFor(goos string) string {
+	if goos == "windows" {
 		return ".exe"
 	}
 	return ""
 }
 
-// normalizeOS maps GOOS to the platform name used in restic release filenames.
 func normalizeOS(goos string) string {
 	switch goos {
 	case "darwin":
@@ -260,8 +283,6 @@ func normalizeOS(goos string) string {
 	}
 }
 
-// rclonePlatform maps GOOS to the platform name used in rclone release filenames.
-// rclone uses "osx" for macOS instead of "darwin".
 func rclonePlatform(goos string) string {
 	switch goos {
 	case "darwin":

@@ -1,0 +1,29 @@
+# agent/Dockerfile.goreleaser
+#
+# Dockerfile used exclusively by GoReleaser for Docker image builds.
+# GoReleaser compiles the binary before invoking Docker, so this is a
+# single-stage runtime-only image — no Go toolchain needed.
+#
+# The restic and rclone binaries are embedded inside arkeep-agent at
+# compile time via go:embed, so no additional binaries are needed here.
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S arkeep && \
+    adduser  -S -G arkeep arkeep
+
+# GoReleaser places the compiled binary at the root of the build context
+# with the name matching the `binary` field in .goreleaser.yml.
+COPY arkeep-agent /usr/local/bin/arkeep-agent
+
+RUN mkdir -p /var/lib/arkeep-agent && \
+    chown arkeep:arkeep /var/lib/arkeep-agent
+
+USER arkeep
+
+VOLUME ["/var/lib/arkeep-agent"]
+
+ENV ARKEEP_STATE_DIR=/var/lib/arkeep-agent
+
+ENTRYPOINT ["arkeep-agent"]
