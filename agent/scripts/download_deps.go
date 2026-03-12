@@ -33,7 +33,7 @@ import (
 
 const (
 	resticVersion = "0.18.1"
-	rcloneVersion = "1.73.1"
+	rcloneVersion = "1.73.2"
 	binDir        = "internal/restic/bin"
 )
 
