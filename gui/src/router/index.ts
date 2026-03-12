@@ -1,27 +1,5 @@
 // router/index.ts — Vue Router configuration with navigation guards.
 //
-// Route structure:
-//   /login                 — public, redirects to / if already authenticated
-//   /                      — protected shell layout
-//   ├── (index)            → redirect to /dashboard
-//   ├── /dashboard
-//   ├── /agents            → list
-//   ├── /agents/:id        → detail
-//   ├── /policies          → list
-//   ├── /policies/new      → create form
-//   ├── /policies/:id      → detail
-//   ├── /policies/:id/edit → edit form
-//   ├── /destinations      → list
-//   ├── /snapshots         → list
-//   ├── /jobs              → list
-//   ├── /jobs/:id          → detail with live logs
-//   ├── /monitoring        → host metrics dashboard
-//   └── /settings          → tabbed settings page
-//        ├── /settings/general
-//        ├── /settings/notifications
-//        ├── /settings/oidc
-//        └── /settings/users
-//
 // Auth guard:
 //   - Protected routes require an authenticated session.
 //   - On first load the guard waits for auth.initialize() to complete before
@@ -149,46 +127,13 @@ const routes: RouteRecordRaw[] = [
         ]
       },
 
-      // Monitoring
-      /*{
-        path: 'monitoring',
-        name: 'monitoring',
-        component: () => import('@/pages/MonitoringPage.vue'),
-      }, */
-
-      // Settings — tabbed layout with nested routes
-      /* {
+      // Settings — single page with OIDC + SMTP tabs, admin only
+      {
         path: 'settings',
-        component: () => import('@/pages/SettingsPage.vue'),
-        meta: { requiresRole: 'admin' },
-        children: [
-          {
-            path: '',
-            redirect: '/settings/general',
-          },
-          {
-            path: 'general',
-            name: 'settings-general',
-            component: () => import('@/pages/settings/GeneralSettings.vue'),
-          },
-          {
-            path: 'notifications',
-            name: 'settings-notifications',
-            component: () =>
-              import('@/pages/settings/NotificationSettings.vue'),
-          },
-          {
-            path: 'oidc',
-            name: 'settings-oidc',
-            component: () => import('@/pages/settings/OIDCSettings.vue'),
-          },
-          {
-            path: 'users',
-            name: 'settings-users',
-            component: () => import('@/pages/settings/UsersSettings.vue'),
-          },
-        ],
-      }, */
+        name: 'settings',
+        component: () => import('@/pages/settings/SettingsPage.vue'),
+        meta: { breadcrumb: 'Settings', requiresRole: 'admin' },
+      },
     ],
   },
 

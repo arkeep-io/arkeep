@@ -2,7 +2,6 @@
 import type { SidebarProps } from "@/components/ui/sidebar"
 
 import {
-    Activity,
     Archive,
     ClipboardList,
     Command,
@@ -70,7 +69,6 @@ const nav: NavSection[] = [
     {
         title: 'Operations',
         items: [
-            { title: 'Monitoring', url: '/monitoring', icon: Activity },
             { title: 'Settings', url: '/settings', icon: Settings, adminOnly: true },
         ],
     },

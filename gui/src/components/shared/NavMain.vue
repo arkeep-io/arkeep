@@ -32,19 +32,21 @@ function isActive(url: string): boolean {
 </script>
 
 <template>
-    <SidebarGroup>
-        <SidebarGroupContent>
-            <SidebarMenu v-for="item in items" :key="item.title" as-child>
-                <SidebarGroupLabel>{{ item.title }}</SidebarGroupLabel>
-                <SidebarMenuItem v-for="obj in item.items" :key="obj.url">
-                    <SidebarMenuButton as-child :is-active="isActive(obj.url)">
-                        <RouterLink :to="obj.url">
-                            <component :is="obj.icon" />
-                            <span>{{ obj.title }}</span>
-                        </RouterLink>
-                    </SidebarMenuButton>
-                </SidebarMenuItem>
-            </SidebarMenu>
-        </SidebarGroupContent>
-    </SidebarGroup>
+    <template v-for="item in items" :key="item.title">
+        <SidebarGroup>
+            <SidebarGroupLabel>{{ item.title }}</SidebarGroupLabel>
+            <SidebarGroupContent>
+                <SidebarMenu>
+                    <SidebarMenuItem v-for="obj in item.items" :key="obj.url">
+                        <SidebarMenuButton as-child :is-active="isActive(obj.url)">
+                            <RouterLink :to="obj.url">
+                                <component :is="obj.icon" />
+                                <span>{{ obj.title }}</span>
+                            </RouterLink>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                </SidebarMenu>
+            </SidebarGroupContent>
+        </SidebarGroup>
+    </template>
 </template>
