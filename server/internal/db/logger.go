@@ -91,7 +91,7 @@ func (l *zapGORMLogger) Trace(_ context.Context, begin time.Time, fc func() (sql
 	}
 
 	switch {
-	case err != nil && !(l.ignoreRecordNotFoundError && errors.Is(err, gorm.ErrRecordNotFound)):
+	case err != nil && (!l.ignoreRecordNotFoundError || !errors.Is(err, gorm.ErrRecordNotFound)):
 		// Log actual database errors at error level.
 		l.log.Error("gorm query error", append(fields, zap.Error(err))...)
 

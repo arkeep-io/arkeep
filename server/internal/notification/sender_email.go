@@ -80,13 +80,21 @@ func (s *emailSender) sendTLS(addr string, cfg *SMTPConfig, to []string, msg []b
 	if err != nil {
 		return fmt.Errorf("%w: tls.Dial: %s", ErrSendFailed, err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			_ = err // TLS conn close error is non-actionable after SMTP session ends
+		}
+	}()
 
 	client, err := smtp.NewClient(conn, cfg.Host)
 	if err != nil {
 		return fmt.Errorf("%w: smtp.NewClient: %s", ErrSendFailed, err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			_ = err // SMTP client close error is non-actionable after session ends
+		}
+	}()
 
 	if cfg.Username != "" {
 		auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)

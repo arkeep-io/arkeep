@@ -117,7 +117,9 @@ func (c *Client) Run() {
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.Unsubscribe(c)
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			c.logger.Warn("ws: failed to close connection", zap.Error(err))
+		}
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
@@ -159,7 +161,9 @@ func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		if err := c.conn.Close(); err != nil {
+			c.logger.Warn("ws: failed to close connection", zap.Error(err))
+		}
 	}()
 
 	for {

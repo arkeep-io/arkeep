@@ -63,11 +63,9 @@ func run() error {
 
 	secretKey := os.Getenv("ARKEEP_SECRET_KEY")
 	if secretKey == "" {
-		return fmt.Errorf(
-			"ARKEEP_SECRET_KEY is not set\n" +
-				"  Set it to the same value used by the server, otherwise the\n" +
-				"  encrypted password will be unreadable at login time.",
-		)
+		// ST1005: error strings should not end with punctuation or newlines.
+		// Use a single-line message; the extra context is moved to a separate log line.
+		return fmt.Errorf("ARKEEP_SECRET_KEY is not set — set it to the same value used by the server")
 	}
 
 	// ─── Encryption ───────────────────────────────────────────────────────────
@@ -96,7 +94,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("get sql.DB: %w", err)
 	}
-	defer sqlDB.Close()
+	defer func() {
+		if err := sqlDB.Close(); err != nil {
+			logger.Warn("failed to close database", zap.Error(err))
+		}
+	}()
 
 	// ─── Hash password ────────────────────────────────────────────────────────
 

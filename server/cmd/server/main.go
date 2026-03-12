@@ -143,7 +143,11 @@ func run(ctx context.Context, cfg *config) error {
 	if err != nil {
 		return fmt.Errorf("failed to get sql.DB: %w", err)
 	}
-	defer sqlDB.Close()
+	defer func() {
+		if err := sqlDB.Close(); err != nil {
+			logger.Warn("failed to close database", zap.Error(err))
+		}
+	}()
 
 	// --- Repositories ---
 	userRepo := repositories.NewUserRepository(gormDB)

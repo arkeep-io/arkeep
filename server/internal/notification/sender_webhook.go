@@ -90,7 +90,11 @@ func (s *webhookSender) Send(ctx context.Context, notifType, title, body string,
 	if err != nil {
 		return fmt.Errorf("%w: webhook request failed: %s", ErrSendFailed, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			_ = err // response body close error is non-actionable
+		}
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("%w: webhook returned non-2xx status %d", ErrSendFailed, resp.StatusCode)
