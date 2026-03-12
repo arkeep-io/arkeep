@@ -114,6 +114,11 @@ func (h *Hub) Run(ctx interface{ Done() <-chan struct{} }) {
 // Clients whose send buffer is full are disconnected to prevent backpressure
 // from a slow consumer blocking all other subscribers on the same topic.
 func (h *Hub) Publish(topic string, msg Message) {
+	// Stamp the topic onto the message so the client can route it correctly.
+	// Callers do not set Topic themselves — it is always derived from the
+	// publish call, so injecting it here keeps all call sites clean.
+	msg.Topic = topic
+
 	h.mu.RLock()
 	targets := h.topics[topic]
 	// Copy the target set before releasing the lock so we don't hold it

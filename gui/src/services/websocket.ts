@@ -12,6 +12,7 @@ export type MessageType =
   | 'job.status'
   | 'job.log'
   | 'agent.status'
+  | 'agent.metrics'
   | 'notification'
   | 'ping'
 
