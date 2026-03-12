@@ -89,7 +89,11 @@ func (e *Extractor) extract(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("restic: embedded binary not found at %q: %w", srcPath, err)
 	}
-	defer srcFile.Close()
+	defer func() {
+		if err := srcFile.Close(); err != nil {
+			_ = err // closing an embedded FS file — non-actionable
+		}
+	}()
 
 	srcInfo, err := srcFile.Stat()
 	if err != nil {
@@ -128,12 +132,12 @@ func (e *Extractor) extract(name string) (string, error) {
 	success := false
 	defer func() {
 		if !success {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath) // best-effort cleanup on failure
 		}
 	}()
 
 	if _, err := io.Copy(tmpFile, srcFile); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return "", fmt.Errorf("restic: failed to write %s binary: %w", name, err)
 	}
 	if err := tmpFile.Close(); err != nil {

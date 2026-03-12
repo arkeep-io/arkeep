@@ -98,11 +98,11 @@ func saveState(stateDir string, s agentState) error {
 	ok := false
 	defer func() {
 		if !ok {
-			os.Remove(tmpPath)
+			_ = os.Remove(tmpPath) // best-effort cleanup on failure
 		}
 	}()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("connection: failed to write state: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -205,7 +205,11 @@ func (m *Manager) connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dial failed: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			m.logger.Warn("failed to close gRPC connection", zap.Error(err))
+		}
+	}()
 
 	// Attach the shared secret to every outgoing RPC via metadata.
 	// This is equivalent to an HTTP Authorization header — the server's
@@ -284,7 +288,7 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 		Capabilities: caps,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("Register RPC failed: %w", err)
+		return "", "", fmt.Errorf("register RPC failed: %w", err)
 	}
 
 	// Persist the agent ID if it changed (first run or server reassignment).

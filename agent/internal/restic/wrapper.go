@@ -323,7 +323,8 @@ func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []
 		if onProgress != nil {
 			if err := onProgress(event); err != nil {
 				// Caller signalled cancellation — kill the process.
-				cmd.Process.Kill()
+				// Ignore the kill error: the process may have already exited.
+				_ = cmd.Process.Kill()
 				return fmt.Errorf("restic: progress callback cancelled: %w", err)
 			}
 		}

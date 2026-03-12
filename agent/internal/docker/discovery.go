@@ -16,8 +16,9 @@ import (
 	"errors"
 	"fmt"
 
-	dockerclient "github.com/docker/docker/client"
+	"github.com/containerd/errdefs"
 	volumetypes "github.com/docker/docker/api/types/volume"
+	dockerclient "github.com/docker/docker/client"
 )
 
 // ErrDockerUnavailable is returned when the Docker daemon cannot be reached.
@@ -115,7 +116,7 @@ func (c *Client) ListVolumes(ctx context.Context, labelFilter string) ([]VolumeI
 func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInfo, error) {
 	v, err := c.docker.VolumeInspect(ctx, name)
 	if err != nil {
-		if dockerclient.IsErrNotFound(err) {
+		if errdefs.IsNotFound(err) {
 			return nil, ErrVolumeNotFound
 		}
 		return nil, fmt.Errorf("%w: %s", ErrDockerUnavailable, err)

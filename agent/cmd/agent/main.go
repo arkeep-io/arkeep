@@ -134,11 +134,17 @@ func run(ctx context.Context, cfg *config) error {
 			logger.Warn("Docker daemon unreachable, Docker volume backup unavailable",
 				zap.Error(pingErr),
 			)
-			dc.Close()
+			if err := dc.Close(); err != nil {
+				logger.Warn("failed to close Docker client", zap.Error(err))
+			}
 		} else {
 			dockerClient = dc
 			dockerAvailable = true
-			defer dockerClient.Close()
+			defer func() {
+				if err := dockerClient.Close(); err != nil {
+					logger.Warn("failed to close Docker client", zap.Error(err))
+				}
+			}()
 			logger.Info("Docker daemon reachable, Docker volume backup available")
 		}
 	}
