@@ -385,9 +385,16 @@ onMounted(fetchAll)
                         <template v-else-if="recentJobs.length === 0">
                             <TableRow>
                                 <TableCell colspan="4">
-                                    <div class="flex flex-col items-center justify-center gap-2 py-10 text-center">
-                                        <BriefcaseBusiness class="w-7 h-7 text-muted-foreground" />
-                                        <p class="text-sm text-muted-foreground">No jobs yet.</p>
+                                    <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
+                                        <div class="p-4 rounded-full bg-muted">
+                                            <BriefcaseBusiness class="w-8 h-8 text-muted-foreground" />
+                                        </div>
+                                        <div>
+                                            <p class="font-medium">No jobs yet</p>
+                                            <p class="mt-1 text-sm text-muted-foreground">
+                                                Jobs will appear here once a policy has been triggered.
+                                            </p>
+                                        </div>
                                     </div>
                                 </TableCell>
                             </TableRow>

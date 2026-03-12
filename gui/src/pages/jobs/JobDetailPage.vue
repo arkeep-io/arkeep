@@ -12,9 +12,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Separator } from '@/components/ui/separator'
 import {
     ArrowLeft,
     RefreshCw,
@@ -236,52 +234,34 @@ onMounted(fetchJob)
         <div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
 
             <!-- Policy -->
-            <Card>
-                <CardHeader class="pb-2">
-                    <CardTitle class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                        Policy
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <Skeleton v-if="loading" class="h-5 w-3/4" />
-                    <div v-else class="flex items-center gap-2 text-sm font-medium">
-                        <FileText class="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span class="truncate">{{ job?.policy_name ?? '—' }}</span>
-                    </div>
-                </CardContent>
-            </Card>
+            <div class="p-4 border rounded-md">
+                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Policy</p>
+                <Skeleton v-if="loading" class="h-5 w-3/4" />
+                <div v-else class="flex items-center gap-2 text-sm font-medium">
+                    <FileText class="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span class="truncate">{{ job?.policy_name ?? '—' }}</span>
+                </div>
+            </div>
 
             <!-- Agent -->
-            <Card>
-                <CardHeader class="pb-2">
-                    <CardTitle class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                        Agent
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <Skeleton v-if="loading" class="h-5 w-3/4" />
-                    <div v-else class="flex items-center gap-2 text-sm font-medium">
-                        <Server class="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span class="truncate">{{ job?.agent_name ?? '—' }}</span>
-                    </div>
-                </CardContent>
-            </Card>
+            <div class="p-4 border rounded-md">
+                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Agent</p>
+                <Skeleton v-if="loading" class="h-5 w-3/4" />
+                <div v-else class="flex items-center gap-2 text-sm font-medium">
+                    <Server class="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span class="truncate">{{ job?.agent_name ?? '—' }}</span>
+                </div>
+            </div>
 
             <!-- Duration -->
-            <Card>
-                <CardHeader class="pb-2">
-                    <CardTitle class="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                        Duration
-                    </CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <Skeleton v-if="loading" class="h-5 w-1/2" />
-                    <div v-else class="flex items-center gap-2 text-sm font-medium font-mono">
-                        <CalendarClock class="w-4 h-4 text-muted-foreground shrink-0" />
-                        <span>{{ formatDuration(job?.started_at, job?.ended_at) }}</span>
-                    </div>
-                </CardContent>
-            </Card>
+            <div class="p-4 border rounded-md">
+                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Duration</p>
+                <Skeleton v-if="loading" class="h-5 w-1/2" />
+                <div v-else class="flex items-center gap-2 text-sm font-medium font-mono">
+                    <CalendarClock class="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span>{{ formatDuration(job?.started_at, job?.ended_at) }}</span>
+                </div>
+            </div>
 
         </div>
 
@@ -297,11 +277,9 @@ onMounted(fetchJob)
             <AlertDescription>{{ job.error }}</AlertDescription>
         </Alert>
 
-        <Separator />
-
         <!-- ── Destinations ────────────────────────────────────────────────── -->
-        <div>
-            <h2 class="text-base font-semibold mb-3">Destinations</h2>
+        <div class="flex flex-col gap-3">
+            <h2 class="text-sm font-semibold">Destinations</h2>
             <div class="border rounded-md">
                 <Table>
                     <TableHeader>
@@ -357,12 +335,10 @@ onMounted(fetchJob)
             </div>
         </div>
 
-        <Separator />
-
         <!-- ── Logs ───────────────────────────────────────────────────────── -->
-        <div>
-            <div class="flex items-center justify-between mb-3">
-                <h2 class="text-base font-semibold">Logs</h2>
+        <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between">
+                <h2 class="text-sm font-semibold">Logs</h2>
                 <!-- Live indicator shown while the job is still running -->
                 <div v-if="isRunning" class="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span class="relative flex h-2 w-2">

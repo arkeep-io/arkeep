@@ -367,7 +367,6 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                     <TableHeader>
                         <TableRow>
                             <TableHead>Status</TableHead>
-                            <TableHead>Trigger</TableHead>
                             <TableHead>Started</TableHead>
                             <TableHead>Finished</TableHead>
                         </TableRow>
@@ -410,14 +409,11 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                                         {{ job.status }}
                                     </Badge>
                                 </TableCell>
-                                <TableCell class="text-sm text-muted-foreground capitalize">
-                                    {{ job.triggered_by }}
-                                </TableCell>
                                 <TableCell class="text-sm text-muted-foreground">
                                     {{ formatDate(job.started_at) }}
                                 </TableCell>
                                 <TableCell class="text-sm text-muted-foreground">
-                                    {{ formatDate(job.finished_at) }}
+                                    {{ formatDate(job.ended_at) }}
                                 </TableCell>
                             </TableRow>
                         </template>

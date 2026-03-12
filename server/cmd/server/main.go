@@ -243,6 +243,7 @@ func run(ctx context.Context, cfg *config) error {
 		Snapshots:     snapshotRepo,
 		Notifications: notificationRepo,
 		OIDCProviders: oidcProviderRepo,
+		Settings:      settingsRepo,
 		Secure:        cfg.secureCookies,
 		Dashboard:     dashboardRepo,
 	})

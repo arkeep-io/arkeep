@@ -34,6 +34,7 @@ type RouterConfig struct {
 	Snapshots     repositories.SnapshotRepository
 	Notifications repositories.NotificationRepository
 	OIDCProviders repositories.OIDCProviderRepository
+	Settings      repositories.SettingsRepository
 	Dashboard     repositories.DashboardRepository
 
 	// Secure controls whether auth cookies are set with the Secure flag.
@@ -72,7 +73,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Logger)
 	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Logger)
+	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
 	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 
@@ -164,6 +165,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 				// OIDC provider configuration
 				r.Get("/settings/oidc", settingsHandler.GetOIDC)
 				r.Put("/settings/oidc", settingsHandler.UpsertOIDC)
+
+				// SMTP configuration
+				r.Get("/settings/smtp", settingsHandler.GetSMTP)
+				r.Put("/settings/smtp", settingsHandler.UpsertSMTP)
 			})
 		})
 	})
