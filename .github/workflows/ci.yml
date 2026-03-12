@@ -77,6 +77,8 @@ jobs:
         with:
           version: latest
           working-directory: ${{ matrix.module }}
+        env:
+          GOTOOLCHAIN: auto
 
   # ─── GUI ────────────────────────────────────────────────────────────────────
   test-gui:
@@ -97,8 +99,5 @@ jobs:
       - name: Install dependencies
         run: cd gui && pnpm install --frozen-lockfile
 
-      - name: Type check
-        run: cd gui && pnpm type-check
-
-      - name: Build
+      - name: Build (includes vue-tsc type check)
         run: cd gui && pnpm build
