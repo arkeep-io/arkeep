@@ -40,14 +40,17 @@ tasks:
     # Linux, macOS, and Windows (cmd.exe) without requiring bash, curl,
     # bzip2, or unzip. The script is idempotent: already-present binaries
     # are skipped. To force a re-download, delete the bin/ directory first.
+    dir: agent
     cmd: go run ./scripts/download_deps.go
 
   deps:download:restic:
     desc: Download restic binary for the current platform (delegates to the shared Go script)
+    dir: agent
     cmd: go run ./scripts/download_deps.go
 
   deps:download:rclone:
     desc: Download rclone binary for the current platform (delegates to the shared Go script)
+    dir: agent
     cmd: go run ./scripts/download_deps.go
 
   # ─── Run (development) ──────────────────────────────────────────────────────

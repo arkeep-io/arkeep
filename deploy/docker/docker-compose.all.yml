@@ -1,0 +1,86 @@
+# deploy/docker/docker-compose.all.yml — All-in-one deployment
+#
+# Runs server + agent on the same machine. Use this when you want to back up
+# the local machine and also host the Arkeep server on it.
+#
+# Quick start:
+#   cd deploy/docker
+#   cp .env.example .env   # fill in required values
+#   docker compose -f docker-compose.all.yml up -d
+#
+# The GUI is available at http://localhost:8080 after startup.
+
+services:
+  server:
+    image: ghcr.io/arkeep-io/arkeep-server:latest
+    container_name: arkeep-server
+    restart: unless-stopped
+    ports:
+      - "${ARKEEP_HTTP_PORT:-8080}:8080"   # REST API + GUI
+      - "${ARKEEP_GRPC_PORT:-9090}:9090"   # gRPC (agents)
+    environment:
+      ARKEEP_SECRET_KEY: "${ARKEEP_SECRET_KEY:?ARKEEP_SECRET_KEY is required — generate with: openssl rand -hex 32}"
+      ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — generate with: openssl rand -hex 24}"
+      ARKEEP_DB_DRIVER: "${ARKEEP_DB_DRIVER:-sqlite}"
+      ARKEEP_DB_DSN: "${ARKEEP_DB_DSN:-/var/lib/arkeep/arkeep.db}"
+      ARKEEP_HTTP_ADDR: ":8080"
+      ARKEEP_GRPC_ADDR: ":9090"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - arkeep-data:/var/lib/arkeep
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  agent:
+    image: ghcr.io/arkeep-io/arkeep-agent:latest
+    container_name: arkeep-agent
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      # In all-in-one mode the agent connects to the server container by
+      # service name — Docker Compose networking resolves "server" automatically.
+      ARKEEP_SERVER_ADDR: "server:9090"
+      ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET}"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - arkeep-agent-data:/var/lib/arkeep-agent
+      # Docker socket — read-only, for automatic container and volume discovery.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the paths you want to back up as read-only.
+      # Examples:
+      #   - /etc:/backup/etc:ro
+      #   - /home:/backup/home:ro
+      #   - /var/data:/backup/data:ro
+
+  # ── Optional: PostgreSQL ────────────────────────────────────────────────────
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: arkeep-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: arkeep
+  #     POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+  #     POSTGRES_DB: arkeep
+  #   volumes:
+  #     - arkeep-postgres-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U arkeep"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+volumes:
+  arkeep-data:
+    driver: local
+  arkeep-agent-data:
+    driver: local
+  # arkeep-postgres-data:
+  #   driver: local

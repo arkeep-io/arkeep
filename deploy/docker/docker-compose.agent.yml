@@ -1,0 +1,35 @@
+# deploy/docker/docker-compose.agent.yml — Agent-only deployment
+#
+# Use this on a machine you want to back up. The agent connects outbound
+# to the Arkeep server via gRPC — no inbound ports are required.
+#
+# Quick start:
+#   cd deploy/docker
+#   cp .env.example .env   # set ARKEEP_SERVER_ADDR and ARKEEP_AGENT_SECRET
+#   docker compose -f docker-compose.agent.yml up -d
+
+services:
+  agent:
+    image: ghcr.io/arkeep-io/arkeep-agent:latest
+    container_name: arkeep-agent
+    restart: unless-stopped
+    environment:
+      ARKEEP_SERVER_ADDR: "${ARKEEP_SERVER_ADDR:?ARKEEP_SERVER_ADDR is required — gRPC address, e.g. arkeep.example.com:9090}"
+      ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — must match the server}"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - arkeep-agent-data:/var/lib/arkeep-agent
+      # Docker socket — read-only, for automatic container and volume discovery.
+      # Remove if you do not need Docker volume backups.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the paths you want to back up as read-only.
+      # The paths must match what you configure in backup policies in the GUI.
+      # Examples:
+      #   - /etc:/backup/etc:ro
+      #   - /home:/backup/home:ro
+      #   - /var/data:/backup/data:ro
+
+volumes:
+  arkeep-agent-data:
+    driver: local

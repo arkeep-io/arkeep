@@ -3,6 +3,7 @@ Description=Arkeep Backup Agent
 Documentation=https://arkeep.io/docs
 After=network-online.target
 Wants=network-online.target
+# If Docker is present, wait for it so volume discovery works on startup.
 After=docker.service
 
 [Service]
@@ -11,13 +12,13 @@ User=arkeep-agent
 Group=arkeep-agent
 
 ExecStart=/usr/local/bin/arkeep-agent \
-    --server=${ARKEEP_SERVER} \
+    --server-addr=${ARKEEP_SERVER_ADDR} \
     --log-level=${ARKEEP_LOG_LEVEL:-info}
 
-# Environment file — copy to /etc/arkeep/agent.env and edit
+# Environment file — copy to /etc/arkeep/agent.env and fill in the values.
 # Minimum required:
-#   ARKEEP_SERVER=your-server:9090
-#   ARKEEP_TOKEN=your-agent-token
+#   ARKEEP_SERVER_ADDR=arkeep.example.com:9090
+#   ARKEEP_AGENT_SECRET=<shared secret — must match the server>
 EnvironmentFile=/etc/arkeep/agent.env
 
 Restart=on-failure
@@ -30,7 +31,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/arkeep-agent
-# Needed for Docker socket access
+# Add the agent user to the docker group for Docker socket access.
+# Required for automatic container and volume discovery.
+# If Docker is not installed you can remove this line.
 SupplementaryGroups=docker
 
 StateDirectory=arkeep-agent

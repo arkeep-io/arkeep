@@ -80,6 +80,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// jwtMgr is used by the Authenticate middleware to validate Bearer tokens.
 	jwtMgr := cfg.AuthService.JWTManager()
 
+	// /health — unauthenticated liveness probe used by Docker healthchecks
+	// and load balancers to verify the server process is running and responsive.
+	// Returns 200 OK with a plain-text body; no database check is performed
+	// so the endpoint remains fast even under load.
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	})
+
 	r.Route("/api/v1", func(r chi.Router) {
 
 		// --- Public routes (no authentication required) ---

@@ -34,7 +34,7 @@ import (
 const (
 	resticVersion = "0.18.1"
 	rcloneVersion = "1.73.1"
-	binDir        = "agent/internal/restic/bin"
+	binDir        = "internal/restic/bin"
 )
 
 func main() {
