@@ -13,8 +13,7 @@ COPY go.work go.work.sum* ./
 COPY shared/  ./shared/
 COPY agent/   ./agent/
 
-# Run from agent/ — binDir in the script is "internal/restic/bin" (relative).
-# GOWORK=off: server/ is not in the build context so go.work cannot be satisfied.
+# Run from /src/agent with GOWORK=off — server/ is not in the build context.
 WORKDIR /src/agent
 RUN GOWORK=off go run ./scripts/download_deps.go
 
@@ -31,13 +30,14 @@ COPY agent/   ./agent/
 
 COPY --from=downloader /src/agent/internal/restic/bin/ ./agent/internal/restic/bin/
 
-# Download agent dependencies with GOWORK=off — server/ is not present.
+# All Go commands run from /src/agent with GOWORK=off.
+# server/ is not present in the build context so go.work cannot be satisfied.
+# The replace directive in agent/go.mod (../shared) resolves to /src/shared
+# which is present, so the build works correctly without the workspace.
 WORKDIR /src/agent
+
 RUN GOWORK=off go mod download
 
-# Build with GOWORK=off for the same reason. The shared/ replace directive
-# in agent/go.mod points to ../shared which is present in the build context.
-WORKDIR /src
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
@@ -45,7 +45,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
     go build \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
     -o /out/arkeep-agent \
-    ./agent/cmd/agent
+    ./cmd/agent
 
 # ─── Stage 3: runtime ─────────────────────────────────────────────────────────
 FROM alpine:3.21
