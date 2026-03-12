@@ -18,13 +18,11 @@ before:
   hooks:
     # Build the GUI and embed it into the server before compiling Go binaries.
     # The server embeds the GUI dist/ directory via go:embed at build time.
-    - cmd: sh -c "cd gui && pnpm install --frozen-lockfile && pnpm build"
-      output: true
+    - sh -c "cd gui && pnpm install --frozen-lockfile && pnpm build"
 
     # Download restic and rclone binaries for all supported platforms.
     # These are embedded into the agent binary via go:embed.
-    - cmd: sh -c "cd agent && go run ./scripts/download_deps.go --all-platforms"
-      output: true
+    - sh -c "cd agent && go run ./scripts/download_deps.go --all-platforms"
 
 # ─── Binaries ─────────────────────────────────────────────────────────────────
 
