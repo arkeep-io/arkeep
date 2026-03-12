@@ -73,7 +73,7 @@ jobs:
         run: cd agent && go run ./scripts/download_deps.go
 
       - name: Lint ${{ matrix.module }}
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
           working-directory: ${{ matrix.module }}
