@@ -12,6 +12,7 @@ import {
   type RouteRecordRaw,
 } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useSetupStore } from '@/stores/setup'
 
 // ─── Route definitions ────────────────────────────────────────────────────────
 
@@ -21,6 +22,12 @@ const routes: RouteRecordRaw[] = [
     path: '/login',
     name: 'login',
     component: () => import('@/pages/auth/LoginPage.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/setup',
+    name: 'setup',
+    component: () => import('@/pages/auth/SetupPage.vue'),
     meta: { public: true },
   },
 
@@ -184,6 +191,21 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
+  const setup = useSetupStore()
+
+  // Check setup status first — if no admin user exists yet, every navigation
+  // lands on /setup. This runs once per session; subsequent calls return the
+  // cached value immediately without a network round-trip.
+  const setupCompleted = await setup.fetchStatus()
+
+  if (!setupCompleted) {
+    // Allow /setup itself through; redirect everything else.
+    if (to.name !== 'setup') return { name: 'setup' }
+    return
+  }
+
+  // Setup is done — /setup is no longer accessible.
+  if (to.name === 'setup') return { name: 'login' }
 
   // Wait for the initial silent refresh to complete before making any
   // allow/redirect decision. This prevents a flash-redirect to /login on

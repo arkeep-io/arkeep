@@ -301,15 +301,8 @@ and backend simultaneously with hot reload on both sides.
 
 **First login:**
 
-Create an admin user with the seed command:
-
-```bash
-ARKEEP_SECRET_KEY=your-key go run ./server/cmd/seed \
-  --email admin@example.com \
-  --password changeme \
-  --name "Admin" \
-  --role admin
-```
+Open `http://localhost:8080` in your browser. On first access you will be
+redirected to the setup page where you can create the initial admin account.
 
 ### Project Structure
 
@@ -326,7 +319,6 @@ arkeep/
 │       └── metrics/            # Host metrics (CPU, RAM, disk) via gopsutil
 ├── server/                     # Server binary
 │   ├── cmd/server/             # Entry point
-│   ├── cmd/seed/               # One-shot user creation utility
 │   └── internal/
 │       ├── api/                # Chi router, HTTP handlers, middleware
 │       ├── auth/               # JWT (RS256), local auth, OIDC

@@ -133,11 +133,3 @@ tasks:
       - cmd: cmd /c "if exist bin rmdir /s /q bin"
         ignore_error: true
         platforms: [windows]
-
-  # ─── Seed ──────────────────────────────────────────────────────────────────
-  seed:
-    desc: Create a test admin user in the development database
-    dir: server
-    cmd: go run ./cmd/seed --email admin@test.com --password secret --name "Admin" --role admin
-    env:
-      ARKEEP_SECRET_KEY: dev-secret-key-00000000000000000

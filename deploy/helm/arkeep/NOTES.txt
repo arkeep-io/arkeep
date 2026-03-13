@@ -17,13 +17,14 @@ Arkeep has been deployed successfully.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 FIRST LOGIN
-  Create an admin user with the seed command:
+  On first access, Arkeep will redirect you to the setup page where you can
+  create the initial admin account directly from the browser.
 
-  kubectl exec -it deploy/{{ include "arkeep.fullname" . }} -n {{ .Release.Namespace }} -- \
-    arkeep-server seed \
-      --email admin@example.com \
-      --password changeme \
-      --role admin
+  {{- if .Values.ingress.enabled }}
+  Open https://{{ (first .Values.ingress.hosts).host }}/setup
+  {{- else }}
+  Open http://localhost:8080/setup (after port-forwarding above)
+  {{- end }}
 
 AGENT CONNECTION
   Agents connect to the gRPC port ({{ .Values.service.grpcPort }}).

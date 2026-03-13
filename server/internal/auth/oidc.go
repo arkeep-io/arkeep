@@ -159,6 +159,14 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, ErrUserDisabled
 	}
 
+	// Update LastLoginAt to track the most recent successful OIDC login.
+	// Non-fatal: a failure here should not block the login itself.
+	now := time.Now()
+	user.LastLoginAt = &now
+	if err := p.userRepo.Update(ctx, user); err != nil {
+		_ = err
+	}
+
 	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)
 }
 

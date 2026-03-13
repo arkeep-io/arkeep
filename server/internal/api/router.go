@@ -26,6 +26,7 @@ type RouterConfig struct {
 	Hub          *websocket.Hub
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
+	// Users is also needed by the public setup handler (no auth middleware).
 	Users         repositories.UserRepository
 	Agents        repositories.AgentRepository
 	Destinations  repositories.DestinationRepository
@@ -65,6 +66,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	r.Use(middleware.Recoverer)
 
 	// --- Initialize handlers ---
+	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
 	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
 	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Logger)
 	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Logger)
@@ -100,6 +102,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			// OIDC flow — public because the user is not yet authenticated.
 			r.Get("/auth/oidc/login", authHandler.OIDCLogin)
 			r.Get("/auth/oidc/callback", authHandler.OIDCCallback)
+
+			// Setup — public because no users exist yet when these are called.
+			// GetStatus is a lightweight check (COUNT query) safe to call on
+			// every app load. Complete is self-sealing: it returns 409 once any
+			// user exists, so it cannot be used as a backdoor after first run.
+			r.Get("/setup/status", setupHandler.GetStatus)
+			r.Post("/setup/complete", setupHandler.Complete)
 
 			// WebSocket — authenticated via JWT query parameter (browsers cannot
 			// set Authorization headers on native WebSocket connections).
