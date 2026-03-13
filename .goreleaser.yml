@@ -232,7 +232,6 @@ changelog:
   use: github
   sort: asc
   # Show only the commit hash and message — no author name or email.
-  abbrev_length: 7
   format: "{{.SHA}}: {{.Message}}"
   groups:
     - title: "New Features"
