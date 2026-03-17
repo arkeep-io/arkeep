@@ -24,7 +24,6 @@ This document covers everything you need to get your changes merged.
   idea or bug is already being tracked.
 - For non-trivial changes, open an issue first to discuss the approach before writing code.
   This avoids wasted effort if the direction doesn't fit the project.
-- Enterprise features are not open to external contributions.
 
 ---
 
@@ -187,17 +186,11 @@ task test:gui      # run GUI tests only
 
 **Do not open a public issue for security vulnerabilities.**
 
-If you discover a security vulnerability, please email **crotti.business@gmail.com** with:
-- A description of the vulnerability
-- Steps to reproduce
-- Potential impact
-
-You will receive a response within 48 hours. We ask that you give us reasonable time to
-patch the issue before any public disclosure.
+Please report security issues by email — see [SECURITY.md](SECURITY.md) for details.
 
 ---
 
 ## License
 
 By contributing to Arkeep you agree that your contributions will be licensed under the
-[AGPLv3 license](LICENSE) that covers the project.
+[Apache License 2.0](LICENSE) that covers the project.

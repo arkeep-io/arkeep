@@ -4,7 +4,7 @@
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Please email **crotti.business@gmail.com** with the following information:
+Please email **hello@arkeep.io** with the following information:
 
 - A clear description of the vulnerability
 - Steps to reproduce the issue

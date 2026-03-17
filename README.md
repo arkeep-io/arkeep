@@ -1,10 +1,11 @@
 # Arkeep
 
-> Your infrastructure's ark — centralized backup management for self-hosted infrastructure.
+> Your infra's Ark — back up everything, keep it yours.
 
-Arkeep is an open-core backup management tool with a server/agent architecture.
+Arkeep is an open-source backup management tool with a server/agent architecture.
 Deploy the server once, install lightweight agents on every machine you want to back up,
-and manage everything from a single web interface.
+and manage everything from a single web interface — built on top of
+[Restic](https://restic.net/) and [Rclone](https://rclone.org/).
 
 > ⚠️ Arkeep is currently in active development and not yet ready for production use.
 > Star the repository to follow progress.
@@ -37,6 +38,10 @@ and manage everything from a single web interface.
 ---
 
 ## Why Arkeep?
+
+Managing backups across multiple machines means juggling separate Restic configs, cron jobs,
+and shell scripts on every host. There is no central view, no unified alerting, and no easy
+way to verify everything ran successfully. Arkeep fixes this.
 
 - **Centralized management** — one dashboard for all your servers, no more managing backup configs machine by machine
 - **Docker-aware** — automatically discovers containers and volumes, adapts when you add or remove services without restarts
@@ -81,22 +86,22 @@ and manage everything from a single web interface.
 
 ## Features
 
-| Feature | Free | Enterprise |
-|---|---|---|
-| Server/agent architecture | ✓ | ✓ |
-| Web GUI (PWA, mobile-first) | ✓ | ✓ |
-| Local auth + OIDC | ✓ | ✓ |
-| Multi-destination (3-2-1) | ✓ | ✓ |
-| Docker volume discovery | ✓ | ✓ |
-| Pre/post hooks (`pg_dump`, etc.) | ✓ | ✓ |
-| Integrity verification | ✓ | ✓ |
-| Restore & restore test | ✓ | ✓ |
-| Retention policies | ✓ | ✓ |
-| Email + webhook notifications | ✓ | ✓ |
-| RBAC with custom roles | — | ✓ |
-| Audit logs (ISO 27001) | — | ✓ |
-| Multi-tenant (MSP) | — | ✓ |
-| Priority support | — | ✓ |
+| Feature | Status |
+|---|---|
+| Server/agent architecture | ✓ |
+| Web GUI (PWA, mobile-first) | ✓ |
+| Local auth + OIDC | ✓ |
+| Multi-destination (3-2-1) | ✓ |
+| Docker volume discovery | ✓ |
+| Pre/post hooks (`pg_dump`, etc.) | ✓ |
+| Integrity verification | ✓ |
+| Retention policies | ✓ |
+| Email + webhook notifications | ✓ |
+| Restore & restore test | 🚧 in progress |
+| Helm chart | 🚧 in progress |
+| Proxmox / VMware integration | 🗓 planned |
+| Bandwidth throttling | 🗓 planned |
+| BYOK encryption key management | 🗓 planned |
 
 ---
 
@@ -410,9 +415,19 @@ Docker Compose on a single node is recommended.
 
 ## Roadmap
 
-- **v1.0** — Production-ready core: all free tier features complete, comprehensive tests, Helm chart
-- **v1.x** — Proxmox and VMware integration (VM and LXC backup)
-- **v2.0** — Bandwidth throttling, BYOK encryption key management
+### v1.0 — Production-ready core
+- [ ] Restore & restore test
+- [ ] Comprehensive test coverage (server + agent + GUI)
+- [ ] Helm chart stable
+- [ ] Full documentation site
+
+### v1.x — Integrations
+- [ ] Proxmox backup (VM and LXC)
+- [ ] VMware vSphere integration
+
+### v2.0 — Advanced features
+- [ ] Bandwidth throttling
+- [ ] BYOK encryption key management
 
 ---
 
@@ -422,5 +437,6 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 ## License
 
-Arkeep core is licensed under [AGPLv3](LICENSE).  
-Enterprise features are available under a commercial license — contact us at crotti.business@gmail.com.
+Arkeep is licensed under the [Apache License 2.0](LICENSE).
+
+Copyright 2025 Filippo Crotti / Arkeep Contributors
