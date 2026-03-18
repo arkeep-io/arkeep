@@ -385,7 +385,7 @@ onMounted(fetchAll)
                         <template v-else-if="recentJobs.length === 0">
                             <TableRow>
                                 <TableCell colspan="4">
-                                    <div class="flex flex-col items-center justify-center gap-3 py-8 text-center">
+                                    <div class="flex flex-col items-center justify-center gap-3 py-7 text-center">
                                         <div class="p-4 rounded-full bg-muted">
                                             <BriefcaseBusiness class="w-8 h-8 text-muted-foreground" />
                                         </div>

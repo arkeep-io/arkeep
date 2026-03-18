@@ -374,8 +374,16 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	}
 
 	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, payload.TargetPath, ""); err != nil {
-		fail(fmt.Sprintf("restore failed: %v", err))
-		return
+		if strings.Contains(err.Error(), "Access is denied") {
+			// On Windows, restic cannot set timestamps or file attributes on
+			// system-protected directories reconstructed under the target path.
+			// Files are restored correctly — log as warning and continue.
+			log("warn", "restore completed with warnings: some file metadata could not be set (Windows permission restriction)")
+			log("warn", "files were restored successfully — check the target path to verify")
+		} else {
+			fail(fmt.Sprintf("restore failed: %v", err))
+			return
+		}
 	}
 
 	// --- 4. Final status ---

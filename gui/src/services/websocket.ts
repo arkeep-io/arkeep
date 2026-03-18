@@ -65,14 +65,26 @@ class ArkeepWebSocketClient {
   // subscribe registers a handler for messages on the given topic.
   // Returns an unsubscribe function.
   subscribe<T = unknown>(topic: string, handler: MessageHandler<T>): () => void {
-    if (!this.subscriptions.has(topic)) {
+    const isNewTopic = !this.subscriptions.has(topic)
+
+    if (isNewTopic) {
       this.subscriptions.set(topic, new Set())
     }
     this.subscriptions.get(topic)!.add(handler as MessageHandler)
 
-    // Auto-connect on first subscription
     if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+      // No active connection: open fresh with all current topics.
       this.destroyed = false
+      this._open()
+    } else if (isNewTopic && this.ws.readyState === WebSocket.OPEN) {
+      // New topic added while already connected: the server only learns about
+      // topics from the URL at connection time, so we must reconnect.
+      // Detach the close handler first to prevent the reconnect scheduler from
+      // firing (we call _open() directly for an immediate reconnect).
+      const stale = this.ws
+      this.ws = null
+      stale.onclose = null
+      stale.close()
       this._open()
     }
 
