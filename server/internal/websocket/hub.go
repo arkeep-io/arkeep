@@ -130,14 +130,33 @@ func (h *Hub) Publish(topic string, msg Message) {
 	h.mu.RUnlock()
 
 	for _, c := range clients {
-		select {
-		case c.send <- msg:
-			// Message queued successfully.
-		default:
-			// Client send buffer is full — it is too slow to keep up.
-			// Disconnect it so it does not stall other subscribers.
-			h.unregister <- c
+		if !trySend(c.send, msg) {
+			// Client send buffer is full or the hub closed its channel during
+			// shutdown. Queue the client for disconnection without blocking —
+			// if the unregister channel is full (hub stopped) we skip silently.
+			select {
+			case h.unregister <- c:
+			default:
+			}
 		}
+	}
+}
+
+// trySend attempts a non-blocking send of msg onto ch.
+// Returns false if the channel is full or already closed (hub shutdown).
+// The recover handles the "send on closed channel" panic that would otherwise
+// occur when Publish races with the hub's ctx.Done() shutdown path.
+func trySend(ch chan Message, msg Message) (sent bool) {
+	defer func() {
+		if recover() != nil {
+			sent = false
+		}
+	}()
+	select {
+	case ch <- msg:
+		return true
+	default:
+		return false
 	}
 }
 

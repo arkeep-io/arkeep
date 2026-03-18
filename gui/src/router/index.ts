@@ -34,12 +34,12 @@ const routes: RouteRecordRaw[] = [
   // OIDC callback — the server handles the actual OAuth exchange and redirects
   // here with the access token. This page reads the token from the URL, stores
   // it, and navigates to the dashboard.
-  /* {
+  {
     path: '/auth/callback',
     name: 'oidc-callback',
-    component: () => import('@/pages/OIDCCallbackPage.vue'),
+    component: () => import('@/pages/auth/OIDCCallbackPage.vue'),
     meta: { public: true },
-  }, */
+  },
 
   // ── Protected shell ─────────────────────────────────────────────────────────
   {

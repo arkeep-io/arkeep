@@ -28,6 +28,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -45,6 +46,7 @@ type Server struct {
 	jobRepo      repositories.JobRepository
 	snapshotRepo repositories.SnapshotRepository
 	hub          *websocket.Hub
+	notifSvc     notification.Service
 	logger       *zap.Logger
 	sharedSecret string // shared secret agents must present in gRPC metadata
 
@@ -65,6 +67,9 @@ type Config struct {
 	// metadata key to authenticate. If empty, a warning is logged and
 	// authentication is disabled (development mode only — always set in production).
 	SharedSecret string
+	// NotifService is used to send notifications when jobs complete or agents
+	// go offline. Optional — if nil, notifications are silently skipped.
+	NotifService notification.Service
 }
 
 // New creates a new Server instance with the given dependencies.
@@ -83,6 +88,7 @@ func New(
 		jobRepo:           jobRepo,
 		snapshotRepo:      snapshotRepo,
 		hub:               hub,
+		notifSvc:          cfg.NotifService,
 		logger:            logger.Named("grpc"),
 		sharedSecret:      cfg.SharedSecret,
 		capabilitiesCache: make(map[string]*proto.AgentCapabilities),
@@ -341,6 +347,16 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		)
 	}
 
+	if s.notifSvc != nil {
+		go func() {
+			notifCtx, notifCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer notifCancel()
+			if err := s.notifSvc.NotifyAgentOffline(notifCtx, agentID, agent.Hostname); err != nil {
+				s.logger.Warn("failed to send agent-offline notification", zap.Error(err))
+			}
+		}()
+	}
+
 	s.logger.Info("StreamJobs stream closed", zap.String("agent_id", req.AgentId))
 	return nil
 }
@@ -386,6 +402,12 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 		},
 	})
 
+	// Fire notifications for terminal job states. Non-fatal: run in a
+	// goroutine so a slow notification path never delays the gRPC response.
+	if s.notifSvc != nil && (req.Status == proto.JobStatus_JOB_STATUS_COMPLETED || req.Status == proto.JobStatus_JOB_STATUS_FAILED) {
+		go s.notifyJobTerminal(jobID, req.Status, req.Message)
+	}
+
 	s.logger.Info("job status updated",
 		zap.String("job_id", req.JobId),
 		zap.String("agent_id", req.AgentId),
@@ -393,6 +415,33 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 	)
 
 	return &proto.JobStatusResponse{Ok: true}, nil
+}
+
+// notifyJobTerminal fetches the job details and fires the appropriate
+// notification. Runs in a goroutine — errors are logged, never propagated.
+func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	job, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
+	if err != nil {
+		s.logger.Warn("notifyJobTerminal: could not fetch job details",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
+	switch st {
+	case proto.JobStatus_JOB_STATUS_COMPLETED:
+		if err := s.notifSvc.NotifyJobSucceeded(ctx, jobID, job.PolicyID, job.PolicyName); err != nil {
+			s.logger.Warn("failed to send job-succeeded notification", zap.Error(err))
+		}
+	case proto.JobStatus_JOB_STATUS_FAILED:
+		if err := s.notifSvc.NotifyJobFailed(ctx, jobID, job.PolicyID, job.PolicyName, errMsg); err != nil {
+			s.logger.Warn("failed to send job-failed notification", zap.Error(err))
+		}
+	}
 }
 
 // StreamLogs handles the client-streaming RPC for job log ingestion.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -122,10 +123,12 @@ func run(ctx context.Context, cfg *config) error {
 	// --- Encryption ---
 	// InitEncryption must be called before opening the database so that
 	// EncryptedString fields can encrypt/decrypt transparently on read/write.
-	// The secret key is padded or truncated to exactly 32 bytes (AES-256).
-	keyBytes := make([]byte, 32)
-	copy(keyBytes, []byte(cfg.secretKey))
-	if err := db.InitEncryption(keyBytes); err != nil {
+	// The key is derived via SHA-256 so that the full 256 bits of AES-256 are
+	// always used regardless of the length or content of the secret key string.
+	// A short secret (e.g. 8 chars) would otherwise leave most of the key as
+	// zero bytes, dramatically reducing the effective brute-force resistance.
+	keySum := sha256.Sum256([]byte(cfg.secretKey))
+	if err := db.InitEncryption(keySum[:]); err != nil {
 		return fmt.Errorf("failed to initialize encryption: %w", err)
 	}
 
@@ -171,8 +174,8 @@ func run(ctx context.Context, cfg *config) error {
 		return fmt.Errorf("failed to initialize JWT manager: %w", err)
 	}
 
-	localProvider := auth.NewLocalAuthProvider(userRepo, refreshTokenRepo, jwtManager)
-	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager)
+	localProvider := auth.NewLocalAuthProvider(userRepo, refreshTokenRepo, jwtManager, logger)
+	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager, logger)
 	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager)
 
 	// --- Agent Manager ---
@@ -209,13 +212,13 @@ func run(ctx context.Context, cfg *config) error {
 		Hub:          wsHub,
 		Logger:       logger,
 	})
-	_ = notifService // will be passed to scheduler and agent manager in upcoming steps
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
 		grpcserver.Config{
-			ListenAddr: cfg.grpcAddr,
+			ListenAddr:   cfg.grpcAddr,
 			SharedSecret: cfg.agentSecret,
+			NotifService: notifService,
 		},
 		agentMgr,
 		agentRepo,
@@ -289,9 +292,16 @@ func buildJWTManager(dataDir string, logger *zap.Logger) (*auth.JWTManager, erro
 	privPath := filepath.Join(dataDir, "jwt_private.pem")
 	pubPath := filepath.Join(dataDir, "jwt_public.pem")
 
-	if _, err := os.Stat(privPath); err == nil {
+	_, err := os.Stat(privPath)
+	if err == nil {
 		logger.Info("loading JWT keys from disk", zap.String("private", privPath))
 		return auth.NewJWTManagerFromFiles(privPath, pubPath, "arkeep-server")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		// Stat failed for a reason other than "file not found" (e.g. permission
+		// denied). Falling back to ephemeral keys here would silently discard
+		// persistent tokens, so treat it as a hard error instead.
+		return nil, fmt.Errorf("JWT key file inaccessible (%s): %w", privPath, err)
 	}
 
 	logger.Warn("JWT key files not found — using ephemeral in-memory keys (tokens will be invalidated on restart)",

@@ -104,7 +104,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(dst); err != nil {
-		ErrBadRequest(w, "invalid request body: "+err.Error())
+		// Return a generic message to avoid leaking internal field names or
+		// struct details via json.Decoder error strings (e.g. "unknown field X").
+		ErrBadRequest(w, "request body is invalid or contains unrecognised fields")
 		return false
 	}
 	return true

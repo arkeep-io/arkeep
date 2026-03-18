@@ -108,3 +108,21 @@ func claimsFromCtx(ctx context.Context) *auth.Claims {
 	claims, _ := ctx.Value(contextKeyUser).(*auth.Claims)
 	return claims
 }
+
+// SecurityHeaders adds defensive HTTP response headers to every request.
+// These headers are a low-cost defense-in-depth measure against common
+// web attacks (clickjacking, MIME sniffing, information leakage, etc.).
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		// Prevent MIME-type sniffing — browsers must respect Content-Type.
+		h.Set("X-Content-Type-Options", "nosniff")
+		// Disallow embedding in iframes to prevent clickjacking.
+		h.Set("X-Frame-Options", "DENY")
+		// Limit referrer information sent to third-party origins.
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Restrict browser features not needed by this app.
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}

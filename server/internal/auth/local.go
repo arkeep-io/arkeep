@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/argon2"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -47,6 +49,7 @@ type LocalAuthProvider struct {
 	userRepo   repositories.UserRepository
 	tokenRepo  repositories.RefreshTokenRepository
 	jwtManager *JWTManager
+	logger     *zap.Logger
 }
 
 // NewLocalAuthProvider creates a LocalAuthProvider with the given dependencies.
@@ -54,11 +57,13 @@ func NewLocalAuthProvider(
 	userRepo repositories.UserRepository,
 	tokenRepo repositories.RefreshTokenRepository,
 	jwtManager *JWTManager,
+	logger *zap.Logger,
 ) *LocalAuthProvider {
 	return &LocalAuthProvider{
 		userRepo:   userRepo,
 		tokenRepo:  tokenRepo,
 		jwtManager: jwtManager,
+		logger:     logger.Named("local_auth"),
 	}
 }
 
@@ -94,7 +99,10 @@ func (p *LocalAuthProvider) Login(ctx context.Context, req LoginRequest) (*Token
 	now := time.Now()
 	user.LastLoginAt = &now
 	if err := p.userRepo.Update(ctx, user); err != nil {
-		_ = err
+		p.logger.Warn("failed to update LastLoginAt on login",
+			zap.String("user_id", user.ID.String()),
+			zap.Error(err),
+		)
 	}
 
 	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)
@@ -262,6 +270,8 @@ func constantTimeEqual(a, b []byte) bool {
 }
 
 // isNotFound checks for the repository ErrNotFound sentinel error.
+// Uses errors.Is so that wrapped errors (fmt.Errorf("...: %w", ErrNotFound))
+// are also handled correctly, unlike a string comparison.
 func isNotFound(err error) bool {
-	return err != nil && err.Error() == repositories.ErrNotFound.Error()
+	return errors.Is(err, repositories.ErrNotFound)
 }

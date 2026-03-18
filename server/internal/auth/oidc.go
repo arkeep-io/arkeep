@@ -9,6 +9,7 @@ import (
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -37,6 +38,7 @@ type OIDCAuthProvider struct {
 	userRepo     repositories.UserRepository
 	tokenRepo    repositories.RefreshTokenRepository
 	jwtManager   *JWTManager
+	logger       *zap.Logger
 }
 
 // NewOIDCAuthProvider creates an OIDCAuthProvider with the given dependencies.
@@ -45,12 +47,14 @@ func NewOIDCAuthProvider(
 	userRepo repositories.UserRepository,
 	tokenRepo repositories.RefreshTokenRepository,
 	jwtManager *JWTManager,
+	logger *zap.Logger,
 ) *OIDCAuthProvider {
 	return &OIDCAuthProvider{
 		providerRepo: providerRepo,
 		userRepo:     userRepo,
 		tokenRepo:    tokenRepo,
 		jwtManager:   jwtManager,
+		logger:       logger.Named("oidc_auth"),
 	}
 }
 
@@ -164,7 +168,10 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 	now := time.Now()
 	user.LastLoginAt = &now
 	if err := p.userRepo.Update(ctx, user); err != nil {
-		_ = err
+		p.logger.Warn("failed to update LastLoginAt on OIDC login",
+			zap.String("user_id", user.ID.String()),
+			zap.Error(err),
+		)
 	}
 
 	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)

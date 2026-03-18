@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -69,6 +70,10 @@ type Client struct {
 
 	// logger is a scoped zap logger with the remote address pre-filled.
 	logger *zap.Logger
+
+	// closeOnce ensures conn.Close is only called once even though both
+	// readPump and writePump defer a close.
+	closeOnce sync.Once
 }
 
 // NewClient creates a Client and upgrades the HTTP connection to WebSocket.
@@ -114,12 +119,21 @@ func (c *Client) Run() {
 //
 // When the loop exits (connection closed or error), the client is unregistered
 // from the hub so resources are freed.
-func (c *Client) readPump() {
-	defer func() {
-		c.hub.Unsubscribe(c)
+// closeConn closes the underlying WebSocket connection exactly once.
+// Both readPump and writePump defer this; sync.Once prevents a spurious
+// "use of closed network connection" warning on the second call.
+func (c *Client) closeConn() {
+	c.closeOnce.Do(func() {
 		if err := c.conn.Close(); err != nil {
 			c.logger.Warn("ws: failed to close connection", zap.Error(err))
 		}
+	})
+}
+
+func (c *Client) readPump() {
+	defer func() {
+		c.hub.Unsubscribe(c)
+		c.closeConn()
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
@@ -161,9 +175,7 @@ func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		if err := c.conn.Close(); err != nil {
-			c.logger.Warn("ws: failed to close connection", zap.Error(err))
-		}
+		c.closeConn()
 	}()
 
 	for {

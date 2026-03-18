@@ -65,6 +65,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// instead of crashing the server.
 	r.Use(middleware.Recoverer)
 
+	// SecurityHeaders adds defensive HTTP headers to every response.
+	r.Use(SecurityHeaders)
+
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
 	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)

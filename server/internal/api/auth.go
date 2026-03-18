@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -234,10 +235,13 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	h.setRefreshCookie(w, pair.RefreshToken, pair.RefreshTokenExpiresAt)
 
-	// Redirect to the frontend with the access token as a query parameter.
-	// The frontend must immediately store it in memory and remove it from
-	// the URL to avoid leaking via the browser history or referrer headers.
-	http.Redirect(w, r, "/?token="+pair.AccessToken, http.StatusFound)
+	// Redirect to the frontend OIDC callback page with the access token and
+	// its TTL as query parameters. The page stores the token in memory and
+	// immediately replaces the URL to prevent token leakage via browser
+	// history or Referer headers.
+	expiresIn := int(time.Until(pair.AccessTokenExpiresAt).Seconds())
+	redirectURL := fmt.Sprintf("/auth/callback?token=%s&expires_in=%d", pair.AccessToken, expiresIn)
+	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
 // -----------------------------------------------------------------------------

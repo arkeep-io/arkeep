@@ -77,7 +77,14 @@ class ArkeepWebSocketClient {
     }
 
     return () => {
-      this.subscriptions.get(topic)?.delete(handler as MessageHandler)
+      const handlers = this.subscriptions.get(topic)
+      if (!handlers) return
+      handlers.delete(handler as MessageHandler)
+      // Remove the topic entry entirely when the last subscriber leaves so
+      // it is not included in future WebSocket connection URLs.
+      if (handlers.size === 0) {
+        this.subscriptions.delete(topic)
+      }
     }
   }
 
