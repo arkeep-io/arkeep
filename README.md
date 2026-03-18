@@ -97,8 +97,8 @@ way to verify everything ran successfully. Arkeep fixes this.
 | Integrity verification | ✓ |
 | Retention policies | ✓ |
 | Email + webhook notifications | ✓ |
-| Restore & restore test | 🚧 in progress |
-| Helm chart | 🚧 in progress |
+| Restore & restore test | ✓ |
+| Helm chart | ✓ |
 | Proxmox / VMware integration | 🗓 planned |
 | Bandwidth throttling | 🗓 planned |
 | BYOK encryption key management | 🗓 planned |
