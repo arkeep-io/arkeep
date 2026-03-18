@@ -4,6 +4,10 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "arkeep.fullname" . }}
   namespace: {{ .Release.Namespace }}
+  annotations:
+    # Prevent accidental data loss: keep the PVC even on `helm uninstall`.
+    # Delete manually only when you are sure the data is no longer needed.
+    helm.sh/resource-policy: keep
   labels:
     {{- include "arkeep.labels" . | nindent 4 }}
 spec:
