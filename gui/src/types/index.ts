@@ -272,10 +272,11 @@ export interface WebhookSettings {
 // OIDCProvider maps to the oidc_providers table.
 export interface OIDCProvider {
   id: string
-  issuer_url: string
+  name: string
+  issuer: string
   client_id: string
-  client_secret: string // masked on read
-  display_name: string
+  redirect_url: string
+  scopes: string
   enabled: boolean
   created_at: string
   updated_at: string

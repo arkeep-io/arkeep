@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
     Field,
     FieldError,
@@ -12,16 +13,15 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
+import {
+    Tabs,
+    TabsContent,
+    TabsList,
+    TabsTrigger,
+} from '@/components/ui/tabs'
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import type { ApiResponse, SMTPSettings, OIDCProvider } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
-
-// Active tab — 'oidc' is shown first as it controls the login flow.
-const activeTab = ref<'oidc' | 'smtp'>('oidc')
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -33,8 +33,6 @@ const loading = ref(false)
 // OIDC — form state
 // ---------------------------------------------------------------------------
 
-// The API returns 404 when no OIDC provider is configured yet. We track
-// whether one exists so the form can show a "not configured" hint.
 const oidcExists = ref(false)
 const oidcSubmitting = ref(false)
 const oidcSubmitError = ref<string | null>(null)
@@ -50,7 +48,6 @@ const oidcEnabled = ref(true)
 
 const oidcErrors = ref<Record<string, string>>({})
 
-// Zod schema for OIDC form validation.
 const oidcSchema = z.object({
     name: z.string().min(1, 'Name is required'),
     issuer: z.string().url('Issuer must be a valid URL'),
@@ -63,8 +60,6 @@ const oidcSchema = z.object({
 // SMTP — form state
 // ---------------------------------------------------------------------------
 
-// smtpExists tracks whether SMTP settings are already stored in the DB.
-// 404 on GET means unconfigured; we show a hint but still allow saving.
 const smtpExists = ref(false)
 const smtpSubmitting = ref(false)
 const smtpSubmitError = ref<string | null>(null)
@@ -79,11 +74,10 @@ const smtpTLS = ref(false)
 
 const smtpErrors = ref<Record<string, string>>({})
 
-// Zod schema for SMTP form validation.
 const smtpSchema = z.object({
     host: z.string().min(1, 'Host is required'),
     port: z
-        .number('Port must be a number')
+        .number()
         .int()
         .min(1, 'Port must be between 1 and 65535')
         .max(65535, 'Port must be between 1 and 65535'),
@@ -92,7 +86,7 @@ const smtpSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
-// Data fetching — load both configs in parallel on mount
+// Data fetching
 // ---------------------------------------------------------------------------
 
 async function fetchOIDC() {
@@ -100,21 +94,17 @@ async function fetchOIDC() {
         const res = await api<ApiResponse<OIDCProvider>>('/api/v1/settings/oidc')
         const p = res.data
         oidcExists.value = true
-        oidcName.value = p.display_name ?? ''
-        oidcIssuer.value = p.issuer_url ?? ''
+        oidcName.value = p.name ?? ''
+        oidcIssuer.value = p.issuer ?? ''
         oidcClientId.value = p.client_id ?? ''
-        // client_secret is always masked — leave blank so the user can re-enter
-        oidcClientSecret.value = ''
-        // redirect_url is not in the OIDCProvider type; populated from issuer
-        oidcRedirectUrl.value = (p as any).redirect_url ?? ''
-        oidcScopes.value = (p as any).scopes ?? 'openid email profile'
+        oidcClientSecret.value = '' // always write-only — user must re-enter to change
+        oidcRedirectUrl.value = p.redirect_url ?? ''
+        oidcScopes.value = p.scopes || 'openid email profile'
         oidcEnabled.value = p.enabled ?? true
     } catch (e: any) {
         if (e?.status === 404 || e?.response?.status === 404) {
-            // Not configured yet — form stays empty, user can create from scratch.
             oidcExists.value = false
         }
-        // Other errors are silently ignored at load time — the form is still usable.
     }
 }
 
@@ -126,7 +116,7 @@ async function fetchSMTP() {
         smtpHost.value = s.host ?? ''
         smtpPort.value = s.port ?? 587
         smtpUsername.value = s.username ?? ''
-        smtpPassword.value = '' // always masked on read — user must re-enter
+        smtpPassword.value = '' // always write-only — user must re-enter to change
         smtpFrom.value = s.from ?? ''
         smtpTLS.value = s.tls ?? false
     } catch (e: any) {
@@ -188,7 +178,6 @@ async function submitOIDC() {
         })
         oidcExists.value = true
         oidcSuccess.value = true
-        // Clear the secret field — always write-only
         oidcClientSecret.value = ''
         setTimeout(() => { oidcSuccess.value = false }, 3000)
     } catch (e: any) {
@@ -253,7 +242,7 @@ async function submitSMTP() {
 <template>
     <div class="flex flex-col gap-6 p-6">
 
-        <!-- Header -->
+        <!-- Page header -->
         <div class="flex items-center justify-between">
             <div>
                 <h1 class="text-2xl font-semibold tracking-tight">Settings</h1>
@@ -266,36 +255,15 @@ async function submitSMTP() {
             </Button>
         </div>
 
-        <!-- 2-column layout: nav sidebar + form content -->
-        <div class="flex gap-8">
+        <Tabs default-value="oidc" class="w-full">
+            <TabsList class="w-fit">
+                <TabsTrigger value="oidc">OpenID Connect</TabsTrigger>
+                <TabsTrigger value="smtp">SMTP</TabsTrigger>
+            </TabsList>
 
-            <!-- ── Left nav ───────────────────────────────────────────────────────── -->
-            <nav class="w-44 shrink-0">
-                <ul class="flex flex-col gap-1">
-                    <li>
-                        <button class="w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors" :class="activeTab === 'oidc'
-                            ? 'bg-accent text-accent-foreground font-medium'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'"
-                            @click="activeTab = 'oidc'">
-                            OpenID Connect
-                        </button>
-                    </li>
-                    <li>
-                        <button class="w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors" :class="activeTab === 'smtp'
-                            ? 'bg-accent text-accent-foreground font-medium'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'"
-                            @click="activeTab = 'smtp'">
-                            SMTP
-                        </button>
-                    </li>
-                </ul>
-            </nav>
-
-            <!-- ── Right content ─────────────────────────────────────────────────── -->
-            <div class="flex-1 min-w-0">
-
-                <!-- ── OIDC section ─────────────────────────────────────────────────── -->
-                <div v-if="activeTab === 'oidc'" class="flex flex-col gap-6 max-w-xl">
+            <!-- ── OIDC tab ──────────────────────────────────────────────────── -->
+            <TabsContent value="oidc" class="mt-6">
+                <div class="flex flex-col gap-6 max-w-xl">
 
                     <div>
                         <h2 class="text-sm font-semibold">OpenID Connect</h2>
@@ -303,12 +271,27 @@ async function submitSMTP() {
                             Allow users to log in with an external identity provider (Keycloak, Okta,
                             Google Workspace, etc.). Only one provider is supported at a time.
                         </p>
-                        <p v-if="!oidcExists" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                        <p v-if="!loading && !oidcExists"
+                            class="mt-2 text-xs text-amber-600 dark:text-amber-400">
                             No OIDC provider configured yet. Fill in the form below to enable SSO.
                         </p>
                     </div>
 
-                    <form novalidate @submit.prevent="submitOIDC">
+                    <!-- Skeleton while loading -->
+                    <template v-if="loading">
+                        <div class="flex flex-col gap-4">
+                            <Skeleton class="h-16 w-full rounded-md" />
+                            <Skeleton class="h-16 w-full rounded-md" />
+                            <div class="grid grid-cols-2 gap-3">
+                                <Skeleton class="h-16 rounded-md" />
+                                <Skeleton class="h-16 rounded-md" />
+                            </div>
+                            <Skeleton class="h-16 w-full rounded-md" />
+                            <Skeleton class="h-16 w-full rounded-md" />
+                        </div>
+                    </template>
+
+                    <form v-else novalidate @submit.prevent="submitOIDC">
                         <FieldGroup class="flex flex-col gap-4">
 
                             <Transition enter-active-class="transition-all duration-200"
@@ -341,8 +324,8 @@ async function submitSMTP() {
 
                             <Field>
                                 <FieldLabel for="oidc-issuer">Issuer URL</FieldLabel>
-                                <Input id="oidc-issuer" v-model="oidcIssuer" placeholder="https://accounts.google.com"
-                                    autocomplete="off"
+                                <Input id="oidc-issuer" v-model="oidcIssuer"
+                                    placeholder="https://accounts.google.com" autocomplete="off"
                                     :class="oidcErrors.issuer ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                 <p class="text-xs text-muted-foreground">
                                     The base URL of the identity provider. Must expose a
@@ -361,17 +344,18 @@ async function submitSMTP() {
                                 <Field>
                                     <FieldLabel for="oidc-client-secret">Client Secret</FieldLabel>
                                     <Input id="oidc-client-secret" v-model="oidcClientSecret" type="password"
-                                        :placeholder="oidcExists ? '(unchanged)' : ''" autocomplete="new-password"
+                                        :placeholder="oidcExists ? '(unchanged)' : ''"
+                                        autocomplete="new-password"
                                         :class="oidcErrors.client_secret ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                                    <FieldError v-if="oidcErrors.client_secret">{{ oidcErrors.client_secret }}
-                                    </FieldError>
+                                    <FieldError v-if="oidcErrors.client_secret">{{ oidcErrors.client_secret }}</FieldError>
                                 </Field>
                             </div>
 
                             <Field>
                                 <FieldLabel for="oidc-redirect">Redirect URL</FieldLabel>
                                 <Input id="oidc-redirect" v-model="oidcRedirectUrl"
-                                    placeholder="https://arkeep.example.com/auth/callback" autocomplete="off"
+                                    placeholder="https://arkeep.example.com/auth/callback"
+                                    autocomplete="off"
                                     :class="oidcErrors.redirect_url ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                 <p class="text-xs text-muted-foreground">
                                     Must match the redirect URI registered in your identity provider.
@@ -383,11 +367,11 @@ async function submitSMTP() {
                                 <FieldLabel for="oidc-scopes">
                                     Scopes <span class="text-muted-foreground font-normal">(optional)</span>
                                 </FieldLabel>
-                                <Input id="oidc-scopes" v-model="oidcScopes" placeholder="openid email profile"
-                                    autocomplete="off" />
+                                <Input id="oidc-scopes" v-model="oidcScopes"
+                                    placeholder="openid email profile" autocomplete="off" />
                                 <p class="text-xs text-muted-foreground">
-                                    Space-separated list. Defaults to <span class="font-mono">openid email
-                                        profile</span>.
+                                    Space-separated list. Defaults to
+                                    <span class="font-mono">openid email profile</span>.
                                 </p>
                             </Field>
 
@@ -400,7 +384,8 @@ async function submitSMTP() {
                                         When disabled, the SSO login button is hidden from the login page.
                                     </p>
                                 </div>
-                                <Switch :model-value="oidcEnabled" @update:model-value="oidcEnabled = $event" />
+                                <Switch :model-value="oidcEnabled"
+                                    @update:model-value="oidcEnabled = $event" />
                             </div>
 
                             <div class="flex justify-end pt-2">
@@ -413,9 +398,11 @@ async function submitSMTP() {
                         </FieldGroup>
                     </form>
                 </div>
+            </TabsContent>
 
-                <!-- ── SMTP section ─────────────────────────────────────────────────── -->
-                <div v-if="activeTab === 'smtp'" class="flex flex-col gap-6 max-w-xl">
+            <!-- ── SMTP tab ──────────────────────────────────────────────────── -->
+            <TabsContent value="smtp" class="mt-6">
+                <div class="flex flex-col gap-6 max-w-xl">
 
                     <div>
                         <h2 class="text-sm font-semibold">SMTP</h2>
@@ -423,12 +410,28 @@ async function submitSMTP() {
                             Configure an outbound SMTP server to send email notifications for backup
                             successes, failures, and agent events.
                         </p>
-                        <p v-if="!smtpExists" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                        <p v-if="!loading && !smtpExists"
+                            class="mt-2 text-xs text-amber-600 dark:text-amber-400">
                             No SMTP server configured yet. Email notifications are disabled.
                         </p>
                     </div>
 
-                    <form novalidate @submit.prevent="submitSMTP">
+                    <!-- Skeleton while loading -->
+                    <template v-if="loading">
+                        <div class="flex flex-col gap-4">
+                            <div class="grid grid-cols-3 gap-3">
+                                <Skeleton class="col-span-2 h-16 rounded-md" />
+                                <Skeleton class="h-16 rounded-md" />
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <Skeleton class="h-16 rounded-md" />
+                                <Skeleton class="h-16 rounded-md" />
+                            </div>
+                            <Skeleton class="h-16 w-full rounded-md" />
+                        </div>
+                    </template>
+
+                    <form v-else novalidate @submit.prevent="submitSMTP">
                         <FieldGroup class="flex flex-col gap-4">
 
                             <Transition enter-active-class="transition-all duration-200"
@@ -454,14 +457,15 @@ async function submitSMTP() {
                             <div class="grid grid-cols-3 gap-3">
                                 <Field class="col-span-2">
                                     <FieldLabel for="smtp-host">Host</FieldLabel>
-                                    <Input id="smtp-host" v-model="smtpHost" placeholder="smtp.example.com"
-                                        autocomplete="off"
+                                    <Input id="smtp-host" v-model="smtpHost"
+                                        placeholder="smtp.example.com" autocomplete="off"
                                         :class="smtpErrors.host ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                     <FieldError v-if="smtpErrors.host">{{ smtpErrors.host }}</FieldError>
                                 </Field>
                                 <Field>
                                     <FieldLabel for="smtp-port">Port</FieldLabel>
-                                    <Input id="smtp-port" v-model.number="smtpPort" type="number" placeholder="587"
+                                    <Input id="smtp-port" v-model.number="smtpPort" type="number"
+                                        placeholder="587"
                                         :class="smtpErrors.port ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                     <FieldError v-if="smtpErrors.port">{{ smtpErrors.port }}</FieldError>
                                 </Field>
@@ -477,7 +481,8 @@ async function submitSMTP() {
                                 <Field>
                                     <FieldLabel for="smtp-password">Password</FieldLabel>
                                     <Input id="smtp-password" v-model="smtpPassword" type="password"
-                                        :placeholder="smtpExists ? '(unchanged)' : ''" autocomplete="new-password"
+                                        :placeholder="smtpExists ? '(unchanged)' : ''"
+                                        autocomplete="new-password"
                                         :class="smtpErrors.password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                     <FieldError v-if="smtpErrors.password">{{ smtpErrors.password }}</FieldError>
                                 </Field>
@@ -485,8 +490,8 @@ async function submitSMTP() {
 
                             <Field>
                                 <FieldLabel for="smtp-from">From Address</FieldLabel>
-                                <Input id="smtp-from" v-model="smtpFrom" placeholder="arkeep@example.com"
-                                    autocomplete="off"
+                                <Input id="smtp-from" v-model="smtpFrom"
+                                    placeholder="arkeep@example.com" autocomplete="off"
                                     :class="smtpErrors.from ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                 <p class="text-xs text-muted-foreground">
                                     The sender address shown in notification emails.
@@ -500,10 +505,12 @@ async function submitSMTP() {
                                 <div>
                                     <p class="text-sm font-medium">Implicit TLS</p>
                                     <p class="text-xs text-muted-foreground">
-                                        Enable for SMTPS on port 465. Leave off for STARTTLS (port 587) or plaintext.
+                                        Enable for SMTPS on port 465. Leave off for STARTTLS (port 587)
+                                        or plaintext.
                                     </p>
                                 </div>
-                                <Switch :model-value="smtpTLS" @update:model-value="smtpTLS = $event" />
+                                <Switch :model-value="smtpTLS"
+                                    @update:model-value="smtpTLS = $event" />
                             </div>
 
                             <div class="flex justify-end pt-2">
@@ -516,9 +523,9 @@ async function submitSMTP() {
                         </FieldGroup>
                     </form>
                 </div>
+            </TabsContent>
 
-            </div>
-        </div>
+        </Tabs>
 
     </div>
 </template>

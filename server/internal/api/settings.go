@@ -157,7 +157,7 @@ func (h *SettingsHandler) UpsertOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Created(w, oidcProviderToResponse(provider))
+	Ok(w, oidcProviderToResponse(provider))
 }
 
 func validateUpsertOIDC(req *upsertOIDCRequest) error {
