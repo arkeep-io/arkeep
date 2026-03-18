@@ -61,15 +61,12 @@ spec:
             - name: ARKEEP_DB_DRIVER
               value: {{ .Values.config.dbDriver | quote }}
 
-            # Database DSN
+            # Database DSN — SQLite is set inline; Postgres always comes from the Secret
+            # so that credentials are never exposed in the Deployment manifest.
             {{- if eq .Values.config.dbDriver "sqlite" }}
             - name: ARKEEP_DB_DSN
               value: {{ printf "%s/arkeep.db" .Values.persistence.mountPath | quote }}
-            {{- else if or .Values.postgresql.enabled .Values.externalPostgresql.host .Values.externalPostgresql.url }}
-            - name: ARKEEP_DB_DSN
-              value: {{ include "arkeep.postgresDSN" . | quote }}
             {{- else }}
-            # DSN from secret (set when externalPostgresql.password is provided via existingSecret)
             - name: ARKEEP_DB_DSN
               valueFrom:
                 secretKeyRef:

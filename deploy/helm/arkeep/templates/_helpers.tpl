@@ -81,21 +81,25 @@ Secret name — either the existing secret or the chart-managed one.
 
 {{/*
 PostgreSQL DSN — built from subchart or external config.
+The password is required in all cases to prevent a silent misconfiguration
+where an empty password produces an invalid DSN.
 */}}
 {{- define "arkeep.postgresDSN" -}}
 {{- if .Values.externalPostgresql.url }}
 {{- .Values.externalPostgresql.url }}
 {{- else if .Values.postgresql.enabled }}
 {{- $host := printf "%s-postgresql" .Release.Name }}
+{{- $pass := required "postgresql.auth.password is required when postgresql.enabled=true" .Values.postgresql.auth.password }}
 {{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable"
     .Values.postgresql.auth.username
-    .Values.postgresql.auth.password
+    $pass
     $host
     .Values.postgresql.auth.database }}
 {{- else }}
+{{- $pass := required "externalPostgresql.password is required when using external PostgreSQL without a full DSN (externalPostgresql.url)" .Values.externalPostgresql.password }}
 {{- printf "postgres://%s:%s@%s:%d/%s?sslmode=%s"
     .Values.externalPostgresql.username
-    .Values.externalPostgresql.password
+    $pass
     .Values.externalPostgresql.host
     (.Values.externalPostgresql.port | int)
     .Values.externalPostgresql.database

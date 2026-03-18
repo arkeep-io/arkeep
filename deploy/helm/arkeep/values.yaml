@@ -12,7 +12,13 @@ image:
 
 imagePullSecrets: []
 
+nameOverride: ""
+fullnameOverride: ""
+
 # ─── Replicas ─────────────────────────────────────────────────────────────────
+# WARNING: SQLite supports only replicaCount: 1 (ReadWriteOnce PVC cannot be
+# mounted by more than one pod simultaneously). Switch to config.dbDriver: postgres
+# before increasing replicas.
 
 replicaCount: 1
 
@@ -43,10 +49,14 @@ config:
 # The secret key is used for AES-256-GCM credential encryption. Once set it must
 # never change — rotating it invalidates all stored destination credentials.
 # Generate with: openssl rand -hex 32
+#
+# When existingSecret is set and config.dbDriver is "postgres", your Secret must
+# also contain the key ARKEEP_DB_DSN with the full PostgreSQL DSN.
 
 secret:
   # Reference an existing Secret instead of creating one.
   # The Secret must contain the keys: ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET
+  # and ARKEEP_DB_DSN (when config.dbDriver=postgres).
   existingSecret: ""
 
   # Used only when existingSecret is empty.
@@ -99,6 +109,7 @@ postgresql:
   enabled: false
   auth:
     username: arkeep
+    # Required when postgresql.enabled=true — generate with: openssl rand -hex 16
     password: ""
     database: arkeep
   primary:

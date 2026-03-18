@@ -43,6 +43,10 @@ desktop.ini
 .env.local
 *.env
 
+# ─── Helm ─────────────────────────────────────────────────────────────────────
+# Subchart tarballs are regenerated with `helm dependency update`; only Chart.lock is committed.
+deploy/helm/**/charts/*.tgz
+
 # ─── Embedded binaries (populated by task deps:download, not committed) ───────
 # Ignore all binaries in the bin/ directory except .gitkeep.
 # Binaries are named with platform suffixes (e.g. restic_linux_amd64) so
