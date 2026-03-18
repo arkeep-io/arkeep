@@ -52,6 +52,7 @@ type jobResponse struct {
 	PolicyName   string                   `json:"policy_name"`
 	AgentID      string                   `json:"agent_id"`
 	AgentName    string                   `json:"agent_name"`
+	Type         string                   `json:"type"`
 	Status       string                   `json:"status"`
 	Error        string                   `json:"error"`
 	StartedAt    *string                  `json:"started_at"`
@@ -79,6 +80,7 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 		PolicyName:   j.PolicyName,
 		AgentID:      j.AgentID.String(),
 		AgentName:    j.AgentName,
+		Type:         j.Type,
 		Status:       j.Status,
 		Error:        j.Error,
 		Destinations: make([]jobDestinationResponse, len(destinations)),

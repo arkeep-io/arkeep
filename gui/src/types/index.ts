@@ -32,6 +32,11 @@ export const JobStatus = {
   Cancelled: 'cancelled',
 } as const
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus]
+export const JobType = {
+  Backup: 'backup',
+  Restore: 'restore',
+} as const
+export type JobType = (typeof JobType)[keyof typeof JobType]
 
 export const DestinationType = {
   Local: 'local',
@@ -203,6 +208,7 @@ export interface Job {
   policy_name: string   // denormalized via JOIN in the API layer
   agent_id: string
   agent_name: string    // denormalized via JOIN in the API layer
+  type: JobType
   status: JobStatus
   error: string
   started_at: string | null
@@ -358,6 +364,16 @@ export interface UpdateUserRequest {
 export interface UpdateMeRequest {
   display_name?: string
   password?: string
+}
+
+// Snapshots
+export interface RestoreRequest {
+  agent_id: string
+  target_path: string
+}
+
+export interface RestoreResponse {
+  job_id: string
 }
 
 // ─── WebSocket message payloads ───────────────────────────────────────────────

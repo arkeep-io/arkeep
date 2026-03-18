@@ -22,7 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BriefcaseBusiness, RefreshCw } from 'lucide-vue-next'
 import { api } from '@/services/api'
-import type { ApiResponse, Job, JobStatus } from '@/types'
+import type { ApiResponse, Job, JobStatus, JobType } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -47,6 +47,7 @@ const error = ref<string | null>(null)
 // Filter: 'all' is a sentinel value meaning no filter applied.
 // SelectItem does not accept empty string as a value in shadcn-vue.
 const statusFilter = ref<JobStatus | 'all'>('all')
+const typeFilter = ref<JobType | 'all'>('all')
 
 // ---------------------------------------------------------------------------
 // Derived list
@@ -56,8 +57,10 @@ const statusFilter = ref<JobStatus | 'all'>('all')
 // filtering too, but since we load the last 50 jobs in one shot, filtering
 // locally avoids an extra round-trip on every select change.
 const filteredJobs = computed(() => {
-    if (statusFilter.value === 'all') return jobs.value
-    return jobs.value.filter((j) => j.status === statusFilter.value)
+    let result = jobs.value
+    if (statusFilter.value !== 'all') result = result.filter((j) => j.status === statusFilter.value)
+    if (typeFilter.value !== 'all') result = result.filter((j) => j.type === typeFilter.value)
+    return result
 })
 
 // ---------------------------------------------------------------------------
@@ -164,6 +167,17 @@ onMounted(fetchJobs)
                 </SelectContent>
             </Select>
 
+            <Select v-model="typeFilter">
+                <SelectTrigger class="w-40">
+                    <SelectValue placeholder="All types" />
+                </SelectTrigger>
+                <SelectContent>
+                    <SelectItem value="all">All types</SelectItem>
+                    <SelectItem value="backup">Backup</SelectItem>
+                    <SelectItem value="restore">Restore</SelectItem>
+                </SelectContent>
+            </Select>
+
             <!-- Total count hint — only shown when all data is loaded -->
             <span v-if="!loading" class="text-sm text-muted-foreground">
                 {{ filteredJobs.length }} job{{ filteredJobs.length !== 1 ? 's' : '' }}
@@ -177,6 +191,7 @@ onMounted(fetchJobs)
                 <TableHeader>
                     <TableRow>
                         <TableHead>Policy</TableHead>
+                        <TableHead>Type</TableHead>
                         <TableHead>Agent</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Started</TableHead>
@@ -218,6 +233,9 @@ onMounted(fetchJobs)
                         <TableRow v-for="job in filteredJobs" :key="job.id" class="cursor-pointer"
                             @click="router.push(`/jobs/${job.id}`)">
                             <TableCell class="font-medium">{{ job.policy_name }}</TableCell>
+                            <TableCell>
+                                <Badge variant="outline" class="capitalize">{{ job.type }}</Badge>
+                            </TableCell>
                             <TableCell class="text-muted-foreground">{{ job.agent_name }}</TableCell>
                             <TableCell>
                                 <Badge :variant="statusVariant(job.status)">

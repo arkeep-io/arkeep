@@ -16,6 +16,13 @@ import {
     SelectValue,
 } from '@/components/ui/select'
 import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
     AlertDialog,
     AlertDialogAction,
     AlertDialogCancel,
@@ -24,14 +31,14 @@ import {
     AlertDialogFooter,
     AlertDialogHeader,
     AlertDialogTitle,
-    AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import type { ApiResponse, Snapshot, Policy, Destination } from '@/types'
+import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,18 +69,24 @@ const destinations = ref<Destination[]>([])
 
 const loading = ref(true)
 const error = ref<string | null>(null)
-const deletingId = ref<string | null>(null)
 
 // Filter sentinels: shadcn-vue SelectItem does not accept empty string as value.
 const policyFilter = ref<string>('all')
 const destinationFilter = ref<string>('all')
 
+// Restore sheet
+const restoreSheetOpen = ref(false)
+const restoreSnapshot = ref<Snapshot | null>(null)
+
+// Delete dialog
+const deleteDialogOpen = ref(false)
+const snapshotToDelete = ref<Snapshot | null>(null)
+const deleteLoading = ref(false)
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-// formatBytes converts a raw byte count to a human-readable string with the
-// most appropriate unit (B, KB, MB, GB, TB).
 function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B'
     const k = 1024
@@ -82,8 +95,6 @@ function formatBytes(bytes: number): string {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
-// formatDate returns a locale-formatted date+time string, or an em-dash if
-// the value is absent.
 function formatDate(iso: string | null): string {
     if (!iso) return '—'
     return new Date(iso).toLocaleString(undefined, {
@@ -92,8 +103,6 @@ function formatDate(iso: string | null): string {
     })
 }
 
-// abbreviate returns the first 8 characters of a string for compact display
-// of long IDs (e.g. restic snapshot hashes).
 function abbreviate(id: string | undefined): string {
     if (!id) return '—'
     return id.slice(0, 8)
@@ -107,7 +116,6 @@ async function fetchSnapshots() {
     loading.value = true
     error.value = null
     try {
-        // Build query params — omit filter keys when set to the sentinel 'all'.
         const params = new URLSearchParams({ limit: '50' })
         if (policyFilter.value !== 'all') params.set('policy_id', policyFilter.value)
         if (destinationFilter.value !== 'all') params.set('destination_id', destinationFilter.value)
@@ -121,9 +129,6 @@ async function fetchSnapshots() {
     }
 }
 
-// fetchFilterOptions loads the policy and destination lists once on mount so
-// the filter selects are populated. Failures are silently swallowed — the
-// selects simply remain limited to "All".
 async function fetchFilterOptions() {
     try {
         const [pRes, dRes] = await Promise.all([
@@ -133,37 +138,49 @@ async function fetchFilterOptions() {
         policies.value = pRes.data.items
         destinations.value = dRes.data.items
     } catch {
-        // Non-critical — filter options degraded gracefully to "All".
+        // Non-critical — filter options degrade gracefully to "All".
     }
+}
+
+// ---------------------------------------------------------------------------
+// Restore
+// ---------------------------------------------------------------------------
+
+function openRestoreSheet(snapshot: Snapshot) {
+    restoreSnapshot.value = snapshot
+    restoreSheetOpen.value = true
 }
 
 // ---------------------------------------------------------------------------
 // Delete
 // ---------------------------------------------------------------------------
 
-async function handleDelete(id: string) {
-    deletingId.value = id
+function openDeleteDialog(snapshot: Snapshot) {
+    snapshotToDelete.value = snapshot
+    deleteDialogOpen.value = true
+}
+
+async function confirmDelete() {
+    if (!snapshotToDelete.value) return
+    deleteLoading.value = true
     try {
-        await api(`/api/v1/snapshots/${id}`, { method: 'DELETE' })
-        // Remove from local list immediately to avoid a full refetch.
-        snapshots.value = snapshots.value.filter((s) => s.id !== id)
+        await api(`/api/v1/snapshots/${snapshotToDelete.value.id}`, { method: 'DELETE' })
+        deleteDialogOpen.value = false
+        snapshotToDelete.value = null
+        snapshots.value = snapshots.value.filter((s) => s.id !== snapshotToDelete.value?.id)
+        await fetchSnapshots()
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to delete snapshot.'
     } finally {
-        deletingId.value = null
+        deleteLoading.value = false
     }
 }
-
-// ---------------------------------------------------------------------------
-// Filter change handler — re-fetch with new server-side params
-// ---------------------------------------------------------------------------
 
 async function applyFilters() {
     await fetchSnapshots()
 }
 
 onMounted(async () => {
-    // Load filter options and snapshot list in parallel.
     await Promise.all([fetchFilterOptions(), fetchSnapshots()])
 })
 </script>
@@ -194,7 +211,6 @@ onMounted(async () => {
         <!-- Filter bar -->
         <div class="flex items-center gap-3">
 
-            <!-- Policy filter -->
             <Select v-model="policyFilter" @update:model-value="applyFilters">
                 <SelectTrigger class="w-44">
                     <SelectValue placeholder="All policies" />
@@ -207,7 +223,6 @@ onMounted(async () => {
                 </SelectContent>
             </Select>
 
-            <!-- Destination filter -->
             <Select v-model="destinationFilter" @update:model-value="applyFilters">
                 <SelectTrigger class="w-48">
                     <SelectValue placeholder="All destinations" />
@@ -220,7 +235,6 @@ onMounted(async () => {
                 </SelectContent>
             </Select>
 
-            <!-- Result count hint, shown once data is loaded -->
             <span v-if="!loading" class="text-sm text-muted-foreground">
                 {{ snapshots.length }} snapshot{{ snapshots.length !== 1 ? 's' : '' }}
             </span>
@@ -237,13 +251,13 @@ onMounted(async () => {
                         <TableHead>Snapshot ID</TableHead>
                         <TableHead>Size</TableHead>
                         <TableHead>Created</TableHead>
-                        <TableHead class="w-12" />
+                        <TableHead class="w-13" />
                     </TableRow>
                 </TableHeader>
 
                 <TableBody>
 
-                    <!-- Loading skeletons — 5 placeholder rows while the API call is in flight -->
+                    <!-- Loading skeletons -->
                     <template v-if="loading">
                         <TableRow v-for="n in 5" :key="n">
                             <TableCell v-for="col in 6" :key="col">
@@ -277,7 +291,6 @@ onMounted(async () => {
                             <TableCell class="font-medium">{{ snapshot.policy_name }}</TableCell>
                             <TableCell class="text-muted-foreground">{{ snapshot.destination_name }}</TableCell>
                             <TableCell>
-                                <!-- Monospace abbreviated restic snapshot hash for compact display. -->
                                 <span class="font-mono text-sm">{{ abbreviate(snapshot.restic_snapshot_id) }}</span>
                             </TableCell>
                             <TableCell class="text-sm text-muted-foreground">
@@ -286,33 +299,29 @@ onMounted(async () => {
                             <TableCell class="text-sm text-muted-foreground">
                                 {{ formatDate(snapshot.created_at) }}
                             </TableCell>
+
+                            <!-- Actions dropdown -->
                             <TableCell>
-                                <!-- Delete action — wrapped in AlertDialog to require explicit confirmation. -->
-                                <AlertDialog>
-                                    <AlertDialogTrigger as-child>
-                                        <Button variant="ghost" size="icon" :disabled="deletingId === snapshot.id"
-                                            class="text-muted-foreground hover:text-destructive">
-                                            <Trash2 class="w-4 h-4" />
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger as-child>
+                                        <Button variant="ghost" size="icon" class="w-8 h-8">
+                                            <MoreHorizontal class="w-4 h-4" />
+                                            <span class="sr-only">Open actions</span>
                                         </Button>
-                                    </AlertDialogTrigger>
-                                    <AlertDialogContent>
-                                        <AlertDialogHeader>
-                                            <AlertDialogTitle>Delete snapshot?</AlertDialogTitle>
-                                            <AlertDialogDescription>
-                                                This will permanently remove snapshot
-                                                <span class="font-mono">{{ abbreviate(snapshot.restic_snapshot_id)
-                                                }}</span>
-                                                from the destination. This action cannot be undone.
-                                            </AlertDialogDescription>
-                                        </AlertDialogHeader>
-                                        <AlertDialogFooter>
-                                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                            <AlertDialogAction @click="handleDelete(snapshot.id)">
-                                                Delete
-                                            </AlertDialogAction>
-                                        </AlertDialogFooter>
-                                    </AlertDialogContent>
-                                </AlertDialog>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                        <DropdownMenuItem @click="openRestoreSheet(snapshot)">
+                                            <RotateCcw class="w-4 h-4 mr-2" />
+                                            Restore
+                                        </DropdownMenuItem>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem class="text-destructive focus:text-destructive"
+                                            @click="openDeleteDialog(snapshot)">
+                                            <Trash2 class="w-4 h-4 mr-2" />
+                                            Delete
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
                             </TableCell>
                         </TableRow>
                     </template>
@@ -322,4 +331,30 @@ onMounted(async () => {
         </div>
 
     </div>
+
+    <!-- Restore sheet -->
+    <RestoreSheet :open="restoreSheetOpen" :snapshot="restoreSnapshot" @update:open="restoreSheetOpen = $event" />
+
+    <!-- Delete confirmation dialog -->
+    <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Delete snapshot?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    <span v-if="snapshotToDelete">
+                        Snapshot
+                        <span class="font-mono">{{ abbreviate(snapshotToDelete.restic_snapshot_id) }}</span>
+                        will be permanently removed. This action cannot be undone.
+                    </span>
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
+                <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    :disabled="deleteLoading" @click="confirmDelete">
+                    {{ deleteLoading ? 'Deleting…' : 'Delete' }}
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
 </template>

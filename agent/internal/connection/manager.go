@@ -583,7 +583,11 @@ func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, er
 	if p.JobId == "" {
 		return executor.JobAssignment{}, errors.New("job assignment missing job_id")
 	}
-	if p.Type != proto.JobType_JOB_TYPE_BACKUP {
+
+	switch p.Type {
+	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE:
+		// Both types are handled by the executor — payload is passed through as-is.
+	default:
 		return executor.JobAssignment{}, fmt.Errorf("unsupported job type: %v", p.Type)
 	}
 
