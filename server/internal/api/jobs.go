@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -84,15 +85,15 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 		Status:       j.Status,
 		Error:        j.Error,
 		Destinations: make([]jobDestinationResponse, len(destinations)),
-		CreatedAt:    j.CreatedAt.UTC().String(),
+		CreatedAt:    j.CreatedAt.UTC().Format(time.RFC3339),
 	}
 
 	if j.StartedAt != nil {
-		s := j.StartedAt.UTC().String()
+		s := j.StartedAt.UTC().Format(time.RFC3339)
 		resp.StartedAt = &s
 	}
 	if j.EndedAt != nil {
-		s := j.EndedAt.UTC().String()
+		s := j.EndedAt.UTC().Format(time.RFC3339)
 		resp.EndedAt = &s
 	}
 
@@ -107,11 +108,11 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 			Error:           jd.Error,
 		}
 		if jd.StartedAt != nil {
-			s := jd.StartedAt.UTC().String()
+			s := jd.StartedAt.UTC().Format(time.RFC3339)
 			d.StartedAt = &s
 		}
 		if jd.EndedAt != nil {
-			s := jd.EndedAt.UTC().String()
+			s := jd.EndedAt.UTC().Format(time.RFC3339)
 			d.EndedAt = &s
 		}
 		resp.Destinations[i] = d
@@ -227,7 +228,7 @@ func (h *JobHandler) GetLogs(w http.ResponseWriter, r *http.Request) {
 			ID:        l.ID.String(),
 			Level:     l.Level,
 			Message:   l.Message,
-			Timestamp: l.Timestamp.UTC().String(),
+			Timestamp: l.Timestamp.UTC().Format(time.RFC3339),
 		}
 	}
 

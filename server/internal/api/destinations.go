@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -45,8 +46,8 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 		Type:      d.Type,
 		Config:    d.Config,
 		Enabled:   d.Enabled,
-		CreatedAt: d.CreatedAt.UTC().String(),
-		UpdatedAt: d.UpdatedAt.UTC().String(),
+		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: d.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

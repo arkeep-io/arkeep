@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -63,8 +64,8 @@ func oidcProviderToResponse(p *db.OIDCProvider) oidcProviderResponse {
 		RedirectURL: p.RedirectURL,
 		Scopes:      p.Scopes,
 		Enabled:     p.Enabled,
-		CreatedAt:   p.CreatedAt.UTC().String(),
-		UpdatedAt:   p.UpdatedAt.UTC().String(),
+		CreatedAt:   p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:   p.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -55,10 +56,10 @@ func userToResponse(u *db.User) userResponse {
 		Role:        u.Role,
 		IsActive:    u.IsActive,
 		IsOIDC:      u.OIDCProvider != "",
-		CreatedAt:   u.CreatedAt.UTC().String(),
+		CreatedAt:   u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if u.LastLoginAt != nil {
-		s := u.LastLoginAt.UTC().String()
+		s := u.LastLoginAt.UTC().Format(time.RFC3339)
 		resp.LastLoginAt = &s
 	}
 	return resp

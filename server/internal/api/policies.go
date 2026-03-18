@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -83,7 +84,7 @@ func policyToResponse(p *db.Policy, destinations []db.PolicyDestination, agentNa
 		HookPreBackup:    p.HookPreBackup,
 		HookPostBackup:   p.HookPostBackup,
 		Destinations:     make([]policyDestinationResponse, len(destinations)),
-		CreatedAt:        p.CreatedAt.UTC().String(),
+		CreatedAt:        p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 
 	for i, pd := range destinations {
@@ -95,11 +96,11 @@ func policyToResponse(p *db.Policy, destinations []db.PolicyDestination, agentNa
 	}
 
 	if p.LastRunAt != nil {
-		s := p.LastRunAt.UTC().String()
+		s := p.LastRunAt.UTC().Format(time.RFC3339)
 		resp.LastRunAt = &s
 	}
 	if p.NextRunAt != nil {
-		s := p.NextRunAt.UTC().String()
+		s := p.NextRunAt.UTC().Format(time.RFC3339)
 		resp.NextRunAt = &s
 	}
 
@@ -444,9 +445,14 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.scheduler.TriggerNow(r.Context(), id); err != nil {
+	job, err := h.scheduler.TriggerNow(r.Context(), id)
+	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
+			return
+		}
+		if errors.Is(err, scheduler.ErrPolicyDisabled) {
+			ErrConflict(w, "policy is disabled")
 			return
 		}
 		h.logger.Error("failed to trigger policy",
@@ -457,7 +463,7 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	NoContent(w)
+	Ok(w, map[string]string{"job_id": job.ID.String()})
 }
 
 // -----------------------------------------------------------------------------

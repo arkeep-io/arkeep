@@ -39,7 +39,7 @@ import {
     ShieldCheck,
 } from 'lucide-vue-next'
 import { api } from '@/services/api'
-import type { Policy, ApiResponse } from '@/types'
+import type { Policy, ApiResponse, TriggerResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 
 interface PolicyListResponse {
@@ -137,7 +137,8 @@ function onSaved() {
 async function triggerPolicy(policy: Policy) {
     triggeringId.value = policy.id
     try {
-        await api(`/api/v1/policies/${policy.id}/trigger`, { method: 'POST' })
+        const res = await api<ApiResponse<TriggerResponse>>(`/api/v1/policies/${policy.id}/trigger`, { method: 'POST' })
+        router.push({ name: 'job-detail', params: { id: res.data.job_id } })
     } catch (e: any) {
         error.value = e?.message ?? `Failed to trigger "${policy.name}"`
     } finally {

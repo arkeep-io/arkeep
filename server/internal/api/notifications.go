@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -49,10 +50,10 @@ func notificationToResponse(n *db.Notification) notificationResponse {
 		Title:     n.Title,
 		Body:      n.Body,
 		Payload:   n.Payload,
-		CreatedAt: n.CreatedAt.UTC().String(),
+		CreatedAt: n.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if n.ReadAt != nil {
-		s := n.ReadAt.UTC().String()
+		s := n.ReadAt.UTC().Format(time.RFC3339)
 		resp.ReadAt = &s
 	}
 	return resp

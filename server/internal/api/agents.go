@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -59,10 +60,10 @@ func agentToResponse(a *db.Agent) agentResponse {
 		Status:          a.Status,
 		Labels:          a.Labels,
 		DockerAvailable: a.DockerAvailable,
-		CreatedAt:       a.CreatedAt.UTC().String(),
+		CreatedAt:       a.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if a.LastSeenAt != nil {
-		s := a.LastSeenAt.UTC().String()
+		s := a.LastSeenAt.UTC().Format(time.RFC3339)
 		resp.LastSeenAt = &s
 	}
 	return resp

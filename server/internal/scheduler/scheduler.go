@@ -20,6 +20,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -72,6 +73,9 @@ type retentionPayload struct {
 	Monthly int `json:"monthly"`
 	Yearly  int `json:"yearly"`
 }
+
+// ErrPolicyDisabled is returned by TriggerNow when the target policy is disabled.
+var ErrPolicyDisabled = errors.New("policy is disabled")
 
 // Scheduler wraps gocron and coordinates job creation and dispatch.
 // The zero value is not usable — create instances with New.
@@ -181,10 +185,11 @@ func (s *Scheduler) UpdatePolicy(policy *db.Policy) error {
 
 // TriggerNow manually triggers an immediate job run for a policy, bypassing
 // the cron schedule. Used by the REST handler for on-demand backups.
-func (s *Scheduler) TriggerNow(ctx context.Context, policyID uuid.UUID) error {
+// It returns the created Job so the caller can surface its ID to the client.
+func (s *Scheduler) TriggerNow(ctx context.Context, policyID uuid.UUID) (*db.Job, error) {
 	policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, policyID)
 	if err != nil {
-		return fmt.Errorf("policy not found: %w", err)
+		return nil, fmt.Errorf("policy not found: %w", err)
 	}
 	s.logger.Info("manual trigger requested",
 		zap.String("policy_id", policyID.String()),
@@ -257,7 +262,7 @@ func (s *Scheduler) addJob(policy *db.Policy) error {
 				return
 			}
 
-			if err := s.runJob(&p, destinations); err != nil {
+			if _, err := s.runJob(&p, destinations); err != nil && !errors.Is(err, ErrPolicyDisabled) {
 				s.logger.Error("job run failed",
 					zap.String("policy_id", p.ID.String()),
 					zap.String("policy_name", p.Name),
@@ -278,7 +283,8 @@ func (s *Scheduler) addJob(policy *db.Policy) error {
 // runJob is the core execution unit called by gocron on each tick (or manually
 // via TriggerNow). It creates the Job and JobDestination DB records, updates
 // policy timestamps, and dispatches the assignment to the agent.
-func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestination) error {
+// It returns the created Job so callers can surface its ID.
+func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestination) (*db.Job, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -286,7 +292,7 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestinatio
 		s.logger.Info("skipping job for disabled policy",
 			zap.String("policy_id", policy.ID.String()),
 		)
-		return nil
+		return nil, ErrPolicyDisabled
 	}
 
 	// --- Create Job record ---
@@ -296,7 +302,7 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestinatio
 		Status:   "pending",
 	}
 	if err := s.jobs.Create(ctx, job); err != nil {
-		return fmt.Errorf("failed to create job record for policy %s: %w", policy.ID, err)
+		return nil, fmt.Errorf("failed to create job record for policy %s: %w", policy.ID, err)
 	}
 
 	s.logger.Info("job created",
@@ -344,7 +350,7 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestinatio
 		)
 	}
 
-	return nil
+	return job, nil
 }
 
 // dispatch builds a complete JobAssignment with the full backup payload and

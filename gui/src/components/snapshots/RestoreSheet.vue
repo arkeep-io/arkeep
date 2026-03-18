@@ -84,6 +84,26 @@ const resolvedTargetPath = computed(() =>
     restoreMode.value === 'inplace' ? '/' : targetPath.value?.trim() ?? ''
 )
 
+// selectedAgent is the full Agent object for the currently selected agent_id.
+const selectedAgent = computed(() =>
+    agents.value.find((a) => a.id === agentId.value) ?? null
+)
+
+// In-place restore is not supported on Windows — restic reconstructs paths
+// from root which produces invalid paths (e.g. \C\Users\...) on Windows.
+const inplaceDisabled = computed(() =>
+    selectedAgent.value?.os === 'windows'
+)
+
+// defaultTargetPath returns the OS-appropriate default restore path.
+// On Windows, C:\Users\Public is writable by all users without elevation.
+// On Linux/macOS, /tmp/arkeep-restore is the standard temp location.
+const defaultTargetPath = computed(() =>
+    selectedAgent.value?.os === 'windows'
+        ? 'C:\\Users\\Public\\arkeep-restore'
+        : '/tmp/arkeep-restore'
+)
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -93,9 +113,10 @@ const agents = ref<Agent[]>([])
 const submitError = ref<string | null>(null)
 
 // ---------------------------------------------------------------------------
-// Watch — reset form and fetch agents when sheet opens
+// Watchers
 // ---------------------------------------------------------------------------
 
+// Reset form and fetch agents when the sheet opens.
 watch(
     () => props.open,
     async (isOpen) => {
@@ -110,6 +131,29 @@ watch(
         await fetchAgents()
     },
 )
+
+// When the selected agent changes, update the default target path if the user
+// has not yet customised it, and reset in-place mode on Windows agents.
+watch(selectedAgent, (agent) => {
+    // Reset to custom mode if a Windows agent is selected while in-place is active.
+    if (agent?.os === 'windows' && restoreMode.value === 'inplace') {
+        restoreMode.value = 'custom'
+    }
+
+    // Update target path only when it still matches a known default so we
+    // don't overwrite a path the user has already typed.
+    const current = targetPath.value?.trim()
+    const isDefault =
+        current === '/tmp/arkeep-restore' ||
+        current === 'C:\\Users\\Public\\arkeep-restore' ||
+        !current
+
+    if (isDefault) {
+        targetPath.value = agent?.os === 'windows'
+            ? 'C:\\Users\\Public\\arkeep-restore'
+            : '/tmp/arkeep-restore'
+    }
+})
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -186,20 +230,19 @@ function onOpenChange(value: boolean) {
 
                     <!-- Agent selector -->
                     <Field>
-                        <FieldLabel>Target agent</FieldLabel>
-                        <Select :model-value="agentId" :disabled="isSubmitting"
+                        <FieldLabel for="agent">Target agent</FieldLabel>
+                        <Select :model-value="agentId ?? ''" :disabled="isSubmitting"
                             @update:model-value="agentId = $event as string">
-                            <SelectTrigger
+                            <SelectTrigger id="agent"
                                 :class="agentError ? 'border-destructive focus-visible:ring-destructive/30' : ''">
                                 <SelectValue placeholder="Select an agent…" />
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem v-for="agent in agents" :key="agent.id" :value="agent.id">
                                     {{ agent.name }}
-                                    <span class="ml-1 text-xs text-muted-foreground">{{ agent.hostname }}</span>
                                 </SelectItem>
                                 <div v-if="agents.length === 0"
-                                    class="px-2 py-4 text-center text-sm text-muted-foreground">
+                                    class="px-3 py-4 text-sm text-muted-foreground text-center">
                                     No online agents available.
                                 </div>
                             </SelectContent>
@@ -217,7 +260,12 @@ function onOpenChange(value: boolean) {
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="custom">Custom path</SelectItem>
-                                <SelectItem value="inplace">Original location</SelectItem>
+                                <SelectItem value="inplace" :disabled="inplaceDisabled">
+                                    Original location
+                                    <span v-if="inplaceDisabled" class="ml-1 text-xs text-muted-foreground">
+                                        (not supported on Windows)
+                                    </span>
+                                </SelectItem>
                             </SelectContent>
                         </Select>
                     </Field>
@@ -225,8 +273,8 @@ function onOpenChange(value: boolean) {
                     <!-- Custom path input — shown only in custom mode -->
                     <Field v-if="restoreMode === 'custom'">
                         <FieldLabel for="target-path">Target path</FieldLabel>
-                        <Input id="target-path" v-model="targetPath" placeholder="/tmp/arkeep-restore"
-                            autocomplete="off" :disabled="isSubmitting"
+                        <Input id="target-path" v-model="targetPath" :placeholder="defaultTargetPath" autocomplete="off"
+                            :disabled="isSubmitting"
                             :class="targetPathError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                         <FieldError v-if="targetPathError">{{ targetPathError }}</FieldError>
                         <p v-else class="text-xs text-muted-foreground mt-1">

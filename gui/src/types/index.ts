@@ -376,6 +376,10 @@ export interface RestoreResponse {
   job_id: string
 }
 
+export interface TriggerResponse {
+  job_id: string
+}
+
 // ─── WebSocket message payloads ───────────────────────────────────────────────
 // These types describe the `payload` field of WSMessage for each topic type.
 // They are used in conjunction with services/websocket.ts.

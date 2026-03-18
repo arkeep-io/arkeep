@@ -372,15 +372,23 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 
 	now := time.Now().UTC()
 
+	// dbStatus is the string value stored in the database and expected by the
+	// frontend. It is distinct from the proto enum's String() representation
+	// (e.g. "succeeded" vs "JOB_STATUS_COMPLETED").
+	var dbStatus string
 	switch req.Status {
 	case proto.JobStatus_JOB_STATUS_RUNNING:
 		err = s.jobRepo.UpdateStatus(ctx, jobID, "running", &now, nil, "")
+		dbStatus = "running"
 	case proto.JobStatus_JOB_STATUS_COMPLETED:
 		err = s.jobRepo.UpdateStatus(ctx, jobID, "succeeded", nil, &now, "")
+		dbStatus = "succeeded"
 	case proto.JobStatus_JOB_STATUS_FAILED:
 		err = s.jobRepo.UpdateStatus(ctx, jobID, "failed", nil, &now, req.Message)
+		dbStatus = "failed"
 	case proto.JobStatus_JOB_STATUS_CANCELLED:
 		err = s.jobRepo.UpdateStatus(ctx, jobID, "cancelled", nil, &now, req.Message)
+		dbStatus = "cancelled"
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown job status")
 	}
@@ -393,13 +401,19 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 		return nil, status.Error(codes.Internal, "failed to update job status")
 	}
 
+	wsPayload := map[string]any{
+		"job_id":  req.JobId,
+		"status":  dbStatus,
+		"message": req.Message,
+	}
+	// Include finished_at for terminal states so the GUI can update the
+	// elapsed-time display without waiting for a full REST fetch.
+	if dbStatus == "succeeded" || dbStatus == "failed" || dbStatus == "cancelled" {
+		wsPayload["finished_at"] = now.Format(time.RFC3339)
+	}
 	s.hub.Publish("job:"+req.JobId, websocket.Message{
-		Type: websocket.MsgJobStatus,
-		Payload: map[string]any{
-			"job_id":  req.JobId,
-			"status":  req.Status.String(),
-			"message": req.Message,
-		},
+		Type:    websocket.MsgJobStatus,
+		Payload: wsPayload,
 	})
 
 	// Fire notifications for terminal job states. Non-fatal: run in a
