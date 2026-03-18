@@ -184,6 +184,7 @@ type Job struct {
 	Base
 	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
+	Type      string     `gorm:"not null;default:'backup'"` // "backup", "restore"
 	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed"
 	StartedAt *time.Time
 	EndedAt   *time.Time
