@@ -590,6 +590,7 @@ func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, er
 	return executor.JobAssignment{
 		JobID:    p.JobId,
 		PolicyID: p.PolicyId,
+		Type:     p.Type,
 		Payload:  p.Payload,
 	}, nil
 }

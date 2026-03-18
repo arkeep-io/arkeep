@@ -96,6 +96,12 @@ func ErrInternal(w http.ResponseWriter) {
 	errJSON(w, http.StatusInternalServerError, "an internal error occurred", "internal_error")
 }
 
+// ErrServiceUnavailable writes a 503 Service Unavailable error response.
+// Used when a required downstream component (e.g. an agent) is not reachable.
+func ErrServiceUnavailable(w http.ResponseWriter, message string) {
+	errJSON(w, http.StatusServiceUnavailable, message, "service_unavailable")
+}
+
 // decodeJSON decodes the request body into dst. Returns false and writes an
 // appropriate error response if decoding fails, so callers can early-return.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {

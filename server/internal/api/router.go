@@ -75,7 +75,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Logger)
 	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Logger)
 	jobHandler          := NewJobHandler(cfg.Jobs, cfg.Logger)
-	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Logger)
+	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Logger)
 	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
@@ -167,6 +167,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			r.Get("/snapshots", snapshotHandler.List)
 			r.Get("/snapshots/{id}", snapshotHandler.GetByID)
 			r.Delete("/snapshots/{id}", snapshotHandler.Delete)
+			r.Post("/snapshots/{id}/restore", snapshotHandler.Restore)
 
 			// Notifications
 			r.Get("/notifications", notificationHandler.List)

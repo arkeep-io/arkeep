@@ -115,30 +115,24 @@ type PolicyRepository interface {
 // -----------------------------------------------------------------------------
 
 type JobRepository interface {
-	Create(ctx context.Context, job *db.Job) error
-	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
+    Create(ctx context.Context, job *db.Job) error
+    GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
+    GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
+    Update(ctx context.Context, job *db.Job) error
+    UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
+    List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
+    ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
+    ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+    ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
 
-	// GetByIDWithDetails retrieves a job (with denormalised policy and agent
-	// names) together with its JobDestination and JobLog records. All three
-	// are returned as separate values to avoid embedding slice associations in
-	// the Job struct (see Policy for rationale). Logs are ordered by timestamp
-	// ascending.
-	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
+    // JobDestination
+    CreateDestination(ctx context.Context, jd *db.JobDestination) error
+    ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
+    UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
-	Update(ctx context.Context, job *db.Job) error
-	UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
-	List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
-	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
-	ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
-
-	// JobDestination
-	CreateDestination(ctx context.Context, jd *db.JobDestination) error
-	ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
-	UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
-
-	// JobLog
-	BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
-	GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)
+    // JobLog
+    BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
+    GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)
 }
 
 // -----------------------------------------------------------------------------

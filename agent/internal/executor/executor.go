@@ -27,6 +27,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/docker"
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
+	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
 // LogSink receives log lines produced during job execution and forwards them
@@ -51,6 +52,7 @@ type StatusReporter interface {
 type JobAssignment struct {
 	JobID    string
 	PolicyID string
+	Type     proto.JobType
 	Payload  []byte
 }
 
@@ -65,6 +67,15 @@ type backupPayload struct {
 	HookPreBackup  string               `json:"hook_pre_backup"`
 	HookPostBackup string               `json:"hook_post_backup"`
 	Tags           []string             `json:"tags"`
+}
+
+// restorePayload mirrors the struct serialized by the server snapshot handler.
+// All credentials arrive already decrypted.
+type restorePayload struct {
+	ResticSnapshotID string             `json:"restic_snapshot_id"`
+	RepoPassword     string             `json:"repo_password"`
+	TargetPath       string             `json:"target_path"`
+	Destination      destinationPayload `json:"destination"`
 }
 
 type destinationPayload struct {
@@ -142,6 +153,7 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 		e.logger.Info("job enqueued",
 			zap.String("job_id", job.JobID),
 			zap.String("policy_id", job.PolicyID),
+			zap.String("type", job.Type.String()),
 		)
 		return nil
 	default:
@@ -149,8 +161,18 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 	}
 }
 
-// execute runs a single job to completion. It deserializes the payload,
-// resolves sources, runs hooks, and calls the restic wrapper.
+// execute routes a job to the appropriate handler based on its type.
+func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	switch job.Type {
+	case proto.JobType_JOB_TYPE_RESTORE:
+		e.executeRestore(ctx, job, sink, reporter)
+	default:
+		// JOB_TYPE_BACKUP and unspecified types all run the backup handler.
+		e.executeBackup(ctx, job, sink, reporter)
+	}
+}
+
+// executeBackup runs a single backup job to completion.
 //
 // Execution sequence:
 //  1. Deserialize payload
@@ -159,8 +181,8 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 //  4. Run pre-backup hook (abort on failure)
 //  5. For each destination: run restic backup, stream progress, run forget
 //  6. Run post-backup hook (non-fatal, always runs)
-//  7. Report status "success" or "failed"
-func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+//  7. Report status "succeeded" or "failed"
+func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
 	log := func(level, msg string) {
 		sink.SendLog(job.JobID, level, msg)
 		switch level {
@@ -292,6 +314,73 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 
 	log("info", "backup completed successfully")
 	reporter.ReportStatus(job.JobID, "success", "backup completed")
+}
+
+// executeRestore runs a single restore job to completion.
+//
+// Execution sequence:
+//  1. Deserialize payload
+//  2. Report status "running"
+//  3. Run restic restore, streaming output as log lines
+//  4. Report status "succeeded" or "failed"
+func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	log := func(level, msg string) {
+		sink.SendLog(job.JobID, level, msg)
+		switch level {
+		case "error":
+			e.logger.Error(msg, zap.String("job_id", job.JobID))
+		case "warn":
+			e.logger.Warn(msg, zap.String("job_id", job.JobID))
+		default:
+			e.logger.Info(msg, zap.String("job_id", job.JobID))
+		}
+	}
+
+	fail := func(msg string) {
+		log("error", msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+	}
+
+	// --- 1. Deserialize payload ---
+	var payload restorePayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		fail(fmt.Sprintf("failed to deserialize restore payload: %v", err))
+		return
+	}
+
+	if payload.ResticSnapshotID == "" {
+		fail("restore payload missing restic_snapshot_id")
+		return
+	}
+	if payload.TargetPath == "" {
+		fail("restore payload missing target_path")
+		return
+	}
+	if payload.Destination.RepoURL == "" {
+		fail("restore payload missing destination repo_url")
+		return
+	}
+
+	// --- 2. Report running ---
+	reporter.ReportStatus(job.JobID, "running", "starting restore")
+	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, payload.TargetPath))
+
+	// --- 3. Run restore ---
+	d := restic.Destination{
+		Type:     restic.DestinationType(payload.Destination.Type),
+		RepoURL:  payload.Destination.RepoURL,
+		Password: payload.RepoPassword,
+		Env:      payload.Destination.Env,
+	}
+
+	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, payload.TargetPath, ""); err != nil {
+		fail(fmt.Sprintf("restore failed: %v", err))
+		return
+	}
+
+	// --- 4. Final status ---
+	log("info", fmt.Sprintf("restore completed successfully: files written to %s", payload.TargetPath))
+	reporter.ReportStatus(job.JobID, "success", "restore completed")
 }
 
 // resolveSources parses the JSON sources array and resolves any

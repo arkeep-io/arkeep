@@ -234,6 +234,31 @@ func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, 
 	return rows, total, nil
 }
 
+// ListByType returns a paginated list of jobs filtered by type ("backup" or
+// "restore"), with policy and agent names, ordered by creation time descending.
+func (r *gormJobRepository) ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error) {
+	var total int64
+	if err := r.db.WithContext(ctx).Model(&db.Job{}).Where("type = ?", jobType).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("jobs: list by type count: %w", err)
+	}
+
+	var rows []JobWithNames
+	if err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Where("jobs.type = ?", jobType).
+		Limit(opts.Limit).
+		Offset(opts.Offset).
+		Order("jobs.created_at DESC").
+		Scan(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("jobs: list by type: %w", err)
+	}
+
+	return rows, total, nil
+}
+
 // -----------------------------------------------------------------------------
 // JobDestination
 // -----------------------------------------------------------------------------
