@@ -15,6 +15,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
+	"strings"
 
 	"github.com/containerd/errdefs"
 	volumetypes "github.com/docker/docker/api/types/volume"
@@ -62,7 +64,9 @@ func NewClient(socketPath string) (*Client, error) {
 	}
 
 	if socketPath != "" {
-		opts = append(opts, dockerclient.WithHost("unix://"+socketPath))
+		opts = append(opts, dockerclient.WithHost(hostURI(socketPath)))
+	} else if runtime.GOOS == "windows" {
+		opts = append(opts, dockerclient.WithHost("npipe:////./pipe/docker_engine"))
 	}
 
 	dc, err := dockerclient.NewClientWithOpts(opts...)
@@ -133,4 +137,18 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInfo, e
 // Close releases the underlying Docker client resources.
 func (c *Client) Close() error {
 	return c.docker.Close()
+}
+
+// hostURI converts a raw socket/pipe path to the full URI expected by the
+// Docker SDK. If the path already contains a scheme (e.g. "unix://",
+// "npipe://", "tcp://") it is returned unchanged. Otherwise the correct
+// scheme is prepended based on the current OS.
+func hostURI(path string) string {
+	if strings.Contains(path, "://") {
+		return path
+	}
+	if runtime.GOOS == "windows" {
+		return "npipe://" + path
+	}
+	return "unix://" + path
 }

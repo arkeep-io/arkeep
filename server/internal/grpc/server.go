@@ -660,6 +660,14 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	return &proto.DestinationStatusResponse{Ok: true}, nil
 }
 
+// ReportVolumeList receives the Docker volume list from an agent in response
+// to a JOB_TYPE_LIST_VOLUMES request sent via StreamJobs. It delivers the
+// result to the waiting RequestVolumeList call via the agent manager.
+func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListReport) (*proto.VolumeListResponse, error) {
+	s.agentManager.DeliverVolumeList(req)
+	return &proto.VolumeListResponse{Ok: true}, nil
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // parseAgentID parses a string UUID sent by the agent over gRPC into the
