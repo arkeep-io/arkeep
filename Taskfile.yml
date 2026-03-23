@@ -61,6 +61,7 @@ tasks:
     env:
       ARKEEP_SECRET_KEY: dev-secret-key-00000000000000000
       ARKEEP_AGENT_SECRET: dev-agent-secret
+      ARKEEP_TELEMETRY: "false"
 
   run:agent:
     desc: Run agent in development mode (downloads deps if needed)
