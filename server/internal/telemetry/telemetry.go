@@ -149,6 +149,10 @@ func loadOrCreateID(path string) (id string, created bool, err error) {
 		return "", false, fmt.Errorf("generate uuid: %w", err)
 	}
 
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", false, fmt.Errorf("create data dir: %w", err)
+	}
+
 	if err = os.WriteFile(path, []byte(id), idFilePerms); err != nil {
 		return "", false, fmt.Errorf("write instance id: %w", err)
 	}

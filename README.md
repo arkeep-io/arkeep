@@ -7,8 +7,8 @@ Deploy the server once, install lightweight agents on every machine you want to 
 and manage everything from a single web interface — built on top of
 [Restic](https://restic.net/) and [Rclone](https://rclone.org/).
 
-> ⚠️ Arkeep is currently in active development and not yet ready for production use.
-> Star the repository to follow progress.
+> 🚧 Arkeep is in early access — core features are working and ready for testing.
+> Not yet recommended for production use. Star the repository to follow progress.
 
 ---
 
@@ -99,8 +99,7 @@ way to verify everything ran successfully. Arkeep fixes this.
 | Retention policies | ✓ |
 | Email + webhook notifications | ✓ |
 | Restore & restore test | ✓ |
-| Helm chart | ✓ |
-| Proxmox / VMware integration | 🗓 planned |
+| Helm chart | ✓ || Proxmox / VMware integration | 🗓 planned |
 | Bandwidth throttling | 🗓 planned |
 | BYOK encryption key management | 🗓 planned |
 
@@ -410,17 +409,16 @@ to run multiple server replicas behind a load balancer.
 
 **Is there a Kubernetes deployment?**
 
-A Helm chart is in progress in `deploy/helm/`. Until it is stable, deploying via
-Docker Compose on a single node is recommended.
+Yes. A Helm chart is available in `deploy/helm/`. For simpler setups, Docker Compose on a single node is also supported.
 
 ---
 
 ## Roadmap
 
 ### v1.0 — Production-ready core
-- [ ] Restore & restore test
+- [x] Restore & restore test
+- [x] Helm chart
 - [ ] Comprehensive test coverage (server + agent + GUI)
-- [ ] Helm chart stable
 - [ ] Full documentation site
 
 ### v1.x — Integrations
@@ -442,7 +440,7 @@ are ever transmitted.**
 What is sent: a stable random instance ID, Arkeep version, OS, number of
 connected agents, and number of active policies.
 
-Aggregate stats are public at: https://telemetry.arkeep.io/stats
+Aggregate stats are public at: https://arkeep-telemetry.arkeep.workers.dev/stats
 
 To opt out: set `ARKEEP_TELEMETRY=false` or pass `--telemetry=false`.
 
