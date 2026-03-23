@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	pingURL      = "https://telemetry.arkeep.io/ping"
+	pingURL      = "https://arkeep-telemetry.arkeep.workers.dev/ping"
 	pingInterval = 24 * time.Hour
 	pingTimeout  = 10 * time.Second
 	idFileName   = "telemetry_id"
