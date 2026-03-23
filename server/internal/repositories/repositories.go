@@ -104,6 +104,10 @@ type PolicyRepository interface {
 	ListEnabled(ctx context.Context) ([]db.Policy, error)
 	UpdateSchedule(ctx context.Context, id uuid.UUID, lastRunAt, nextRunAt time.Time) error
 
+	// ActivePoliciesCount returns the count of enabled, non-deleted policies.
+	// Used by telemetry.
+	ActivePoliciesCount(ctx context.Context) int
+
 	// PolicyDestination
 	AddDestination(ctx context.Context, pd *db.PolicyDestination) error
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error

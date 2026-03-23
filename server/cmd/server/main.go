@@ -24,6 +24,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/telemetry"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
@@ -34,15 +35,16 @@ var (
 )
 
 type config struct {
-	httpAddr   string
-	grpcAddr   string
-	dbDriver   string
-	dbDSN      string
-	secretKey  string
-	logLevel   string
-	dataDir    string
-	agentSecret string
+	httpAddr      string
+	grpcAddr      string
+	dbDriver      string
+	dbDSN         string
+	secretKey     string
+	logLevel      string
+	dataDir       string
+	agentSecret   string
 	secureCookies bool
+	telemetry     bool
 }
 
 func main() {
@@ -77,6 +79,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
 	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
+	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
 
 	return root
 }
@@ -271,6 +274,23 @@ func run(ctx context.Context, cfg *config) error {
 		}
 	}()
 
+	// --- Telemetry ---
+	if cfg.telemetry {
+		stats := &telemetryStats{agentMgr: agentMgr, policyRepo: policyRepo}
+		reporter, firstRun, err := telemetry.New(version, cfg.dataDir, stats, logger)
+		if err != nil {
+			logger.Warn("telemetry: failed to initialize, disabling", zap.Error(err))
+		} else {
+			if firstRun {
+				logger.Info("Arkeep collects anonymous usage statistics to help prioritize development.\n" +
+					"No personal data, backup contents, or credentials are ever transmitted.\n" +
+					"To opt out: set ARKEEP_TELEMETRY=false or --telemetry=false\n" +
+					"Public stats: https://telemetry.arkeep.io/stats")
+			}
+			go reporter.Start(ctx)
+		}
+	}
+
 	// --- Wait for shutdown signal ---
 	<-ctx.Done()
 	logger.Info("shutting down arkeep server")
@@ -284,6 +304,19 @@ func run(ctx context.Context, cfg *config) error {
 
 	logger.Info("arkeep server stopped")
 	return nil
+}
+
+// telemetryStats adapts agentmanager.Manager and repositories.PolicyRepository
+// to the telemetry.StatsProvider interface without importing them from the
+// telemetry package.
+type telemetryStats struct {
+	agentMgr   *agentmanager.Manager
+	policyRepo repositories.PolicyRepository
+}
+
+func (s *telemetryStats) ConnectedAgentsCount() int { return s.agentMgr.ConnectedAgentsCount() }
+func (s *telemetryStats) ActivePoliciesCount() int {
+	return s.policyRepo.ActivePoliciesCount(context.Background())
 }
 
 // buildJWTManager loads RSA keys from the data directory if available,

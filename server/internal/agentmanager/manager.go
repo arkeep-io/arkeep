@@ -190,6 +190,13 @@ func (m *Manager) DockerAvailable(agentID string) bool {
 	return exists && a.DockerAvailable
 }
 
+// ConnectedAgentsCount returns the number of currently connected agents.
+func (m *Manager) ConnectedAgentsCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.agents)
+}
+
 // ConnectedAgents returns a snapshot of all currently connected agents.
 // The returned slice is a copy — modifications do not affect the registry.
 func (m *Manager) ConnectedAgents() []*ConnectedAgent {

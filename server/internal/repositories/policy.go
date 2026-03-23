@@ -136,6 +136,18 @@ func (r *gormPolicyRepository) ListByAgent(ctx context.Context, agentID uuid.UUI
 	return policies, nil
 }
 
+// ActivePoliciesCount returns the count of enabled, non-deleted policies.
+// Returns 0 on any database error so that a transient failure does not
+// break the telemetry ping.
+func (r *gormPolicyRepository) ActivePoliciesCount(ctx context.Context) int {
+	var count int64
+	r.db.WithContext(ctx).
+		Model(&db.Policy{}).
+		Where("enabled = ? AND deleted_at IS NULL", true).
+		Count(&count)
+	return int(count)
+}
+
 // ListEnabled returns all non-deleted, enabled policies.
 // Used by the scheduler at startup to register all active cron jobs.
 func (r *gormPolicyRepository) ListEnabled(ctx context.Context) ([]db.Policy, error) {

@@ -32,6 +32,7 @@ and manage everything from a single web interface — built on top of
   - [Available Tasks](#available-tasks)
 - [FAQ](#faq)
 - [Roadmap](#roadmap)
+- [Telemetry](#telemetry)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -235,6 +236,7 @@ take precedence when both are provided.
 | `--data-dir` | `ARKEEP_DATA_DIR` | `./data` | Directory for RSA JWT keys and server state |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `--secure-cookies` | `ARKEEP_SECURE_COOKIES` | `false` | Set `Secure` flag on auth cookies (enable in production over HTTPS) |
+| `--telemetry` | `ARKEEP_TELEMETRY` | `true` | Send anonymous usage stats (opt-out) |
 
 **Generating secrets:**
 
@@ -428,6 +430,21 @@ Docker Compose on a single node is recommended.
 ### v2.0 — Advanced features
 - [ ] Bandwidth throttling
 - [ ] BYOK encryption key management
+
+---
+
+## Telemetry
+
+Arkeep sends anonymous usage statistics once per day to help prioritize
+development. **No personal data, backup contents, credentials, or hostnames
+are ever transmitted.**
+
+What is sent: a stable random instance ID, Arkeep version, OS, number of
+connected agents, and number of active policies.
+
+Aggregate stats are public at: https://telemetry.arkeep.io/stats
+
+To opt out: set `ARKEEP_TELEMETRY=false` or pass `--telemetry=false`.
 
 ---
 
