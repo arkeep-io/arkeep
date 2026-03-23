@@ -454,4 +454,4 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 Arkeep is licensed under the [Apache License 2.0](LICENSE).
 
-Copyright 2025 Filippo Crotti / Arkeep Contributors
+Copyright 2026 Filippo Crotti / Arkeep Contributors
