@@ -48,7 +48,7 @@ const breadcrumbs = computed<Crumb[]>(() => {
         <SidebarInset class="flex flex-col min-h-0">
             <header class="flex items-center h-16 gap-2 shrink-0 border-b">
                 <div class="flex items-center gap-2 px-4">
-                    <SidebarTrigger class="-ml-1" />
+                    <SidebarTrigger class="-ml-1" aria-label="Toggle sidebar" />
                     <Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
                     <Breadcrumb>
                         <BreadcrumbList>

@@ -42,6 +42,7 @@ import {
     Cpu,
     MemoryStick,
     HardDrive,
+    ClipboardList,
 } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import { wsClient } from '@/services/websocket'
@@ -197,9 +198,17 @@ async function confirmDelete() {
 
 function statusVariant(status: AgentStatus): 'default' | 'secondary' | 'outline' {
     switch (status) {
-        case 'online': return 'default'
+        case 'online': return 'outline'
         case 'offline': return 'secondary'
         default: return 'outline'
+    }
+}
+
+function statusClass(status: AgentStatus): string {
+    switch (status) {
+        case 'online': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
+        case 'unknown': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        default: return ''
     }
 }
 
@@ -216,10 +225,21 @@ function formatLastSeen(lastSeenAt: string | null): string {
 
 function jobStatusVariant(status: string): 'default' | 'secondary' | 'outline' | 'destructive' {
     switch (status) {
-        case 'completed': return 'default'
+        case 'succeeded':
+        case 'completed': return 'outline'
         case 'running': return 'outline'
         case 'failed': return 'destructive'
         default: return 'secondary'
+    }
+}
+
+function jobStatusClass(status: string): string {
+    switch (status) {
+        case 'succeeded':
+        case 'completed': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
+        case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
+        case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        default: return ''
     }
 }
 
@@ -313,7 +333,7 @@ onUnmounted(() => {
         <!-- Back + Header -->
         <div class="flex items-start justify-between gap-4">
             <div class="flex items-center gap-3">
-                <Button variant="ghost" size="icon" @click="router.push('/agents')">
+                <Button variant="ghost" size="icon" aria-label="Back to agents" @click="router.push('/agents')">
                     <ArrowLeft class="w-4 h-4" />
                 </Button>
                 <div>
@@ -324,13 +344,13 @@ onUnmounted(() => {
                     <template v-else-if="mergedAgent">
                         <div class="flex items-center gap-2.5">
                             <h1 class="text-2xl font-semibold tracking-tight">{{ mergedAgent.name }}</h1>
-                            <Badge :variant="statusVariant(mergedAgent.status)" class="gap-1.5">
+                            <Badge :variant="statusVariant(mergedAgent.status)" class="gap-1.5" :class="statusClass(mergedAgent.status)">
                                 <span class="inline-block h-1.5 w-1.5 rounded-full" :class="{
                                     'bg-emerald-400': mergedAgent.status === 'online',
                                     'bg-muted-foreground': mergedAgent.status === 'offline',
                                     'bg-yellow-400': mergedAgent.status === 'unknown',
                                 }" />
-                                {{ mergedAgent.status }}
+                                {{ mergedAgent.status.charAt(0).toUpperCase() + mergedAgent.status.slice(1) }}
                             </Badge>
                         </div>
                         <p class="mt-0.5 text-sm font-mono text-muted-foreground">
@@ -342,7 +362,7 @@ onUnmounted(() => {
 
             <!-- Actions -->
             <div v-if="!loading && mergedAgent" class="flex items-center gap-2">
-                <Button variant="outline" size="icon" @click="fetchAgent(); fetchJobs()">
+                <Button variant="outline" size="icon" aria-label="Refresh" @click="fetchAgent(); fetchJobs()">
                     <RefreshCw class="w-4 h-4" />
                 </Button>
                 <Button variant="outline" size="sm" @click="editSheetOpen = true">
@@ -404,7 +424,7 @@ onUnmounted(() => {
         <!-- Metrics chart -->
         <div class="border rounded-md p-4 flex flex-col gap-3">
             <div class="flex items-center justify-between">
-                <h2 class="text-sm font-semibold">Resource Usage</h2>
+                <p class="text-sm font-medium">Resource Usage</p>
                 <!-- Legend -->
                 <div class="flex items-center gap-4 text-xs text-muted-foreground">
                     <div class="flex items-center gap-1.5">
@@ -450,8 +470,8 @@ onUnmounted(() => {
 
         <!-- Recent jobs -->
         <div class="flex flex-col gap-3">
-            <h2 class="text-sm font-semibold">Recent Jobs</h2>
-            <div class="border rounded-md">
+            <p class="text-sm font-medium">Recent Jobs</p>
+            <div class="border rounded-md overflow-x-auto">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -464,7 +484,7 @@ onUnmounted(() => {
                     <TableBody>
                         <!-- Loading -->
                         <template v-if="jobsLoading">
-                            <TableRow v-for="n in 3" :key="n">
+                            <TableRow v-for="n in 5" :key="n">
                                 <TableCell v-for="col in 4" :key="col">
                                     <Skeleton class="w-full h-4" />
                                 </TableCell>
@@ -474,21 +494,31 @@ onUnmounted(() => {
                         <!-- Empty -->
                         <template v-else-if="jobs.length === 0">
                             <TableRow>
-                                <TableCell colspan="4" class="py-8 text-center text-sm text-muted-foreground">
-                                    No jobs have run on this agent yet.
+                                <TableCell colspan="4">
+                                    <div class="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                                        <div class="p-4 rounded-full bg-muted">
+                                            <ClipboardList class="w-10 h-10 text-muted-foreground" />
+                                        </div>
+                                        <div>
+                                            <p class="font-medium">No jobs yet</p>
+                                            <p class="mt-1 text-sm text-muted-foreground">
+                                                No jobs have run on this agent yet.
+                                            </p>
+                                        </div>
+                                    </div>
                                 </TableCell>
                             </TableRow>
                         </template>
 
                         <!-- Rows -->
                         <template v-else>
-                            <TableRow v-for="job in jobs" :key="job.id" class="cursor-pointer"
+                            <TableRow v-for="job in jobs" :key="job.id" class="cursor-pointer hover:bg-muted/50"
                                 @click="router.push(`/jobs/${job.id}`)">
                                 <TableCell class="font-medium">
                                     {{ (job as any).policy_name || job.policy_id }}
                                 </TableCell>
                                 <TableCell>
-                                    <Badge :variant="jobStatusVariant(job.status)">
+                                    <Badge :variant="jobStatusVariant(job.status)" :class="jobStatusClass(job.status)">
                                         {{ job.status }}
                                     </Badge>
                                 </TableCell>
@@ -525,7 +555,7 @@ onUnmounted(() => {
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                <AlertDialogAction variant="destructive"
                     :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
                 </AlertDialogAction>

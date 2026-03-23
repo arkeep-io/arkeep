@@ -4,7 +4,6 @@ import type { SidebarProps } from "@/components/ui/sidebar"
 import {
     Archive,
     ClipboardList,
-    Command,
     HardDrive,
     LayoutDashboard,
     Server,
@@ -99,15 +98,12 @@ const userInitials = computed(() =>
             <SidebarMenu>
                 <SidebarMenuItem>
                     <SidebarMenuButton size="lg" as-child>
-                        <a href="#">
-                            <div
-                                class="flex items-center justify-center rounded-lg aspect-square size-8 bg-sidebar-primary text-sidebar-primary-foreground">
-                                <Command class="size-4" />
-                            </div>
+                        <RouterLink to="/dashboard">
+                            <img src="/arkeep-icon.png" class="size-8 rounded-lg shrink-0" alt="Arkeep" />
                             <div class="grid flex-1 text-sm leading-tight text-left">
                                 <span class="font-medium truncate">Arkeep</span>
                             </div>
-                        </a>
+                        </RouterLink>
                     </SidebarMenuButton>
                 </SidebarMenuItem>
             </SidebarMenu>

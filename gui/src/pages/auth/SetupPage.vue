@@ -191,7 +191,7 @@ const onSubmit = handleSubmit(async (values) => {
 
                                 <!-- Submit -->
                                 <Field>
-                                    <Button type="submit" :disabled="isSubmitting">
+                                    <Button type="submit" class="w-full" :disabled="isSubmitting">
                                         <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
                                         {{ isSubmitting ? 'Creating account…' : 'Create account' }}
                                     </Button>

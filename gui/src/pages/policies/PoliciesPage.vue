@@ -37,6 +37,7 @@ import {
     Trash2,
     Play,
     ShieldCheck,
+    RefreshCw,
 } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import type { Policy, ApiResponse, TriggerResponse } from '@/types'
@@ -189,6 +190,9 @@ onMounted(fetchPolicies)
                 </p>
             </div>
             <div class="flex items-center gap-2">
+                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchPolicies">
+                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
+                </Button>
                 <Button @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Policy
@@ -202,7 +206,7 @@ onMounted(fetchPolicies)
         </Alert>
 
         <!-- Table -->
-        <div class="border rounded-md">
+        <div class="border rounded-md overflow-x-auto">
             <Table>
                 <TableHeader>
                     <TableRow>
@@ -230,7 +234,7 @@ onMounted(fetchPolicies)
                             <TableCell colspan="5">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                                     <div class="p-4 rounded-full bg-muted">
-                                        <ShieldCheck class="w-8 h-8 text-muted-foreground" />
+                                        <ShieldCheck class="w-10 h-10 text-muted-foreground" />
                                     </div>
                                     <div>
                                         <p class="font-medium">No policies configured</p>
@@ -249,7 +253,7 @@ onMounted(fetchPolicies)
 
                     <!-- Data rows -->
                     <template v-else>
-                        <TableRow v-for="policy in policies" :key="policy.id" class="cursor-pointer"
+                        <TableRow v-for="policy in policies" :key="policy.id" class="cursor-pointer hover:bg-muted/50"
                             @click="router.push(`/policies/${policy.id}`)">
                             <TableCell class="font-medium">{{ policy.name }}</TableCell>
                             <TableCell class="text-sm text-muted-foreground">
@@ -321,7 +325,7 @@ onMounted(fetchPolicies)
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                <AlertDialogAction variant="destructive"
                     :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
                 </AlertDialogAction>

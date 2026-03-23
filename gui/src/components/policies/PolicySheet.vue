@@ -1018,7 +1018,7 @@ function onOpenChange(value: boolean) {
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <p class="text-sm font-medium">Pre-backup</p>
-                    <Switch :checked="hookPreEnabled ?? false"
+                    <Switch :model-value="hookPreEnabled ?? false"
                       @update:model-value="(v: boolean) => hookPreEnabled = v" />
                   </div>
                   <template v-if="hookPreEnabled">
@@ -1051,7 +1051,7 @@ function onOpenChange(value: boolean) {
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <p class="text-sm font-medium">Post-backup</p>
-                    <Switch :checked="hookPostEnabled ?? false"
+                    <Switch :model-value="hookPostEnabled ?? false"
                       @update:model-value="(v: boolean) => hookPostEnabled = v" />
                   </div>
                   <template v-if="hookPostEnabled">

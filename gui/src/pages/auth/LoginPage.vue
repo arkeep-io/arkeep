@@ -156,7 +156,7 @@ function loginWithOIDC(): void {
 
                                 <!-- Submit -->
                                 <Field>
-                                    <Button type="submit" :disabled="isSubmitting">
+                                    <Button type="submit" class="w-full" :disabled="isSubmitting">
                                         <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
                                         {{ isSubmitting ? 'Signing in…' : 'Sign in' }}
                                     </Button>
@@ -169,7 +169,7 @@ function loginWithOIDC(): void {
 
                                 <!-- OIDC -->
                                 <Field>
-                                    <Button type="button" variant="outline" :disabled="oidcLoading"
+                                    <Button type="button" variant="outline" class="w-full" :disabled="oidcLoading"
                                         @click="loginWithOIDC">
                                         <Loader2 v-if="oidcLoading" class="size-4 animate-spin" />
                                         Continue with SSO
@@ -180,7 +180,7 @@ function loginWithOIDC(): void {
 
                         <!-- Decorative panel -->
                         <div class="relative hidden bg-black md:block overflow-hidden">
-                            <video src="/login-bg.mp4" class="absolute inset-0 h-full w-full object-fit scale-130"
+                            <video src="/login-bg.mp4" class="absolute inset-0 h-full w-full object-cover scale-130"
                                 autoplay loop muted playsinline />
                         </div>
 

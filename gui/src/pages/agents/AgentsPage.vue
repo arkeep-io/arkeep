@@ -203,9 +203,17 @@ function openEditSheet(agent: Agent) {
 // Maps agent status string to a Badge variant.
 function statusVariant(status: AgentStatus): 'default' | 'secondary' | 'outline' {
     switch (status) {
-        case 'online': return 'default'
+        case 'online': return 'outline'
         case 'offline': return 'secondary'
         default: return 'outline'
+    }
+}
+
+function statusClass(status: AgentStatus): string {
+    switch (status) {
+        case 'online': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
+        case 'unknown': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        default: return ''
     }
 }
 
@@ -250,7 +258,7 @@ onUnmounted(teardownSubscriptions)
                     Machines registered for backup management
                 </p>
             </div>
-            <Button variant="outline" size="icon" :disabled="loading" @click="fetchAgents">
+            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchAgents">
                 <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
             </Button>
         </div>
@@ -261,7 +269,7 @@ onUnmounted(teardownSubscriptions)
         </Alert>
 
         <!-- Table -->
-        <div class="border rounded-md">
+        <div class="border rounded-md overflow-x-auto">
             <Table>
                 <TableHeader>
                     <TableRow>
@@ -291,7 +299,7 @@ onUnmounted(teardownSubscriptions)
                             <TableCell colspan="7">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                                     <div class="p-4 rounded-full bg-muted">
-                                        <Server class="w-8 h-8 text-muted-foreground" />
+                                        <Server class="w-10 h-10 text-muted-foreground" />
                                     </div>
                                     <div>
                                         <p class="font-medium">No agents connected</p>
@@ -306,7 +314,7 @@ onUnmounted(teardownSubscriptions)
 
                     <!-- Data rows -->
                     <template v-else>
-                        <TableRow v-for="agent in mergedAgents" :key="agent.id" class="cursor-pointer"
+                        <TableRow v-for="agent in mergedAgents" :key="agent.id" class="cursor-pointer hover:bg-muted/50"
                             @click="goToDetail(agent)">
                             <TableCell class="font-medium">{{ agent.name }}</TableCell>
                             <TableCell class="font-mono text-sm text-muted-foreground">
@@ -323,7 +331,7 @@ onUnmounted(teardownSubscriptions)
                             </TableCell>
                             <TableCell>
                                 <!-- Live status dot + badge -->
-                                <Badge :variant="statusVariant(agent.status)" class="gap-1.5">
+                                <Badge :variant="statusVariant(agent.status)" class="gap-1.5" :class="statusClass(agent.status)">
                                     <span class="inline-block h-1.5 w-1.5 rounded-full" :class="{
                                         'bg-emerald-400': agent.status === 'online',
                                         'bg-muted-foreground': agent.status === 'offline',
@@ -405,7 +413,7 @@ onUnmounted(teardownSubscriptions)
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                <AlertDialogAction variant="destructive"
                     :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
                 </AlertDialogAction>

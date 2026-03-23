@@ -70,11 +70,20 @@ const filteredJobs = computed(() => {
 // statusVariant maps a JobStatus to the appropriate shadcn Badge variant.
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
     switch (status) {
-        case 'succeeded': return 'default'
+        case 'succeeded': return 'outline'
         case 'running': return 'outline'
         case 'failed': return 'destructive'
-        case 'pending':
+        case 'pending': return 'outline'
         default: return 'secondary'
+    }
+}
+
+function statusClass(status: string): string {
+    switch (status) {
+        case 'succeeded': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
+        case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
+        case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        default: return ''
     }
 }
 
@@ -141,7 +150,7 @@ onMounted(fetchJobs)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchJobs">
+                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJobs">
                     <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
                 </Button>
             </div>
@@ -186,7 +195,7 @@ onMounted(fetchJobs)
         </div>
 
         <!-- Table -->
-        <div class="border rounded-md">
+        <div class="border rounded-md overflow-x-auto">
             <Table>
                 <TableHeader>
                     <TableRow>
@@ -215,7 +224,7 @@ onMounted(fetchJobs)
                             <TableCell colspan="6">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                                     <div class="p-4 rounded-full bg-muted">
-                                        <BriefcaseBusiness class="w-8 h-8 text-muted-foreground" />
+                                        <BriefcaseBusiness class="w-10 h-10 text-muted-foreground" />
                                     </div>
                                     <div>
                                         <p class="font-medium">No jobs found</p>
@@ -230,7 +239,7 @@ onMounted(fetchJobs)
 
                     <!-- Data rows -->
                     <template v-else>
-                        <TableRow v-for="job in filteredJobs" :key="job.id" class="cursor-pointer"
+                        <TableRow v-for="job in filteredJobs" :key="job.id" class="cursor-pointer hover:bg-muted/50"
                             @click="router.push(`/jobs/${job.id}`)">
                             <TableCell class="font-medium">{{ job.policy_name }}</TableCell>
                             <TableCell>
@@ -238,7 +247,7 @@ onMounted(fetchJobs)
                             </TableCell>
                             <TableCell class="text-muted-foreground">{{ job.agent_name }}</TableCell>
                             <TableCell>
-                                <Badge :variant="statusVariant(job.status)">
+                                <Badge :variant="statusVariant(job.status)" :class="statusClass(job.status)">
                                     {{ statusLabel(job.status) }}
                                 </Badge>
                             </TableCell>

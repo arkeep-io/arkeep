@@ -197,7 +197,7 @@ onMounted(async () => {
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchSnapshots">
+                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchSnapshots">
                     <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
                 </Button>
             </div>
@@ -242,7 +242,7 @@ onMounted(async () => {
         </div>
 
         <!-- Table -->
-        <div class="border rounded-md">
+        <div class="border rounded-md overflow-x-auto">
             <Table>
                 <TableHeader>
                     <TableRow>
@@ -272,7 +272,7 @@ onMounted(async () => {
                             <TableCell colspan="6">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                                     <div class="p-4 rounded-full bg-muted">
-                                        <Camera class="w-8 h-8 text-muted-foreground" />
+                                        <Camera class="w-10 h-10 text-muted-foreground" />
                                     </div>
                                     <div>
                                         <p class="font-medium">No snapshots found</p>
@@ -350,7 +350,7 @@ onMounted(async () => {
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                <AlertDialogAction variant="destructive"
                     :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
                 </AlertDialogAction>

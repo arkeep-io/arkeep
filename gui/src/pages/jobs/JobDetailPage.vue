@@ -23,6 +23,7 @@ import {
     XCircle,
     Clock,
     Loader,
+    HardDrive,
 } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
@@ -52,11 +53,20 @@ const error = ref<string | null>(null)
 // statusVariant maps a JobStatus to the appropriate shadcn Badge variant.
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
     switch (status) {
-        case 'succeeded': return 'default'
+        case 'succeeded': return 'outline'
         case 'running': return 'outline'
         case 'failed': return 'destructive'
-        case 'pending':
+        case 'pending': return 'outline'
         default: return 'secondary'
+    }
+}
+
+function statusClass(status: string): string {
+    switch (status) {
+        case 'succeeded': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
+        case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
+        case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        default: return ''
     }
 }
 
@@ -203,13 +213,13 @@ onMounted(fetchJob)
         <!-- Page header -->
         <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
-                <Button variant="ghost" size="icon" @click="router.push('/jobs')">
+                <Button variant="ghost" size="icon" aria-label="Back to jobs" @click="router.push('/jobs')">
                     <ArrowLeft class="w-4 h-4" />
                 </Button>
                 <div>
                     <div class="flex items-center gap-2">
                         <h1 class="text-2xl font-semibold tracking-tight">Job Detail</h1>
-                        <Badge v-if="job" :variant="statusVariant(job.status)" class="gap-1">
+                        <Badge v-if="job" :variant="statusVariant(job.status)" class="gap-1" :class="statusClass(job.status)">
                             <component :is="statusIcon(job.status)" class="w-3 h-3"
                                 :class="{ 'animate-spin': job.status === 'running' }" />
                             {{ statusLabel(job.status) }}
@@ -219,7 +229,7 @@ onMounted(fetchJob)
                 </div>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchJob">
+                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJob">
                     <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
                 </Button>
             </div>
@@ -279,8 +289,8 @@ onMounted(fetchJob)
 
         <!-- ── Destinations ────────────────────────────────────────────────── -->
         <div class="flex flex-col gap-3">
-            <h2 class="text-sm font-semibold">Destinations</h2>
-            <div class="border rounded-md">
+            <p class="text-sm font-medium">Destinations</p>
+            <div class="border rounded-md overflow-x-auto">
                 <Table>
                     <TableHeader>
                         <TableRow>
@@ -294,8 +304,8 @@ onMounted(fetchJob)
 
                         <!-- Loading skeletons -->
                         <template v-if="loading">
-                            <TableRow v-for="n in 2" :key="n">
-                                <TableCell v-for="col in 7" :key="col">
+                            <TableRow v-for="n in 5" :key="n">
+                                <TableCell v-for="col in 4" :key="col">
                                     <Skeleton class="w-full h-4" />
                                 </TableCell>
                             </TableRow>
@@ -305,9 +315,17 @@ onMounted(fetchJob)
                         <template v-else-if="!job?.destinations?.length">
                             <TableRow>
                                 <TableCell colspan="7">
-                                    <p class="text-center text-sm text-muted-foreground py-8">
-                                        No destination data available yet.
-                                    </p>
+                                    <div class="flex flex-col items-center justify-center gap-3 py-10 text-center">
+                                        <div class="p-4 rounded-full bg-muted">
+                                            <HardDrive class="w-10 h-10 text-muted-foreground" />
+                                        </div>
+                                        <div>
+                                            <p class="font-medium">No destination data</p>
+                                            <p class="mt-1 text-sm text-muted-foreground">
+                                                Destination details will appear once the job runs.
+                                            </p>
+                                        </div>
+                                    </div>
                                 </TableCell>
                             </TableRow>
                         </template>
@@ -317,7 +335,7 @@ onMounted(fetchJob)
                             <TableRow v-for="dest in job.destinations" :key="dest.id">
                                 <TableCell class="font-medium">{{ dest.destination_name }}</TableCell>
                                 <TableCell>
-                                    <Badge :variant="statusVariant(dest.status)">
+                                    <Badge :variant="statusVariant(dest.status)" :class="statusClass(dest.status)">
                                         {{ statusLabel(dest.status) }}
                                     </Badge>
                                 </TableCell>
@@ -338,7 +356,7 @@ onMounted(fetchJob)
         <!-- ── Logs ───────────────────────────────────────────────────────── -->
         <div class="flex flex-col gap-3">
             <div class="flex items-center justify-between">
-                <h2 class="text-sm font-semibold">Logs</h2>
+                <p class="text-sm font-medium">Logs</p>
                 <!-- Live indicator shown while the job is still running -->
                 <div v-if="isRunning" class="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span class="relative flex h-2 w-2">

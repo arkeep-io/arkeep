@@ -250,7 +250,7 @@ async function submitSMTP() {
                     Manage authentication and notification configuration.
                 </p>
             </div>
-            <Button variant="outline" size="icon" :disabled="loading" @click="fetchAll">
+            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchAll">
                 <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
             </Button>
         </div>
@@ -266,7 +266,7 @@ async function submitSMTP() {
                 <div class="flex flex-col gap-6 max-w-xl">
 
                     <div>
-                        <h2 class="text-sm font-semibold">OpenID Connect</h2>
+                        <p class="text-sm font-medium">OpenID Connect</p>
                         <p class="mt-1 text-sm text-muted-foreground">
                             Allow users to log in with an external identity provider (Keycloak, Okta,
                             Google Workspace, etc.). Only one provider is supported at a time.
@@ -405,7 +405,7 @@ async function submitSMTP() {
                 <div class="flex flex-col gap-6 max-w-xl">
 
                     <div>
-                        <h2 class="text-sm font-semibold">SMTP</h2>
+                        <p class="text-sm font-medium">SMTP</p>
                         <p class="mt-1 text-sm text-muted-foreground">
                             Configure an outbound SMTP server to send email notifications for backup
                             successes, failures, and agent events.
