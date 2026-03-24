@@ -238,7 +238,7 @@ func run(ctx context.Context, cfg *config) error {
 		}
 	}()
 
-	// --- HTTP server ---
+	// --- HTTP router ---
 	router := api.NewRouter(api.RouterConfig{
 		AuthService:   authService,
 		Scheduler:     sched,
@@ -257,7 +257,9 @@ func run(ctx context.Context, cfg *config) error {
 		Secure:        cfg.secureCookies,
 		Dashboard:     dashboardRepo,
 	})
+	api.MountGUI(router, guiFS())
 
+	// --- HTTP server ---
 	httpSrv := &http.Server{
 		Addr:         cfg.httpAddr,
 		Handler:      router,

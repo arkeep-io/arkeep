@@ -46,7 +46,7 @@ type RouterConfig struct {
 // NewRouter builds and returns the fully configured Chi router.
 // All routes are registered under /api/v1. The GUI is served as a catch-all
 // from the root — this is wired in main.go after embedding the frontend assets.
-func NewRouter(cfg RouterConfig) http.Handler {
+func NewRouter(cfg RouterConfig) *chi.Mux {
 	r := chi.NewRouter()
 
 	// --- Global middleware ---

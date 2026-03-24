@@ -31,7 +31,6 @@ Thumbs.db
 desktop.ini
 
 # ─── IDE ──────────────────────────────────────────────────────────────────────
-.claude/
 .vscode/
 .idea/
 *.swp
@@ -53,3 +52,9 @@ deploy/helm/**/charts/*.tgz
 # we ignore by pattern rather than explicit names.
 agent/internal/restic/bin/*
 !agent/internal/restic/bin/.gitkeep
+
+# ─── Embedded GUI (populated by pnpm build + cp, not committed) ──────────────
+# The dist/ directory is copied into the go:embed path by GoReleaser/Docker.
+# Only .gitkeep is tracked so the empty directory compiles locally.
+server/cmd/server/dist/*
+!server/cmd/server/dist/.gitkeep

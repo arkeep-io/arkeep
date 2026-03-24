@@ -22,10 +22,18 @@ tasks:
     desc: Build all components
     deps: [build:server, build:agent]
 
+  build:gui:
+    desc: Build the Vue GUI (output to gui/dist/)
+    dir: gui
+    cmd: pnpm build
+
   build:server:
-    desc: Build server binary
+    desc: Build server binary (builds GUI first and embeds it)
+    deps: [build:gui]
     dir: server
-    cmd: go build -ldflags="{{.LDFLAGS}}" -o ../bin/arkeep-server ./cmd/server
+    cmds:
+      - cp -r ../gui/dist/. cmd/server/dist
+      - go build -ldflags="{{.LDFLAGS}}" -o ../bin/arkeep-server ./cmd/server
 
   build:agent:
     desc: Build agent binary (embeds restic + rclone — downloads them first if missing)

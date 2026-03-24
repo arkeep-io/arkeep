@@ -2,7 +2,20 @@
 #
 #   docker build -f server/Dockerfile -t arkeep-server .
 
-# ─── Stage 1: build ───────────────────────────────────────────────────────────
+# ─── Stage 1: build GUI ───────────────────────────────────────────────────────
+FROM node:22-alpine AS gui-builder
+
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+WORKDIR /src/gui
+
+COPY gui/package.json gui/pnpm-lock.yaml* ./
+RUN pnpm install --frozen-lockfile
+
+COPY gui/ ./
+RUN pnpm build
+
+# ─── Stage 2: build server ────────────────────────────────────────────────────
 FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git
@@ -12,6 +25,9 @@ WORKDIR /src
 COPY go.work go.work.sum* ./
 COPY shared/  ./shared/
 COPY server/  ./server/
+
+# Inject the GUI dist built in stage 1 into the go:embed path
+COPY --from=gui-builder /src/gui/dist ./server/cmd/server/dist
 
 # All Go commands run from /src/server with GOWORK=off.
 # agent/ is not present in the build context so go.work cannot be satisfied.

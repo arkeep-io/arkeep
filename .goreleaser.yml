@@ -20,6 +20,9 @@ before:
     # The server embeds the GUI dist/ directory via go:embed at build time.
     - sh -c "cd gui && pnpm install --frozen-lockfile && pnpm build"
 
+    # Copy the Vite output into the embed path so go:embed picks it up.
+    - sh -c "cp -r gui/dist server/cmd/server/dist"
+
     # Download restic and rclone binaries for all supported platforms.
     # These are embedded into the agent binary via go:embed.
     - sh -c "cd agent && go run ./scripts/download_deps.go --all-platforms"
