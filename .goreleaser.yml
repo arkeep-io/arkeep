@@ -21,7 +21,9 @@ before:
     - sh -c "cd gui && pnpm install --frozen-lockfile && pnpm build"
 
     # Copy the Vite output into the embed path so go:embed picks it up.
-    - sh -c "cp -r gui/dist server/cmd/server/dist"
+    # The trailing /. copies the *contents* of dist, not the directory itself,
+    # avoiding a nested dist/dist/ structure inside the embed path.
+    - sh -c "cp -r gui/dist/. server/cmd/server/dist"
 
     # Download restic and rclone binaries for all supported platforms.
     # These are embedded into the agent binary via go:embed.
