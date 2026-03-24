@@ -440,7 +440,7 @@ are ever transmitted.**
 What is sent: a stable random instance ID, Arkeep version, OS, number of
 connected agents, and number of active policies.
 
-Aggregate stats are public at: https://arkeep-telemetry.arkeep.workers.dev/stats
+Aggregate stats are public at: https://telemetry.arkeep.io/stats
 
 To opt out: set `ARKEEP_TELEMETRY=false` or pass `--telemetry=false`.
 
