@@ -180,7 +180,7 @@ function loginWithOIDC(): void {
 
                         <!-- Decorative panel -->
                         <div class="relative hidden bg-black md:block overflow-hidden">
-                            <video src="/login-bg.mp4" class="absolute inset-0 h-full w-full object-cover scale-130"
+                            <video src="/login-bg.mp4" class="absolute inset-0 h-full w-full object-contain scale-130"
                                 autoplay loop muted playsinline />
                         </div>
 
