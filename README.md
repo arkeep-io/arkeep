@@ -99,7 +99,8 @@ way to verify everything ran successfully. Arkeep fixes this.
 | Retention policies | ✓ |
 | Email + webhook notifications | ✓ |
 | Restore & restore test | ✓ |
-| Helm chart | ✓ || Proxmox / VMware integration | 🗓 planned |
+| Helm chart | ✓ |
+| Proxmox / VMware integration | 🗓 planned |
 | Bandwidth throttling | 🗓 planned |
 | BYOK encryption key management | 🗓 planned |
 
@@ -305,6 +306,10 @@ task run:agent
 The GUI dev server proxies API requests to the server, so you can work on frontend
 and backend simultaneously with hot reload on both sides.
 
+> **Note:** In development, the GUI runs as a separate Vite dev server on port 5173.
+> In production (binary or Docker), the GUI is compiled and embedded directly inside
+> the server binary — no separate process or web server is needed.
+
 **First login:**
 
 Open `http://localhost:8080` in your browser. On first access you will be
@@ -358,16 +363,19 @@ arkeep/
 ### Available Tasks
 
 ```bash
-task build          # Build all binaries (server + agent)
+task build          # Build all binaries (server + agent, GUI included)
+task build:server   # Build server binary (builds GUI first, then embeds it)
+task build:agent    # Build agent binary (downloads restic + rclone first)
+task build:gui      # Build the Vue GUI only (output to gui/dist/)
 task test           # Run all tests (Go + GUI)
 task lint           # Run linters (golangci-lint + vue-tsc)
 task proto          # Regenerate gRPC code from .proto definitions
 task tidy           # Tidy all Go modules
 task clean          # Remove build artifacts
 
-task run:server     # Run the server in development mode
+task run:server     # Run the server in development mode (GUI via task run:gui)
 task run:agent      # Run the agent in development mode
-task run:gui        # Run the GUI dev server (Vite HMR)
+task run:gui        # Run the GUI dev server with HMR (proxies API to :8080)
 
 task deps:download  # Download restic and rclone binaries for the current platform
 ```

@@ -39,7 +39,12 @@ task deps:download   # download restic + rclone binaries
 task proto           # generate gRPC code
 task run:server      # terminal 1
 task run:gui         # terminal 2
-task run:agent       # terminal 3
+task run:agent       # terminal 3 — agent connecting to localhost:9090
+```
+
+To build a production binary with the GUI embedded:
+```bash
+task build:server   # builds GUI first, then compiles Go with GUI embedded
 ```
 
 ---
