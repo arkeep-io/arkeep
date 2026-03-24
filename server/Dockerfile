@@ -3,7 +3,7 @@
 #   docker build -f server/Dockerfile -t arkeep-server .
 
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
-FROM node:22-alpine AS gui-builder
+FROM node:24-alpine AS gui-builder
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -47,7 +47,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
     ./cmd/server
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM alpine:3.21
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S arkeep && \

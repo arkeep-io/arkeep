@@ -7,7 +7,7 @@
 # The restic and rclone binaries are embedded inside arkeep-agent at
 # compile time via go:embed, so no additional binaries are needed here.
 
-FROM alpine:3.21
+FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S arkeep && \
