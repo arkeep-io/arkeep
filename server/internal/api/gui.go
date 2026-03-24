@@ -26,7 +26,7 @@ func MountGUI(r *chi.Mux, assets fs.FS) {
 
 	// Catch-all: serve index.html for all other paths (Vue Router history mode)
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = "/"
+		r.URL.Path = "/index.html"
 		fileServer.ServeHTTP(w, r)
 	})
 }
