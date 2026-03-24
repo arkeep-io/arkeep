@@ -24,9 +24,7 @@ func MountGUI(r *chi.Mux, assets fs.FS) {
 	r.Get("/registerSW.js", fileServer.ServeHTTP)
 	r.Get("/sw.js", fileServer.ServeHTTP)
 
-	// Catch-all: serve index.html for all other paths (Vue Router history mode)
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = "/index.html"
-		fileServer.ServeHTTP(w, r)
+		http.ServeFileFS(w, r, assets, "index.html")
 	})
 }
