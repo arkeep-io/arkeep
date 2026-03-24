@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Plus,
+  RefreshCw,
   MoreHorizontal,
   PencilLine,
   Trash2,
@@ -172,6 +173,9 @@ onMounted(fetchDestinations)
         </p>
       </div>
       <div class="flex items-center gap-2">
+        <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchDestinations">
+          <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
+        </Button>
         <Button @click="openCreate">
           <Plus class="w-4 h-4" />
           New Destination

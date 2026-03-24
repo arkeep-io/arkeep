@@ -13,6 +13,7 @@ Group=arkeep-agent
 
 ExecStart=/usr/local/bin/arkeep-agent \
     --server-addr=${ARKEEP_SERVER_ADDR} \
+    --state-dir=/var/lib/arkeep-agent \
     --log-level=${ARKEEP_LOG_LEVEL:-info}
 
 # Environment file — copy to /etc/arkeep/agent.env and fill in the values.

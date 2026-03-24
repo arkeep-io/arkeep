@@ -66,7 +66,7 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 
 	root.AddCommand(newVersionCmd())
 
-	root.PersistentFlags().StringVar(&cfg.serverAddr, "server-addr", envOrDefault("ARKEEP_SERVER", "localhost:9090"), "Arkeep server gRPC address (host:port)")
+	root.PersistentFlags().StringVar(&cfg.serverAddr, "server-addr", envOrDefault("ARKEEP_SERVER_ADDR", "localhost:9090"), "Arkeep server gRPC address (host:port)")
 	root.PersistentFlags().StringVar(&cfg.sharedSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC authentication (must match server ARKEEP_AGENT_SECRET)")
 	root.PersistentFlags().StringVar(&cfg.stateDir, "state-dir", envOrDefault("ARKEEP_STATE_DIR", defaultStateDir()), "Directory for agent state (agent-state.json, extracted binaries)")
 	root.PersistentFlags().StringVar(&cfg.dockerSocket, "docker-socket", envOrDefault("ARKEEP_DOCKER_SOCKET", ""), "Docker socket path (empty = platform default)")

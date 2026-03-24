@@ -48,6 +48,7 @@ services:
       # service name — Docker Compose networking resolves "server" automatically.
       ARKEEP_SERVER_ADDR: "server:9090"
       ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET}"
+      ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
     volumes:

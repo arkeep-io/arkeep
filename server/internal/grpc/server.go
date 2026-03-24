@@ -186,46 +186,62 @@ func (s *Server) validateToken(ctx context.Context) error {
 // ─── AgentService implementation ─────────────────────────────────────────────
 
 // Register handles the initial agent registration RPC.
-// It upserts the agent record in the database and returns the agent's
-// persistent ID. On reconnect, the agent passes back its stored ID so the
-// server can match it to the existing record instead of creating a duplicate.
+// Upsert logic:
+//   - If agent sends a persisted agent_id → look up by ID, update metadata.
+//   - Otherwise (first-ever run, or DB wiped) → create a new record.
 //
-// Upsert logic: look up by hostname first. If found, update metadata and
-// return the existing ID. If not found, create a new record.
+// hostname is stored as display/operational metadata only; it is never used
+// as an identity key.
 func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*proto.RegisterResponse, error) {
 	logger := s.logger.With(zap.String("hostname", req.Hostname))
 
-	existing, err := s.agentRepo.GetByHostname(ctx, req.Hostname)
-	if err != nil && err != repositories.ErrNotFound {
-		logger.Error("failed to look up agent by hostname", zap.Error(err))
-		return nil, status.Error(codes.Internal, "registration failed")
-	}
+	// ── Reconnect: agent has a persisted agent_id ─────────────────────────────
+	if req.AgentId != "" {
+		agentID, err := uuid.Parse(req.AgentId)
+		if err != nil {
+			logger.Error("register: malformed agent_id",
+				zap.String("agent_id", req.AgentId),
+				zap.Error(err),
+			)
+			return nil, status.Error(codes.InvalidArgument, "invalid agent_id")
+		}
 
-	if existing != nil {
-		// Agent already known — update its metadata in case the version,
-		// OS, or arch changed since the last connection (e.g. after an upgrade).
-		existing.Version = req.Version
-		existing.OS = req.Os
-		existing.Arch = req.Arch
-
-		if err := s.agentRepo.Update(ctx, existing); err != nil {
-			logger.Error("failed to update agent record", zap.Error(err))
+		existing, err := s.agentRepo.GetByID(ctx, agentID)
+		if err != nil && err != repositories.ErrNotFound {
+			logger.Error("register: db lookup failed", zap.Error(err))
 			return nil, status.Error(codes.Internal, "registration failed")
 		}
 
-		// Cache the capabilities so StreamJobs can read docker availability
-		// without an additional DB lookup (the DB model does not persist them).
-		s.cacheCapabilities(existing.ID.String(), req.Capabilities)
+		if existing != nil {
+			existing.Hostname = req.Hostname
+			existing.Version = req.Version
+			existing.OS = req.Os
+			existing.Arch = req.Arch
 
-		logger.Info("agent re-registered", zap.String("agent_id", existing.ID.String()))
-		return &proto.RegisterResponse{
-			AgentId:   existing.ID.String(),
-			AgentName: existing.Name,
-		}, nil
+			if err := s.agentRepo.Update(ctx, existing); err != nil {
+				logger.Error("register: failed to update agent record", zap.Error(err))
+				return nil, status.Error(codes.Internal, "registration failed")
+			}
+
+			s.cacheCapabilities(existing.ID.String(), req.Capabilities)
+
+			logger.Info("agent re-registered",
+				zap.String("agent_id", existing.ID.String()),
+			)
+			return &proto.RegisterResponse{
+				AgentId:   existing.ID.String(),
+				AgentName: existing.Name,
+			}, nil
+		}
+
+		// agent_id not found (DB was wiped) — fall through to create a new record.
+		logger.Warn("register: agent_id not found in DB, creating new record",
+			zap.String("agent_id", req.AgentId),
+		)
 	}
 
-	// First-time registration: create a new agent record.
-	// The ID is a UUIDv7 generated in the BeforeCreate hook (see db/models.go).
+	// ── First-time registration ───────────────────────────────────────────────
+	// ID is a UUIDv7 generated in the BeforeCreate hook (see db/models.go).
 	// Default display name is the hostname — the user can rename it in the GUI.
 	agent := &db.Agent{
 		Name:     req.Hostname,
@@ -233,18 +249,19 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 		Version:  req.Version,
 		OS:       req.Os,
 		Arch:     req.Arch,
-		Status:   "offline", // will transition to "online" when StreamJobs opens
+		Status:   "offline", // transitions to "online" when StreamJobs opens
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
-		logger.Error("failed to create agent record", zap.Error(err))
+		logger.Error("register: failed to create agent record", zap.Error(err))
 		return nil, status.Error(codes.Internal, "registration failed")
 	}
 
-	// Cache the capabilities so StreamJobs can read docker availability.
 	s.cacheCapabilities(agent.ID.String(), req.Capabilities)
 
-	logger.Info("agent registered for the first time", zap.String("agent_id", agent.ID.String()))
+	logger.Info("agent registered for the first time",
+		zap.String("agent_id", agent.ID.String()),
+	)
 	return &proto.RegisterResponse{
 		AgentId:   agent.ID.String(),
 		AgentName: agent.Name,

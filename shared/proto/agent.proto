@@ -86,6 +86,12 @@ message RegisterRequest {
   // capabilities advertised by this agent instance — the server uses these
   // to validate that a policy assigned to this agent is actually executable
   AgentCapabilities capabilities = 5;
+  // agent_id is the persistent UUID previously returned by the server and stored
+  // locally by the agent. When non-empty, the server uses it as the primary key
+  // for deduplication and upsert, ensuring the same physical agent is never
+  // registered twice even if its hostname changes (e.g. Docker redeploy).
+  // Empty on first-ever registration; populated on all subsequent connects.
+  string agent_id = 6;
 }
 
 // AgentCapabilities describes which optional features are available on the agent.

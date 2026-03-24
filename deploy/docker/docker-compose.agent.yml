@@ -16,6 +16,7 @@ services:
     environment:
       ARKEEP_SERVER_ADDR: "${ARKEEP_SERVER_ADDR:?ARKEEP_SERVER_ADDR is required — gRPC address, e.g. arkeep.example.com:9090}"
       ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — must match the server}"
+      ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
     volumes:

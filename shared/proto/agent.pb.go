@@ -222,7 +222,13 @@ type RegisterRequest struct {
 	Arch string `protobuf:"bytes,4,opt,name=arch,proto3" json:"arch,omitempty"`
 	// capabilities advertised by this agent instance — the server uses these
 	// to validate that a policy assigned to this agent is actually executable
-	Capabilities  *AgentCapabilities `protobuf:"bytes,5,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Capabilities *AgentCapabilities `protobuf:"bytes,5,opt,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// agent_id is the persistent UUID previously returned by the server and stored
+	// locally by the agent. When non-empty, the server uses it as the primary key
+	// for deduplication and upsert, ensuring the same physical agent is never
+	// registered twice even if its hostname changes (e.g. Docker redeploy).
+	// Empty on first-ever registration; populated on all subsequent connects.
+	AgentId       string `protobuf:"bytes,6,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -290,6 +296,13 @@ func (x *RegisterRequest) GetCapabilities() *AgentCapabilities {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *RegisterRequest) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
 }
 
 // AgentCapabilities describes which optional features are available on the agent.
@@ -1339,13 +1352,14 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa9\x01\n" +
+	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc4\x01\n" +
 	"\x0fRegisterRequest\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x0e\n" +
 	"\x02os\x18\x03 \x01(\tR\x02os\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12<\n" +
-	"\fcapabilities\x18\x05 \x01(\v2\x18.agent.AgentCapabilitiesR\fcapabilities\"[\n" +
+	"\fcapabilities\x18\x05 \x01(\v2\x18.agent.AgentCapabilitiesR\fcapabilities\x12\x19\n" +
+	"\bagent_id\x18\x06 \x01(\tR\aagentId\"[\n" +
 	"\x11AgentCapabilities\x12\x16\n" +
 	"\x06docker\x18\x01 \x01(\bR\x06docker\x12\x16\n" +
 	"\x06restic\x18\x02 \x01(\bR\x06restic\x12\x16\n" +

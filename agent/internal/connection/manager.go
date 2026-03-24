@@ -286,16 +286,18 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 		Os:           runtime.GOOS,
 		Arch:         runtime.GOARCH,
 		Capabilities: caps,
+		AgentId:      state.AgentID, // empty on first run; server uses it as primary dedup key
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("register RPC failed: %w", err)
 	}
 
-	// Persist the agent ID if it changed (first run or server reassignment).
+	// Persist the agent ID returned by the server (only changes on first run).
 	if resp.AgentId != state.AgentID {
 		if err := saveState(m.cfg.StateDir, agentState{AgentID: resp.AgentId}); err != nil {
-			// Non-fatal: the server deduplicates by hostname so no duplicate
-			// record is created on the next restart.
+			// Non-fatal on this run, but the next restart will register as a
+			// new agent (no persisted ID to send). Fix the state dir permissions
+			// if this warning appears repeatedly.
 			m.logger.Warn("failed to persist agent state", zap.Error(err))
 		}
 	}
