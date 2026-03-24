@@ -50,7 +50,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
 # ─── Stage 3: runtime ─────────────────────────────────────────────────────────
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata && \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata && \
     addgroup -S arkeep && \
     adduser  -S -G arkeep arkeep
 
