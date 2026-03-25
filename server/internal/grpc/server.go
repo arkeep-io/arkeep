@@ -217,6 +217,7 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 			existing.Version = req.Version
 			existing.OS = req.Os
 			existing.Arch = req.Arch
+			existing.DockerAvailable = req.Capabilities != nil && req.Capabilities.Docker
 
 			if err := s.agentRepo.Update(ctx, existing); err != nil {
 				logger.Error("register: failed to update agent record", zap.Error(err))
@@ -244,12 +245,13 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 	// ID is a UUIDv7 generated in the BeforeCreate hook (see db/models.go).
 	// Default display name is the hostname — the user can rename it in the GUI.
 	agent := &db.Agent{
-		Name:     req.Hostname,
-		Hostname: req.Hostname,
-		Version:  req.Version,
-		OS:       req.Os,
-		Arch:     req.Arch,
-		Status:   "offline", // transitions to "online" when StreamJobs opens
+		Name:            req.Hostname,
+		Hostname:        req.Hostname,
+		Version:         req.Version,
+		OS:              req.Os,
+		Arch:            req.Arch,
+		Status:          "offline", // transitions to "online" when StreamJobs opens
+		DockerAvailable: req.Capabilities != nil && req.Capabilities.Docker,
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {

@@ -157,6 +157,8 @@ dockers:
       - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-amd64"
       - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-amd64"
     dockerfile: agent/Dockerfile.goreleaser
+    extra_files:
+      - agent/entrypoint.sh
     use: buildx
     build_flag_templates:
       - "--platform=linux/amd64"
@@ -176,6 +178,8 @@ dockers:
       - "ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}-arm64"
       - "docker.io/arkeepio/arkeep-agent:{{ .Tag }}-arm64"
     dockerfile: agent/Dockerfile.goreleaser
+    extra_files:
+      - agent/entrypoint.sh
     use: buildx
     build_flag_templates:
       - "--platform=linux/arm64"

@@ -51,19 +51,20 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
 FROM alpine:3.23
 
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates tzdata && \
+    apk add --no-cache ca-certificates tzdata su-exec && \
     addgroup -S arkeep && \
     adduser  -S -G arkeep arkeep
 
 COPY --from=builder /out/arkeep-agent /usr/local/bin/arkeep-agent
+COPY agent/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 RUN mkdir -p /var/lib/arkeep-agent && \
     chown arkeep:arkeep /var/lib/arkeep-agent
-
-USER arkeep
 
 VOLUME ["/var/lib/arkeep-agent"]
 
 ENV ARKEEP_STATE_DIR=/var/lib/arkeep-agent
 
-ENTRYPOINT ["arkeep-agent"]
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["arkeep-agent"]
