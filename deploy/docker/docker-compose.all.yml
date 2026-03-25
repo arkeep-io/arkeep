@@ -27,8 +27,15 @@ services:
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
+      # ── gRPC TLS ───────────────────────────────────────────────────────────────
+      # In all-in-one mode, server and agent share the same Docker network, so
+      # TLS between them is optional. If you want TLS, mount your cert and enable:
+      #   ARKEEP_GRPC_TLS_CERT: "/etc/arkeep/tls/tls.crt"
+      #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
     volumes:
       - arkeep-data:/var/lib/arkeep
+      # Uncomment to mount TLS certificates for gRPC:
+      # - /etc/arkeep/tls:/etc/arkeep/tls:ro
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -51,6 +58,10 @@ services:
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
+      # The agent and server share the same internal Docker network, so TLS is
+      # disabled here. Remove this line only if you enable TLS on the server above
+      # and mount the corresponding CA certificate for the agent to verify.
+      ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
       # Docker socket — read-only, for automatic container and volume discovery.

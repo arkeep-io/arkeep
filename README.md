@@ -138,6 +138,15 @@ docker compose up -d
 
 The GUI is available at `http://localhost:8080`.
 
+**gRPC TLS with Docker:**
+
+The agent connects with TLS by default. Two options for the server:
+
+- **Reverse proxy (recommended):** put Caddy or Nginx in front and let it handle TLS termination for HTTP (port 8080) and gRPC (port 9090). No cert config inside the containers.
+- **Direct TLS:** mount a certificate and set `ARKEEP_GRPC_TLS_CERT`/`ARKEEP_GRPC_TLS_KEY` on the server container (see the commented lines in `docker-compose.yml` and `.env.example`).
+
+The **all-in-one** compose file sets `ARKEEP_GRPC_INSECURE=true` on the agent automatically, since server and agent share the same private Docker network.
+
 **Agent only** (on the machines you want to back up):
 
 ```bash
@@ -166,7 +175,7 @@ Pre-built binaries for Linux, macOS, and Windows are available on the
 # Download and extract the server binary for your platform
 curl -L https://github.com/arkeep-io/arkeep/releases/latest/download/arkeep-server_linux_amd64.tar.gz | tar xz
 
-# Generate a secret key
+# Generate secrets
 export ARKEEP_SECRET_KEY=$(openssl rand -hex 32)
 export ARKEEP_AGENT_SECRET=$(openssl rand -hex 32)
 
@@ -174,8 +183,15 @@ export ARKEEP_AGENT_SECRET=$(openssl rand -hex 32)
   --db-dsn /var/lib/arkeep/arkeep.db \
   --data-dir /var/lib/arkeep/data \
   --http-addr :8080 \
-  --grpc-addr :9090
+  --grpc-addr :9090 \
+  --grpc-tls-cert /etc/arkeep/server.crt \
+  --grpc-tls-key  /etc/arkeep/server.key
 ```
+
+> **TLS:** provide a certificate for `--grpc-tls-cert`/`--grpc-tls-key` in production.
+> The simplest approach is to put Caddy or Nginx in front and let them handle
+> TLS termination for both ports. When running without a reverse proxy, obtain a
+> certificate with `certbot` or use a self-signed one (`openssl req -x509 ...`).
 
 **Agent:**
 
@@ -187,6 +203,10 @@ curl -L https://github.com/arkeep-io/arkeep/releases/latest/download/arkeep-agen
   --agent-secret your-agent-secret \
   --state-dir /var/lib/arkeep-agent
 ```
+
+> **TLS:** the agent connects with TLS by default using the system certificate pool.
+> No extra flags are needed when the server certificate is from a trusted CA (Let's Encrypt).
+> For self-signed certs add `--grpc-tls-ca /path/to/ca.crt`.
 
 ---
 
@@ -209,6 +229,8 @@ sudo mkdir -p /etc/arkeep
 sudo tee /etc/arkeep/agent.env > /dev/null <<EOF
 ARKEEP_SERVER_ADDR=your-server:9090
 ARKEEP_AGENT_SECRET=your-agent-secret
+# For self-signed server certs only — leave empty for Let's Encrypt/trusted CAs:
+# ARKEEP_GRPC_TLS_CA=/etc/arkeep/ca.crt
 EOF
 sudo chmod 600 /etc/arkeep/agent.env
 
@@ -220,8 +242,8 @@ sudo journalctl -u arkeep-agent -f
 
 ## Configuration
 
-All options can be set via CLI flags or environment variables. Environment variables
-take precedence when both are provided.
+All options can be set via CLI flags or environment variables. CLI flags take
+precedence over environment variables when both are provided.
 
 ### Server Configuration
 
@@ -229,6 +251,8 @@ take precedence when both are provided.
 |---|---|---|---|
 | `--http-addr` | `ARKEEP_HTTP_ADDR` | `:8080` | HTTP API and GUI listen address |
 | `--grpc-addr` | `ARKEEP_GRPC_ADDR` | `:9090` | gRPC listen address for agents |
+| `--grpc-tls-cert` | `ARKEEP_GRPC_TLS_CERT` | — | Path to PEM certificate for gRPC TLS (requires `--grpc-tls-key`) |
+| `--grpc-tls-key` | `ARKEEP_GRPC_TLS_KEY` | — | Path to PEM private key for gRPC TLS (requires `--grpc-tls-cert`) |
 | `--db-driver` | `ARKEEP_DB_DRIVER` | `sqlite` | Database driver (`sqlite` or `postgres`) |
 | `--db-dsn` | `ARKEEP_DB_DSN` | `./arkeep.db` | SQLite file path or PostgreSQL DSN |
 | `--secret-key` | `ARKEEP_SECRET_KEY` | — | **Required.** Master key for AES-256-GCM credential encryption |
@@ -263,6 +287,8 @@ postgres://arkeep:password@localhost:5432/arkeep?sslmode=require
 | `--state-dir` | `ARKEEP_STATE_DIR` | `~/.arkeep` | Directory for agent state and extracted binaries |
 | `--docker-socket` | `ARKEEP_DOCKER_SOCKET` | *(platform default)* | Docker socket path |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level |
+| `--grpc-tls-ca` | `ARKEEP_GRPC_TLS_CA` | — | Path to CA certificate for gRPC TLS (only needed for self-signed server certs) |
+| `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport (development only) |
 
 ---
 
@@ -355,7 +381,7 @@ arkeep/
 ├── deploy/
 │   ├── docker/                 # Docker Compose files
 │   ├── systemd/                # systemd unit file for the agent
-│   └── helm/                   # Helm chart (work in progress)
+│   └── helm/                   # Helm chart
 ├── go.work                     # Go workspace (agent + server + shared)
 └── Taskfile.yml                # Task runner
 ```
@@ -417,7 +443,7 @@ to run multiple server replicas behind a load balancer.
 
 **Is there a Kubernetes deployment?**
 
-Yes. A Helm chart is available in `deploy/helm/`. For simpler setups, Docker Compose on a single node is also supported.
+Yes. A Helm chart is available in `deploy/helm/`. Set `grpc.tls.existingSecret` to the name of a TLS Secret (type `kubernetes.io/tls`) to enable TLS on the gRPC port — cert-manager with Let's Encrypt is the recommended approach. For simpler setups, Docker Compose on a single node is also supported.
 
 ---
 

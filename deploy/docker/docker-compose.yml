@@ -25,8 +25,19 @@ services:
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
+      # ── gRPC TLS (recommended in production) ──────────────────────────────────
+      # Option A — terminate TLS inside the container:
+      #   Mount your certificate files and uncomment the two lines below.
+      #   ARKEEP_GRPC_TLS_CERT: "/etc/arkeep/tls/tls.crt"
+      #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
+      #
+      # Option B — terminate TLS at a reverse proxy (Caddy, Nginx, Traefik):
+      #   Leave these lines commented. Expose port 9090 only on the internal
+      #   network and let the proxy handle TLS for both HTTP and gRPC traffic.
     volumes:
       - arkeep-data:/var/lib/arkeep
+      # Uncomment to mount TLS certificates (Option A above):
+      # - /etc/arkeep/tls:/etc/arkeep/tls:ro
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s

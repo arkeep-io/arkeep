@@ -75,7 +75,7 @@ tasks:
     desc: Run agent in development mode (downloads deps if needed)
     deps: [deps:download]
     dir: agent
-    cmd: go run ./cmd/agent --server-addr=localhost:9090 --log-level=debug
+    cmd: go run ./cmd/agent --server-addr=localhost:9090 --log-level=debug --grpc-insecure
     env:
       ARKEEP_AGENT_SECRET: dev-agent-secret
   

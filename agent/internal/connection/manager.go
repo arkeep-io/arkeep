@@ -28,8 +28,11 @@ import (
 	"sync"
 	"time"
 
+	"crypto/tls"
+
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -117,7 +120,7 @@ func saveState(stateDir string, s agentState) error {
 
 // Config holds all parameters needed to connect to the server.
 type Config struct {
-	// ServerAddr is the gRPC server address (e.g. "localhost:9090").
+	// ServerAddr is the gRPC server address (e.g. "arkeep.example.com:9090").
 	ServerAddr string
 	// SharedSecret is the shared secret sent in gRPC metadata for authentication.
 	// Must match the ARKEEP_AGENT_SECRET configured on the server.
@@ -128,6 +131,12 @@ type Config struct {
 	// Version is the agent binary version, sent during registration.
 	Version string
 	DockerAvailable bool
+	// TLSCAFile is the path to a PEM-encoded CA certificate used to verify the
+	// server's TLS certificate. Required when the server uses a self-signed cert.
+	// Leave empty to use the system certificate pool (e.g. Let's Encrypt certs).
+	TLSCAFile string
+	// Insecure disables TLS entirely. For development only — never use in production.
+	Insecure bool
 }
 
 // Manager maintains the persistent gRPC connection to the server.
@@ -195,12 +204,41 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// buildTransportCredentials returns the appropriate gRPC transport credentials
+// based on the agent configuration:
+//   - Insecure=true → plaintext (dev only)
+//   - TLSCAFile set  → TLS with a custom CA certificate (self-signed server certs)
+//   - default        → TLS using the system certificate pool (Let's Encrypt, etc.)
+func (m *Manager) buildTransportCredentials() (credentials.TransportCredentials, error) {
+	if m.cfg.Insecure {
+		m.logger.Warn("gRPC transport is unencrypted (--grpc-insecure) — do not use in production")
+		return insecure.NewCredentials(), nil
+	}
+
+	if m.cfg.TLSCAFile != "" {
+		creds, err := credentials.NewClientTLSFromFile(m.cfg.TLSCAFile, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to load CA certificate %q: %w", m.cfg.TLSCAFile, err)
+		}
+		return creds, nil
+	}
+
+	// Default: system certificate pool. Works with Let's Encrypt and any
+	// publicly trusted CA. ServerName is derived from the host in ServerAddr.
+	return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12}), nil
+}
+
 // connect establishes one gRPC session: dial → register → run loops.
 // Returns when the session ends (error or context cancellation).
 func (m *Manager) connect(ctx context.Context) error {
+	transportCreds, err := m.buildTransportCredentials()
+	if err != nil {
+		return fmt.Errorf("failed to build transport credentials: %w", err)
+	}
+
 	conn, err := grpc.NewClient(
 		m.cfg.ServerAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transportCreds),
 	)
 	if err != nil {
 		return fmt.Errorf("dial failed: %w", err)

@@ -19,8 +19,19 @@ services:
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
+      # ── gRPC TLS ───────────────────────────────────────────────────────────────
+      # The agent connects with TLS by default using the system certificate pool.
+      # No extra config is needed when the server uses a Let's Encrypt certificate.
+      #
+      # For self-signed server certificates, provide the CA:
+      #   ARKEEP_GRPC_TLS_CA: "/etc/arkeep/tls/ca.crt"
+      #
+      # To disable TLS entirely (development only — never in production):
+      #   ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
+      # Uncomment to mount a custom CA certificate for self-signed server certs:
+      # - /etc/arkeep/tls:/etc/arkeep/tls:ro
       # Docker socket — read-only, for automatic container and volume discovery.
       # Remove if you do not need Docker volume backups.
       - /var/run/docker.sock:/var/run/docker.sock:ro

@@ -37,6 +37,8 @@ var (
 type config struct {
 	httpAddr      string
 	grpcAddr      string
+	grpcTLSCert   string
+	grpcTLSKey    string
 	dbDriver      string
 	dbDSN         string
 	secretKey     string
@@ -72,6 +74,8 @@ and manages scheduling, policies, and notifications.`,
 
 	root.PersistentFlags().StringVar(&cfg.httpAddr, "http-addr", envOrDefault("ARKEEP_HTTP_ADDR", ":8080"), "HTTP API and GUI listen address")
 	root.PersistentFlags().StringVar(&cfg.grpcAddr, "grpc-addr", envOrDefault("ARKEEP_GRPC_ADDR", ":9090"), "gRPC server listen address for agents")
+	root.PersistentFlags().StringVar(&cfg.grpcTLSCert, "grpc-tls-cert", envOrDefault("ARKEEP_GRPC_TLS_CERT", ""), "Path to PEM certificate file for gRPC TLS (requires --grpc-tls-key)")
+	root.PersistentFlags().StringVar(&cfg.grpcTLSKey, "grpc-tls-key", envOrDefault("ARKEEP_GRPC_TLS_KEY", ""), "Path to PEM private key file for gRPC TLS (requires --grpc-tls-cert)")
 	root.PersistentFlags().StringVar(&cfg.dbDriver, "db-driver", envOrDefault("ARKEEP_DB_DRIVER", "sqlite"), "Database driver (sqlite or postgres)")
 	root.PersistentFlags().StringVar(&cfg.dbDSN, "db-dsn", envOrDefault("ARKEEP_DB_DSN", "./arkeep.db"), "Database DSN or file path for SQLite")
 	root.PersistentFlags().StringVar(&cfg.secretKey, "secret-key", envOrDefault("ARKEEP_SECRET_KEY", ""), "Master secret key for encrypting credentials at rest (required)")
@@ -221,6 +225,8 @@ func run(ctx context.Context, cfg *config) error {
 		grpcserver.Config{
 			ListenAddr:   cfg.grpcAddr,
 			SharedSecret: cfg.agentSecret,
+			TLSCertFile:  cfg.grpcTLSCert,
+			TLSKeyFile:   cfg.grpcTLSKey,
 			NotifService: notifService,
 		},
 		agentMgr,

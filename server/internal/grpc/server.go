@@ -6,10 +6,10 @@
 // and the rest of the server: it delegates connection lifecycle to
 // agentmanager and persistence to AgentRepository.
 //
-// Security note: in production, the gRPC listener should be wrapped with
-// TLS. For the initial release, mutual TLS between server and agent is on
-// the roadmap. Currently, agents authenticate via a shared token passed
-// in gRPC metadata (see authInterceptor).
+// TLS: when TLSCertFile and TLSKeyFile are set in Config, the gRPC listener
+// is wrapped with TLS. In production always provide a certificate — either
+// issued by a trusted CA (Let's Encrypt via Caddy/Nginx) or self-signed.
+// Agents authenticate via a shared token in gRPC metadata (see authInterceptor).
 package grpc
 
 import (
@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -49,6 +50,8 @@ type Server struct {
 	notifSvc     notification.Service
 	logger       *zap.Logger
 	sharedSecret string // shared secret agents must present in gRPC metadata
+	tlsCertFile  string
+	tlsKeyFile   string
 
 	// capabilitiesMu guards capabilitiesCache.
 	capabilitiesMu sync.Mutex
@@ -67,6 +70,11 @@ type Config struct {
 	// metadata key to authenticate. If empty, a warning is logged and
 	// authentication is disabled (development mode only — always set in production).
 	SharedSecret string
+	// TLSCertFile is the path to the PEM-encoded TLS certificate file.
+	// Both TLSCertFile and TLSKeyFile must be set to enable TLS.
+	TLSCertFile string
+	// TLSKeyFile is the path to the PEM-encoded TLS private key file.
+	TLSKeyFile string
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
@@ -91,6 +99,8 @@ func New(
 		notifSvc:          cfg.NotifService,
 		logger:            logger.Named("grpc"),
 		sharedSecret:      cfg.SharedSecret,
+		tlsCertFile:       cfg.TLSCertFile,
+		tlsKeyFile:        cfg.TLSKeyFile,
 		capabilitiesCache: make(map[string]*proto.AgentCapabilities),
 	}
 }
@@ -107,10 +117,28 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 		return fmt.Errorf("grpc: failed to listen on %s: %w", listenAddr, err)
 	}
 
-	grpcServer := grpc.NewServer(
+	opts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(s.authUnaryInterceptor),
 		grpc.StreamInterceptor(s.authStreamInterceptor),
-	)
+	}
+
+	if s.tlsCertFile != "" && s.tlsKeyFile != "" {
+		creds, err := credentials.NewServerTLSFromFile(s.tlsCertFile, s.tlsKeyFile)
+		if err != nil {
+			return fmt.Errorf("grpc: failed to load TLS credentials: %w", err)
+		}
+		opts = append(opts, grpc.Creds(creds))
+		s.logger.Info("gRPC TLS enabled",
+			zap.String("cert", s.tlsCertFile),
+			zap.String("addr", listenAddr),
+		)
+	} else {
+		s.logger.Warn("gRPC running without TLS — set ARKEEP_GRPC_TLS_CERT and ARKEEP_GRPC_TLS_KEY for production",
+			zap.String("addr", listenAddr),
+		)
+	}
+
+	grpcServer := grpc.NewServer(opts...)
 
 	proto.RegisterAgentServiceServer(grpcServer, s)
 

@@ -41,6 +41,8 @@ type config struct {
 	stateDir     string
 	dockerSocket string
 	logLevel     string
+	grpcTLSCA    string
+	grpcInsecure bool
 }
 
 func main() {
@@ -71,6 +73,8 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.PersistentFlags().StringVar(&cfg.stateDir, "state-dir", envOrDefault("ARKEEP_STATE_DIR", defaultStateDir()), "Directory for agent state (agent-state.json, extracted binaries)")
 	root.PersistentFlags().StringVar(&cfg.dockerSocket, "docker-socket", envOrDefault("ARKEEP_DOCKER_SOCKET", ""), "Docker socket path (empty = platform default)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
+	root.PersistentFlags().StringVar(&cfg.grpcTLSCA, "grpc-tls-ca", envOrDefault("ARKEEP_GRPC_TLS_CA", ""), "Path to CA certificate for gRPC TLS (for self-signed server certs; leave empty for system pool)")
+	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 
 	return root
 }
@@ -162,6 +166,8 @@ func run(ctx context.Context, cfg *config) error {
 		StateDir:        cfg.stateDir,
 		Version:         version,
 		DockerAvailable: dockerAvailable,
+		TLSCAFile:       cfg.grpcTLSCA,
+		Insecure:        cfg.grpcInsecure,
 	}
 
 	// Pass dockerClient so the connection manager can handle JOB_TYPE_LIST_VOLUMES

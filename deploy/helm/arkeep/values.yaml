@@ -41,6 +41,31 @@ config:
   httpAddr: ":8080"
   grpcAddr: ":9090"
 
+# ─── gRPC TLS ─────────────────────────────────────────────────────────────────
+# Enables TLS on the gRPC port so agents can connect securely without a proxy.
+#
+# Provide the name of an existing TLS Secret (type: kubernetes.io/tls).
+# The chart mounts tls.crt and tls.key from the secret into the pod and sets
+# ARKEEP_GRPC_TLS_CERT / ARKEEP_GRPC_TLS_KEY accordingly.
+#
+# Create with cert-manager (recommended):
+#   Add a Certificate resource pointing to your ClusterIssuer, then set
+#   grpc.tls.existingSecret to the name of the resulting Secret.
+#
+# Create manually:
+#   kubectl create secret tls arkeep-grpc-tls \
+#     --cert=path/to/tls.crt --key=path/to/tls.key -n <namespace>
+#
+# Leave existingSecret empty to run gRPC without TLS inside the cluster
+# (acceptable when agents connect through a TLS-terminating load balancer
+# or a service mesh such as Istio/Linkerd).
+
+grpc:
+  tls:
+    existingSecret: ""
+    # Mount path inside the container for the TLS certificate files.
+    mountPath: /etc/arkeep/tls
+
 # ─── Secrets ──────────────────────────────────────────────────────────────────
 #
 # Option A (simple): provide values here — the chart creates a Secret.
