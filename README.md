@@ -258,7 +258,7 @@ postgres://arkeep:password@localhost:5432/arkeep?sslmode=require
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `--server-addr` | `ARKEEP_SERVER` | `localhost:9090` | Server gRPC address (`host:port`) |
+| `--server-addr` | `ARKEEP_SERVER_ADDR` | `localhost:9090` | Server gRPC address (`host:port`) |
 | `--agent-secret` | `ARKEEP_AGENT_SECRET` | — | Shared secret (must match server) |
 | `--state-dir` | `ARKEEP_STATE_DIR` | `~/.arkeep` | Directory for agent state and extracted binaries |
 | `--docker-socket` | `ARKEEP_DOCKER_SOCKET` | *(platform default)* | Docker socket path |
