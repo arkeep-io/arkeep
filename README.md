@@ -208,6 +208,20 @@ curl -L https://github.com/arkeep-io/arkeep/releases/latest/download/arkeep-agen
 > No extra flags are needed when the server certificate is from a trusted CA (Let's Encrypt).
 > For self-signed certs add `--grpc-tls-ca /path/to/ca.crt`.
 
+**Server and agent on the same machine (no reverse proxy, no TLS cert):**
+
+If you are running both binaries on the same host without a TLS certificate on the server, add `--grpc-insecure` to the agent. Communication stays on loopback and is not exposed to the network.
+
+```bash
+./arkeep-agent \
+  --server-addr localhost:9090 \
+  --agent-secret your-agent-secret \
+  --state-dir /var/lib/arkeep-agent \
+  --grpc-insecure
+```
+
+For any setup where the gRPC port is reachable from other machines, always configure TLS on the server.
+
 ---
 
 ### Agent via systemd
