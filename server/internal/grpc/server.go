@@ -64,8 +64,6 @@ type Server struct {
 
 // Config holds the configuration for the gRPC server.
 type Config struct {
-	// ListenAddr is the address the gRPC server binds to (e.g. ":9090").
-	ListenAddr string
 	// SharedSecret is the shared secret agents must send in the "agent-secret"
 	// metadata key to authenticate. If empty, a warning is logged and
 	// authentication is disabled (development mode only — always set in production).

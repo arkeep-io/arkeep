@@ -223,7 +223,6 @@ func run(ctx context.Context, cfg *config) error {
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
 		grpcserver.Config{
-			ListenAddr:   cfg.grpcAddr,
 			SharedSecret: cfg.agentSecret,
 			TLSCertFile:  cfg.grpcTLSCert,
 			TLSKeyFile:   cfg.grpcTLSKey,
