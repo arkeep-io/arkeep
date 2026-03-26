@@ -85,11 +85,7 @@ func (e *Extractor) extract(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("restic: embedded binary not found at %q: %w", srcPath, err)
 	}
-	defer func() {
-		if err := srcFile.Close(); err != nil {
-			_ = err // closing an embedded FS file — non-actionable
-		}
-	}()
+	defer func() { _ = srcFile.Close() }() // embedded FS file: close error is non-actionable
 
 	srcInfo, err := srcFile.Stat()
 	if err != nil {

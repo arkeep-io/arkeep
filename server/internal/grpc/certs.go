@@ -291,8 +291,10 @@ func loadCerts(caCertFile, caKeyFile, serverCertFile, serverKeyFile string) (*Au
 		caKey:          caKeyRaw,
 		caCert:         caCert,
 	}
-	// Start serial counter well above 2 to avoid collisions with existing certs.
-	ac.serialCounter.Store(1000)
+	// Use the current Unix timestamp as the starting serial to avoid collisions
+	// with certificates issued before the last restart (RFC 5280 requires only
+	// that serials be unique within a CA, not monotonically sequential).
+	ac.serialCounter.Store(time.Now().Unix())
 	return ac, nil
 }
 

@@ -47,7 +47,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/arkeep-agent
 # Add the agent user to the docker group for Docker socket access.
 # Required for automatic container and volume discovery.
 # If Docker is not installed you can remove this line.
