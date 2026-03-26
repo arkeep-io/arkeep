@@ -212,7 +212,12 @@ curl -L https://github.com/arkeep-io/arkeep/releases/latest/download/arkeep-agen
 > client certificate. The CA cert and client cert are stored in `--state-dir`
 > and reused on every subsequent startup — no re-enrollment unless you delete them.
 >
-> Use `--server-http-addr` if your HTTP API is on a different address or port than the default.
+> **Reverse proxy (Traefik, Nginx, Caddy):** if the server's HTTP API is only
+> reachable via HTTPS (port 8080 is not exposed directly), set `--server-http-addr`
+> to the public HTTPS URL — e.g. `--server-http-addr https://arkeep.example.com`.
+> The agent uses this address only for the one-time enrollment request; afterwards
+> the mTLS certificates in `--state-dir` are reused on every restart.
+>
 > Use `--grpc-tls-ca` only when connecting to a server that uses an external cert
 > (not auto-PKI) signed by a non-system CA.
 
@@ -315,7 +320,7 @@ postgres://arkeep:password@localhost:5432/arkeep?sslmode=require
 | `--state-dir` | `ARKEEP_STATE_DIR` | `~/.arkeep` | Directory for agent state and extracted binaries |
 | `--docker-socket` | `ARKEEP_DOCKER_SOCKET` | *(platform default)* | Docker socket path |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level |
-| `--server-http-addr` | `ARKEEP_SERVER_HTTP_ADDR` | *(derived from `--server-addr`)* | Base URL of the server HTTP API used for enrollment (default: `--server-addr` host with port 8080) |
+| `--server-http-addr` | `ARKEEP_SERVER_HTTP_ADDR` | *(derived from `--server-addr`)* | Base URL of the server HTTP API used for enrollment. **Required when the server is behind a TLS-terminating reverse proxy** (e.g. `https://arkeep.example.com`). Default: `--server-addr` host with port 8080 over plain HTTP. |
 | `--grpc-tls-ca` | `ARKEEP_GRPC_TLS_CA` | — | Path to CA certificate for gRPC TLS (only needed when the server uses an external, non-system-trusted cert) |
 | `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport — development and same-machine deployments only |
 

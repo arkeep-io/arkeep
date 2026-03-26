@@ -23,8 +23,13 @@ services:
       # Auto-enrollment (default): on first startup the agent calls the server's
       # HTTP API to obtain a signed client certificate. The CA and client cert are
       # stored in ARKEEP_STATE_DIR and reused on every subsequent startup.
-      # ARKEEP_SERVER_HTTP_ADDR is derived from ARKEEP_SERVER_ADDR (port → 8080)
-      # automatically; override it only if your HTTP API is on a different address.
+      #
+      # The enrollment address is derived from ARKEEP_SERVER_ADDR by replacing
+      # the port with 8080 and using plain HTTP. Override it when the server's
+      # HTTP API is on a different address — this is REQUIRED when the server is
+      # behind a TLS-terminating reverse proxy (Traefik, Nginx, Caddy):
+      #   ARKEEP_SERVER_HTTP_ADDR: "https://arkeep.example.com"
+      # If port 8080 is exposed directly (no proxy), the default is sufficient:
       #   ARKEEP_SERVER_HTTP_ADDR: "http://arkeep.example.com:8080"
       #
       # Only needed when the server uses an external cert from a non-system CA:

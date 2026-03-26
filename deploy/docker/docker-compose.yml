@@ -19,6 +19,7 @@ services:
     environment:
       ARKEEP_SECRET_KEY: "${ARKEEP_SECRET_KEY:?ARKEEP_SECRET_KEY is required — generate with: openssl rand -hex 32}"
       ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — generate with: openssl rand -hex 24}"
+      ARKEEP_DATA_DIR: "${ARKEEP_DATA_DIR:-/var/lib/arkeep/data}"
       ARKEEP_DB_DRIVER: "${ARKEEP_DB_DRIVER:-sqlite}"
       ARKEEP_DB_DSN: "${ARKEEP_DB_DSN:-/var/lib/arkeep/arkeep.db}"
       ARKEEP_HTTP_ADDR: ":8080"
@@ -36,9 +37,11 @@ services:
       #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
       #
       # Option B — terminate TLS at a reverse proxy (Caddy, Nginx, Traefik):
-      #   Leave these lines commented and expose port 9090 only on the internal
-      #   network. Auto-PKI still applies for agent-to-server connections that
-      #   reach port 9090 directly.
+      #   Leave these lines commented. Auto-PKI applies to direct gRPC connections
+      #   on port 9090. If port 8080 is not exposed directly (only via the proxy),
+      #   agents on remote machines must set ARKEEP_SERVER_HTTP_ADDR to the proxy
+      #   HTTPS URL for enrollment, e.g.:
+      #     ARKEEP_SERVER_HTTP_ADDR=https://arkeep.example.com
     volumes:
       - arkeep-data:/var/lib/arkeep
       # Uncomment to mount TLS certificates (Option A above):

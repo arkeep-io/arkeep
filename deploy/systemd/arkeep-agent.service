@@ -25,7 +25,10 @@ ExecStart=/usr/local/bin/arkeep-agent \
 # API (port 8080, derived automatically) to obtain a signed client certificate.
 # The cert is stored in /var/lib/arkeep-agent and reused on every restart.
 #
-# Override the HTTP address only if it differs from the default:
+# Override the enrollment HTTP address when the server is behind a reverse
+# proxy (Traefik, Nginx, Caddy) — the derived http://<host>:8080 won't work:
+#   ARKEEP_SERVER_HTTP_ADDR=https://arkeep.example.com
+# If port 8080 is exposed directly, the default is sufficient:
 #   ARKEEP_SERVER_HTTP_ADDR=http://arkeep.example.com:8080
 #
 # Only needed when the server uses an external cert from a non-system CA:

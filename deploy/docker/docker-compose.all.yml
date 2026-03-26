@@ -21,6 +21,7 @@ services:
     environment:
       ARKEEP_SECRET_KEY: "${ARKEEP_SECRET_KEY:?ARKEEP_SECRET_KEY is required — generate with: openssl rand -hex 32}"
       ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — generate with: openssl rand -hex 24}"
+      ARKEEP_DATA_DIR: "${ARKEEP_DATA_DIR:-/var/lib/arkeep/data}"
       ARKEEP_DB_DRIVER: "${ARKEEP_DB_DRIVER:-sqlite}"
       ARKEEP_DB_DSN: "${ARKEEP_DB_DSN:-/var/lib/arkeep/arkeep.db}"
       ARKEEP_HTTP_ADDR: ":8080"
@@ -28,13 +29,11 @@ services:
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
       # ── gRPC TLS ───────────────────────────────────────────────────────────────
-      # In all-in-one mode, server and agent share the same private Docker
-      # network so TLS between them adds no security benefit. Both sides run
-      # in insecure (plaintext) mode. Remove these two lines only if you mount
-      # an external cert and want end-to-end TLS inside Docker as well.
+      # In all-in-one mode both containers share the same private Docker network.
+      # ARKEEP_GRPC_INSECURE skips auto-PKI and keeps things simple. Remove it
+      # (from both server and agent below) to use auto-PKI + mTLS instead —
+      # the agent will auto-enroll via http://server:8080 on first startup.
       ARKEEP_GRPC_INSECURE: "true"
-      #   ARKEEP_GRPC_TLS_CERT: "/etc/arkeep/tls/tls.crt"
-      #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
     volumes:
       - arkeep-data:/var/lib/arkeep
       # Uncomment to mount TLS certificates for gRPC:
@@ -61,9 +60,8 @@ services:
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
-      # The agent and server share the same internal Docker network, so TLS is
-      # disabled here. Remove this line only if you enable TLS on the server above
-      # and mount the corresponding CA certificate for the agent to verify.
+      # Must match the server: remove both ARKEEP_GRPC_INSECURE lines together
+      # to switch to auto-PKI + mTLS (see server comment above).
       ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
