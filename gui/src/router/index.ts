@@ -252,8 +252,9 @@ router.beforeEach(async (to) => {
   }
 
   // Role-based guard: check the most specific requiresRole in the matched chain
-  const requiredRole = to.matched
-    .findLast((r) => r.meta.requiresRole)?.meta.requiresRole
+  const requiredRole = [...to.matched]
+    .reverse()
+    .find((r) => r.meta.requiresRole)?.meta.requiresRole
 
   if (requiredRole && auth.user?.role !== requiredRole) {
     return { name: 'forbidden' }
