@@ -104,7 +104,7 @@ const routes: RouteRecordRaw[] = [
             props: true,
             meta: { breadcrumb: 'Policy Details' },
           },
-        ]
+        ],
       },
 
       // Destinations
@@ -140,7 +140,7 @@ const routes: RouteRecordRaw[] = [
             props: true,
             meta: { breadcrumb: 'Job Details' },
           },
-        ]
+        ],
       },
 
       // Users — admin only
