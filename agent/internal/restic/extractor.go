@@ -9,7 +9,6 @@
 package restic
 
 import (
-	"embed"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,22 +18,19 @@ import (
 	"runtime"
 )
 
-// Embedded binary assets. The bin/ directory is populated by the
-// `task deps:download` command before building and is excluded from git.
-// Each binary is named with its target platform to allow cross-compilation:
+// embeddedBins holds the restic and rclone binaries for the current platform.
+// It is declared in a platform-specific embed file (embed_<os>_<arch>.go) so
+// that each binary only carries the ~100 MB it actually needs at runtime,
+// rather than the ~473 MB total across all supported platforms.
 //
-//	bin/restic_linux_amd64
-//	bin/restic_linux_arm64
-//	bin/restic_darwin_amd64
-//	bin/restic_darwin_arm64
-//	bin/restic_windows_amd64.exe
-//	bin/rclone_linux_amd64   (etc.)
+// The bin/ directory is populated by `task deps:download` before building
+// and is excluded from git. Each file is named with its target platform:
 //
-// The embed pattern uses * which does not match hidden files or directories,
-// so only the binary files themselves are included.
-//
-//go:embed all:bin
-var embeddedBins embed.FS
+//	bin/restic_linux_amd64    bin/rclone_linux_amd64
+//	bin/restic_linux_arm64    bin/rclone_linux_arm64
+//	bin/restic_darwin_amd64   bin/rclone_darwin_amd64
+//	bin/restic_darwin_arm64   bin/rclone_darwin_arm64
+//	bin/restic_windows_amd64.exe  bin/rclone_windows_amd64.exe
 
 // Extractor manages the lifecycle of the embedded binaries on disk.
 // It extracts restic and rclone to the state directory on first run and

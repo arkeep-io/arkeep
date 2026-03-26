@@ -1,0 +1,23 @@
+# .dockerignore — exclude files from the Docker build context.
+# Keeps the context small and prevents secrets/generated files from leaking
+# into the build (node_modules in particular can be hundreds of MB).
+
+.git/
+
+# GUI build artifacts — rebuilt inside the Docker build (gui-builder stage).
+gui/node_modules/
+gui/dist/
+server/cmd/server/dist/
+
+# Agent dependency binaries — downloaded fresh inside the Docker build
+# (downloader stage). Placeholder .gitkeep files are kept so go:embed compiles.
+agent/internal/restic/bin/*
+!agent/internal/restic/bin/.gitkeep
+
+# Deploy configs — not needed inside the image.
+deploy/
+
+# Docs and tooling — not needed inside the image.
+*.md
+Taskfile.yml
+.goreleaser.yml
