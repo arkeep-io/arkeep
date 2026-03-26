@@ -204,7 +204,7 @@ router.afterEach((to) => {
     .filter(Boolean) as string[]
 
   document.title = breadcrumbs.length > 0
-    ? `Arkeep | ${breadcrumbs.at(-1)}`
+    ? `Arkeep | ${breadcrumbs[breadcrumbs.length - 1]}`
     : 'Arkeep'
 })
 
