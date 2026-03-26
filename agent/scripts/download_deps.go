@@ -155,7 +155,7 @@ func downloadResticZip(resticOS, goarch, out string) error {
 func downloadRclone(goos, goarch string) error {
 	rcloneOS := rclonePlatform(goos)
 	ext := exeExtFor(goos)
-	out := filepath.Join(binDir, fmt.Sprintf("rclone_%s_%s%s", rcloneOS, goarch, ext))
+	out := filepath.Join(binDir, fmt.Sprintf("rclone_%s_%s%s", goos, goarch, ext))
 
 	if fileExists(out) {
 		fmt.Printf("rclone already present: %s\n", out)
