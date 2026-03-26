@@ -187,6 +187,18 @@ export const router = createRouter({
   },
 })
 
+// ─── Title update ─────────────────────────────────────────────────────────────
+
+router.afterEach((to) => {
+  const breadcrumbs = to.matched
+    .map((r) => r.meta.breadcrumb as string | undefined)
+    .filter(Boolean) as string[]
+
+  document.title = breadcrumbs.length > 0
+    ? `Arkeep | ${breadcrumbs.at(-1)}`
+    : 'Arkeep'
+})
+
 // ─── Navigation guard ─────────────────────────────────────────────────────────
 
 router.beforeEach(async (to) => {
