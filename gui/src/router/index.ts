@@ -64,25 +64,25 @@ const routes: RouteRecordRaw[] = [
         path: 'dashboard',
         name: 'dashboard',
         component: () => import('@/pages/dashboard/DashboardPage.vue'),
-        meta: { breadcrumb: "Dashboard" },
+        meta: { breadcrumb: 'Dashboard' },
       },
 
       // Agents
       {
-        path: "agents",
-        meta: { breadcrumb: "Agents" },
+        path: 'agents',
+        meta: { breadcrumb: 'Agents' },
         children: [
           {
-            path: "",
-            name: "agents",
-            component: () => import("@/pages/agents/AgentsPage.vue"),
+            path: '',
+            name: 'agents',
+            component: () => import('@/pages/agents/AgentsPage.vue'),
           },
           {
-            path: ":id",
-            name: "agent-detail",
-            component: () => import("@/pages/agents/AgentDetailPage.vue"),
+            path: ':id',
+            name: 'agent-detail',
+            component: () => import('@/pages/agents/AgentDetailPage.vue'),
             props: true,
-            meta: { breadcrumb: "Agent Details" },
+            meta: { breadcrumb: 'Agent Details' },
           },
         ],
       },
@@ -90,19 +90,19 @@ const routes: RouteRecordRaw[] = [
       // Policies
       {
         path: 'policies',
-        meta: { breadcrumb: "Policies" },
+        meta: { breadcrumb: 'Policies' },
         children: [
           {
-            path: "",
+            path: '',
             name: 'policies',
             component: () => import('@/pages/policies/PoliciesPage.vue'),
           },
           {
-            path: ":id",
-            name: "policy-detail",
-            component: () => import("@/pages/policies/PolicyDetailPage.vue"),
+            path: ':id',
+            name: 'policy-detail',
+            component: () => import('@/pages/policies/PolicyDetailPage.vue'),
             props: true,
-            meta: { breadcrumb: "Policy Details" },
+            meta: { breadcrumb: 'Policy Details' },
           },
         ]
       },
@@ -112,7 +112,7 @@ const routes: RouteRecordRaw[] = [
         path: 'destinations',
         name: 'destinations',
         component: () => import('@/pages/destinations/DestinationsPage.vue'),
-        meta: { breadcrumb: "Destinations" },
+        meta: { breadcrumb: 'Destinations' },
       },
 
       // Snapshots
@@ -120,13 +120,13 @@ const routes: RouteRecordRaw[] = [
         path: 'snapshots',
         name: 'snapshots',
         component: () => import('@/pages/snapshots/SnapshotsPage.vue'),
-        meta: { breadcrumb: "Snapshots" },
+        meta: { breadcrumb: 'Snapshots' },
       },
 
       // Jobs
       {
         path: 'jobs',
-        meta: { breadcrumb: "Jobs" },
+        meta: { breadcrumb: 'Jobs' },
         children: [
           {
             path: '',
@@ -138,7 +138,7 @@ const routes: RouteRecordRaw[] = [
             name: 'job-detail',
             component: () => import('@/pages/jobs/JobDetailPage.vue'),
             props: true,
-            meta: { breadcrumb: "Job Details" },
+            meta: { breadcrumb: 'Job Details' },
           },
         ]
       },
