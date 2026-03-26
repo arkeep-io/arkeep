@@ -21,10 +21,18 @@ ExecStart=/usr/local/bin/arkeep-agent \
 #   ARKEEP_SERVER_ADDR=arkeep.example.com:9090
 #   ARKEEP_AGENT_SECRET=<shared secret — must match the server>
 #
-# TLS (agent connects with TLS by default):
-#   No extra config needed when the server uses a publicly trusted certificate
-#   (Let's Encrypt via Caddy/Nginx). For self-signed server certs set:
+# Auto-enrollment (default): on first startup the agent calls the server's HTTP
+# API (port 8080, derived automatically) to obtain a signed client certificate.
+# The cert is stored in /var/lib/arkeep-agent and reused on every restart.
+#
+# Override the HTTP address only if it differs from the default:
+#   ARKEEP_SERVER_HTTP_ADDR=http://arkeep.example.com:8080
+#
+# Only needed when the server uses an external cert from a non-system CA:
 #   ARKEEP_GRPC_TLS_CA=/etc/arkeep/ca.crt
+#
+# Disable TLS (same-machine only — must also set ARKEEP_GRPC_INSECURE on server):
+#   ARKEEP_GRPC_INSECURE=true
 EnvironmentFile=/etc/arkeep/agent.env
 
 Restart=on-failure

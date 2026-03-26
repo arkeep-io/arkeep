@@ -47,6 +47,7 @@ type config struct {
 	agentSecret   string
 	secureCookies bool
 	telemetry     bool
+	grpcInsecure  bool
 }
 
 func main() {
@@ -84,6 +85,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
+	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 
 	return root
 }
@@ -185,6 +187,22 @@ func run(ctx context.Context, cfg *config) error {
 	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager, logger)
 	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager)
 
+	// --- gRPC PKI (auto-generated) ---
+	// EnsureCerts is only called when no external TLS cert is configured.
+	// When an external cert is provided (e.g. via Let's Encrypt / cert-manager),
+	// the auto-PKI and the enrollment endpoint are skipped entirely.
+	var autoCerts *grpcserver.AutoCerts
+	if cfg.grpcTLSCert == "" && !cfg.grpcInsecure {
+		autoCerts, err = grpcserver.EnsureCerts(cfg.dataDir, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize gRPC PKI: %w", err)
+		}
+		logger.Info("gRPC CA cert available for agent enrollment",
+			zap.String("ca_cert", autoCerts.CACertFile),
+			zap.String("enroll_endpoint", "POST /api/v1/agents/enroll"),
+		)
+	}
+
 	// --- Agent Manager ---
 	agentMgr := agentmanager.New(logger)
 
@@ -226,6 +244,7 @@ func run(ctx context.Context, cfg *config) error {
 			SharedSecret: cfg.agentSecret,
 			TLSCertFile:  cfg.grpcTLSCert,
 			TLSKeyFile:   cfg.grpcTLSKey,
+			AutoCerts:    autoCerts,
 			NotifService: notifService,
 		},
 		agentMgr,
@@ -261,6 +280,8 @@ func run(ctx context.Context, cfg *config) error {
 		Settings:      settingsRepo,
 		Secure:        cfg.secureCookies,
 		Dashboard:     dashboardRepo,
+		AutoCerts:     autoCerts,
+		AgentSecret:   cfg.agentSecret,
 	})
 	api.MountGUI(router, guiFS())
 

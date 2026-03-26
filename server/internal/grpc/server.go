@@ -52,6 +52,7 @@ type Server struct {
 	sharedSecret string // shared secret agents must present in gRPC metadata
 	tlsCertFile  string
 	tlsKeyFile   string
+	autoCerts    *AutoCerts // non-nil when auto-PKI + mTLS is active
 
 	// capabilitiesMu guards capabilitiesCache.
 	capabilitiesMu sync.Mutex
@@ -73,6 +74,10 @@ type Config struct {
 	TLSCertFile string
 	// TLSKeyFile is the path to the PEM-encoded TLS private key file.
 	TLSKeyFile string
+	// AutoCerts holds the auto-generated PKI. When set, the gRPC server enables
+	// mTLS (RequireAndVerifyClientCert) and the shared-secret token check is
+	// bypassed — the client certificate is the authentication proof.
+	AutoCerts *AutoCerts
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
@@ -99,6 +104,7 @@ func New(
 		sharedSecret:      cfg.SharedSecret,
 		tlsCertFile:       cfg.TLSCertFile,
 		tlsKeyFile:        cfg.TLSKeyFile,
+		autoCerts:         cfg.AutoCerts,
 		capabilitiesCache: make(map[string]*proto.AgentCapabilities),
 	}
 }
@@ -120,18 +126,35 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 		grpc.StreamInterceptor(s.authStreamInterceptor),
 	}
 
-	if s.tlsCertFile != "" && s.tlsKeyFile != "" {
+	switch {
+	case s.autoCerts != nil:
+		// Auto-PKI: use the generated CA + server cert with mTLS.
+		// Client certificates are required and verified against the CA pool —
+		// the shared-secret token check is bypassed (see validateToken).
+		tlsCfg, err := s.autoCerts.TLSConfig()
+		if err != nil {
+			return fmt.Errorf("grpc: failed to build mTLS config: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+		s.logger.Info("gRPC mTLS enabled (auto-PKI)",
+			zap.String("ca_cert", s.autoCerts.CACertFile),
+			zap.String("addr", listenAddr),
+		)
+
+	case s.tlsCertFile != "" && s.tlsKeyFile != "":
+		// Externally managed certificate (e.g. Let's Encrypt via Caddy).
 		creds, err := credentials.NewServerTLSFromFile(s.tlsCertFile, s.tlsKeyFile)
 		if err != nil {
 			return fmt.Errorf("grpc: failed to load TLS credentials: %w", err)
 		}
 		opts = append(opts, grpc.Creds(creds))
-		s.logger.Info("gRPC TLS enabled",
+		s.logger.Info("gRPC TLS enabled (external cert)",
 			zap.String("cert", s.tlsCertFile),
 			zap.String("addr", listenAddr),
 		)
-	} else {
-		s.logger.Warn("gRPC running without TLS — set ARKEEP_GRPC_TLS_CERT and ARKEEP_GRPC_TLS_KEY for production",
+
+	default:
+		s.logger.Warn("gRPC running without TLS (insecure mode) — do not use in production",
 			zap.String("addr", listenAddr),
 		)
 	}
@@ -190,6 +213,13 @@ func (s *Server) authStreamInterceptor(
 // Metadata in gRPC is the equivalent of HTTP headers — agents set it
 // when creating the ClientConn (see agent/internal/connection/manager.go).
 func (s *Server) validateToken(ctx context.Context) error {
+	// With auto-PKI (mTLS), the client certificate has already been verified
+	// by the TLS handshake before any RPC reaches this interceptor.
+	// The shared-secret token is not needed — skip the metadata check.
+	if s.autoCerts != nil {
+		return nil
+	}
+
 	// If no secret is configured, auth is disabled (development mode).
 	// A warning is logged at startup — see cmd/server/main.go.
 	if s.sharedSecret == "" {

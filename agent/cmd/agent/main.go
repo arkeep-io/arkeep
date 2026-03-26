@@ -15,8 +15,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -36,13 +38,14 @@ var (
 )
 
 type config struct {
-	serverAddr   string
-	sharedSecret string
-	stateDir     string
-	dockerSocket string
-	logLevel     string
-	grpcTLSCA    string
-	grpcInsecure bool
+	serverAddr     string
+	serverHTTPAddr string
+	sharedSecret   string
+	stateDir       string
+	dockerSocket   string
+	logLevel       string
+	grpcTLSCA      string
+	grpcInsecure   bool
 }
 
 func main() {
@@ -75,6 +78,7 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.grpcTLSCA, "grpc-tls-ca", envOrDefault("ARKEEP_GRPC_TLS_CA", ""), "Path to CA certificate for gRPC TLS (for self-signed server certs; leave empty for system pool)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
+	root.PersistentFlags().StringVar(&cfg.serverHTTPAddr, "server-http-addr", envOrDefault("ARKEEP_SERVER_HTTP_ADDR", ""), "Base URL of the server HTTP API for enrollment (default: derived from --server-addr with port 8080)")
 
 	return root
 }
@@ -159,14 +163,40 @@ func run(ctx context.Context, cfg *config) error {
 	// --- Executor ---
 	exec := executor.New(wrapper, dockerClient, hooksRunner, logger)
 
+	// --- Load mTLS credentials from state-dir (written by enrollment) ---
+	// If all three files are present the agent was enrolled previously and can
+	// skip the enrollment step. cfg.grpcTLSCA is only overwritten when it was
+	// not set explicitly on the command line, so a user-supplied CA always wins.
+	clientCertFile := filepath.Join(cfg.stateDir, "grpc-client.crt")
+	clientKeyFile := filepath.Join(cfg.stateDir, "grpc-client.key")
+	stateCAFile := filepath.Join(cfg.stateDir, "grpc-ca.crt")
+	if fileExists(clientCertFile) && fileExists(clientKeyFile) && fileExists(stateCAFile) {
+		if cfg.grpcTLSCA == "" {
+			cfg.grpcTLSCA = stateCAFile
+		}
+	} else {
+		// Reset so the connection manager knows enrollment is needed.
+		clientCertFile = ""
+		clientKeyFile = ""
+	}
+
+	// --- Derive server HTTP address if not set explicitly ---
+	serverHTTPAddr := cfg.serverHTTPAddr
+	if serverHTTPAddr == "" {
+		serverHTTPAddr = deriveHTTPAddr(cfg.serverAddr)
+	}
+
 	// --- Connection manager ---
 	connCfg := connection.Config{
 		ServerAddr:      cfg.serverAddr,
+		ServerHTTPAddr:  serverHTTPAddr,
 		SharedSecret:    cfg.sharedSecret,
 		StateDir:        cfg.stateDir,
 		Version:         version,
 		DockerAvailable: dockerAvailable,
 		TLSCAFile:       cfg.grpcTLSCA,
+		ClientCertFile:  clientCertFile,
+		ClientKeyFile:   clientKeyFile,
 		Insecure:        cfg.grpcInsecure,
 	}
 
@@ -227,4 +257,24 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// fileExists returns true if path exists and is a regular file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// deriveHTTPAddr constructs the HTTP base URL from a gRPC address by replacing
+// the port with 8080 and prepending "http://". For example:
+//
+//	"arkeep.example.com:9090" → "http://arkeep.example.com:8080"
+//	"localhost:9090"           → "http://localhost:8080"
+func deriveHTTPAddr(grpcAddr string) string {
+	host, _, err := net.SplitHostPort(grpcAddr)
+	if err != nil {
+		// grpcAddr has no port — use it as-is.
+		return "http://" + grpcAddr + ":8080"
+	}
+	return "http://" + net.JoinHostPort(host, "8080")
 }

@@ -42,11 +42,15 @@ config:
   grpcAddr: ":9090"
 
 # ─── gRPC TLS ─────────────────────────────────────────────────────────────────
-# Enables TLS on the gRPC port so agents can connect securely without a proxy.
+# Auto-PKI (default, existingSecret empty): the server generates a private CA
+# and server certificate under data-dir/grpc/ on first startup. Agents
+# auto-enroll via the HTTP API and connect with mTLS. No extra configuration
+# is required for this mode.
 #
-# Provide the name of an existing TLS Secret (type: kubernetes.io/tls).
-# The chart mounts tls.crt and tls.key from the secret into the pod and sets
-# ARKEEP_GRPC_TLS_CERT / ARKEEP_GRPC_TLS_KEY accordingly.
+# External cert (existingSecret set): provide the name of an existing TLS
+# Secret (type: kubernetes.io/tls). The chart mounts tls.crt and tls.key from
+# the secret and sets ARKEEP_GRPC_TLS_CERT / ARKEEP_GRPC_TLS_KEY accordingly.
+# Auto-PKI is skipped when these env vars are set.
 #
 # Create with cert-manager (recommended):
 #   Add a Certificate resource pointing to your ClusterIssuer, then set
@@ -55,10 +59,6 @@ config:
 # Create manually:
 #   kubectl create secret tls arkeep-grpc-tls \
 #     --cert=path/to/tls.crt --key=path/to/tls.key -n <namespace>
-#
-# Leave existingSecret empty to run gRPC without TLS inside the cluster
-# (acceptable when agents connect through a TLS-terminating load balancer
-# or a service mesh such as Istio/Linkerd).
 
 grpc:
   tls:

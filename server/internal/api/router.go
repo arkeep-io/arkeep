@@ -9,6 +9,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -41,6 +42,16 @@ type RouterConfig struct {
 	// Secure controls whether auth cookies are set with the Secure flag.
 	// Set to true in production (HTTPS), false in local development.
 	Secure bool
+
+	// AutoCerts is the auto-generated PKI used for gRPC mTLS enrollment.
+	// When non-nil, POST /api/v1/agents/enroll is registered and returns a
+	// signed client certificate to the agent. Nil when an external TLS cert
+	// is configured (--grpc-tls-cert) or TLS is disabled.
+	AutoCerts *grpccerts.AutoCerts
+
+	// AgentSecret is the shared bootstrap secret agents must present when
+	// enrolling. Empty means no authentication is required (dev only).
+	AgentSecret string
 }
 
 // NewRouter builds and returns the fully configured Chi router.
@@ -71,6 +82,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
 	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
+	var enrollHandler *EnrollHandler
+	if cfg.AutoCerts != nil {
+		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
+	}
 	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Logger)
 	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Logger)
 	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Logger)
@@ -112,6 +127,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// user exists, so it cannot be used as a backdoor after first run.
 			r.Get("/setup/status", setupHandler.GetStatus)
 			r.Post("/setup/complete", setupHandler.Complete)
+
+			// Agent enrollment — public because agents call this before they have
+			// a client certificate. Protected by the shared agent secret instead.
+			// Only registered when auto-PKI is active (AutoCerts != nil).
+			if enrollHandler != nil {
+				r.Post("/agents/enroll", enrollHandler.Enroll)
+			}
 
 			// WebSocket — authenticated via JWT query parameter (browsers cannot
 			// set Authorization headers on native WebSocket connections).

@@ -25,15 +25,20 @@ services:
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
-      # ── gRPC TLS (recommended in production) ──────────────────────────────────
-      # Option A — terminate TLS inside the container:
+      # ── gRPC TLS ───────────────────────────────────────────────────────────────
+      # Auto-PKI (default): the server generates a private CA and server cert
+      # under data-dir/grpc/ on first startup. Agents auto-enroll via HTTP and
+      # connect with mTLS. No extra configuration is required.
+      #
+      # Option A — external cert (e.g. Let's Encrypt via certbot):
       #   Mount your certificate files and uncomment the two lines below.
       #   ARKEEP_GRPC_TLS_CERT: "/etc/arkeep/tls/tls.crt"
       #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
       #
       # Option B — terminate TLS at a reverse proxy (Caddy, Nginx, Traefik):
-      #   Leave these lines commented. Expose port 9090 only on the internal
-      #   network and let the proxy handle TLS for both HTTP and gRPC traffic.
+      #   Leave these lines commented and expose port 9090 only on the internal
+      #   network. Auto-PKI still applies for agent-to-server connections that
+      #   reach port 9090 directly.
     volumes:
       - arkeep-data:/var/lib/arkeep
       # Uncomment to mount TLS certificates (Option A above):

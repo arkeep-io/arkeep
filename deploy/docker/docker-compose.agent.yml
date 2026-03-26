@@ -20,13 +20,17 @@ services:
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
       # ── gRPC TLS ───────────────────────────────────────────────────────────────
-      # The agent connects with TLS by default using the system certificate pool.
-      # No extra config is needed when the server uses a Let's Encrypt certificate.
+      # Auto-enrollment (default): on first startup the agent calls the server's
+      # HTTP API to obtain a signed client certificate. The CA and client cert are
+      # stored in ARKEEP_STATE_DIR and reused on every subsequent startup.
+      # ARKEEP_SERVER_HTTP_ADDR is derived from ARKEEP_SERVER_ADDR (port → 8080)
+      # automatically; override it only if your HTTP API is on a different address.
+      #   ARKEEP_SERVER_HTTP_ADDR: "http://arkeep.example.com:8080"
       #
-      # For self-signed server certificates, provide the CA:
+      # Only needed when the server uses an external cert from a non-system CA:
       #   ARKEEP_GRPC_TLS_CA: "/etc/arkeep/tls/ca.crt"
       #
-      # To disable TLS entirely (development only — never in production):
+      # Disable TLS entirely (development / same-machine only — never in production):
       #   ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent

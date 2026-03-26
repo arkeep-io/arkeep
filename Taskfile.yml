@@ -65,7 +65,7 @@ tasks:
   run:server:
     desc: Run server in development mode
     dir: server
-    cmd: go run ./cmd/server --log-level=debug
+    cmd: go run ./cmd/server --log-level=debug --grpc-insecure
     env:
       ARKEEP_SECRET_KEY: dev-secret-key-00000000000000000
       ARKEEP_AGENT_SECRET: dev-agent-secret

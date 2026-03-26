@@ -17,18 +17,20 @@
 package connection
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
-
-	"crypto/tls"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -135,6 +137,16 @@ type Config struct {
 	// server's TLS certificate. Required when the server uses a self-signed cert.
 	// Leave empty to use the system certificate pool (e.g. Let's Encrypt certs).
 	TLSCAFile string
+	// ClientCertFile and ClientKeyFile are the PEM paths for the agent's client
+	// certificate, issued by the server during enrollment. When both are set,
+	// the connection uses mTLS (mutual TLS) instead of one-way TLS.
+	ClientCertFile string
+	ClientKeyFile  string
+	// ServerHTTPAddr is the base URL of the server's HTTP API (e.g.
+	// "http://arkeep.example.com:8080"). Used only for the enrollment request.
+	// After enrollment the client certs are cached in StateDir and this address
+	// is no longer needed.
+	ServerHTTPAddr string
 	// Insecure disables TLS entirely. For development only — never use in production.
 	Insecure bool
 }
@@ -171,10 +183,98 @@ func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, logge
 	}
 }
 
+// Enroll calls the server's enrollment endpoint over HTTP, obtains a CA
+// certificate and a signed client certificate, and writes them to StateDir.
+// On success it updates m.cfg so subsequent calls to buildTransportCredentials
+// use the new mTLS credentials.
+//
+// Enroll is called automatically by Run when ClientCertFile does not exist yet.
+func (m *Manager) Enroll(ctx context.Context) error {
+	if m.cfg.ServerHTTPAddr == "" {
+		return fmt.Errorf("enrollment required but --server-http-addr is not set")
+	}
+
+	body, err := json.Marshal(map[string]string{"agent_secret": m.cfg.SharedSecret})
+	if err != nil {
+		return fmt.Errorf("enroll: failed to marshal request: %w", err)
+	}
+
+	url := m.cfg.ServerHTTPAddr + "/api/v1/agents/enroll"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("enroll: failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("enroll: HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("enroll: server returned %s", resp.Status)
+	}
+
+	var result struct {
+		CACert     string `json:"ca_cert"`
+		ClientCert string `json:"client_cert"`
+		ClientKey  string `json:"client_key"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("enroll: failed to decode response: %w", err)
+	}
+
+	if err := os.MkdirAll(m.cfg.StateDir, 0750); err != nil {
+		return fmt.Errorf("enroll: failed to create state dir: %w", err)
+	}
+
+	caFile := filepath.Join(m.cfg.StateDir, "grpc-ca.crt")
+	certFile := filepath.Join(m.cfg.StateDir, "grpc-client.crt")
+	keyFile := filepath.Join(m.cfg.StateDir, "grpc-client.key")
+
+	if err := os.WriteFile(caFile, []byte(result.CACert), 0644); err != nil {
+		return fmt.Errorf("enroll: failed to write CA cert: %w", err)
+	}
+	if err := os.WriteFile(certFile, []byte(result.ClientCert), 0644); err != nil {
+		return fmt.Errorf("enroll: failed to write client cert: %w", err)
+	}
+	if err := os.WriteFile(keyFile, []byte(result.ClientKey), 0600); err != nil {
+		return fmt.Errorf("enroll: failed to write client key: %w", err)
+	}
+
+	m.cfg.TLSCAFile = caFile
+	m.cfg.ClientCertFile = certFile
+	m.cfg.ClientKeyFile = keyFile
+
+	m.logger.Info("enrollment successful — mTLS credentials stored",
+		zap.String("ca_cert", caFile),
+		zap.String("client_cert", certFile),
+	)
+	return nil
+}
+
 // Run starts the connection loop. It connects to the server, registers, and
 // begins the heartbeat and job stream loops. On any error it reconnects with
 // exponential backoff. Blocks until ctx is cancelled.
 func (m *Manager) Run(ctx context.Context) {
+	// Auto-enroll if client certs are not yet present and the agent is not
+	// running in insecure mode. The enrollment request goes over HTTP and
+	// therefore does not require a pre-existing TLS certificate.
+	if !m.cfg.Insecure && m.cfg.ClientCertFile == "" {
+		m.logger.Info("no client certificate found — attempting enrollment",
+			zap.String("http_addr", m.cfg.ServerHTTPAddr),
+		)
+		if err := m.Enroll(ctx); err != nil {
+			m.logger.Error("enrollment failed — check --server-http-addr and --agent-secret",
+				zap.Error(err),
+			)
+			// Continue without mTLS; the server may still accept the connection
+			// in dev mode (agentSecret == ""). If mTLS is enforced the gRPC
+			// handshake will fail and the retry loop will handle it.
+		}
+	}
+
 	backoff := backoffInitial
 
 	for {
@@ -204,15 +304,47 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// grpcServerName is the fixed TLS ServerName used by the auto-generated PKI.
+// It must match the SAN in the server certificate generated by EnsureCerts.
+// Agents always set ServerName to this value so TLS verification succeeds
+// regardless of the server's actual hostname or IP address.
+const grpcServerName = "arkeep-grpc"
+
 // buildTransportCredentials returns the appropriate gRPC transport credentials
 // based on the agent configuration:
-//   - Insecure=true → plaintext (dev only)
-//   - TLSCAFile set  → TLS with a custom CA certificate (self-signed server certs)
-//   - default        → TLS using the system certificate pool (Let's Encrypt, etc.)
+//   - Insecure=true                     → plaintext (dev/all-in-one only)
+//   - ClientCertFile + ClientKeyFile set → mTLS with auto-PKI CA
+//   - TLSCAFile set (no client cert)    → one-way TLS with custom CA
+//   - default                           → TLS using the system cert pool
 func (m *Manager) buildTransportCredentials() (credentials.TransportCredentials, error) {
 	if m.cfg.Insecure {
 		m.logger.Warn("gRPC transport is unencrypted (--grpc-insecure) — do not use in production")
 		return insecure.NewCredentials(), nil
+	}
+
+	// mTLS: client certificate available → use it together with the CA cert.
+	if m.cfg.ClientCertFile != "" && m.cfg.ClientKeyFile != "" {
+		clientCert, err := tls.LoadX509KeyPair(m.cfg.ClientCertFile, m.cfg.ClientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client certificate: %w", err)
+		}
+		tlsCfg := &tls.Config{
+			Certificates: []tls.Certificate{clientCert},
+			ServerName:   grpcServerName,
+			MinVersion:   tls.VersionTLS12,
+		}
+		if m.cfg.TLSCAFile != "" {
+			caPEM, err := os.ReadFile(m.cfg.TLSCAFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read CA certificate %q: %w", m.cfg.TLSCAFile, err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caPEM) {
+				return nil, fmt.Errorf("failed to parse CA certificate %q", m.cfg.TLSCAFile)
+			}
+			tlsCfg.RootCAs = pool
+		}
+		return credentials.NewTLS(tlsCfg), nil
 	}
 
 	if m.cfg.TLSCAFile != "" {

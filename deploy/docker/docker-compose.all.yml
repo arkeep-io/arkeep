@@ -28,8 +28,11 @@ services:
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
       # ── gRPC TLS ───────────────────────────────────────────────────────────────
-      # In all-in-one mode, server and agent share the same Docker network, so
-      # TLS between them is optional. If you want TLS, mount your cert and enable:
+      # In all-in-one mode, server and agent share the same private Docker
+      # network so TLS between them adds no security benefit. Both sides run
+      # in insecure (plaintext) mode. Remove these two lines only if you mount
+      # an external cert and want end-to-end TLS inside Docker as well.
+      ARKEEP_GRPC_INSECURE: "true"
       #   ARKEEP_GRPC_TLS_CERT: "/etc/arkeep/tls/tls.crt"
       #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
     volumes:

@@ -140,12 +140,14 @@ The GUI is available at `http://localhost:8080`.
 
 **gRPC TLS with Docker:**
 
-The agent connects with TLS by default. Two options for the server:
+The server generates a private CA and server certificate on first startup (auto-PKI). Agents auto-enroll via HTTP on first run and use mTLS from that point on — no manual cert configuration required.
 
-- **Reverse proxy (recommended):** put Caddy or Nginx in front and let it handle TLS termination for HTTP (port 8080) and gRPC (port 9090). No cert config inside the containers.
+For the server you can alternatively use an external certificate:
+
+- **Reverse proxy (recommended):** put Caddy or Nginx in front and let it handle TLS termination for both ports. No cert config inside the containers.
 - **Direct TLS:** mount a certificate and set `ARKEEP_GRPC_TLS_CERT`/`ARKEEP_GRPC_TLS_KEY` on the server container (see the commented lines in `docker-compose.yml` and `.env.example`).
 
-The **all-in-one** compose file sets `ARKEEP_GRPC_INSECURE=true` on the agent automatically, since server and agent share the same private Docker network.
+The **all-in-one** compose file sets `ARKEEP_GRPC_INSECURE=true` on both server and agent automatically, since they share the same private Docker network and TLS adds no security benefit there.
 
 **Agent only** (on the machines you want to back up):
 
@@ -183,15 +185,16 @@ export ARKEEP_AGENT_SECRET=$(openssl rand -hex 32)
   --db-dsn /var/lib/arkeep/arkeep.db \
   --data-dir /var/lib/arkeep/data \
   --http-addr :8080 \
-  --grpc-addr :9090 \
-  --grpc-tls-cert /etc/arkeep/server.crt \
-  --grpc-tls-key  /etc/arkeep/server.key
+  --grpc-addr :9090
 ```
 
-> **TLS:** provide a certificate for `--grpc-tls-cert`/`--grpc-tls-key` in production.
-> The simplest approach is to put Caddy or Nginx in front and let them handle
-> TLS termination for both ports. When running without a reverse proxy, obtain a
-> certificate with `certbot` or use a self-signed one (`openssl req -x509 ...`).
+> **TLS (auto-PKI):** by default the server generates a private CA and server certificate
+> under `--data-dir/grpc/` on first startup. Agents auto-enroll via
+> `POST /api/v1/agents/enroll` on first run and use mTLS from then on —
+> no manual cert management required.
+>
+> To use an external certificate instead (e.g. Let's Encrypt via Caddy), pass
+> `--grpc-tls-cert` and `--grpc-tls-key`. Auto-PKI is then skipped entirely.
 
 **Agent:**
 
@@ -204,15 +207,25 @@ curl -L https://github.com/arkeep-io/arkeep/releases/latest/download/arkeep-agen
   --state-dir /var/lib/arkeep-agent
 ```
 
-> **TLS:** the agent connects with TLS by default using the system certificate pool.
-> No extra flags are needed when the server certificate is from a trusted CA (Let's Encrypt).
-> For self-signed certs add `--grpc-tls-ca /path/to/ca.crt`.
+> **Auto-enrollment:** on first run the agent calls the server's HTTP API
+> (derived from `--server-addr` with port 8080 by default) to obtain its
+> client certificate. The CA cert and client cert are stored in `--state-dir`
+> and reused on every subsequent startup — no re-enrollment unless you delete them.
+>
+> Use `--server-http-addr` if your HTTP API is on a different address or port than the default.
+> Use `--grpc-tls-ca` only when connecting to a server that uses an external cert
+> (not auto-PKI) signed by a non-system CA.
 
-**Server and agent on the same machine (no reverse proxy, no TLS cert):**
+**Server and agent on the same machine (no reverse proxy, no TLS):**
 
-If you are running both binaries on the same host without a TLS certificate on the server, add `--grpc-insecure` to the agent. Communication stays on loopback and is not exposed to the network.
+If you are running both binaries on the same host and do not want TLS on the loopback interface, add `--grpc-insecure` to **both**. Communication stays on loopback and is never exposed to the network.
 
 ```bash
+./arkeep-server \
+  --db-dsn /var/lib/arkeep/arkeep.db \
+  --data-dir /var/lib/arkeep/data \
+  --grpc-insecure
+
 ./arkeep-agent \
   --server-addr localhost:9090 \
   --agent-secret your-agent-secret \
@@ -220,7 +233,7 @@ If you are running both binaries on the same host without a TLS certificate on t
   --grpc-insecure
 ```
 
-For any setup where the gRPC port is reachable from other machines, always configure TLS on the server.
+For any setup where the gRPC port is reachable from other machines, always use TLS (the default).
 
 ---
 
@@ -275,6 +288,7 @@ precedence over environment variables when both are provided.
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `--secure-cookies` | `ARKEEP_SECURE_COOKIES` | `false` | Set `Secure` flag on auth cookies (enable in production over HTTPS) |
 | `--telemetry` | `ARKEEP_TELEMETRY` | `true` | Send anonymous usage stats (opt-out) |
+| `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport — development and same-machine deployments only |
 
 **Generating secrets:**
 
@@ -301,8 +315,9 @@ postgres://arkeep:password@localhost:5432/arkeep?sslmode=require
 | `--state-dir` | `ARKEEP_STATE_DIR` | `~/.arkeep` | Directory for agent state and extracted binaries |
 | `--docker-socket` | `ARKEEP_DOCKER_SOCKET` | *(platform default)* | Docker socket path |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level |
-| `--grpc-tls-ca` | `ARKEEP_GRPC_TLS_CA` | — | Path to CA certificate for gRPC TLS (only needed for self-signed server certs) |
-| `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport (development only) |
+| `--server-http-addr` | `ARKEEP_SERVER_HTTP_ADDR` | *(derived from `--server-addr`)* | Base URL of the server HTTP API used for enrollment (default: `--server-addr` host with port 8080) |
+| `--grpc-tls-ca` | `ARKEEP_GRPC_TLS_CA` | — | Path to CA certificate for gRPC TLS (only needed when the server uses an external, non-system-trusted cert) |
+| `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport — development and same-machine deployments only |
 
 ---
 
