@@ -14,8 +14,14 @@ services:
     container_name: arkeep-agent
     restart: unless-stopped
     environment:
+      # gRPC address — must be host:port only, e.g. arkeep.example.com:9090
+      # Do NOT include a scheme (https:// etc.) — gRPC resolves the host directly.
       ARKEEP_SERVER_ADDR: "${ARKEEP_SERVER_ADDR:?ARKEEP_SERVER_ADDR is required — gRPC address, e.g. arkeep.example.com:9090}"
       ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — must match the server}"
+      # Required when the server's HTTP API is behind a reverse proxy (Traefik etc.).
+      # Set to the public HTTPS URL, e.g. https://arkeep.example.com
+      # Leave empty if port 8080 is exposed directly on the server host.
+      ARKEEP_SERVER_HTTP_ADDR: "${ARKEEP_SERVER_HTTP_ADDR:-}"
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
