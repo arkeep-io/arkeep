@@ -158,6 +158,42 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, fmt.Errorf("auth: extracting OIDC claims: %w", err)
 	}
 
+	// Many providers (e.g. Zitadel, Keycloak) only guarantee sub in the ID
+	// token and return email/name via the UserInfo endpoint. Fetch UserInfo as
+	// a fallback whenever either field is missing.
+	if claims.Email == "" || claims.Name == "" {
+		userInfo, uiErr := oidcProvider.UserInfo(ctx, oauth2.StaticTokenSource(oauth2Token))
+		if uiErr != nil {
+			p.logger.Warn("OIDC userinfo fetch failed, proceeding with ID token claims only",
+				zap.Error(uiErr))
+		} else {
+			var uiClaims struct {
+				Email string `json:"email"`
+				Name  string `json:"name"`
+			}
+			if uiErr = userInfo.Claims(&uiClaims); uiErr == nil {
+				if claims.Email == "" {
+					claims.Email = uiClaims.Email
+				}
+				if claims.Name == "" {
+					claims.Name = uiClaims.Name
+				}
+			}
+		}
+	}
+
+	// sub is guaranteed by OIDC spec; email is required to provision an account.
+	if claims.Sub == "" {
+		return nil, fmt.Errorf("auth: OIDC id_token missing required 'sub' claim")
+	}
+	if claims.Email == "" {
+		return nil, fmt.Errorf("auth: identity provider did not return an email address — ensure the 'email' scope is requested and the provider is configured to include it")
+	}
+	// Fall back to sub as display name if the provider does not return one.
+	if claims.Name == "" {
+		claims.Name = claims.Sub
+	}
+
 	user, err := p.findOrProvisionUser(ctx, cfg, claims.Sub, claims.Email, claims.Name)
 	if err != nil {
 		return nil, err
@@ -261,40 +297,65 @@ func (p *OIDCAuthProvider) loadConfig(ctx context.Context, providerID uuid.UUID,
 	return cfg, oauth2Cfg, nil
 }
 
-// findOrProvisionUser looks up a user by OIDC subject claim. If no user exists,
-// a new account is created (JIT provisioning) with role "user" by default.
-// Email and display name are updated from the identity provider on every login.
+// findOrProvisionUser resolves the arkeep user for an incoming OIDC login.
+//
+// Lookup order:
+//  1. By (oidc_provider, oidc_sub) — returning OIDC user, fast path.
+//  2. By email — account linking: an existing local (or other-provider) account
+//     with the same email is adopted for this OIDC provider so that no duplicate
+//     is created.
+//  3. Neither found — JIT-provision a new account with role "user".
+//
+// Email and display name are synced from the IdP on every login.
 func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDCProvider, sub, email, displayName string) (*db.User, error) {
+	// 1. Fast path: returning OIDC user.
 	user, err := p.userRepo.GetByOIDC(ctx, cfg.ID.String(), sub)
 	if err != nil && !isNotFound(err) {
 		return nil, fmt.Errorf("auth: looking up OIDC user: %w", err)
 	}
 
-	if err == nil {
-		// User exists — update email and display name in case they changed at the IdP.
-		user.Email = email
-		user.DisplayName = displayName
-		if updateErr := p.userRepo.Update(ctx, user); updateErr != nil {
-			_ = updateErr // Non-fatal
+	if isNotFound(err) {
+		// 2. Account linking: look up by email.
+		user, err = p.userRepo.GetByEmail(ctx, email)
+		if err != nil && !isNotFound(err) {
+			return nil, fmt.Errorf("auth: looking up user by email: %w", err)
 		}
-		return user, nil
+
+		if isNotFound(err) {
+			// 3. New user — provision.
+			newUser := &db.User{
+				Email:        email,
+				DisplayName:  displayName,
+				Role:         "user",
+				IsActive:     true,
+				OIDCProvider: cfg.ID.String(),
+				OIDCSub:      sub,
+			}
+			if err := p.userRepo.Create(ctx, newUser); err != nil {
+				return nil, fmt.Errorf("auth: provisioning OIDC user: %w", err)
+			}
+			return newUser, nil
+		}
+
+		// Existing account found by email — link it to this OIDC provider.
+		p.logger.Info("linking existing account to OIDC provider",
+			zap.String("user_id", user.ID.String()),
+			zap.String("provider", cfg.ID.String()),
+		)
+		user.OIDCProvider = cfg.ID.String()
+		user.OIDCSub = sub
 	}
 
-	// No existing user — provision a new account.
-	newUser := &db.User{
-		Email:        email,
-		DisplayName:  displayName,
-		Role:         "user",
-		IsActive:     true,
-		OIDCProvider: cfg.ID.String(),
-		OIDCSub:      sub,
+	// Update email and display name in case they changed at the IdP.
+	user.Email = email
+	user.DisplayName = displayName
+	if updateErr := p.userRepo.Update(ctx, user); updateErr != nil {
+		p.logger.Warn("failed to update user profile from OIDC claims",
+			zap.String("user_id", user.ID.String()),
+			zap.Error(updateErr),
+		)
 	}
-
-	if err := p.userRepo.Create(ctx, newUser); err != nil {
-		return nil, fmt.Errorf("auth: provisioning OIDC user: %w", err)
-	}
-
-	return newUser, nil
+	return user, nil
 }
 
 // issueTokenPair is the OIDC equivalent of LocalAuthProvider.issueTokenPair.

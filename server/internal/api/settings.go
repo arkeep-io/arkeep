@@ -21,31 +21,20 @@ import (
 type SettingsHandler struct {
 	oidcRepo     repositories.OIDCProviderRepository
 	settingsRepo repositories.SettingsRepository
-	baseURL      string // e.g. "https://arkeep.example.com" — used to build the callback URL
 	logger       *zap.Logger
 }
 
 // NewSettingsHandler creates a new SettingsHandler.
-// baseURL is the externally reachable URL of the server, used to compute the
-// OIDC callback URL shown to administrators when configuring providers.
 func NewSettingsHandler(
 	oidcRepo repositories.OIDCProviderRepository,
 	settingsRepo repositories.SettingsRepository,
-	baseURL string,
 	logger *zap.Logger,
 ) *SettingsHandler {
 	return &SettingsHandler{
 		oidcRepo:     oidcRepo,
 		settingsRepo: settingsRepo,
-		baseURL:      baseURL,
 		logger:       logger.Named("settings_handler"),
 	}
-}
-
-// callbackURL returns the OIDC redirect URI that identity providers must be
-// configured to accept. It is the same for all providers.
-func (h *SettingsHandler) callbackURL() string {
-	return h.baseURL + "/api/v1/auth/oidc/callback"
 }
 
 // =============================================================================
@@ -68,13 +57,13 @@ type oidcProviderResponse struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
-func (h *SettingsHandler) oidcToResponse(p *db.OIDCProvider) oidcProviderResponse {
+func (h *SettingsHandler) oidcToResponse(p *db.OIDCProvider, callbackURL string) oidcProviderResponse {
 	return oidcProviderResponse{
 		ID:          p.ID.String(),
 		Name:        p.Name,
 		Issuer:      p.Issuer,
 		ClientID:    p.ClientID,
-		CallbackURL: h.callbackURL(),
+		CallbackURL: callbackURL,
 		Scopes:      p.Scopes,
 		Enabled:     p.Enabled,
 		CreatedAt:   p.CreatedAt.UTC().Format(time.RFC3339),
@@ -92,9 +81,10 @@ func (h *SettingsHandler) ListOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cbURL := requestCallbackURL(r)
 	resp := make([]oidcProviderResponse, len(providers))
 	for i, p := range providers {
-		resp[i] = h.oidcToResponse(p)
+		resp[i] = h.oidcToResponse(p, cbURL)
 	}
 
 	Ok(w, resp)
@@ -154,7 +144,7 @@ func (h *SettingsHandler) CreateOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Created(w, h.oidcToResponse(provider))
+	Created(w, h.oidcToResponse(provider, requestCallbackURL(r)))
 }
 
 // GetOIDCByID handles GET /api/v1/settings/oidc/{id} (admin only).
@@ -175,7 +165,7 @@ func (h *SettingsHandler) GetOIDCByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, h.oidcToResponse(provider))
+	Ok(w, h.oidcToResponse(provider, requestCallbackURL(r)))
 }
 
 // updateOIDCRequest is the JSON body for PUT /api/v1/settings/oidc/{id}.
@@ -247,7 +237,7 @@ func (h *SettingsHandler) UpdateOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, h.oidcToResponse(existing))
+	Ok(w, h.oidcToResponse(existing, requestCallbackURL(r)))
 }
 
 // DeleteOIDC handles DELETE /api/v1/settings/oidc/{id} (admin only).
@@ -341,9 +331,14 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 		{notification.KeySMTPHost, req.Host},
 		{notification.KeySMTPPort, strconv.Itoa(req.Port)},
 		{notification.KeySMTPUsername, req.Username},
-		{notification.KeySMTPPassword, req.Password},
 		{notification.KeySMTPFrom, req.From},
 		{notification.KeySMTPTLS, strconv.FormatBool(req.TLS)},
+	}
+
+	// Only overwrite the stored password if a new one was provided.
+	// An empty password means "keep the existing value" (analogous to OIDC client_secret).
+	if req.Password != "" {
+		pairs = append(pairs, struct{ key, value string }{notification.KeySMTPPassword, req.Password})
 	}
 
 	for _, p := range pairs {
@@ -375,9 +370,6 @@ func validateUpsertSMTP(req *upsertSMTPRequest) error {
 	}
 	if req.Port < 1 || req.Port > 65535 {
 		return errors.New("port must be between 1 and 65535")
-	}
-	if req.Password == "" {
-		return errors.New("password is required")
 	}
 	if req.From == "" {
 		return errors.New("from is required")

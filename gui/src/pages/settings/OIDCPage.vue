@@ -12,6 +12,14 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog'
+import {
+    Sheet,
+    SheetContent,
+    SheetDescription,
+    SheetFooter,
+    SheetHeader,
+    SheetTitle,
+} from '@/components/ui/sheet'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -54,11 +62,11 @@ function copyCallbackURL(url: string, id: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Add / edit dialog
+// Add / edit sheet
 // ---------------------------------------------------------------------------
 
-const dialogOpen = ref(false)
-const dialogMode = ref<'create' | 'edit'>('create')
+const sheetOpen = ref(false)
+const sheetMode = ref<'create' | 'edit'>('create')
 const editingProvider = ref<OIDCProvider | null>(null)
 
 const formName = ref('')
@@ -84,9 +92,7 @@ const editSchema = z.object({
     client_id: z.string().min(1, 'Client ID is required'),
 })
 
-function openCreateDialog() {
-    dialogMode.value = 'create'
-    editingProvider.value = null
+function resetForm() {
     formName.value = ''
     formIssuer.value = ''
     formClientId.value = ''
@@ -95,11 +101,17 @@ function openCreateDialog() {
     formEnabled.value = true
     formErrors.value = {}
     formError.value = null
-    dialogOpen.value = true
 }
 
-function openEditDialog(provider: OIDCProvider) {
-    dialogMode.value = 'edit'
+function openCreateSheet() {
+    sheetMode.value = 'create'
+    editingProvider.value = null
+    resetForm()
+    sheetOpen.value = true
+}
+
+function openEditSheet(provider: OIDCProvider) {
+    sheetMode.value = 'edit'
     editingProvider.value = provider
     formName.value = provider.name
     formIssuer.value = provider.issuer
@@ -109,12 +121,17 @@ function openEditDialog(provider: OIDCProvider) {
     formEnabled.value = provider.enabled
     formErrors.value = {}
     formError.value = null
-    dialogOpen.value = true
+    sheetOpen.value = true
+}
+
+function onSheetOpenChange(value: boolean) {
+    if (!value) resetForm()
+    sheetOpen.value = value
 }
 
 function validateForm(): boolean {
     formErrors.value = {}
-    const schema = dialogMode.value === 'create' ? createSchema : editSchema
+    const schema = sheetMode.value === 'create' ? createSchema : editSchema
     const result = schema.safeParse({
         name: formName.value,
         issuer: formIssuer.value,
@@ -149,13 +166,13 @@ async function submitForm() {
             body.client_secret = formClientSecret.value
         }
 
-        if (dialogMode.value === 'create') {
+        if (sheetMode.value === 'create') {
             await api('/api/v1/settings/oidc', { method: 'POST', body })
         } else {
             await api(`/api/v1/settings/oidc/${editingProvider.value!.id}`, { method: 'PUT', body })
         }
 
-        dialogOpen.value = false
+        sheetOpen.value = false
         await fetchOIDC()
     } catch (e: any) {
         formError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save provider'
@@ -213,7 +230,7 @@ onMounted(fetchOIDC)
             <Button variant="outline" size="icon" aria-label="Refresh" :disabled="oidcLoading" @click="fetchOIDC">
                 <RefreshCw class="size-4" :class="{ 'animate-spin': oidcLoading }" />
             </Button>
-            <Button size="sm" @click="openCreateDialog">
+            <Button size="sm" @click="openCreateSheet">
                 <Plus class="size-4" />
                 Add provider
             </Button>
@@ -252,7 +269,7 @@ onMounted(fetchOIDC)
                     </Badge>
                 </div>
                 <div class="flex items-center gap-1 shrink-0">
-                    <Button variant="ghost" size="icon" aria-label="Edit" @click="openEditDialog(provider)">
+                    <Button variant="ghost" size="icon" aria-label="Edit" @click="openEditSheet(provider)">
                         <Pencil class="size-4" />
                     </Button>
                     <Button variant="ghost" size="icon" aria-label="Delete"
@@ -284,21 +301,21 @@ onMounted(fetchOIDC)
         </div>
     </div>
 
-    <!-- Add / Edit dialog -->
-    <Dialog :open="dialogOpen" @update:open="dialogOpen = $event">
-        <DialogContent class="max-w-lg">
-            <DialogHeader>
-                <DialogTitle>{{ dialogMode === 'create' ? 'Add OIDC Provider' : 'Edit OIDC Provider' }}</DialogTitle>
-                <DialogDescription>
-                    {{ dialogMode === 'create'
+    <!-- ── Add / Edit sheet ──────────────────────────────────────────────── -->
+    <Sheet :open="sheetOpen" @update:open="onSheetOpenChange">
+        <SheetContent class="sm:max-w-lg overflow-y-auto">
+            <SheetHeader>
+                <SheetTitle>{{ sheetMode === 'create' ? 'Add OIDC Provider' : 'Edit OIDC Provider' }}</SheetTitle>
+                <SheetDescription>
+                    {{ sheetMode === 'create'
                         ? 'Configure a new identity provider. Copy the redirect URI into your IdP after saving.'
                         : 'Update the provider configuration. Leave the client secret blank to keep the current value.'
                     }}
-                </DialogDescription>
-            </DialogHeader>
+                </SheetDescription>
+            </SheetHeader>
 
-            <form novalidate @submit.prevent="submitForm">
-                <FieldGroup class="flex flex-col gap-4 py-2">
+            <form class="py-6 px-4" novalidate @submit.prevent="submitForm">
+                <FieldGroup class="flex flex-col gap-4">
 
                     <Transition enter-active-class="transition-all duration-200"
                         enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
@@ -338,11 +355,11 @@ onMounted(fetchOIDC)
                         <Field>
                             <FieldLabel for="form-client-secret">
                                 Client Secret
-                                <span v-if="dialogMode === 'edit'"
+                                <span v-if="sheetMode === 'edit'"
                                     class="text-muted-foreground font-normal">(optional)</span>
                             </FieldLabel>
                             <Input id="form-client-secret" v-model="formClientSecret" type="password"
-                                :placeholder="dialogMode === 'edit' ? '(unchanged)' : ''" autocomplete="new-password"
+                                :placeholder="sheetMode === 'edit' ? '(unchanged)' : ''" autocomplete="new-password"
                                 :class="formErrors.client_secret ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="formErrors.client_secret">{{ formErrors.client_secret }}</FieldError>
                         </Field>
@@ -371,21 +388,21 @@ onMounted(fetchOIDC)
                         <Switch :model-value="formEnabled" @update:model-value="formEnabled = $event" />
                     </div>
 
+                    <SheetFooter class="mt-2 px-0">
+                        <Button type="button" variant="outline" :disabled="formSubmitting"
+                            @click="onSheetOpenChange(false)">Cancel</Button>
+                        <Button type="submit" :disabled="formSubmitting">
+                            <Loader2 v-if="formSubmitting" class="size-4 animate-spin" />
+                            {{ formSubmitting ? 'Saving…' : (sheetMode === 'create' ? 'Add Provider' : 'Save Changes') }}
+                        </Button>
+                    </SheetFooter>
+
                 </FieldGroup>
-
-                <DialogFooter class="mt-4">
-                    <Button type="button" variant="outline" :disabled="formSubmitting"
-                        @click="dialogOpen = false">Cancel</Button>
-                    <Button type="submit" :disabled="formSubmitting">
-                        <Loader2 v-if="formSubmitting" class="size-4 animate-spin" />
-                        {{ formSubmitting ? 'Saving…' : (dialogMode === 'create' ? 'Add Provider' : 'Save Changes') }}
-                    </Button>
-                </DialogFooter>
             </form>
-        </DialogContent>
-    </Dialog>
+        </SheetContent>
+    </Sheet>
 
-    <!-- Delete confirmation dialog -->
+    <!-- ── Delete confirmation dialog ───────────────────────────────────── -->
     <Dialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
         <DialogContent class="max-w-sm">
             <DialogHeader>

@@ -30,21 +30,17 @@ const (
 
 // AuthHandler groups all authentication-related HTTP handlers.
 type AuthHandler struct {
-	svc         *auth.AuthService
-	logger      *zap.Logger
-	secure      bool   // true in production (HTTPS), false in development
-	callbackURL string // computed: {base_url}/api/v1/auth/oidc/callback
+	svc    *auth.AuthService
+	logger *zap.Logger
+	secure bool // true in production (HTTPS), false in development
 }
 
 // NewAuthHandler creates a new AuthHandler.
-// callbackURL is the full redirect URI registered with identity providers
-// (e.g. "https://arkeep.example.com/api/v1/auth/oidc/callback").
-func NewAuthHandler(svc *auth.AuthService, logger *zap.Logger, secure bool, callbackURL string) *AuthHandler {
+func NewAuthHandler(svc *auth.AuthService, logger *zap.Logger, secure bool) *AuthHandler {
 	return &AuthHandler{
-		svc:         svc,
-		logger:      logger.Named("auth_handler"),
-		secure:      secure,
-		callbackURL: callbackURL,
+		svc:    svc,
+		logger: logger.Named("auth_handler"),
+		secure: secure,
 	}
 }
 
@@ -175,7 +171,7 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectURL, state, codeVerifier, err := h.svc.AuthorizationURL(r.Context(), providerID, h.callbackURL)
+	redirectURL, state, codeVerifier, err := h.svc.AuthorizationURL(r.Context(), providerID, requestCallbackURL(r))
 	if err != nil {
 		if errors.Is(err, auth.ErrProviderNotFound) {
 			ErrBadRequest(w, "OIDC provider not found")
@@ -241,7 +237,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	pair, err := h.svc.ExchangeCode(r.Context(), auth.OIDCCallbackRequest{
 		ProviderID:   providerCookie.Value,
-		CallbackURL:  h.callbackURL,
+		CallbackURL:  requestCallbackURL(r),
 		Code:         code,
 		State:        state,
 		SessionState: stateCookie.Value,

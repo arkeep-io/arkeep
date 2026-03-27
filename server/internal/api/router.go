@@ -38,11 +38,6 @@ type RouterConfig struct {
 	// Secure controls whether auth cookies are set with the Secure flag.
 	Secure bool
 
-	// BaseURL is the externally reachable URL of the server (e.g. "https://arkeep.example.com").
-	// Used to compute the OIDC callback URL shown to administrators and sent to identity providers.
-	// If empty the callback URL is returned as a relative path.
-	BaseURL string
-
 	// AutoCerts is the auto-generated PKI used for gRPC mTLS enrollment.
 	AutoCerts *grpccerts.AutoCerts
 
@@ -60,12 +55,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Use(middleware.Recoverer)
 	r.Use(SecurityHeaders)
 
-	// The OIDC callback URL is the same for all providers.
-	callbackURL := cfg.BaseURL + "/api/v1/auth/oidc/callback"
-
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
-	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure, callbackURL)
+	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
 	var enrollHandler *EnrollHandler
 	if cfg.AutoCerts != nil {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
@@ -77,7 +69,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Logger)
 	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.BaseURL, cfg.Logger)
+	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
 	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 

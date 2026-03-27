@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { z } from 'zod'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -36,16 +36,22 @@ const smtpTLS = ref(false)
 
 const smtpErrors = ref<Record<string, string>>({})
 
-const smtpSchema = z.object({
-    host: z.string().min(1, 'Host is required'),
-    port: z
-        .number()
-        .int()
-        .min(1, 'Port must be between 1 and 65535')
-        .max(65535, 'Port must be between 1 and 65535'),
-    password: z.string().min(1, 'Password is required'),
-    from: z.string().email('Must be a valid email address'),
-})
+// Password is required only when creating a new SMTP config.
+// On update (smtpExists), an empty password means "keep the existing one".
+const smtpSchema = computed(() =>
+    z.object({
+        host: z.string().min(1, 'Host is required'),
+        port: z
+            .number()
+            .int()
+            .min(1, 'Port must be between 1 and 65535')
+            .max(65535, 'Port must be between 1 and 65535'),
+        password: smtpExists.value
+            ? z.string()
+            : z.string().min(1, 'Password is required'),
+        from: z.string().email('Must be a valid email address'),
+    })
+)
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -80,7 +86,7 @@ onMounted(fetchSMTP)
 
 function validateSMTP(): boolean {
     smtpErrors.value = {}
-    const result = smtpSchema.safeParse({
+    const result = smtpSchema.value.safeParse({
         host: smtpHost.value,
         port: smtpPort.value,
         password: smtpPassword.value,

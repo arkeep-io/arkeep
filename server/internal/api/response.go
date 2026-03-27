@@ -8,6 +8,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // envelope is the standard JSON response wrapper for all API responses.
@@ -100,6 +101,30 @@ func ErrInternal(w http.ResponseWriter) {
 // Used when a required downstream component (e.g. an agent) is not reachable.
 func ErrServiceUnavailable(w http.ResponseWriter, message string) {
 	errJSON(w, http.StatusServiceUnavailable, message, "service_unavailable")
+}
+
+// requestCallbackURL derives the OIDC redirect URI from the incoming HTTP
+// request. It respects X-Forwarded-Proto and X-Forwarded-Host headers so that
+// deployments behind a TLS-terminating reverse proxy produce the correct
+// https:// callback URL without requiring a separate --base-url flag.
+//
+// Security note: X-Forwarded-* headers are trusted as-is. In production the
+// reverse proxy must strip these headers from untrusted client requests so that
+// only the proxy's own values reach this function.
+func requestCallbackURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		first, _, _ := strings.Cut(strings.TrimSpace(proto), ",")
+		scheme = strings.TrimSpace(first)
+	}
+	host := r.Host
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		host = h
+	}
+	return scheme + "://" + host + "/api/v1/auth/oidc/callback"
 }
 
 // decodeJSON decodes the request body into dst. Returns false and writes an
