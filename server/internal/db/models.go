@@ -84,6 +84,10 @@ type OIDCProvider struct {
 	Enabled      bool            `gorm:"not null;default:false"`
 }
 
+// TableName overrides GORM's default naming convention, which would produce
+// "o_id_c_providers" by splitting each uppercase letter as a word boundary.
+func (OIDCProvider) TableName() string { return "oidc_providers" }
+
 // -----------------------------------------------------------------------------
 // Agents
 // -----------------------------------------------------------------------------
