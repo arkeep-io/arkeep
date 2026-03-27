@@ -43,19 +43,22 @@ func (r *gormOIDCProviderRepository) GetByID(ctx context.Context, id uuid.UUID) 
 	return &provider, nil
 }
 
-// GetEnabled retrieves the currently enabled OIDC provider.
-// Only one provider is supported at a time in the open core tier.
-// Returns ErrNotFound if no enabled provider exists.
-func (r *gormOIDCProviderRepository) GetEnabled(ctx context.Context) (*db.OIDCProvider, error) {
-	var provider db.OIDCProvider
-	err := r.db.WithContext(ctx).First(&provider, "enabled = ?", true).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("oidc_providers: get enabled: %w", err)
+// List retrieves all OIDC providers ordered by creation time.
+func (r *gormOIDCProviderRepository) List(ctx context.Context) ([]*db.OIDCProvider, error) {
+	var providers []*db.OIDCProvider
+	if err := r.db.WithContext(ctx).Order("created_at ASC").Find(&providers).Error; err != nil {
+		return nil, fmt.Errorf("oidc_providers: list: %w", err)
 	}
-	return &provider, nil
+	return providers, nil
+}
+
+// ListEnabled retrieves all enabled OIDC providers ordered by creation time.
+func (r *gormOIDCProviderRepository) ListEnabled(ctx context.Context) ([]*db.OIDCProvider, error) {
+	var providers []*db.OIDCProvider
+	if err := r.db.WithContext(ctx).Where("enabled = ?", true).Order("created_at ASC").Find(&providers).Error; err != nil {
+		return nil, fmt.Errorf("oidc_providers: list enabled: %w", err)
+	}
+	return providers, nil
 }
 
 // Update persists all fields of an existing OIDC provider record.

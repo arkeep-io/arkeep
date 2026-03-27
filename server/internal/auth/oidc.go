@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	// oidcStatBytes is the length of the random state parameter for CSRF protection.
+	// oidcStateBytes is the length of the random state parameter for CSRF protection.
 	oidcStateBytes = 16
 
 	// oidcCodeVerifierBytes is the length of the PKCE code verifier before encoding.
@@ -26,13 +26,9 @@ const (
 )
 
 // OIDCAuthProvider implements OIDCFlowProvider using coreos/go-oidc.
-// It handles the Authorization Code flow with PKCE for a single configured
-// OIDC provider. The provider configuration is loaded from the database on
-// each call to allow runtime updates without server restart.
-//
-// Dependency on OIDCProviderRepository (not a cached config struct) is
-// intentional: OIDC provider settings can be updated via the admin UI and
-// must be reflected immediately without a restart.
+// It handles the Authorization Code flow with PKCE for multiple configured
+// OIDC providers. Provider configuration is loaded from the database on each
+// call to allow runtime updates without server restart.
 type OIDCAuthProvider struct {
 	providerRepo repositories.OIDCProviderRepository
 	userRepo     repositories.UserRepository
@@ -70,15 +66,17 @@ func (p *OIDCAuthProvider) Login(_ context.Context, _ LoginRequest) (*TokenPair,
 	return nil, fmt.Errorf("auth: Login is not supported for OIDC provider, use AuthorizationURL and ExchangeCode")
 }
 
-// AuthorizationURL generates the OIDC authorization URL with a random state
-// parameter and PKCE code verifier. The caller must store state and
-// codeVerifier in short-lived session cookies before redirecting the user.
-func (p *OIDCAuthProvider) AuthorizationURL(ctx context.Context) (url, state, codeVerifier string, err error) {
-	cfg, oauth2Cfg, err := p.loadConfig(ctx)
+// AuthorizationURL generates the OIDC authorization URL for the given provider.
+// callbackURL is the redirect URI registered with the identity provider
+// (computed server-side as {base_url}/api/v1/auth/oidc/callback).
+// The caller must store state and codeVerifier in short-lived session cookies
+// before redirecting the user.
+func (p *OIDCAuthProvider) AuthorizationURL(ctx context.Context, providerID uuid.UUID, callbackURL string) (url, state, codeVerifier string, err error) {
+	cfg, oauth2Cfg, err := p.loadConfig(ctx, providerID, callbackURL)
 	if err != nil {
 		return "", "", "", err
 	}
-	_ = cfg // provider config loaded for validation; oauth2Cfg carries the relevant fields
+	_ = cfg
 
 	state, err = generateRandomBase64(oidcStateBytes)
 	if err != nil {
@@ -111,7 +109,12 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, ErrOIDCCodeVerifierMissing
 	}
 
-	cfg, oauth2Cfg, err := p.loadConfig(ctx)
+	providerID, err := uuid.Parse(req.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("auth: invalid provider ID %q: %w", req.ProviderID, err)
+	}
+
+	cfg, oauth2Cfg, err := p.loadConfig(ctx, providerID, req.CallbackURL)
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +135,7 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, fmt.Errorf("auth: OIDC token response missing id_token")
 	}
 
+	// Use the discovered provider to verify the ID token signature and claims.
 	oidcProvider, err := gooidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("auth: initializing OIDC provider for issuer %q: %w", cfg.Issuer, err)
@@ -163,8 +167,7 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, ErrUserDisabled
 	}
 
-	// Update LastLoginAt to track the most recent successful OIDC login.
-	// Non-fatal: a failure here should not block the login itself.
+	// Update LastLoginAt. Non-fatal: a failure here should not block the login.
 	now := time.Now()
 	user.LastLoginAt = &now
 	if err := p.userRepo.Update(ctx, user); err != nil {
@@ -221,11 +224,17 @@ func (p *OIDCAuthProvider) Logout(ctx context.Context, rawToken string) error {
 	return nil
 }
 
-// loadConfig retrieves the enabled OIDC provider from the database and builds
-// the oauth2.Config. Called on every request so configuration changes are
-// picked up without a server restart.
-func (p *OIDCAuthProvider) loadConfig(ctx context.Context) (*db.OIDCProvider, *oauth2.Config, error) {
-	cfg, err := p.providerRepo.GetEnabled(ctx)
+// ListEnabledProviders returns all enabled OIDC provider configurations.
+// Used by the public login endpoint to build the SSO button list.
+func (p *OIDCAuthProvider) ListEnabledProviders(ctx context.Context) ([]*db.OIDCProvider, error) {
+	return p.providerRepo.ListEnabled(ctx)
+}
+
+// loadConfig retrieves the OIDC provider by ID from the database and builds
+// the oauth2.Config using OIDC discovery (/.well-known/openid-configuration).
+// Called on every request so configuration changes are picked up without a restart.
+func (p *OIDCAuthProvider) loadConfig(ctx context.Context, providerID uuid.UUID, callbackURL string) (*db.OIDCProvider, *oauth2.Config, error) {
+	cfg, err := p.providerRepo.GetByID(ctx, providerID)
 	if err != nil {
 		if isNotFound(err) {
 			return nil, nil, ErrProviderNotFound
@@ -233,15 +242,20 @@ func (p *OIDCAuthProvider) loadConfig(ctx context.Context) (*db.OIDCProvider, *o
 		return nil, nil, fmt.Errorf("auth: loading OIDC provider config: %w", err)
 	}
 
+	// Use OIDC discovery to obtain the correct authorization and token endpoints.
+	// This replaces the previous hard-coded {issuer}/authorize and {issuer}/token
+	// pattern which fails for providers like Zitadel that use different paths.
+	oidcProvider, err := gooidc.NewProvider(ctx, cfg.Issuer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("auth: OIDC discovery for issuer %q: %w", cfg.Issuer, err)
+	}
+
 	oauth2Cfg := &oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: string(cfg.ClientSecret),
-		RedirectURL:  cfg.RedirectURL,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  cfg.Issuer + "/authorize",
-			TokenURL: cfg.Issuer + "/token",
-		},
-		Scopes: splitScopes(cfg.Scopes),
+		RedirectURL:  callbackURL,
+		Endpoint:     oidcProvider.Endpoint(),
+		Scopes:       splitScopes(cfg.Scopes),
 	}
 
 	return cfg, oauth2Cfg, nil
@@ -249,7 +263,7 @@ func (p *OIDCAuthProvider) loadConfig(ctx context.Context) (*db.OIDCProvider, *o
 
 // findOrProvisionUser looks up a user by OIDC subject claim. If no user exists,
 // a new account is created (JIT provisioning) with role "user" by default.
-// Email updates from the identity provider are applied on every login.
+// Email and display name are updated from the identity provider on every login.
 func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDCProvider, sub, email, displayName string) (*db.User, error) {
 	user, err := p.userRepo.GetByOIDC(ctx, cfg.ID.String(), sub)
 	if err != nil && !isNotFound(err) {
@@ -261,9 +275,7 @@ func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDC
 		user.Email = email
 		user.DisplayName = displayName
 		if updateErr := p.userRepo.Update(ctx, user); updateErr != nil {
-			// Non-fatal: log-worthy but should not block login.
-			// The caller will use the stale data from the existing user record.
-			_ = updateErr
+			_ = updateErr // Non-fatal
 		}
 		return user, nil
 	}
@@ -286,8 +298,6 @@ func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDC
 }
 
 // issueTokenPair is the OIDC equivalent of LocalAuthProvider.issueTokenPair.
-// Duplicated intentionally to keep the two providers independent — a shared
-// helper would couple them through a common base type.
 func (p *OIDCAuthProvider) issueTokenPair(ctx context.Context, userID uuid.UUID, email, role string) (*TokenPair, error) {
 	accessToken, err := p.jwtManager.GenerateAccessToken(userID.String(), email, role)
 	if err != nil {

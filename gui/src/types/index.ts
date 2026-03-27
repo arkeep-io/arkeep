@@ -269,17 +269,26 @@ export interface WebhookSettings {
   enabled: boolean
 }
 
-// OIDCProvider maps to the oidc_providers table.
+// OIDCProvider maps to the oidc_providers table (admin settings view).
+// callback_url is computed server-side and returned read-only — copy it into
+// the identity provider's allowed redirect URIs.
 export interface OIDCProvider {
   id: string
   name: string
   issuer: string
   client_id: string
-  redirect_url: string
+  callback_url: string // read-only, computed by the server
   scopes: string
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+// OIDCProviderSummary is the minimal shape returned by the public
+// GET /api/v1/auth/oidc/providers endpoint used by the login page.
+export interface OIDCProviderSummary {
+  id: string
+  name: string
 }
 
 // ─── API request / response shapes ───────────────────────────────────────────

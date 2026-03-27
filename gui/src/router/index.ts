@@ -151,12 +151,29 @@ const routes: RouteRecordRaw[] = [
         meta: { breadcrumb: 'Users', requiresRole: 'admin' },
       },
 
-      // Settings — single page with OIDC + SMTP tabs, admin only
+      // Settings — layout shell with OIDC + SMTP sub-pages, admin only
       {
         path: 'settings',
-        name: 'settings',
         component: () => import('@/pages/settings/SettingsPage.vue'),
         meta: { breadcrumb: 'Settings', requiresRole: 'admin' },
+        children: [
+          {
+            path: '',
+            redirect: { name: 'settings-oidc' },
+          },
+          {
+            path: 'oidc',
+            name: 'settings-oidc',
+            component: () => import('@/pages/settings/OIDCPage.vue'),
+            meta: { breadcrumb: 'OpenID Connect', requiresRole: 'admin' },
+          },
+          {
+            path: 'smtp',
+            name: 'settings-smtp',
+            component: () => import('@/pages/settings/SMTPPage.vue'),
+            meta: { breadcrumb: 'SMTP', requiresRole: 'admin' },
+          },
+        ],
       },
 
       // Profile — accessible to all authenticated users

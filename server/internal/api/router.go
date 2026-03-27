@@ -16,9 +16,6 @@ import (
 )
 
 // RouterConfig holds all dependencies needed to build the HTTP router.
-// It is populated in main.go after all components are initialized and
-// passed to NewRouter as a single struct to keep the constructor signature
-// manageable as the number of dependencies grows.
 type RouterConfig struct {
 	AuthService  *auth.AuthService
 	Scheduler    *scheduler.Scheduler
@@ -27,7 +24,6 @@ type RouterConfig struct {
 	Hub          *websocket.Hub
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
-	// Users is also needed by the public setup handler (no auth middleware).
 	Users         repositories.UserRepository
 	Agents        repositories.AgentRepository
 	Destinations  repositories.DestinationRepository
@@ -40,48 +36,36 @@ type RouterConfig struct {
 	Dashboard     repositories.DashboardRepository
 
 	// Secure controls whether auth cookies are set with the Secure flag.
-	// Set to true in production (HTTPS), false in local development.
 	Secure bool
 
+	// BaseURL is the externally reachable URL of the server (e.g. "https://arkeep.example.com").
+	// Used to compute the OIDC callback URL shown to administrators and sent to identity providers.
+	// If empty the callback URL is returned as a relative path.
+	BaseURL string
+
 	// AutoCerts is the auto-generated PKI used for gRPC mTLS enrollment.
-	// When non-nil, POST /api/v1/agents/enroll is registered and returns a
-	// signed client certificate to the agent. Nil when an external TLS cert
-	// is configured (--grpc-tls-cert) or TLS is disabled.
 	AutoCerts *grpccerts.AutoCerts
 
-	// AgentSecret is the shared bootstrap secret agents must present when
-	// enrolling. Empty means no authentication is required (dev only).
+	// AgentSecret is the shared bootstrap secret agents must present when enrolling.
 	AgentSecret string
 }
 
 // NewRouter builds and returns the fully configured Chi router.
-// All routes are registered under /api/v1. The GUI is served as a catch-all
-// from the root — this is wired in main.go after embedding the frontend assets.
 func NewRouter(cfg RouterConfig) *chi.Mux {
 	r := chi.NewRouter()
 
-	// --- Global middleware ---
-	// RequestID generates a unique ID for each request, used in logs and
-	// response headers for tracing.
 	r.Use(middleware.RequestID)
-
-	// RealIP extracts the real client IP from X-Forwarded-For or X-Real-IP
-	// headers when the server runs behind a reverse proxy.
 	r.Use(middleware.RealIP)
-
-	// RequestLogger logs every request with method, path, status and latency.
 	r.Use(RequestLogger(cfg.Logger))
-
-	// Recoverer catches panics in handlers, logs them, and returns a 500
-	// instead of crashing the server.
 	r.Use(middleware.Recoverer)
-
-	// SecurityHeaders adds defensive HTTP headers to every response.
 	r.Use(SecurityHeaders)
+
+	// The OIDC callback URL is the same for all providers.
+	callbackURL := cfg.BaseURL + "/api/v1/auth/oidc/callback"
 
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
-	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
+	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure, callbackURL)
 	var enrollHandler *EnrollHandler
 	if cfg.AutoCerts != nil {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
@@ -93,17 +77,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Logger)
 	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
+	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.BaseURL, cfg.Logger)
 	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 
-	// jwtMgr is used by the Authenticate middleware to validate Bearer tokens.
 	jwtMgr := cfg.AuthService.JWTManager()
 
-	// /health — unauthenticated liveness probe used by Docker healthchecks
-	// and load balancers to verify the server process is running and responsive.
-	// Returns 200 OK with a plain-text body; no database check is performed
-	// so the endpoint remains fast even under load.
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
@@ -112,47 +91,37 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	r.Route("/api/v1", func(r chi.Router) {
 
-		// --- Public routes (no authentication required) ---
+		// --- Public routes ---
 		r.Group(func(r chi.Router) {
 			r.Post("/auth/login", authHandler.Login)
 			r.Post("/auth/refresh", authHandler.Refresh)
 
 			// OIDC flow — public because the user is not yet authenticated.
+			// /providers lists enabled providers for the login page SSO buttons.
+			// /login?provider_id={id} initiates the flow for a specific provider.
+			// /callback receives the authorization code from the identity provider.
+			r.Get("/auth/oidc/providers", authHandler.ListOIDCProviders)
 			r.Get("/auth/oidc/login", authHandler.OIDCLogin)
 			r.Get("/auth/oidc/callback", authHandler.OIDCCallback)
 
-			// Setup — public because no users exist yet when these are called.
-			// GetStatus is a lightweight check (COUNT query) safe to call on
-			// every app load. Complete is self-sealing: it returns 409 once any
-			// user exists, so it cannot be used as a backdoor after first run.
 			r.Get("/setup/status", setupHandler.GetStatus)
 			r.Post("/setup/complete", setupHandler.Complete)
 
-			// Agent enrollment — public because agents call this before they have
-			// a client certificate. Protected by the shared agent secret instead.
-			// Only registered when auto-PKI is active (AutoCerts != nil).
 			if enrollHandler != nil {
 				r.Post("/agents/enroll", enrollHandler.Enroll)
 			}
 
-			// WebSocket — authenticated via JWT query parameter (browsers cannot
-			// set Authorization headers on native WebSocket connections).
-			// The Authenticate middleware is NOT used here because the upgrade
-			// must complete before any response is written.
 			r.Get("/ws", wsHandler.ServeWS)
 		})
 
-		// --- Authenticated routes (valid JWT required) ---
+		// --- Authenticated routes ---
 		r.Group(func(r chi.Router) {
 			r.Use(Authenticate(jwtMgr))
 
-			// Dashboard — single aggregated endpoint for the overview page.
 			r.Get("/dashboard", dashboardHandler.Get)
 
-			// Auth
 			r.Post("/auth/logout", authHandler.Logout)
 
-			// Current user profile
 			r.Get("/users/me", userHandler.GetMe)
 			r.Patch("/users/me", userHandler.UpdateMe)
 
@@ -207,9 +176,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Patch("/users/{id}", userHandler.Update)
 				r.Delete("/users/{id}", userHandler.Delete)
 
-				// OIDC provider configuration
-				r.Get("/settings/oidc", settingsHandler.GetOIDC)
-				r.Put("/settings/oidc", settingsHandler.UpsertOIDC)
+				// OIDC provider configuration (multiple providers supported)
+				r.Get("/settings/oidc", settingsHandler.ListOIDC)
+				r.Post("/settings/oidc", settingsHandler.CreateOIDC)
+				r.Get("/settings/oidc/{id}", settingsHandler.GetOIDCByID)
+				r.Put("/settings/oidc/{id}", settingsHandler.UpdateOIDC)
+				r.Delete("/settings/oidc/{id}", settingsHandler.DeleteOIDC)
 
 				// SMTP configuration
 				r.Get("/settings/smtp", settingsHandler.GetSMTP)

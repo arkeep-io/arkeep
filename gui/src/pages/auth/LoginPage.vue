@@ -1,15 +1,12 @@
 <script setup lang="ts">
 // LoginPage.vue — Authentication entry point.
 //
-// Form pattern: shadcn-vue Field/FieldLabel/FieldError for layout and styling,
-// vee-validate useField() for validation binding — no <Field> component from
-// vee-validate in the template to avoid naming conflicts with shadcn Field.
-//
 // Auth flows:
 //   1. Local: email/password → POST /api/v1/auth/login
-//   2. OIDC:  full-page redirect to /api/v1/auth/oidc/login
+//   2. OIDC:  full-page redirect to /api/v1/auth/oidc/login?provider_id={id}
+//             One button per enabled provider. Buttons hidden when none configured.
 
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -28,6 +25,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
+import type { OIDCProviderSummary } from '@/types'
 
 // ─── Validation schema ────────────────────────────────────────────────────────
 
@@ -40,7 +38,6 @@ const schema = toTypedSchema(
 
 const { handleSubmit, isSubmitting } = useForm({ validationSchema: schema })
 
-// useField binds each input to vee-validate
 const { value: emailValue, errorMessage: emailError } = useField<string>('email')
 const { value: passwordValue, errorMessage: passwordError } = useField<string>('password')
 
@@ -53,7 +50,10 @@ const { isDark, cycle, modeLabel } = useTheme()
 
 const serverError = ref<string | null>(null)
 const showPassword = ref(false)
-const oidcLoading = ref(false)
+const oidcLoadingId = ref<string | null>(null)
+
+// Enabled OIDC providers fetched on mount — one button rendered per entry.
+const oidcProviders = ref<OIDCProviderSummary[]>([])
 
 const redirectTo = computed(() =>
     typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard',
@@ -71,10 +71,26 @@ const onSubmit = handleSubmit(async (values) => {
     }
 })
 
-function loginWithOIDC(): void {
-    oidcLoading.value = true
-    window.location.href = '/api/v1/auth/oidc/login'
+function loginWithOIDC(providerId: string): void {
+    oidcLoadingId.value = providerId
+    window.location.href = `/api/v1/auth/oidc/login?provider_id=${providerId}`
 }
+
+// Fetch enabled providers — errors are silently swallowed so that a misconfigured
+// OIDC setup never breaks the local login form.
+async function fetchOIDCProviders(): Promise<void> {
+    try {
+        const res = await fetch('/api/v1/auth/oidc/providers')
+        if (res.ok) {
+            const json = await res.json()
+            oidcProviders.value = json.data ?? []
+        }
+    } catch {
+        // No OIDC providers available — local login only.
+    }
+}
+
+onMounted(fetchOIDCProviders)
 </script>
 
 <template>
@@ -162,19 +178,22 @@ function loginWithOIDC(): void {
                                     </Button>
                                 </Field>
 
-                                <!-- Separator -->
-                                <FieldSeparator class="*:data-[slot=field-separator-content]:bg-card">
-                                    Or continue with
-                                </FieldSeparator>
+                                <!-- SSO buttons — rendered only when at least one provider is enabled -->
+                                <template v-if="oidcProviders.length > 0">
+                                    <FieldSeparator class="*:data-[slot=field-separator-content]:bg-card">
+                                        Or continue with
+                                    </FieldSeparator>
 
-                                <!-- OIDC -->
-                                <Field>
-                                    <Button type="button" variant="outline" class="w-full" :disabled="oidcLoading"
-                                        @click="loginWithOIDC">
-                                        <Loader2 v-if="oidcLoading" class="size-4 animate-spin" />
-                                        Continue with SSO
-                                    </Button>
-                                </Field>
+                                    <Field v-for="provider in oidcProviders" :key="provider.id">
+                                        <Button type="button" variant="outline" class="w-full"
+                                            :disabled="oidcLoadingId !== null"
+                                            @click="loginWithOIDC(provider.id)">
+                                            <Loader2 v-if="oidcLoadingId === provider.id"
+                                                class="size-4 animate-spin" />
+                                            Login with {{ provider.name }}
+                                        </Button>
+                                    </Field>
+                                </template>
                             </FieldGroup>
                         </form>
 

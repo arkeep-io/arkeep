@@ -71,15 +71,15 @@ type RefreshToken struct {
 }
 
 // OIDCProvider stores the configuration for an external OIDC identity provider.
-// ClientSecret is encrypted at rest. Only one provider is supported at a time
-// in the open core tier.
+// ClientSecret is encrypted at rest. Multiple providers are supported.
+// The callback URL is computed server-side as {base_url}/api/v1/auth/oidc/callback
+// and is not stored in the database.
 type OIDCProvider struct {
 	Base
 	Name         string          `gorm:"not null"`
 	Issuer       string          `gorm:"not null"`
 	ClientID     string          `gorm:"not null"`
 	ClientSecret EncryptedString `gorm:"type:text;not null"`
-	RedirectURL  string          `gorm:"not null"`
 	Scopes       string          `gorm:"not null;default:'openid email profile'"` // space-separated
 	Enabled      bool            `gorm:"not null;default:false"`
 }

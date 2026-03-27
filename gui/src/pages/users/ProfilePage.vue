@@ -5,8 +5,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { Separator } from '@/components/ui/separator'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Loader2 } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
@@ -137,160 +137,151 @@ async function submitPassword() {
 </script>
 
 <template>
-    <div class="flex flex-col gap-6 p-6">
+    <div class="flex flex-col p-6">
 
-        <!-- Header -->
-        <div>
-            <h1 class="text-2xl font-semibold tracking-tight">Profile</h1>
-            <p class="mt-1 text-sm text-muted-foreground">
-                Manage your personal account settings.
-            </p>
+        <!-- Avatar identity row -->
+        <div class="flex items-center gap-5 pb-8 border-b">
+            <Avatar class="w-16 h-16 rounded-xl shrink-0">
+                <AvatarFallback class="rounded-xl text-xl font-semibold">
+                    {{ userInitials }}
+                </AvatarFallback>
+            </Avatar>
+            <div class="min-w-0">
+                <h1 class="text-2xl font-semibold tracking-tight truncate">{{ auth.user?.display_name }}</h1>
+                <p class="text-sm text-muted-foreground truncate">{{ auth.user?.email }}</p>
+                <div class="flex items-center gap-2 mt-1">
+                    <Badge variant="outline" class="capitalize text-xs">{{ auth.user?.role }}</Badge>
+                    <Badge v-if="isOIDC" variant="secondary" class="text-xs">SSO</Badge>
+                </div>
+            </div>
         </div>
 
-        <div class="max-w-lg flex flex-col gap-8">
-
-            <!-- Avatar + identity -->
-            <div class="flex items-center gap-4">
-                <Avatar class="w-14 h-14 rounded-xl">
-                    <AvatarFallback class="rounded-xl text-lg font-semibold">
-                        {{ userInitials }}
-                    </AvatarFallback>
-                </Avatar>
-                <div>
-                    <p class="font-semibold">{{ auth.user?.display_name }}</p>
-                    <p class="text-sm text-muted-foreground">{{ auth.user?.email }}</p>
-                    <p class="text-xs text-muted-foreground mt-0.5 capitalize">{{ auth.user?.role }}</p>
-                </div>
+        <!-- ── Display Name section ──────────────────────────────────────────── -->
+        <div class="grid grid-cols-[280px_1fr] gap-12 py-8 border-b">
+            <div>
+                <h2 class="text-sm font-semibold">Display Name</h2>
+                <p class="mt-1 text-sm text-muted-foreground">
+                    This name is shown in the sidebar, notifications, and anywhere your account is referenced.
+                </p>
             </div>
 
-            <Separator />
+            <form novalidate @submit.prevent="submitProfile">
+                <FieldGroup class="flex flex-col gap-4">
 
-            <!-- ── Profile section ─────────────────────────────────────────────── -->
-            <div class="flex flex-col gap-4">
-                <div>
-                    <h2 class="text-sm font-semibold">Display Name</h2>
-                    <p class="mt-0.5 text-sm text-muted-foreground">
-                        This name is shown in the sidebar and notifications.
-                    </p>
-                </div>
+                    <Transition enter-active-class="transition-all duration-200"
+                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                        leave-to-class="-translate-y-1 opacity-0">
+                        <Alert v-if="profileError" variant="destructive">
+                            <AlertCircle class="size-4" />
+                            <AlertDescription>{{ profileError }}</AlertDescription>
+                        </Alert>
+                    </Transition>
 
-                <form novalidate @submit.prevent="submitProfile">
-                    <FieldGroup class="flex flex-col gap-4">
+                    <Transition enter-active-class="transition-all duration-200"
+                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                        leave-to-class="-translate-y-1 opacity-0">
+                        <Alert v-if="profileSuccess"
+                            class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+                            <AlertDescription>Display name updated successfully.</AlertDescription>
+                        </Alert>
+                    </Transition>
 
-                        <Transition enter-active-class="transition-all duration-200"
-                            enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
-                            leave-to-class="-translate-y-1 opacity-0">
-                            <Alert v-if="profileError" variant="destructive">
-                                <AlertCircle class="size-4" />
-                                <AlertDescription>{{ profileError }}</AlertDescription>
-                            </Alert>
-                        </Transition>
+                    <Field>
+                        <FieldLabel for="display-name">Display Name</FieldLabel>
+                        <Input id="display-name" v-model="fieldDisplayName" placeholder="Jane Doe" autocomplete="off"
+                            :class="profileErrors.display_name ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="profileErrors.display_name">{{ profileErrors.display_name }}</FieldError>
+                    </Field>
 
-                        <Transition enter-active-class="transition-all duration-200"
-                            enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
-                            leave-to-class="-translate-y-1 opacity-0">
-                            <Alert v-if="profileSuccess"
-                                class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
-                                <AlertDescription>Display name updated successfully.</AlertDescription>
-                            </Alert>
-                        </Transition>
+                    <div class="flex justify-end">
+                        <Button type="submit" :disabled="profileSubmitting">
+                            <Loader2 v-if="profileSubmitting" class="size-4 animate-spin" />
+                            {{ profileSubmitting ? 'Saving…' : 'Save Name' }}
+                        </Button>
+                    </div>
 
-                        <Field>
-                            <FieldLabel for="display-name">Display Name</FieldLabel>
-                            <Input id="display-name" v-model="fieldDisplayName" placeholder="Jane Doe"
-                                autocomplete="off"
-                                :class="profileErrors.display_name ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="profileErrors.display_name">{{ profileErrors.display_name }}</FieldError>
-                        </Field>
-
-                        <div class="flex justify-end">
-                            <Button type="submit" :disabled="profileSubmitting">
-                                <Loader2 v-if="profileSubmitting" class="size-4 animate-spin" />
-                                {{ profileSubmitting ? 'Saving…' : 'Save Name' }}
-                            </Button>
-                        </div>
-
-                    </FieldGroup>
-                </form>
-            </div>
-
-            <Separator />
-
-            <!-- ── Password section ────────────────────────────────────────────── -->
-            <div class="flex flex-col gap-4">
-                <div>
-                    <h2 class="text-sm font-semibold">Password</h2>
-                    <p class="mt-0.5 text-sm text-muted-foreground">
-                        <template v-if="isOIDC">
-                            Your account is managed by an external identity provider.
-                            Password changes must be made there.
-                        </template>
-                        <template v-else>
-                            Choose a strong password of at least 8 characters.
-                        </template>
-                    </p>
-                </div>
-
-                <form v-if="!isOIDC" novalidate @submit.prevent="submitPassword">
-                    <FieldGroup class="flex flex-col gap-4">
-
-                        <Transition enter-active-class="transition-all duration-200"
-                            enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
-                            leave-to-class="-translate-y-1 opacity-0">
-                            <Alert v-if="passwordError" variant="destructive">
-                                <AlertCircle class="size-4" />
-                                <AlertDescription>{{ passwordError }}</AlertDescription>
-                            </Alert>
-                        </Transition>
-
-                        <Transition enter-active-class="transition-all duration-200"
-                            enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
-                            leave-to-class="-translate-y-1 opacity-0">
-                            <Alert v-if="passwordSuccess"
-                                class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
-                                <AlertDescription>Password updated successfully.</AlertDescription>
-                            </Alert>
-                        </Transition>
-
-                        <Field>
-                            <FieldLabel for="current-password">Current Password</FieldLabel>
-                            <Input id="current-password" v-model="fieldCurrentPassword" type="password"
-                                autocomplete="current-password"
-                                :class="passwordErrors.current_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="passwordErrors.current_password">{{ passwordErrors.current_password }}
-                            </FieldError>
-                        </Field>
-
-                        <div class="grid grid-cols-2 gap-3">
-                            <Field>
-                                <FieldLabel for="new-password">New Password</FieldLabel>
-                                <Input id="new-password" v-model="fieldNewPassword" type="password"
-                                    autocomplete="new-password"
-                                    :class="passwordErrors.new_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                                <FieldError v-if="passwordErrors.new_password">{{ passwordErrors.new_password }}
-                                </FieldError>
-                            </Field>
-                            <Field>
-                                <FieldLabel for="confirm-password">Confirm Password</FieldLabel>
-                                <Input id="confirm-password" v-model="fieldConfirmPassword" type="password"
-                                    autocomplete="new-password"
-                                    :class="passwordErrors.confirm_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                                <FieldError v-if="passwordErrors.confirm_password">{{ passwordErrors.confirm_password }}
-                                </FieldError>
-                            </Field>
-                        </div>
-
-                        <div class="flex justify-end">
-                            <Button type="submit" :disabled="passwordSubmitting">
-                                <Loader2 v-if="passwordSubmitting" class="size-4 animate-spin" />
-                                {{ passwordSubmitting ? 'Saving…' : 'Update Password' }}
-                            </Button>
-                        </div>
-
-                    </FieldGroup>
-                </form>
-            </div>
-
+                </FieldGroup>
+            </form>
         </div>
+
+        <!-- ── Password section ─────────────────────────────────────────────── -->
+        <div class="grid grid-cols-[280px_1fr] gap-12 py-8">
+            <div>
+                <h2 class="text-sm font-semibold">Password</h2>
+                <p class="mt-1 text-sm text-muted-foreground">
+                    <template v-if="isOIDC">
+                        Your account is managed by an external identity provider.
+                        Password changes must be made there.
+                    </template>
+                    <template v-else>
+                        Choose a strong password of at least 8 characters.
+                    </template>
+                </p>
+            </div>
+
+            <div v-if="isOIDC"
+                class="flex items-center justify-center rounded-lg border border-dashed p-8 text-sm text-muted-foreground">
+                Password is managed by your identity provider.
+            </div>
+
+            <form v-else novalidate @submit.prevent="submitPassword">
+                <FieldGroup class="flex flex-col gap-4">
+
+                    <Transition enter-active-class="transition-all duration-200"
+                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                        leave-to-class="-translate-y-1 opacity-0">
+                        <Alert v-if="passwordError" variant="destructive">
+                            <AlertCircle class="size-4" />
+                            <AlertDescription>{{ passwordError }}</AlertDescription>
+                        </Alert>
+                    </Transition>
+
+                    <Transition enter-active-class="transition-all duration-200"
+                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                        leave-to-class="-translate-y-1 opacity-0">
+                        <Alert v-if="passwordSuccess"
+                            class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+                            <AlertDescription>Password updated successfully.</AlertDescription>
+                        </Alert>
+                    </Transition>
+
+                    <Field>
+                        <FieldLabel for="current-password">Current Password</FieldLabel>
+                        <Input id="current-password" v-model="fieldCurrentPassword" type="password"
+                            autocomplete="current-password"
+                            :class="passwordErrors.current_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="passwordErrors.current_password">{{ passwordErrors.current_password
+                            }}</FieldError>
+                    </Field>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <Field>
+                            <FieldLabel for="new-password">New Password</FieldLabel>
+                            <Input id="new-password" v-model="fieldNewPassword" type="password"
+                                autocomplete="new-password"
+                                :class="passwordErrors.new_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="passwordErrors.new_password">{{ passwordErrors.new_password }}</FieldError>
+                        </Field>
+                        <Field>
+                            <FieldLabel for="confirm-password">Confirm Password</FieldLabel>
+                            <Input id="confirm-password" v-model="fieldConfirmPassword" type="password"
+                                autocomplete="new-password"
+                                :class="passwordErrors.confirm_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="passwordErrors.confirm_password">{{ passwordErrors.confirm_password
+                                }}</FieldError>
+                        </Field>
+                    </div>
+
+                    <div class="flex justify-end">
+                        <Button type="submit" :disabled="passwordSubmitting">
+                            <Loader2 v-if="passwordSubmitting" class="size-4 animate-spin" />
+                            {{ passwordSubmitting ? 'Saving…' : 'Update Password' }}
+                        </Button>
+                    </div>
+
+                </FieldGroup>
+            </form>
+        </div>
+
     </div>
 </template>

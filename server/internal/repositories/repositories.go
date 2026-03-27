@@ -52,7 +52,8 @@ type RefreshTokenRepository interface {
 type OIDCProviderRepository interface {
 	Create(ctx context.Context, provider *db.OIDCProvider) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.OIDCProvider, error)
-	GetEnabled(ctx context.Context) (*db.OIDCProvider, error)
+	List(ctx context.Context) ([]*db.OIDCProvider, error)
+	ListEnabled(ctx context.Context) ([]*db.OIDCProvider, error)
 	Update(ctx context.Context, provider *db.OIDCProvider) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }

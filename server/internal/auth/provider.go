@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // AuthProvider is the interface that every authentication backend must implement.
@@ -40,10 +42,10 @@ type AuthProvider interface {
 type OIDCFlowProvider interface {
 	AuthProvider
 
-	// AuthorizationURL generates the OIDC authorization URL and returns the
-	// state and code verifier (PKCE) that must be stored server-side in a
-	// short-lived session cookie before redirecting the user.
-	AuthorizationURL(ctx context.Context) (url, state, codeVerifier string, err error)
+	// AuthorizationURL generates the OIDC authorization URL for the given provider
+	// and returns the state and code verifier (PKCE) that must be stored server-side
+	// in short-lived session cookies before redirecting the user.
+	AuthorizationURL(ctx context.Context, providerID uuid.UUID, callbackURL string) (url, state, codeVerifier string, err error)
 
 	// ExchangeCode completes the OIDC flow by exchanging the authorization code
 	// for tokens. state and codeVerifier must match the values from AuthorizationURL.
@@ -61,6 +63,10 @@ type LoginRequest struct {
 type OIDCCallbackRequest struct {
 	// ProviderID identifies which OIDC provider configuration to use.
 	ProviderID string
+
+	// CallbackURL is the redirect URI that was used in AuthorizationURL.
+	// Must match exactly what was sent to the identity provider.
+	CallbackURL string
 
 	// Code is the authorization code returned by the identity provider.
 	Code string

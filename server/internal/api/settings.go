@@ -21,20 +21,31 @@ import (
 type SettingsHandler struct {
 	oidcRepo     repositories.OIDCProviderRepository
 	settingsRepo repositories.SettingsRepository
+	baseURL      string // e.g. "https://arkeep.example.com" — used to build the callback URL
 	logger       *zap.Logger
 }
 
 // NewSettingsHandler creates a new SettingsHandler.
+// baseURL is the externally reachable URL of the server, used to compute the
+// OIDC callback URL shown to administrators when configuring providers.
 func NewSettingsHandler(
 	oidcRepo repositories.OIDCProviderRepository,
 	settingsRepo repositories.SettingsRepository,
+	baseURL string,
 	logger *zap.Logger,
 ) *SettingsHandler {
 	return &SettingsHandler{
 		oidcRepo:     oidcRepo,
 		settingsRepo: settingsRepo,
+		baseURL:      baseURL,
 		logger:       logger.Named("settings_handler"),
 	}
+}
+
+// callbackURL returns the OIDC redirect URI that identity providers must be
+// configured to accept. It is the same for all providers.
+func (h *SettingsHandler) callbackURL() string {
+	return h.baseURL + "/api/v1/auth/oidc/callback"
 }
 
 // =============================================================================
@@ -43,25 +54,27 @@ func NewSettingsHandler(
 
 // oidcProviderResponse is the JSON representation of an OIDC provider config.
 // ClientSecret is intentionally omitted — it is write-only and never returned.
+// CallbackURL is computed server-side and returned read-only for the admin to
+// copy into the identity provider's application settings.
 type oidcProviderResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Issuer      string `json:"issuer"`
 	ClientID    string `json:"client_id"`
-	RedirectURL string `json:"redirect_url"`
+	CallbackURL string `json:"callback_url"` // read-only, computed from base_url
 	Scopes      string `json:"scopes"`
 	Enabled     bool   `json:"enabled"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
 }
 
-func oidcProviderToResponse(p *db.OIDCProvider) oidcProviderResponse {
+func (h *SettingsHandler) oidcToResponse(p *db.OIDCProvider) oidcProviderResponse {
 	return oidcProviderResponse{
 		ID:          p.ID.String(),
 		Name:        p.Name,
 		Issuer:      p.Issuer,
 		ClientID:    p.ClientID,
-		RedirectURL: p.RedirectURL,
+		CallbackURL: h.callbackURL(),
 		Scopes:      p.Scopes,
 		Enabled:     p.Enabled,
 		CreatedAt:   p.CreatedAt.UTC().Format(time.RFC3339),
@@ -69,45 +82,56 @@ func oidcProviderToResponse(p *db.OIDCProvider) oidcProviderResponse {
 	}
 }
 
-// GetOIDC handles GET /api/v1/settings/oidc (admin only).
-// Returns the currently configured OIDC provider, or 404 if none is configured.
-func (h *SettingsHandler) GetOIDC(w http.ResponseWriter, r *http.Request) {
-	provider, err := h.oidcRepo.GetEnabled(r.Context())
+// ListOIDC handles GET /api/v1/settings/oidc (admin only).
+// Returns all configured OIDC providers.
+func (h *SettingsHandler) ListOIDC(w http.ResponseWriter, r *http.Request) {
+	providers, err := h.oidcRepo.List(r.Context())
 	if err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			ErrNotFound(w)
-			return
-		}
-		h.logger.Error("failed to get OIDC provider", zap.Error(err))
+		h.logger.Error("failed to list OIDC providers", zap.Error(err))
 		ErrInternal(w)
 		return
 	}
 
-	Ok(w, oidcProviderToResponse(provider))
+	resp := make([]oidcProviderResponse, len(providers))
+	for i, p := range providers {
+		resp[i] = h.oidcToResponse(p)
+	}
+
+	Ok(w, resp)
 }
 
-// upsertOIDCRequest is the JSON body expected by PUT /api/v1/settings/oidc.
-type upsertOIDCRequest struct {
+// createOIDCRequest is the JSON body for POST /api/v1/settings/oidc.
+// ClientSecret is required on creation.
+type createOIDCRequest struct {
 	Name         string `json:"name"`
 	Issuer       string `json:"issuer"`
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
-	RedirectURL  string `json:"redirect_url"`
 	Scopes       string `json:"scopes"`
 	Enabled      bool   `json:"enabled"`
 }
 
-// UpsertOIDC handles PUT /api/v1/settings/oidc (admin only).
-// Creates the OIDC provider configuration if none exists, or replaces it.
-// Only one provider is supported in the open core tier.
-func (h *SettingsHandler) UpsertOIDC(w http.ResponseWriter, r *http.Request) {
-	var req upsertOIDCRequest
+// CreateOIDC handles POST /api/v1/settings/oidc (admin only).
+func (h *SettingsHandler) CreateOIDC(w http.ResponseWriter, r *http.Request) {
+	var req createOIDCRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
 
-	if err := validateUpsertOIDC(&req); err != nil {
-		ErrBadRequest(w, err.Error())
+	if req.Name == "" {
+		ErrBadRequest(w, "name is required")
+		return
+	}
+	if req.Issuer == "" {
+		ErrBadRequest(w, "issuer is required")
+		return
+	}
+	if req.ClientID == "" {
+		ErrBadRequest(w, "client_id is required")
+		return
+	}
+	if req.ClientSecret == "" {
+		ErrBadRequest(w, "client_secret is required")
 		return
 	}
 
@@ -115,38 +139,11 @@ func (h *SettingsHandler) UpsertOIDC(w http.ResponseWriter, r *http.Request) {
 		req.Scopes = "openid email profile"
 	}
 
-	existing, err := h.oidcRepo.GetEnabled(r.Context())
-	if err != nil && !errors.Is(err, repositories.ErrNotFound) {
-		h.logger.Error("failed to check existing OIDC provider", zap.Error(err))
-		ErrInternal(w)
-		return
-	}
-
-	if existing != nil {
-		existing.Name = req.Name
-		existing.Issuer = req.Issuer
-		existing.ClientID = req.ClientID
-		existing.ClientSecret = db.EncryptedString(req.ClientSecret)
-		existing.RedirectURL = req.RedirectURL
-		existing.Scopes = req.Scopes
-		existing.Enabled = req.Enabled
-
-		if err := h.oidcRepo.Update(r.Context(), existing); err != nil {
-			h.logger.Error("failed to update OIDC provider", zap.Error(err))
-			ErrInternal(w)
-			return
-		}
-
-		Ok(w, oidcProviderToResponse(existing))
-		return
-	}
-
 	provider := &db.OIDCProvider{
 		Name:         req.Name,
 		Issuer:       req.Issuer,
 		ClientID:     req.ClientID,
 		ClientSecret: db.EncryptedString(req.ClientSecret),
-		RedirectURL:  req.RedirectURL,
 		Scopes:       req.Scopes,
 		Enabled:      req.Enabled,
 	}
@@ -157,35 +154,127 @@ func (h *SettingsHandler) UpsertOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, oidcProviderToResponse(provider))
+	Created(w, h.oidcToResponse(provider))
 }
 
-func validateUpsertOIDC(req *upsertOIDCRequest) error {
+// GetOIDCByID handles GET /api/v1/settings/oidc/{id} (admin only).
+func (h *SettingsHandler) GetOIDCByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	provider, err := h.oidcRepo.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get OIDC provider", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	Ok(w, h.oidcToResponse(provider))
+}
+
+// updateOIDCRequest is the JSON body for PUT /api/v1/settings/oidc/{id}.
+// ClientSecret is optional — omit or send empty string to keep the existing value.
+type updateOIDCRequest struct {
+	Name         string `json:"name"`
+	Issuer       string `json:"issuer"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"` // optional: empty = keep existing
+	Scopes       string `json:"scopes"`
+	Enabled      bool   `json:"enabled"`
+}
+
+// UpdateOIDC handles PUT /api/v1/settings/oidc/{id} (admin only).
+// If client_secret is empty the stored encrypted secret is preserved.
+func (h *SettingsHandler) UpdateOIDC(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var req updateOIDCRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
 	if req.Name == "" {
-		return errors.New("name is required")
+		ErrBadRequest(w, "name is required")
+		return
 	}
 	if req.Issuer == "" {
-		return errors.New("issuer is required")
+		ErrBadRequest(w, "issuer is required")
+		return
 	}
 	if req.ClientID == "" {
-		return errors.New("client_id is required")
+		ErrBadRequest(w, "client_id is required")
+		return
 	}
-	if req.ClientSecret == "" {
-		return errors.New("client_secret is required")
+
+	if req.Scopes == "" {
+		req.Scopes = "openid email profile"
 	}
-	if req.RedirectURL == "" {
-		return errors.New("redirect_url is required")
+
+	existing, err := h.oidcRepo.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get OIDC provider for update", zap.Error(err))
+		ErrInternal(w)
+		return
 	}
-	return nil
+
+	existing.Name = req.Name
+	existing.Issuer = req.Issuer
+	existing.ClientID = req.ClientID
+	existing.Scopes = req.Scopes
+	existing.Enabled = req.Enabled
+
+	// Only overwrite the stored secret if a new one was provided.
+	if req.ClientSecret != "" {
+		existing.ClientSecret = db.EncryptedString(req.ClientSecret)
+	}
+
+	if err := h.oidcRepo.Update(r.Context(), existing); err != nil {
+		h.logger.Error("failed to update OIDC provider", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	Ok(w, h.oidcToResponse(existing))
 }
+
+// DeleteOIDC handles DELETE /api/v1/settings/oidc/{id} (admin only).
+func (h *SettingsHandler) DeleteOIDC(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	if err := h.oidcRepo.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to delete OIDC provider", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	NoContent(w)
+}
+
 
 // =============================================================================
 // SMTP
 // =============================================================================
 
-// smtpResponse is the JSON representation of the SMTP configuration.
-// Password is always masked — it is write-only, identical to how OIDC handles
-// client_secret. Callers must re-submit the password on every PUT.
 type smtpResponse struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -196,8 +285,6 @@ type smtpResponse struct {
 }
 
 // GetSMTP handles GET /api/v1/settings/smtp (admin only).
-// Returns the current SMTP configuration with the password masked.
-// Returns 404 if SMTP has not been configured yet.
 func (h *SettingsHandler) GetSMTP(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.settingsRepo.GetMany(r.Context(), "smtp.")
 	if err != nil {
@@ -212,22 +299,18 @@ func (h *SettingsHandler) GetSMTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idx := settingsToMap(settings)
-
 	port, _ := strconv.Atoi(idx[notification.KeySMTPPort])
 
 	Ok(w, smtpResponse{
 		Host:     idx[notification.KeySMTPHost],
 		Port:     port,
 		Username: idx[notification.KeySMTPUsername],
-		Password: "***", // never expose the stored credential
+		Password: "***",
 		From:     idx[notification.KeySMTPFrom],
 		TLS:      idx[notification.KeySMTPTLS] == "true",
 	})
 }
 
-// upsertSMTPRequest is the JSON body expected by PUT /api/v1/settings/smtp.
-// All fields are required on every PUT — there is no partial-update semantic.
-// Password must always be provided; the previous value is overwritten.
 type upsertSMTPRequest struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -238,9 +321,6 @@ type upsertSMTPRequest struct {
 }
 
 // UpsertSMTP handles PUT /api/v1/settings/smtp (admin only).
-// Writes each SMTP field as an individual key in the settings table using the
-// notification package's canonical key constants. The password is encrypted at
-// rest automatically via EncryptedString.
 func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 	var req upsertSMTPRequest
 	if !decodeJSON(w, r, &req) {
@@ -254,9 +334,6 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Persist each field independently. The settings table uses a key-value
-	// model — there is no single "smtp" row, just smtp.host, smtp.port, etc.
-	// EncryptedString encrypts the password at rest transparently on Set.
 	pairs := []struct {
 		key   string
 		value string
@@ -312,8 +389,6 @@ func validateUpsertSMTP(req *upsertSMTPRequest) error {
 // Internal helpers
 // =============================================================================
 
-// settingsToMap converts a slice of db.Setting to a map[key]value string for
-// O(1) lookup. EncryptedString decrypts the value automatically on cast.
 func settingsToMap(settings []db.Setting) map[string]string {
 	m := make(map[string]string, len(settings))
 	for _, s := range settings {
