@@ -124,7 +124,7 @@ func requestCallbackURL(r *http.Request) string {
 	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
 		host = h
 	}
-	return scheme + "://" + host + "/api/v1/auth/oidc/callback"
+	return scheme + "://" + host + "/auth/oidc/callback"
 }
 
 // decodeJSON decodes the request body into dst. Returns false and writes an

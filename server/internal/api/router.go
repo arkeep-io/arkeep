@@ -81,6 +81,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		w.Write([]byte("ok")) //nolint:errcheck
 	})
 
+	// OIDC callback — registered at the root so the redirect URI registered
+	// with identity providers does not carry the /api/v1 prefix.
+	r.Get("/auth/oidc/callback", authHandler.OIDCCallback)
+
 	r.Route("/api/v1", func(r chi.Router) {
 
 		// --- Public routes ---
@@ -91,10 +95,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// OIDC flow — public because the user is not yet authenticated.
 			// /providers lists enabled providers for the login page SSO buttons.
 			// /login?provider_id={id} initiates the flow for a specific provider.
-			// /callback receives the authorization code from the identity provider.
 			r.Get("/auth/oidc/providers", authHandler.ListOIDCProviders)
 			r.Get("/auth/oidc/login", authHandler.OIDCLogin)
-			r.Get("/auth/oidc/callback", authHandler.OIDCCallback)
 
 			r.Get("/setup/status", setupHandler.GetStatus)
 			r.Post("/setup/complete", setupHandler.Complete)

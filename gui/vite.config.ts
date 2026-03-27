@@ -61,8 +61,9 @@ export default defineConfig({
         // index.html so Vue Router can handle them offline.
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [
-          // Never intercept API calls or WebSocket upgrades
+          // Never intercept API calls, WebSocket upgrades, or server-side auth routes
           /^\/api\//,
+          /^\/auth\/oidc\//,
         ],
 
         // Skip waiting so the new SW activates immediately on deploy
@@ -124,6 +125,11 @@ export default defineConfig({
       // Forward all API calls to the Go server in dev.
       // In production, both GUI and API are served from the same origin (port 8080).
       '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      // OIDC callback — handled server-side (outside /api), must be proxied too.
+      '/auth/oidc/callback': {
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
