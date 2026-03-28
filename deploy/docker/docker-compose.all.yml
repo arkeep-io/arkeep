@@ -63,8 +63,19 @@ services:
       # Must match the server: remove both ARKEEP_GRPC_INSECURE lines together
       # to switch to auto-PKI + mTLS (see server comment above).
       ARKEEP_GRPC_INSECURE: "true"
+      # ── PUID / PGID (optional) ───────────────────────────────────────────────
+      # Uncomment and set to your host user's UID/GID (run `id` on the host) when
+      # using bind-mount backup destinations. This lets the agent write to host
+      # directories without requiring manual chown.
+      #   PUID: "${PUID:-}"
+      #   PGID: "${PGID:-}"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
+      # Local backup destination — accessible inside the container at /arkeep-backups.
+      # By default this is a named Docker volume (managed by Docker, stored under
+      # /var/lib/docker/volumes/). To use a specific host path instead, replace
+      # "arkeep-backups" with a host path, e.g.: /mnt/nas/backups:/arkeep-backups
+      - arkeep-backups:/arkeep-backups
       # Docker socket — read-only, for automatic container and volume discovery.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Mount the paths you want to back up as read-only.
@@ -94,6 +105,8 @@ volumes:
   arkeep-data:
     driver: local
   arkeep-agent-data:
+    driver: local
+  arkeep-backups:
     driver: local
   # arkeep-postgres-data:
   #   driver: local

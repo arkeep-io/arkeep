@@ -25,6 +25,12 @@ services:
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
+      # ── PUID / PGID (optional) ───────────────────────────────────────────────
+      # Uncomment and set to your host user's UID/GID (run `id` on the host) when
+      # using bind-mount backup destinations. This lets the agent write to host
+      # directories without requiring manual chown.
+      #   PUID: "${PUID:-}"
+      #   PGID: "${PGID:-}"
       # ── gRPC TLS ───────────────────────────────────────────────────────────────
       # Auto-enrollment (default): on first startup the agent calls the server's
       # HTTP API to obtain a signed client certificate. The CA and client cert are
@@ -45,6 +51,12 @@ services:
       #   ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
+      # Local backup destination — accessible inside the container at /arkeep-backups.
+      # By default this is a named Docker volume (managed by Docker, stored under
+      # /var/lib/docker/volumes/). To use a specific host path instead, replace
+      # "arkeep-backups" with a host path, e.g.: /mnt/nas/backups:/arkeep-backups
+      # (also set PUID/PGID above to match the directory owner on the host).
+      - arkeep-backups:/arkeep-backups
       # Uncomment to mount a custom CA certificate for self-signed server certs:
       # - /etc/arkeep/tls:/etc/arkeep/tls:ro
       # Docker socket — read-only, for automatic container and volume discovery.
@@ -59,4 +71,6 @@ services:
 
 volumes:
   arkeep-agent-data:
+    driver: local
+  arkeep-backups:
     driver: local

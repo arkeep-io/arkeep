@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -245,6 +246,22 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		// Record the start time before invoking restic so the server can persist
 		// an accurate started_at on the JobDestination row.
 		destStartedAt := time.Now().UTC()
+
+		// For local destinations, ensure the directory exists and is writable
+		// before handing off to restic. This produces a clear, actionable error
+		// instead of the cryptic "permission denied" from restic internals.
+		if dest.Type == "local" {
+			if err := os.MkdirAll(dest.RepoURL, 0755); err != nil {
+				errMsg := fmt.Sprintf(
+					"local path %q is not writable: %v — if running inside Docker, either mount it as a volume (- %s:%s) or set PUID/PGID to match the directory owner",
+					dest.RepoURL, err, dest.RepoURL, dest.RepoURL,
+				)
+				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, errMsg)
+				backupFailed = true
+				continue
+			}
+		}
 
 		d := restic.Destination{
 			Type:     restic.DestinationType(dest.Type),
