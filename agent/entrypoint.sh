@@ -21,6 +21,14 @@ if [ -n "$PUID" ]; then
     chown -R "${PUID}:${PGID}" /var/lib/arkeep-agent 2>/dev/null || true
 fi
 
+# ── Backup destination permissions ────────────────────────────────────────────
+# The named volume at /arkeep-backups is created by Docker as root:root.
+# Fix ownership here (we still run as root at this point) so the arkeep process
+# can write to it. This is idempotent and safe for bind mounts too.
+ARKEEP_UID=$(id -u arkeep 2>/dev/null || echo 100)
+ARKEEP_GID=$(id -g arkeep 2>/dev/null || echo 101)
+chown "${ARKEEP_UID}:${ARKEEP_GID}" /arkeep-backups 2>/dev/null || true
+
 # ── Docker socket group ────────────────────────────────────────────────────────
 DOCKER_SOCK="${ARKEEP_DOCKER_SOCKET:-/var/run/docker.sock}"
 
