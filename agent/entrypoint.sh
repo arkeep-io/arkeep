@@ -1,34 +1,6 @@
 #!/bin/sh
 set -e
 
-# ── PUID / PGID remapping ──────────────────────────────────────────────────────
-# Set PUID and PGID to match the UID/GID that owns your bind-mounted backup
-# directories on the host. This lets the agent write to host paths without
-# requiring manual chown on the host.
-#
-#   Example .env:
-#     PUID=1000
-#     PGID=1000   # optional, defaults to PUID
-#
-# To find your host UID/GID: run `id` on the host machine.
-if [ -n "$PUID" ]; then
-    PGID="${PGID:-$PUID}"
-    # Remap the arkeep group to the requested GID.
-    sed -i "s/^arkeep:x:[0-9]*/arkeep:x:${PGID}/" /etc/group
-    # Remap the arkeep user to the requested UID:GID.
-    sed -i "s/^arkeep:x:[0-9]*:[0-9]*/arkeep:x:${PUID}:${PGID}/" /etc/passwd
-    # Fix ownership of the state dir so the remapped user can still access it.
-    chown -R "${PUID}:${PGID}" /var/lib/arkeep-agent 2>/dev/null || true
-fi
-
-# ── Backup destination permissions ────────────────────────────────────────────
-# The named volume at /arkeep-backups is created by Docker as root:root.
-# Fix ownership here (we still run as root at this point) so the arkeep process
-# can write to it. This is idempotent and safe for bind mounts too.
-ARKEEP_UID=$(id -u arkeep 2>/dev/null || echo 100)
-ARKEEP_GID=$(id -g arkeep 2>/dev/null || echo 101)
-chown "${ARKEEP_UID}:${ARKEEP_GID}" /arkeep-backups 2>/dev/null || true
-
 # ── Docker socket group ────────────────────────────────────────────────────────
 DOCKER_SOCK="${ARKEEP_DOCKER_SOCKET:-/var/run/docker.sock}"
 
@@ -38,7 +10,32 @@ if [ -S "$DOCKER_SOCK" ]; then
         addgroup -g "$DOCKER_GID" dockerhost
     fi
     DOCKER_GROUP=$(getent group "$DOCKER_GID" | cut -d: -f1)
-    addgroup arkeep "$DOCKER_GROUP"
+    # Add to both root and arkeep so either run mode has Docker access.
+    addgroup root "$DOCKER_GROUP" 2>/dev/null || true
+    addgroup arkeep "$DOCKER_GROUP" 2>/dev/null || true
 fi
 
-exec su-exec arkeep "$@"
+# ── Run as root (default) or drop to a specific user via PUID/PGID ────────────
+# Backing up Docker volumes requires reading files owned by arbitrary UIDs
+# (postgres, git, www-data, …). The agent therefore runs as root by default —
+# the standard approach for backup agents that need full filesystem access.
+#
+# To restrict to a specific user (e.g. when backing up only paths you own),
+# set PUID (and optionally PGID) in your .env file:
+#
+#   PUID=1000   # run `id` on the host to find your UID
+#   PGID=1000   # optional, defaults to PUID
+#
+# When PUID is set the agent drops privileges via su-exec. Note that the agent
+# will then only be able to read files accessible to that UID.
+if [ -n "$PUID" ]; then
+    PGID="${PGID:-$PUID}"
+    # Remap the arkeep user/group to the requested UID:GID.
+    sed -i "s/^arkeep:x:[0-9]*/arkeep:x:${PGID}/" /etc/group
+    sed -i "s/^arkeep:x:[0-9]*:[0-9]*/arkeep:x:${PUID}:${PGID}/" /etc/passwd
+    chown -R "${PUID}:${PGID}" /var/lib/arkeep-agent 2>/dev/null || true
+    exec su-exec arkeep "$@"
+fi
+
+# Default: run as root.
+exec "$@"

@@ -60,7 +60,7 @@ COPY agent/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 RUN mkdir -p /var/lib/arkeep-agent /arkeep-backups && \
-    chown arkeep:arkeep /var/lib/arkeep-agent /arkeep-backups
+    chown arkeep:arkeep /var/lib/arkeep-agent
 
 VOLUME ["/var/lib/arkeep-agent"]
 
