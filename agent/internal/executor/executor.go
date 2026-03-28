@@ -437,6 +437,18 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 		}
 
 		log("info", fmt.Sprintf("resolved docker-volume://%s → %s", volumeName, info.Mountpoint))
+
+		// Warn early if the mountpoint is not accessible inside this container.
+		// This typically means /var/lib/docker/volumes is not mounted — see the
+		// docker-compose volumes section for the required bind mount.
+		if _, statErr := os.Stat(info.Mountpoint); statErr != nil {
+			log("warn", fmt.Sprintf(
+				"docker-volume://%s resolved to %q but that path is not accessible inside this container — "+
+					"add a read-only bind mount to your docker-compose: - %s:%s:ro",
+				volumeName, info.Mountpoint, info.Mountpoint, info.Mountpoint,
+			))
+		}
+
 		resolved = append(resolved, info.Mountpoint)
 	}
 
