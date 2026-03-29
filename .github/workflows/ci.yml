@@ -44,13 +44,22 @@ jobs:
         run: cd agent && go run ./scripts/download_deps.go
 
       - name: Test shared
-        run: cd shared && go test -v -race -count=1 ./...
+        run: |
+          cd shared
+          go test -v -race -count=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | grep total | awk '{if ($3+0 < 40) exit 1}'
 
       - name: Test server
-        run: cd server && go test -v -race -count=1 ./...
+        run: |
+          cd server
+          go test -v -race -count=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | grep total | awk '{if ($3+0 < 40) exit 1}'
 
       - name: Test agent
-        run: cd agent && go test -v -race -count=1 ./...
+        run: |
+          cd agent
+          go test -v -race -count=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | grep total | awk '{if ($3+0 < 40) exit 1}'
 
   # ─── Go lint ────────────────────────────────────────────────────────────────
   # golangci-lint does not support go.work multi-module workspaces with ./...
