@@ -189,7 +189,7 @@ type Job struct {
 	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
 	Type      string     `gorm:"not null;default:'backup'"` // "backup", "restore"
-	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed"
+	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled"
 	StartedAt *time.Time
 	EndedAt   *time.Time
 	Error     string `gorm:"type:text;default:''"` // populated on failure
@@ -214,8 +214,8 @@ type JobDestination struct {
 }
 
 // JobLog stores structured log lines emitted during a job execution.
-// Logs are inserted in bulk at job completion, not line by line during
-// execution, to avoid high-frequency write pressure on the database.
+// Logs are flushed to the database in batches during execution so that
+// the GUI can show partial logs even for in-progress jobs.
 type JobLog struct {
 	Base
 	JobID     uuid.UUID `gorm:"type:text;not null;index"`

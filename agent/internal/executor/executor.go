@@ -218,6 +218,12 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		fail(fmt.Sprintf("failed to resolve backup sources: %v", err))
 		return
 	}
+	if len(sources) == 0 {
+		fail("no accessible backup sources: all docker-volume mountpoints are unreachable on this host. " +
+			"If running a native agent on Windows, Docker volume paths are not directly accessible. " +
+			"Use the Docker-based agent deployment to back up Docker volumes.")
+		return
+	}
 	log("info", fmt.Sprintf("resolved %d source(s)", len(sources)))
 
 	// --- 4. Pre-backup hook ---
@@ -438,15 +444,20 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 
 		log("info", fmt.Sprintf("resolved docker-volume://%s → %s", volumeName, info.Mountpoint))
 
-		// Warn early if the mountpoint is not accessible inside this container.
-		// This typically means /var/lib/docker/volumes is not mounted — see the
-		// docker-compose volumes section for the required bind mount.
+		// Skip the volume if its mountpoint is not accessible from this host.
+		// On a native Windows agent, Docker Desktop returns Linux-style paths
+		// (e.g. /var/lib/docker/volumes/…/_data) that live inside the WSL2 VM
+		// and are not reachable from the Windows filesystem. In a Docker-based
+		// deployment the host volume root must be bind-mounted into the agent
+		// container (e.g. - /var/lib/docker/volumes:/var/lib/docker/volumes:ro).
 		if _, statErr := os.Stat(info.Mountpoint); statErr != nil {
-			log("warn", fmt.Sprintf(
-				"docker-volume://%s resolved to %q but that path is not accessible inside this container — "+
-					"add a read-only bind mount to your docker-compose: - %s:%s:ro",
+			log("error", fmt.Sprintf(
+				"docker-volume://%s resolved to %q but that path is not accessible on this host — "+
+					"skipping source. If running in Docker, add a read-only bind mount: "+
+					"- %s:%s:ro",
 				volumeName, info.Mountpoint, info.Mountpoint, info.Mountpoint,
 			))
+			continue
 		}
 
 		resolved = append(resolved, info.Mountpoint)

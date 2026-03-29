@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
     Table,
@@ -45,6 +45,10 @@ const job = ref<Job | null>(null)
 const logs = ref<JobLog[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+
+// Log scroll state
+const logsContainer = ref<HTMLElement | null>(null)
+const userScrolledUp = ref(false)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -149,12 +153,25 @@ async function fetchJob() {
         job.value = res.data
 
         // Fetch logs separately. For finished jobs this is the only source of
-        // truth; for running jobs we load historic logs and then append live ones.
+        // truth; for running jobs we load historic DB logs and then append live ones.
         await fetchLogs()
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to load job.'
     } finally {
         loading.value = false
+    }
+}
+
+// refreshJobMeta fetches only the job metadata and destinations without touching
+// the logs array. Called on terminal WS status updates so that live WS log
+// entries already accumulated in memory are not wiped by a potentially-stale
+// DB fetch (the bulk log insert may not have completed yet at that point).
+async function refreshJobMeta() {
+    try {
+        const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
+        job.value = res.data
+    } catch {
+        // Non-fatal — the current status is already updated optimistically.
     }
 }
 
@@ -168,6 +185,27 @@ async function fetchLogs() {
 }
 
 // ---------------------------------------------------------------------------
+// Log auto-scroll
+// ---------------------------------------------------------------------------
+
+function scrollLogsToBottom() {
+    if (!logsContainer.value || userScrolledUp.value) return
+    logsContainer.value.scrollTop = logsContainer.value.scrollHeight
+}
+
+function onLogsScroll() {
+    if (!logsContainer.value) return
+    const { scrollTop, scrollHeight, clientHeight } = logsContainer.value
+    // Treat as "scrolled up" when more than 60px from the bottom.
+    userScrolledUp.value = scrollHeight - scrollTop - clientHeight > 60
+}
+
+// Scroll to bottom whenever new log entries arrive.
+watch(() => logs.value.length, () => {
+    nextTick(scrollLogsToBottom)
+})
+
+// ---------------------------------------------------------------------------
 // Live updates via WebSocket
 // ---------------------------------------------------------------------------
 
@@ -175,7 +213,7 @@ async function fetchLogs() {
 // We subscribe unconditionally; handlers guard on the live status.
 
 useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
-    // Append incoming log lines only while the job is running.
+    // Append incoming log lines (live WS stream from agent via gRPC).
     if (msg.type === 'job.log' && msg.payload) {
         const p = msg.payload
         logs.value.push({
@@ -192,10 +230,13 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
         job.value.status = p.status as JobStatus
         job.value.ended_at = p.finished_at ?? job.value.ended_at
 
-        // Once the job transitions to a terminal state, reload the full detail
-        // so destinations are updated with final byte counts and statuses.
+        // Once the job reaches a terminal state, refresh only the job metadata
+        // (status, destinations, timestamps) without touching the logs array.
+        // The bulk DB log insert may not have completed yet, so calling
+        // fetchLogs() here would wipe live WS log entries with an empty result.
         if (p.status === 'succeeded' || p.status === 'failed') {
-            fetchJob()
+            userScrolledUp.value = false // let the view scroll to the final log
+            refreshJobMeta()
         }
     }
 })
@@ -378,7 +419,9 @@ onMounted(fetchJob)
             <!-- Log list — fixed height, scrollable -->
             <template v-else>
                 <div v-if="logs.length > 0"
-                    class="border rounded-md bg-muted/30 font-mono text-xs overflow-y-auto max-h-96 p-3 flex flex-col gap-1">
+                    ref="logsContainer"
+                    class="border rounded-md bg-muted/30 font-mono text-xs overflow-y-auto max-h-96 p-3 flex flex-col gap-1"
+                    @scroll="onLogsScroll">
                     <div v-for="log in logs" :key="log.id" class="flex items-start gap-2">
                         <!-- Timestamp -->
                         <span class="text-muted-foreground shrink-0 pt-px">

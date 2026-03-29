@@ -339,3 +339,4 @@ func (r *gormJobRepository) GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.
 	}
 	return logs, nil
 }
+

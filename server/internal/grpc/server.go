@@ -535,12 +535,48 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 
 // StreamLogs handles the client-streaming RPC for job log ingestion.
 // The agent streams log entries in real-time during job execution.
-// Entries are buffered in memory and flushed to the database in bulk
-// when the stream closes to avoid per-row INSERT overhead.
+// Entries are flushed to the database in batches of logFlushBatchSize so that
+// the GUI can show partial logs for in-progress jobs on page reload.
+// Any remaining entries are flushed when the stream closes.
 //
 // See server/internal/repository/job.go for the BulkCreateLogs implementation.
+const logFlushBatchSize = 50
+
 func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
-	var entries []*proto.LogEntry
+	var (
+		entries  []*proto.LogEntry
+		jobID    uuid.UUID
+		jobIDSet bool
+		flushed  int // index into entries up to which we have already persisted
+	)
+
+	// flushBatch persists entries[flushed:end] to the DB.
+	// Non-fatal: log persistence failure is logged but does not abort the stream.
+	flushBatch := func(end int) {
+		batch := entries[flushed:end]
+		if len(batch) == 0 || !jobIDSet {
+			return
+		}
+		logs := make([]db.JobLog, len(batch))
+		for i, e := range batch {
+			logs[i] = db.JobLog{
+				JobID:   jobID,
+				Level:   protoLevelToString(e.Level),
+				Message: e.Message,
+			}
+			if e.Timestamp != nil {
+				logs[i].Timestamp = e.Timestamp.AsTime()
+			}
+		}
+		if err := s.jobRepo.BulkCreateLogs(stream.Context(), logs); err != nil {
+			s.logger.Error("StreamLogs: failed to persist log batch",
+				zap.String("job_id", jobID.String()),
+				zap.Int("batch_size", len(logs)),
+				zap.Error(err),
+			)
+		}
+		flushed = end
+	}
 
 	for {
 		entry, err := stream.Recv()
@@ -554,6 +590,21 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 			)
 			return status.Errorf(codes.Internal, "recv error: %v", err)
 		}
+
+		// Parse the job ID from the first entry; all entries in a stream share
+		// the same job ID so we only need to do this once.
+		if !jobIDSet {
+			parsed, parseErr := uuid.Parse(entry.JobId)
+			if parseErr != nil {
+				s.logger.Error("StreamLogs: invalid job_id in first log entry",
+					zap.String("job_id", entry.JobId),
+				)
+				return status.Error(codes.InvalidArgument, "invalid job_id in log entries")
+			}
+			jobID = parsed
+			jobIDSet = true
+		}
+
 		entries = append(entries, entry)
 
 		// Publish each log line to WebSocket in real-time so the GUI can
@@ -573,42 +624,16 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 				"timestamp": ts.Format(time.RFC3339),
 			},
 		})
-	}
 
-	// Bulk insert all buffered log entries in a single DB call to avoid
-	// per-row INSERT overhead. Logs are not critical path — if this fails
-	// we log the error but still acknowledge the stream.
-	if len(entries) > 0 {
-		jobID, err := uuid.Parse(entries[0].JobId)
-		if err != nil {
-			s.logger.Error("StreamLogs: invalid job_id in log entries",
-				zap.String("job_id", entries[0].JobId),
-			)
-			return status.Error(codes.InvalidArgument, "invalid job_id in log entries")
-		}
-
-		logs := make([]db.JobLog, len(entries))
-		for i, e := range entries {
-			logs[i] = db.JobLog{
-				JobID:   jobID,
-				Level:   protoLevelToString(e.Level),
-				Message: e.Message,
-			}
-			if e.Timestamp != nil {
-				logs[i].Timestamp = e.Timestamp.AsTime()
-			}
-		}
-
-		if err := s.jobRepo.BulkCreateLogs(stream.Context(), logs); err != nil {
-			s.logger.Error("StreamLogs: failed to persist log entries",
-				zap.String("job_id", entries[0].JobId),
-				zap.Int("count", len(logs)),
-				zap.Error(err),
-			)
-			// Non-fatal: the backup completed — don't fail the RPC just
-			// because log persistence failed.
+		// Flush to DB every logFlushBatchSize entries so the GUI can show
+		// partial logs on page reload without waiting for stream completion.
+		if len(entries)-flushed >= logFlushBatchSize {
+			flushBatch(len(entries))
 		}
 	}
+
+	// Flush any remaining entries that did not fill a complete batch.
+	flushBatch(len(entries))
 
 	s.logger.Info("StreamLogs completed",
 		zap.Int("entries_received", len(entries)),
