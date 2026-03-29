@@ -1,0 +1,52 @@
+changelog:
+  exclude:
+    labels:
+      - skip-release-notes
+      - no-changelog
+      - internal
+      - duplicate
+    authors:
+      - dependabot
+      - github-actions
+      - github-actions[bot]
+      - dependabot[bot]
+
+  categories:
+    - title: "Breaking Changes"
+      labels:
+        - breaking-change
+        - semver-major
+
+    - title: "Features"
+      labels:
+        - feat
+        - enhancement
+        - semver-minor
+
+    - title: "Fixes"
+      labels:
+        - fix
+        - bug
+        - bugfix
+        - semver-patch
+
+    - title: "⚡ Performance"
+      labels:
+        - perf
+        - performance
+
+    - title: "Build & CI"
+      labels:
+        - build
+        - ci
+        - release
+
+    - title: "Maintenance"
+      labels:
+        - chore
+        - refactor
+        - dependencies
+
+    - title: "Documentation"
+      labels:
+        - docs
