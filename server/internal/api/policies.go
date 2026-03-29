@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -361,6 +362,10 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 			ErrBadRequest(w, "schedule cannot be empty")
 			return
 		}
+		if err := validateSchedule(*req.Schedule); err != nil {
+			ErrBadRequest(w, err.Error())
+			return
+		}
 		policy.Schedule = *req.Schedule
 	}
 	if req.Enabled != nil {
@@ -486,6 +491,15 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	}
 	if req.RepoPassword == "" {
 		return errors.New("repo_password is required")
+	}
+	return validateSchedule(req.Schedule)
+}
+
+// validateSchedule parses a cron expression to ensure it's valid.
+func validateSchedule(schedule string) error {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+	if _, err := parser.Parse(schedule); err != nil {
+		return errors.New("invalid schedule: " + err.Error())
 	}
 	return nil
 }
