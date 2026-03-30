@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/containerd/errdefs"
+	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	volumetypes "github.com/docker/docker/api/types/volume"
 	dockerclient "github.com/docker/docker/client"
 )
@@ -132,6 +134,63 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInfo, e
 		Driver:     v.Driver,
 		Labels:     v.Labels,
 	}, nil
+}
+
+// RunningContainerVolumes holds the volume host-paths used by a single running container.
+type RunningContainerVolumes struct {
+	// ContainerName is the human-readable name of the container (without leading slash).
+	ContainerName string
+	// VolumePaths are the host-side mountpoints of the named volumes used by this
+	// container (e.g. /var/lib/docker/volumes/myapp_data/_data).
+	VolumePaths []string
+}
+
+// ListRunningContainerVolumes returns the named-volume mountpoints used by
+// currently running containers. It is used by the executor to determine which
+// Docker volumes cannot be restored in-place without first stopping the
+// container.
+//
+// Only named volumes (Type == volume) are included; bind-mounts are skipped.
+// If a volume's Source path is empty in the ContainerList response (the daemon
+// may omit it), the path is resolved via VolumeInspect.
+func (c *Client) ListRunningContainerVolumes(ctx context.Context) ([]RunningContainerVolumes, error) {
+	containers, err := c.docker.ContainerList(ctx, containertypes.ListOptions{All: false})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
+	}
+
+	var result []RunningContainerVolumes
+	for _, ctr := range containers {
+		name := ctr.ID[:12]
+		if len(ctr.Names) > 0 {
+			name = strings.TrimPrefix(ctr.Names[0], "/")
+		}
+
+		var paths []string
+		for _, m := range ctr.Mounts {
+			if m.Type != mount.TypeVolume {
+				continue
+			}
+			src := m.Source
+			if src == "" && m.Name != "" {
+				// Source not populated by ContainerList — resolve via VolumeInspect.
+				info, err := c.InspectVolume(ctx, m.Name)
+				if err == nil {
+					src = info.Mountpoint
+				}
+			}
+			if src != "" {
+				paths = append(paths, src)
+			}
+		}
+		if len(paths) > 0 {
+			result = append(result, RunningContainerVolumes{
+				ContainerName: name,
+				VolumePaths:   paths,
+			})
+		}
+	}
+	return result, nil
 }
 
 // Close releases the underlying Docker client resources.

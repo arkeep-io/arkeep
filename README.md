@@ -164,7 +164,7 @@ curl -O https://raw.githubusercontent.com/arkeep-io/arkeep/main/deploy/docker/do
 docker compose -f docker-compose.all.yml up -d
 ```
 
-For local filesystem destinations with Docker (backing up host directories), see [Local destinations in Docker](#local-destinations-in-docker) below.
+For local filesystem destinations and restore behaviour with Docker, see [Local destinations in Docker](#local-destinations-in-docker) and [Restore in Docker](#restore-in-docker) below.
 
 ---
 
@@ -356,6 +356,25 @@ volumes:
 With this in place you can type any native host path directly in the Arkeep UI as a backup destination (e.g. `C:\Users\Filippo\Downloads` or `/home/user/backups`) and the agent will translate it automatically. No per-directory bind-mounts required.
 
 > For binary, systemd, and Helm deployments leave `ARKEEP_DOCKER_HOST_ROOT` unset — paths are used as-is.
+
+### Restore in Docker
+
+**Restore to a custom path** works out of the box — enter any host path in the UI (e.g. `C:\Users\Filippo\Downloads\restore`) and the agent writes the files there via the hostfs mount.
+
+**In-place restore** (original location) behaviour depends on the `/var/lib/docker/volumes` mount mode:
+
+| Mount mode | Local filesystem paths | Docker volume paths |
+|---|---|---|
+| `:ro` (default) | Restored normally | **Skipped** — agent logs a warning. Change to `:rw` to enable. |
+| `:rw` | Restored normally | Restored if the container is **stopped**; **skipped** with a warning if running. |
+
+To restore Docker volumes in-place:
+1. Change `:ro` to `:rw` for the `/var/lib/docker/volumes` mount in `docker-compose.yml`
+2. Stop the containers whose volumes you want to restore
+3. Run the in-place restore from the UI
+4. Restart the containers
+
+Volumes of containers that are still running when the restore starts are automatically skipped with a log entry that names the container. The rest of the restore (local paths + stopped-container volumes) completes normally.
 
 ---
 

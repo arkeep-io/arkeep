@@ -454,7 +454,16 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	}
 	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, targetPath))
 
-	// --- 3. Run restore ---
+	// --- 3. Build exclude list for in-place restore ---
+	// When restoring in-place (target "/"), Docker named-volume paths may be
+	// read-only or in use by running containers. We build an --exclude list
+	// before calling restic so the restore degrades gracefully instead of failing.
+	var excludePaths []string
+	if payload.TargetPath == "/" {
+		excludePaths = e.buildInPlaceExcludes(ctx, log)
+	}
+
+	// --- 4. Run restore ---
 	// Translate the repository path for local destinations, the same way
 	// backup destination paths are translated in executeBackup.
 	repoURL := payload.Destination.RepoURL
@@ -469,35 +478,75 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 		Env:      payload.Destination.Env,
 	}
 
-	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, ""); err != nil {
+	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, "", excludePaths); err != nil {
 		if strings.Contains(err.Error(), "Access is denied") {
 			// On Windows, restic cannot set timestamps or file attributes on
 			// system-protected directories reconstructed under the target path.
 			// Files are restored correctly — log as warning and continue.
 			log("warn", "restore completed with warnings: some file metadata could not be set (Windows permission restriction)")
 			log("warn", "files were restored successfully — check the target path to verify")
-		} else if strings.Contains(err.Error(), "read-only file system") {
-			// Restore-in-place to Docker named volumes fails because the agent
-			// mounts /var/lib/docker/volumes read-only for backup safety.
-			// To restore in place: either mount volumes read-write in docker-compose
-			// (remove :ro), stop the affected containers first, then re-run the
-			// restore. Alternatively, restore to a separate directory and copy
-			// the files manually.
-			fail("restore failed: one or more target paths are on a read-only filesystem. " +
-				"When restoring Docker volume data in place, the agent needs /var/lib/docker/volumes " +
-				"mounted read-write (remove :ro from the docker-compose volume entry) and the " +
-				"affected containers must be stopped before restoring. " +
-				"As an alternative, restore to a separate directory and copy the files from there.")
-			return
 		} else {
 			fail(fmt.Sprintf("restore failed: %v", err))
 			return
 		}
 	}
 
-	// --- 4. Final status ---
+	// --- 5. Final status ---
 	log("info", fmt.Sprintf("restore completed successfully: files written to %s", targetPath))
 	reporter.ReportStatus(job.JobID, "success", "restore completed")
+}
+
+// buildInPlaceExcludes returns the --exclude paths for an in-place restore.
+//
+// Docker named-volume paths under /var/lib/docker/volumes may be:
+//   - read-only (mounted :ro for backup safety) → exclude the whole root
+//   - in use by a running container           → exclude per-volume paths with a warning
+//
+// Local filesystem paths are never excluded.
+func (e *Executor) buildInPlaceExcludes(ctx context.Context, log func(level, msg string)) []string {
+	const dockerVolRoot = "/var/lib/docker/volumes"
+
+	// Check if the Docker volumes root is accessible at all. If Docker is not
+	// in use (native agent, no volume mount) there is nothing to exclude.
+	if _, err := os.Stat(dockerVolRoot); err != nil {
+		return nil
+	}
+
+	// Check writability by attempting to create a temporary file.
+	// A read-only bind-mount (:ro) makes this fail with EROFS.
+	tmp, err := os.CreateTemp(dockerVolRoot, ".arkeep-write-test-*")
+	if err != nil {
+		// Mount is read-only — exclude the entire Docker volumes root.
+		log("warn", "docker volume paths excluded from in-place restore: "+
+			dockerVolRoot+" is mounted read-only. "+
+			"Change :ro to :rw in the docker-compose volume entry to enable "+
+			"in-place restore of Docker volumes (stop affected containers first).")
+		return []string{dockerVolRoot}
+	}
+	tmp.Close()                //nolint:errcheck
+	os.Remove(tmp.Name())      //nolint:errcheck
+
+	// Mount is writable — exclude only volumes whose containers are running.
+	if e.docker == nil {
+		return nil
+	}
+	running, err := e.docker.ListRunningContainerVolumes(ctx)
+	if err != nil {
+		log("warn", fmt.Sprintf("could not list running containers for in-place restore: %v — proceeding without exclusions", err))
+		return nil
+	}
+
+	var excludes []string
+	for _, c := range running {
+		for _, p := range c.VolumePaths {
+			log("warn", fmt.Sprintf(
+				"skipping volume %q for in-place restore: container %q is running. Stop it first to restore this volume.",
+				p, c.ContainerName,
+			))
+			excludes = append(excludes, p)
+		}
+	}
+	return excludes
 }
 
 // resolveSources parses the JSON sources array and resolves any
@@ -512,7 +561,12 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 	resolved := make([]string, 0, len(raw))
 	for _, src := range raw {
 		if !strings.HasPrefix(src, "docker-volume://") {
-			resolved = append(resolved, src)
+			// Translate host paths to container-accessible paths when
+			// ARKEEP_DOCKER_HOST_ROOT is set (Docker deployments). This ensures
+			// that paths entered in the UI as native host paths (e.g.
+			// C:\Users\...) are resolved to their container equivalents
+			// (e.g. /hostfs/c/Users/...) before being passed to restic.
+			resolved = append(resolved, translateLocalPath(src, e.dockerHostRoot))
 			continue
 		}
 

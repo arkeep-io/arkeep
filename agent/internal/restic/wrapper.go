@@ -247,10 +247,15 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 
 // Restore restores a snapshot (or a path within it) to targetDir.
 // snapshotID may be "latest" to restore the most recent snapshot.
-func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePath string) error {
+// includePath, if non-empty, limits restoration to a sub-path inside the snapshot.
+// excludePaths lists paths to skip during restore (e.g. read-only volume mounts).
+func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePath string, excludePaths []string) error {
 	args := []string{"restore", snapshotID, "--target", targetDir}
 	if includePath != "" {
 		args = append(args, "--include", includePath)
+	}
+	for _, ex := range excludePaths {
+		args = append(args, "--exclude", ex)
 	}
 	return w.run(ctx, dest, args)
 }
