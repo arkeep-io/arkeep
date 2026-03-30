@@ -23,7 +23,6 @@ import {
     SidebarMenu,
     SidebarMenuButton,
     SidebarMenuItem,
-    useSidebar,
 } from "@/components/ui/sidebar"
 import { Card, CardContent } from "@/components/ui/card"
 import { useAuthStore } from "@/stores/auth"
@@ -44,7 +43,6 @@ interface NavItem {
 
 const auth = useAuthStore();
 const updateStore = useUpdateStore();
-const { state } = useSidebar();
 
 onMounted(() => updateStore.fetch())
 
@@ -121,17 +119,30 @@ const userInitials = computed(() =>
             <NavMain :items="visibleNav" />
         </SidebarContent>
         <SidebarFooter>
-            <Card v-if="state === 'expanded'">
-                <CardContent>
-                    <div class="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>{{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available'
-                            }}</span>
-                        <UpgradeIndicator :show="updateStore.updateAvailable" :version="updateStore.latestVersion"
-                            tooltip-side="right" />
-                    </div>
-                </CardContent>
-            </Card>
-            <div v-else-if="updateStore.updateAvailable" class="flex justify-center py-1">
+            <!-- Version card: fades and collapses when sidebar goes to icon mode.
+                 Uses the same duration/easing as the sidebar's own transitions. -->
+            <div class="overflow-hidden transition-[max-height,opacity] duration-200 ease-linear
+                        max-h-32 opacity-100
+                        group-data-[collapsible=icon]:max-h-0 group-data-[collapsible=icon]:opacity-0">
+                <Card>
+                    <CardContent>
+                        <div class="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available' }}</span>
+                            <UpgradeIndicator
+                                :show="updateStore.updateAvailable"
+                                :version="updateStore.latestVersion"
+                                tooltip-side="right"
+                            />
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+            <!-- Collapsed icon: only rendered when an update is available;
+                 fades in when sidebar is collapsed, hidden when expanded. -->
+            <div v-if="updateStore.updateAvailable"
+                 class="flex justify-center overflow-hidden transition-[max-height,opacity] duration-200 ease-linear
+                        max-h-0 opacity-0
+                        group-data-[collapsible=icon]:max-h-8 group-data-[collapsible=icon]:opacity-100">
                 <UpgradeIndicator :show="true" :version="updateStore.latestVersion" tooltip-side="right" />
             </div>
             <NavUser :user="{
