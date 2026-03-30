@@ -444,9 +444,16 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, targetPath))
 
 	// --- 3. Run restore ---
+	// Translate the repository path for local destinations, the same way
+	// backup destination paths are translated in executeBackup.
+	repoURL := payload.Destination.RepoURL
+	if payload.Destination.Type == "local" {
+		repoURL = translateLocalPath(repoURL, e.dockerHostRoot)
+	}
+
 	d := restic.Destination{
 		Type:     restic.DestinationType(payload.Destination.Type),
-		RepoURL:  payload.Destination.RepoURL,
+		RepoURL:  repoURL,
 		Password: payload.RepoPassword,
 		Env:      payload.Destination.Env,
 	}
