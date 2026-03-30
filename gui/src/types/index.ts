@@ -390,6 +390,12 @@ export interface TriggerResponse {
   job_id: string
 }
 
+export interface VersionInfo {
+  server_version: string
+  latest_version: string
+  update_available: boolean
+}
+
 // ─── WebSocket message payloads ───────────────────────────────────────────────
 // These types describe the `payload` field of WSMessage for each topic type.
 // They are used in conjunction with services/websocket.ts.

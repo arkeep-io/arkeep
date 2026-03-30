@@ -14,6 +14,7 @@ import {
 
 import NavMain from "@/components/shared/NavMain.vue"
 import NavUser from "@/components/shared/NavUser.vue"
+import UpgradeIndicator from "@/components/shared/UpgradeIndicator.vue"
 import {
     Sidebar,
     SidebarContent,
@@ -22,9 +23,12 @@ import {
     SidebarMenu,
     SidebarMenuButton,
     SidebarMenuItem,
+    useSidebar,
 } from "@/components/ui/sidebar"
+import { Card, CardContent } from "@/components/ui/card"
 import { useAuthStore } from "@/stores/auth"
-import { computed } from "vue"
+import { useUpdateStore } from "@/stores/update"
+import { computed, onMounted } from "vue"
 
 interface NavSection {
     title: string
@@ -39,6 +43,11 @@ interface NavItem {
 }
 
 const auth = useAuthStore();
+const updateStore = useUpdateStore();
+const { state } = useSidebar();
+
+onMounted(() => updateStore.fetch())
+
 const props = withDefaults(defineProps<SidebarProps>(), {
     collapsible: "icon",
     variant: "inset",
@@ -112,6 +121,19 @@ const userInitials = computed(() =>
             <NavMain :items="visibleNav" />
         </SidebarContent>
         <SidebarFooter>
+            <Card v-if="state === 'expanded'">
+                <CardContent>
+                    <div class="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available'
+                            }}</span>
+                        <UpgradeIndicator :show="updateStore.updateAvailable" :version="updateStore.latestVersion"
+                            tooltip-side="right" />
+                    </div>
+                </CardContent>
+            </Card>
+            <div v-else-if="updateStore.updateAvailable" class="flex justify-center py-1">
+                <UpgradeIndicator :show="true" :version="updateStore.latestVersion" tooltip-side="right" />
+            </div>
             <NavUser :user="{
                 display_name: auth.user?.display_name ?? '',
                 email: auth.user?.email ?? '',

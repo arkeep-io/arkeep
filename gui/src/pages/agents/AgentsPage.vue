@@ -42,6 +42,8 @@ import { api } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
+import UpgradeIndicator from '@/components/shared/UpgradeIndicator.vue'
+import { useUpdateStore } from '@/stores/update'
 
 // The list endpoint returns { items, total } — not aligned with PaginatedResponse
 // in types/index.ts which reflects a different shape. We type it inline here.
@@ -55,6 +57,7 @@ interface AgentListResponse {
 // ---------------------------------------------------------------------------
 
 const router = useRouter()
+const updateStore = useUpdateStore()
 
 const agents = ref<Agent[]>([])
 const total = ref(0)
@@ -238,6 +241,27 @@ function formatLastSeen(lastSeenAt: string | null): string {
     return date.toLocaleDateString()
 }
 
+// Returns true when the agent's version is older than the latest known release.
+function isAgentOutdated(agentVersion: string): boolean {
+    const latest = updateStore.latestVersion
+    if (!latest || !agentVersion) return false
+    return compareVersions(agentVersion, latest) < 0
+}
+
+// Compares two semver strings (with or without leading 'v').
+// Returns -1 if a < b, 0 if equal, 1 if a > b.
+function compareVersions(a: string, b: string): number {
+    const parse = (v: string) =>
+        v.replace(/^v/, '').split('.').map((p) => parseInt(p.split('-')[0] ?? '0', 10))
+    const pa = parse(a)
+    const pb = parse(b)
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+        if (diff !== 0) return diff < 0 ? -1 : 1
+    }
+    return 0
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
@@ -327,7 +351,15 @@ onUnmounted(teardownSubscriptions)
                                 <span v-else>—</span>
                             </TableCell>
                             <TableCell class="font-mono text-sm text-muted-foreground">
-                                {{ agent.version || '—' }}
+                                <div class="flex items-center gap-1.5">
+                                    <span>{{ agent.version || '—' }}</span>
+                                    <UpgradeIndicator
+                                        v-if="agent.version"
+                                        :show="isAgentOutdated(agent.version)"
+                                        :version="updateStore.latestVersion"
+                                        tooltip-side="top"
+                                    />
+                                </div>
                             </TableCell>
                             <TableCell>
                                 <!-- Live status dot + badge -->

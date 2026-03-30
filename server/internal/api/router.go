@@ -43,6 +43,11 @@ type RouterConfig struct {
 
 	// AgentSecret is the shared bootstrap secret agents must present when enrolling.
 	AgentSecret string
+
+	// ServerVersion is the running server binary version (injected at build time
+	// via ldflags). Used by the version endpoint to report the current version
+	// and check for updates.
+	ServerVersion string
 }
 
 // NewRouter builds and returns the fully configured Chi router.
@@ -72,6 +77,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
 	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
+	versionHandler      := newVersionHandler(cfg.ServerVersion)
 
 	jwtMgr := cfg.AuthService.JWTManager()
 
@@ -113,6 +119,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Use(Authenticate(jwtMgr))
 
 			r.Get("/dashboard", dashboardHandler.Get)
+			r.Get("/version", versionHandler.Get)
 
 			r.Post("/auth/logout", authHandler.Logout)
 

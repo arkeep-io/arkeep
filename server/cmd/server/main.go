@@ -282,6 +282,7 @@ func run(ctx context.Context, cfg *config) error {
 		Dashboard:     dashboardRepo,
 		AutoCerts:     autoCerts,
 		AgentSecret:   cfg.agentSecret,
+		ServerVersion: version,
 	})
 	api.MountGUI(router, guiFS())
 
