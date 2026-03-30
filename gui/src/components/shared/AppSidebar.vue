@@ -127,13 +127,13 @@ const userInitials = computed(() =>
                 <Card>
                     <CardContent>
                         <div class="flex items-center justify-between text-xs">
-                            <div>
-                                <span class="text-muted-foreground">Server</span>
+                            <span class="text-muted-foreground">Server</span>
+                            <div class="flex gap-1.5">
                                 {{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available'
                                 }}
+                                <UpgradeIndicator :show="updateStore.updateAvailable"
+                                    :version="updateStore.latestVersion" tooltip-side="right" />
                             </div>
-                            <UpgradeIndicator :show="updateStore.updateAvailable" :version="updateStore.latestVersion"
-                                tooltip-side="right" />
                         </div>
                     </CardContent>
                 </Card>
