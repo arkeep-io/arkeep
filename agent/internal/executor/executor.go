@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -104,28 +105,72 @@ const queueSize = 16
 // Executor receives job assignments, queues them, and executes them one at a
 // time using the restic wrapper, docker client, and hooks runner.
 type Executor struct {
-	wrapper *restic.Wrapper
-	docker  *docker.Client // may be nil if Docker is unavailable on this host
-	hooks   *hooks.Runner
-	queue   chan JobAssignment
-	logger  *zap.Logger
+	wrapper        *restic.Wrapper
+	docker         *docker.Client // may be nil if Docker is unavailable on this host
+	hooks          *hooks.Runner
+	queue          chan JobAssignment
+	logger         *zap.Logger
+	dockerHostRoot string // ARKEEP_DOCKER_HOST_ROOT — when set, local paths are translated to this prefix
 }
 
 // New creates a new Executor. dockerClient may be nil — if it is, any job
 // that requires Docker volume discovery will fail gracefully.
+// dockerHostRoot is the value of ARKEEP_DOCKER_HOST_ROOT: when non-empty, any
+// local destination path or restore target path entered by the user is
+// automatically translated so it resolves inside the container. This lets
+// users enter native host paths (e.g. C:/Users/… on Windows or /home/user/…
+// on Linux) without having to pre-configure per-directory bind-mounts.
 func New(
 	wrapper *restic.Wrapper,
 	dockerClient *docker.Client,
 	hooksRunner *hooks.Runner,
 	logger *zap.Logger,
+	dockerHostRoot string,
 ) *Executor {
 	return &Executor{
-		wrapper: wrapper,
-		docker:  dockerClient,
-		hooks:   hooksRunner,
-		queue:   make(chan JobAssignment, queueSize),
-		logger:  logger.Named("executor"),
+		wrapper:        wrapper,
+		docker:         dockerClient,
+		hooks:          hooksRunner,
+		queue:          make(chan JobAssignment, queueSize),
+		logger:         logger.Named("executor"),
+		dockerHostRoot: dockerHostRoot,
 	}
+}
+
+// translateLocalPath maps a user-provided filesystem path to the corresponding
+// container-accessible path when ARKEEP_DOCKER_HOST_ROOT is set.
+//
+// Examples (hostRoot = "/hostfs"):
+//
+//	/home/user/backups         → /hostfs/home/user/backups
+//	C:/Users/Filippo/Downloads → /hostfs/c/Users/Filippo/Downloads
+//	C:\Users\Filippo\Downloads → /hostfs/c/Users/Filippo/Downloads
+//
+// If hostRoot is empty the path is returned unchanged (non-Docker deployments
+// or the legacy /arkeep-backups bind-mount approach).
+func translateLocalPath(path, hostRoot string) string {
+	if hostRoot == "" {
+		return path
+	}
+	// Already under the host root — avoid double-translation.
+	if strings.HasPrefix(filepath.ToSlash(path), filepath.ToSlash(hostRoot)+"/") {
+		return path
+	}
+	// Windows-style path: C:\… or C:/…
+	if len(path) >= 2 && path[1] == ':' {
+		drive := strings.ToLower(string(path[0]))
+		rest := filepath.ToSlash(path[2:]) // strip drive letter + colon, normalise separators
+		if !strings.HasPrefix(rest, "/") {
+			rest = "/" + rest
+		}
+		return filepath.Join(hostRoot, drive+rest)
+	}
+	// Unix absolute path.
+	if strings.HasPrefix(path, "/") {
+		return filepath.Join(hostRoot, path)
+	}
+	// Relative path — no translation.
+	return path
 }
 
 // Run starts the worker loop. It blocks until ctx is cancelled, processing
@@ -253,14 +298,20 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		// an accurate started_at on the JobDestination row.
 		destStartedAt := time.Now().UTC()
 
-		// For local destinations, ensure the directory exists and is writable
-		// before handing off to restic. This produces a clear, actionable error
-		// instead of the cryptic "permission denied" from restic internals.
+		// For local destinations, translate the user-provided path to the
+		// container-accessible path (when ARKEEP_DOCKER_HOST_ROOT is set), then
+		// ensure the directory exists and is writable before handing off to
+		// restic. This produces a clear, actionable error instead of the
+		// cryptic "permission denied" from restic internals.
 		if dest.Type == "local" {
+			dest.RepoURL = translateLocalPath(dest.RepoURL, e.dockerHostRoot)
 			if err := os.MkdirAll(dest.RepoURL, 0755); err != nil {
 				errMsg := fmt.Sprintf(
-					"local path %q is not writable: %v — if running inside Docker, either mount it as a volume (- %s:%s) or set PUID/PGID to match the directory owner",
-					dest.RepoURL, err, dest.RepoURL, dest.RepoURL,
+					"local path %q is not writable: %v — "+
+						"if running inside Docker, set ARKEEP_DOCKER_HOST_ROOT and mount the host "+
+						"filesystem (e.g. /:/hostfs:rw on Linux, C:/:/hostfs/c:rw on Windows), "+
+						"or set PUID/PGID to match the directory owner",
+					dest.RepoURL, err,
 				)
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, errMsg)
@@ -386,7 +437,11 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 
 	// --- 2. Report running ---
 	reporter.ReportStatus(job.JobID, "running", "starting restore")
-	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, payload.TargetPath))
+
+	// Translate the restore target path when ARKEEP_DOCKER_HOST_ROOT is set,
+	// the same way backup destination paths are translated.
+	targetPath := translateLocalPath(payload.TargetPath, e.dockerHostRoot)
+	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, targetPath))
 
 	// --- 3. Run restore ---
 	d := restic.Destination{
@@ -396,7 +451,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 		Env:      payload.Destination.Env,
 	}
 
-	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, payload.TargetPath, ""); err != nil {
+	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, ""); err != nil {
 		if strings.Contains(err.Error(), "Access is denied") {
 			// On Windows, restic cannot set timestamps or file attributes on
 			// system-protected directories reconstructed under the target path.
@@ -414,8 +469,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 				"When restoring Docker volume data in place, the agent needs /var/lib/docker/volumes " +
 				"mounted read-write (remove :ro from the docker-compose volume entry) and the " +
 				"affected containers must be stopped before restoring. " +
-				"As an alternative, restore to a separate directory (e.g. /arkeep-backups/restore) " +
-				"and copy the files from there.")
+				"As an alternative, restore to a separate directory and copy the files from there.")
 			return
 		} else {
 			fail(fmt.Sprintf("restore failed: %v", err))
@@ -424,7 +478,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	}
 
 	// --- 4. Final status ---
-	log("info", fmt.Sprintf("restore completed successfully: files written to %s", payload.TargetPath))
+	log("info", fmt.Sprintf("restore completed successfully: files written to %s", targetPath))
 	reporter.ReportStatus(job.JobID, "success", "restore completed")
 }
 

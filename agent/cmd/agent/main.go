@@ -46,6 +46,7 @@ type config struct {
 	logLevel       string
 	grpcTLSCA      string
 	grpcInsecure   bool
+	dockerHostRoot string
 }
 
 func main() {
@@ -79,6 +80,7 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.PersistentFlags().StringVar(&cfg.grpcTLSCA, "grpc-tls-ca", envOrDefault("ARKEEP_GRPC_TLS_CA", ""), "Path to CA certificate for gRPC TLS (for self-signed server certs; leave empty for system pool)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 	root.PersistentFlags().StringVar(&cfg.serverHTTPAddr, "server-http-addr", envOrDefault("ARKEEP_SERVER_HTTP_ADDR", ""), "Base URL of the server HTTP API for enrollment (default: derived from --server-addr with port 8080)")
+	root.PersistentFlags().StringVar(&cfg.dockerHostRoot, "docker-host-root", envOrDefault("ARKEEP_DOCKER_HOST_ROOT", ""), "Container path where the host filesystem is mounted (e.g. /hostfs). When set, local destination paths and restore targets entered in the UI are automatically translated so they resolve inside the container — users can enter native host paths without pre-configuring per-directory bind-mounts.")
 
 	return root
 }
@@ -161,7 +163,7 @@ func run(ctx context.Context, cfg *config) error {
 	hooksRunner := hooks.NewRunner(0) // 0 = use DefaultTimeout (5 minutes)
 
 	// --- Executor ---
-	exec := executor.New(wrapper, dockerClient, hooksRunner, logger)
+	exec := executor.New(wrapper, dockerClient, hooksRunner, logger, cfg.dockerHostRoot)
 
 	// --- Load mTLS credentials from state-dir (written by enrollment) ---
 	// If all three files are present the agent was enrolled previously and can

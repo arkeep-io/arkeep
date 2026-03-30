@@ -25,10 +25,14 @@ services:
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
+      # ── Local backup destinations ────────────────────────────────────────────
+      # Set ARKEEP_DOCKER_HOST_ROOT so users can enter any host path directly in
+      # the Arkeep UI (e.g. /home/user/backups or C:/Users/…) without adding a
+      # separate bind-mount per destination. Add the matching volume mount below.
+      #   ARKEEP_DOCKER_HOST_ROOT: "${ARKEEP_DOCKER_HOST_ROOT:-}"
       # ── PUID / PGID (optional) ───────────────────────────────────────────────
-      # Uncomment and set to your host user's UID/GID (run `id` on the host) when
-      # using bind-mount backup destinations. This lets the agent write to host
-      # directories without requiring manual chown.
+      # Uncomment when writing to host directories via the hostfs mount and the
+      # agent does not have write permission as root.
       #   PUID: "${PUID:-}"
       #   PGID: "${PGID:-}"
       # ── gRPC TLS ───────────────────────────────────────────────────────────────
@@ -51,15 +55,13 @@ services:
       #   ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
-      # Local backup destination — accessible inside the container at /arkeep-backups.
-      # Configure destinations in the Arkeep UI using the container path /arkeep-backups.
-      # By default this is a named Docker volume (managed by Docker, stored under
-      # /var/lib/docker/volumes/). To store backups on the host instead, replace
-      # "arkeep-backups" with a host path (also set PUID/PGID above to match the
-      # directory owner on the host):
-      #   Linux/macOS: /mnt/nas/backups:/arkeep-backups
-      #   Windows (Docker Desktop, forward slashes): C:/Users/Name/backups:/arkeep-backups
-      - arkeep-backups:/arkeep-backups
+      # ── Host filesystem mount (used with ARKEEP_DOCKER_HOST_ROOT) ────────────
+      # Mount the host FS once so any path entered in the UI resolves correctly.
+      # Linux:
+      #   - /:/hostfs:rw
+      # Windows (Docker Desktop) — one entry per drive:
+      #   - C:/:/hostfs/c:rw
+      #   - D:/:/hostfs/d:rw
       # Uncomment to mount a custom CA certificate for self-signed server certs:
       # - /etc/arkeep/tls:/etc/arkeep/tls:ro
       # Docker socket — read-only, for automatic container and volume discovery.
@@ -79,6 +81,4 @@ services:
 
 volumes:
   arkeep-agent-data:
-    driver: local
-  arkeep-backups:
     driver: local
