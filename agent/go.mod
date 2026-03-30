@@ -3,7 +3,7 @@ module github.com/arkeep-io/arkeep/agent
 go 1.26
 
 require (
-	github.com/arkeep-io/arkeep/shared v0.0.0-20260330081605-f7742982eca0
+	github.com/arkeep-io/arkeep/shared v0.0.0-20260330145356-af5faeb7e992
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/shirou/gopsutil/v4 v4.26.2
@@ -27,7 +27,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/lufia/plan9stats v0.0.0-20260324052639-156f7da3f749 // indirect
+	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
 	github.com/moby/term v0.5.2 // indirect
