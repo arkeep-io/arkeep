@@ -126,21 +126,21 @@ const userInitials = computed(() =>
                         group-data-[collapsible=icon]:max-h-0 group-data-[collapsible=icon]:opacity-0">
                 <Card>
                     <CardContent>
-                        <div class="flex items-center justify-between text-xs text-muted-foreground">
-                            <span>{{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available' }}</span>
-                            <UpgradeIndicator
-                                :show="updateStore.updateAvailable"
-                                :version="updateStore.latestVersion"
-                                tooltip-side="right"
-                            />
+                        <div class="flex items-center justify-between text-xs">
+                            <div>
+                                <span class="text-muted-foreground">Server</span>
+                                {{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available'
+                                }}
+                            </div>
+                            <UpgradeIndicator :show="updateStore.updateAvailable" :version="updateStore.latestVersion"
+                                tooltip-side="right" />
                         </div>
                     </CardContent>
                 </Card>
             </div>
             <!-- Collapsed icon: only rendered when an update is available;
                  fades in when sidebar is collapsed, hidden when expanded. -->
-            <div v-if="updateStore.updateAvailable"
-                 class="flex justify-center overflow-hidden transition-[max-height,opacity] duration-200 ease-linear
+            <div v-if="updateStore.updateAvailable" class="flex justify-center overflow-hidden transition-[max-height,opacity] duration-200 ease-linear
                         max-h-0 opacity-0
                         group-data-[collapsible=icon]:max-h-8 group-data-[collapsible=icon]:opacity-100">
                 <UpgradeIndicator :show="true" :version="updateStore.latestVersion" tooltip-side="right" />

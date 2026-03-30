@@ -15,11 +15,10 @@ defineProps<{
 </script>
 
 <template>
-    <TooltipProvider v-if="show" :delay-duration="200">
+    <TooltipProvider v-if="show" :delay-duration="200" class="cursor-pointer">
         <Tooltip>
             <TooltipTrigger as-child>
-                <CircleArrowUp class="size-3.5 text-primary motion-safe:animate-ping shrink-0 cursor-default"
-                    aria-label="Update available" />
+                <CircleArrowUp class="size-3.5 text-primary shrink-0 cursor-default" aria-label="Update available" />
             </TooltipTrigger>
             <TooltipContent :side="tooltipSide ?? 'top'">
                 v{{ version }} available
