@@ -403,6 +403,20 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 			// Files are restored correctly — log as warning and continue.
 			log("warn", "restore completed with warnings: some file metadata could not be set (Windows permission restriction)")
 			log("warn", "files were restored successfully — check the target path to verify")
+		} else if strings.Contains(err.Error(), "read-only file system") {
+			// Restore-in-place to Docker named volumes fails because the agent
+			// mounts /var/lib/docker/volumes read-only for backup safety.
+			// To restore in place: either mount volumes read-write in docker-compose
+			// (remove :ro), stop the affected containers first, then re-run the
+			// restore. Alternatively, restore to a separate directory and copy
+			// the files manually.
+			fail("restore failed: one or more target paths are on a read-only filesystem. " +
+				"When restoring Docker volume data in place, the agent needs /var/lib/docker/volumes " +
+				"mounted read-write (remove :ro from the docker-compose volume entry) and the " +
+				"affected containers must be stopped before restoring. " +
+				"As an alternative, restore to a separate directory (e.g. /arkeep-backups/restore) " +
+				"and copy the files from there.")
+			return
 		} else {
 			fail(fmt.Sprintf("restore failed: %v", err))
 			return

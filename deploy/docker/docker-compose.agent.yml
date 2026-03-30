@@ -52,10 +52,13 @@ services:
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
       # Local backup destination — accessible inside the container at /arkeep-backups.
+      # Configure destinations in the Arkeep UI using the container path /arkeep-backups.
       # By default this is a named Docker volume (managed by Docker, stored under
-      # /var/lib/docker/volumes/). To use a specific host path instead, replace
-      # "arkeep-backups" with a host path, e.g.: /mnt/nas/backups:/arkeep-backups
-      # (also set PUID/PGID above to match the directory owner on the host).
+      # /var/lib/docker/volumes/). To store backups on the host instead, replace
+      # "arkeep-backups" with a host path (also set PUID/PGID above to match the
+      # directory owner on the host):
+      #   Linux/macOS: /mnt/nas/backups:/arkeep-backups
+      #   Windows (Docker Desktop, forward slashes): C:/Users/Name/backups:/arkeep-backups
       - arkeep-backups:/arkeep-backups
       # Uncomment to mount a custom CA certificate for self-signed server certs:
       # - /etc/arkeep/tls:/etc/arkeep/tls:ro

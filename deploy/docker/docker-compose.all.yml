@@ -28,12 +28,6 @@ services:
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
-      # ── gRPC TLS ───────────────────────────────────────────────────────────────
-      # In all-in-one mode both containers share the same private Docker network.
-      # ARKEEP_GRPC_INSECURE skips auto-PKI and keeps things simple. Remove it
-      # (from both server and agent below) to use auto-PKI + mTLS instead —
-      # the agent will auto-enroll via http://server:8080 on first startup.
-      ARKEEP_GRPC_INSECURE: "true"
     volumes:
       - arkeep-data:/var/lib/arkeep
       # Uncomment to mount TLS certificates for gRPC:
@@ -60,9 +54,6 @@ services:
       ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
-      # Must match the server: remove both ARKEEP_GRPC_INSECURE lines together
-      # to switch to auto-PKI + mTLS (see server comment above).
-      ARKEEP_GRPC_INSECURE: "true"
       # ── PUID / PGID (optional) ───────────────────────────────────────────────
       # Uncomment and set to your host user's UID/GID (run `id` on the host) when
       # using bind-mount backup destinations. This lets the agent write to host
@@ -72,9 +63,12 @@ services:
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
       # Local backup destination — accessible inside the container at /arkeep-backups.
+      # Configure destinations in the Arkeep UI using the container path /arkeep-backups.
       # By default this is a named Docker volume (managed by Docker, stored under
-      # /var/lib/docker/volumes/). To use a specific host path instead, replace
-      # "arkeep-backups" with a host path, e.g.: /mnt/nas/backups:/arkeep-backups
+      # /var/lib/docker/volumes/). To store backups on the host instead, replace
+      # "arkeep-backups" with a host path:
+      #   Linux/macOS: /mnt/nas/backups:/arkeep-backups
+      #   Windows (Docker Desktop, forward slashes): C:/Users/Name/backups:/arkeep-backups
       - arkeep-backups:/arkeep-backups
       # Docker socket — read-only, for automatic container and volume discovery.
       - /var/run/docker.sock:/var/run/docker.sock:ro
