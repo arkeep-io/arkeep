@@ -164,6 +164,8 @@ curl -O https://raw.githubusercontent.com/arkeep-io/arkeep/main/deploy/docker/do
 docker compose -f docker-compose.all.yml up -d
 ```
 
+For local filesystem destinations with Docker (backing up host directories), see [Local destinations in Docker](#local-destinations-in-docker) below.
+
 ---
 
 ### Standalone Binary
@@ -323,6 +325,37 @@ postgres://arkeep:password@localhost:5432/arkeep?sslmode=require
 | `--server-http-addr` | `ARKEEP_SERVER_HTTP_ADDR` | *(derived from `--server-addr`)* | Base URL of the server HTTP API used for enrollment. **Required when the server is behind a TLS-terminating reverse proxy** (e.g. `https://arkeep.example.com`). Default: `--server-addr` host with port 8080 over plain HTTP. |
 | `--grpc-tls-ca` | `ARKEEP_GRPC_TLS_CA` | — | Path to CA certificate for gRPC TLS (only needed when the server uses an external, non-system-trusted cert) |
 | `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport — development and same-machine deployments only |
+| `--docker-host-root` | `ARKEEP_DOCKER_HOST_ROOT` | — | Container path where the host filesystem is mounted. When set, the agent automatically translates any native host path entered in the UI to the corresponding container path (e.g. `C:/Users/…` → `/hostfs/c/Users/…`). See [Local destinations in Docker](#local-destinations-in-docker). |
+
+---
+
+### Local destinations in Docker
+
+When the agent runs in Docker, it can only write to paths that are mounted into the container. Rather than adding a bind-mount for every directory you want to back up, mount the entire host filesystem once and set `ARKEEP_DOCKER_HOST_ROOT`:
+
+**Linux:**
+
+```yaml
+# docker-compose.yml — agent service
+environment:
+  ARKEEP_DOCKER_HOST_ROOT: /hostfs
+volumes:
+  - /:/hostfs:rw
+```
+
+**Windows (Docker Desktop) — one entry per drive:**
+
+```yaml
+environment:
+  ARKEEP_DOCKER_HOST_ROOT: /hostfs
+volumes:
+  - C:/:/hostfs/c:rw
+  - D:/:/hostfs/d:rw   # add more drives as needed
+```
+
+With this in place you can type any native host path directly in the Arkeep UI as a backup destination (e.g. `C:\Users\Filippo\Downloads` or `/home/user/backups`) and the agent will translate it automatically. No per-directory bind-mounts required.
+
+> For binary, systemd, and Helm deployments leave `ARKEEP_DOCKER_HOST_ROOT` unset — paths are used as-is.
 
 ---
 
