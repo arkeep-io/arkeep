@@ -159,7 +159,11 @@ func translateLocalPath(path, hostRoot string) string {
 	// Windows-style path: C:\… or C:/…
 	if len(path) >= 2 && path[1] == ':' {
 		drive := strings.ToLower(string(path[0]))
-		rest := filepath.ToSlash(path[2:]) // strip drive letter + colon, normalise separators
+		// Use strings.ReplaceAll instead of filepath.ToSlash: filepath.ToSlash is a
+		// no-op on Linux (it only converts the OS-native separator), so Windows paths
+		// with backslashes sent from the GUI would not be normalised when the agent
+		// runs in a Linux container.
+		rest := strings.ReplaceAll(path[2:], "\\", "/") // strip drive letter + colon, normalise separators
 		if !strings.HasPrefix(rest, "/") {
 			rest = "/" + rest
 		}
@@ -438,9 +442,16 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	// --- 2. Report running ---
 	reporter.ReportStatus(job.JobID, "running", "starting restore")
 
-	// Translate the restore target path when ARKEEP_DOCKER_HOST_ROOT is set,
-	// the same way backup destination paths are translated.
-	targetPath := translateLocalPath(payload.TargetPath, e.dockerHostRoot)
+	// Translate the restore target path when ARKEEP_DOCKER_HOST_ROOT is set.
+	// Exception: "/" is the in-place sentinel — the GUI sends it to mean "restore
+	// to original location". Since the backup was already written under hostRoot
+	// (e.g. /hostfs/c/Users/…), restoring to "/" lets restic reconstruct the
+	// original paths exactly. Translating "/" → hostRoot would produce double
+	// nesting (e.g. /hostfs/hostfs/c/…).
+	targetPath := payload.TargetPath
+	if payload.TargetPath != "/" {
+		targetPath = translateLocalPath(payload.TargetPath, e.dockerHostRoot)
+	}
 	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, targetPath))
 
 	// --- 3. Run restore ---
