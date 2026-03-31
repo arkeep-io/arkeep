@@ -70,6 +70,11 @@ type AgentRepository interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Agent, int64, error)
+
+	// TotalCount returns the count of all non-deleted agents in the database.
+	// Used by telemetry to report the registered agent count regardless of
+	// whether agents are currently connected.
+	TotalCount(ctx context.Context) int
 }
 
 // -----------------------------------------------------------------------------

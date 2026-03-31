@@ -36,7 +36,7 @@ const (
 // StatsProvider supplies runtime statistics included in telemetry pings.
 // Implement this interface to avoid a direct import of internal packages.
 type StatsProvider interface {
-	ConnectedAgentsCount() int
+	TotalAgentsCount() int
 	ActivePoliciesCount() int
 }
 
@@ -100,7 +100,7 @@ func (r *Reporter) ping(ctx context.Context) {
 	payload := pingPayload{
 		InstanceID:    r.instanceID,
 		Version:       r.version,
-		AgentsCount:   r.stats.ConnectedAgentsCount(),
+		AgentsCount:   r.stats.TotalAgentsCount(),
 		PoliciesCount: r.stats.ActivePoliciesCount(),
 		OS:            runtime.GOOS,
 	}

@@ -109,6 +109,13 @@ func (r *gormAgentRepository) List(ctx context.Context, opts ListOptions) ([]db.
 	return agents, total, nil
 }
 
+// TotalCount returns the number of non-deleted agents in the database.
+func (r *gormAgentRepository) TotalCount(ctx context.Context) int {
+	var count int64
+	r.db.WithContext(ctx).Model(&db.Agent{}).Where("deleted_at IS NULL").Count(&count)
+	return int(count)
+}
+
 // GetByHostname retrieves a non-deleted agent by its hostname.
 // Used during agent registration to detect reconnections and avoid creating
 // duplicate records when an agent reconnects without its stored ID.

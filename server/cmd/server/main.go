@@ -305,7 +305,7 @@ func run(ctx context.Context, cfg *config) error {
 
 	// --- Telemetry ---
 	if cfg.telemetry {
-		stats := &telemetryStats{agentMgr: agentMgr, policyRepo: policyRepo}
+		stats := &telemetryStats{agentRepo: agentRepo, policyRepo: policyRepo}
 		reporter, firstRun, err := telemetry.New(version, cfg.dataDir, stats, logger)
 		if err != nil {
 			logger.Warn("telemetry: failed to initialize, disabling", zap.Error(err))
@@ -335,15 +335,16 @@ func run(ctx context.Context, cfg *config) error {
 	return nil
 }
 
-// telemetryStats adapts agentmanager.Manager and repositories.PolicyRepository
-// to the telemetry.StatsProvider interface without importing them from the
-// telemetry package.
+// telemetryStats adapts repositories to the telemetry.StatsProvider interface
+// without importing them from the telemetry package.
 type telemetryStats struct {
-	agentMgr   *agentmanager.Manager
+	agentRepo  repositories.AgentRepository
 	policyRepo repositories.PolicyRepository
 }
 
-func (s *telemetryStats) ConnectedAgentsCount() int { return s.agentMgr.ConnectedAgentsCount() }
+func (s *telemetryStats) TotalAgentsCount() int {
+	return s.agentRepo.TotalCount(context.Background())
+}
 func (s *telemetryStats) ActivePoliciesCount() int {
 	return s.policyRepo.ActivePoliciesCount(context.Background())
 }

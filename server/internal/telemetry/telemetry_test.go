@@ -113,7 +113,7 @@ type fixedStats struct {
 	agents, policies int
 }
 
-func (s *fixedStats) ConnectedAgentsCount() int { return s.agents }
+func (s *fixedStats) TotalAgentsCount() int { return s.agents }
 func (s *fixedStats) ActivePoliciesCount() int  { return s.policies }
 
 // redirectTransport rewrites every outbound request to target, preserving
