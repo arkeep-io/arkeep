@@ -312,6 +312,10 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 // that the container cannot chown because the underlying filesystem (Windows
 // NTFS) does not support Unix ownership. File data is intact in these cases.
 // Errors on paths outside hostRoot are always treated as real failures.
+//
+// Handles both output formats:
+//   - JSON (restic --json): {"message_type":"error","error":{"message":"lchown ..."},"item":"..."}
+//   - Plain text (fallback): "ignoring error for /hostfs/c: lchown /hostfs/c: permission denied"
 func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 	foundLchownError := false
 	for _, line := range strings.Split(stderr, "\n") {
@@ -319,6 +323,37 @@ func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 		if line == "" {
 			continue
 		}
+
+		// ── JSON format (restic --json emits errors to stderr as JSON objects) ──
+		if strings.HasPrefix(line, "{") {
+			var ev struct {
+				MessageType string `json:"message_type"`
+				Error       struct {
+					Message string `json:"message"`
+				} `json:"error"`
+				Item string `json:"item"`
+			}
+			if err := json.Unmarshal([]byte(line), &ev); err == nil {
+				switch ev.MessageType {
+				case "error":
+					isLchown := strings.Contains(ev.Error.Message, "lchown") &&
+						strings.Contains(ev.Error.Message, "permission denied")
+					isUnderHostRoot := strings.HasPrefix(ev.Item, hostRoot)
+					if isLchown && isUnderHostRoot {
+						foundLchownError = true
+						continue
+					}
+					return false // non-lchown or outside hostRoot → real error
+				case "exit_error":
+					// {"message_type":"exit_error","code":1,"message":"Fatal: There were N errors\n"}
+					// Acceptable summary when all individual errors are lchown.
+					continue
+				}
+				continue // other JSON event types on stderr — skip
+			}
+		}
+
+		// ── Plain-text format (fallback for restic without --json) ───────────────
 		// "ignoring error for /hostfs/c: lchown /hostfs/c: permission denied"
 		if strings.HasPrefix(line, "ignoring error for ") {
 			isLchown := strings.Contains(line, "lchown") && strings.Contains(line, "permission denied")
@@ -327,9 +362,8 @@ func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 				foundLchownError = true
 				continue
 			}
-			return false // non-lchown error or path outside hostRoot → real problem
+			return false
 		}
-		// "Fatal: There were 2 errors" — acceptable when all errors are lchown
 		if strings.HasPrefix(line, "Fatal: There were ") && strings.HasSuffix(line, "errors") {
 			continue
 		}
