@@ -249,15 +249,95 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 // snapshotID may be "latest" to restore the most recent snapshot.
 // includePath, if non-empty, limits restoration to a sub-path inside the snapshot.
 // excludePaths lists paths to skip during restore (e.g. read-only volume mounts).
-func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePath string, excludePaths []string) error {
-	args := []string{"restore", snapshotID, "--target", targetDir}
+// hostRoot, if non-empty, is the container path where the host filesystem is
+// bind-mounted (e.g. "/hostfs"). When set, lchown failures on paths under
+// hostRoot are silently tolerated: they occur because the host filesystem
+// (typically Windows NTFS) does not support Unix ownership operations, but the
+// file data is restored correctly. When empty (native Linux/Windows deployments),
+// all errors are propagated as-is.
+func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePath string, excludePaths []string, hostRoot string) error {
+	args := []string{"restore", snapshotID, "--target", targetDir, "--json"}
 	if includePath != "" {
 		args = append(args, "--include", includePath)
 	}
 	for _, ex := range excludePaths {
 		args = append(args, "--exclude", ex)
 	}
-	return w.run(ctx, dest, args)
+	return w.runRestoreJSON(ctx, dest, args, hostRoot)
+}
+
+// runRestoreJSON runs restic restore --json, consuming stdout as a JSON event
+// stream (to prevent pipe stalls) and capturing stderr separately.
+// On exit error, only stderr is inspected for lchown failures — mixing JSON
+// stdout with text stderr via CombinedOutput would risk false-positive matches.
+// lchown tolerance is applied only when hostRoot is non-empty (Docker deployments
+// with a bind-mounted host filesystem); on native binaries hostRoot is "" and
+// all errors are propagated unchanged.
+func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []string, hostRoot string) error {
+	cmd := w.buildCmd(ctx, dest, args)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("restic: failed to open stdout pipe: %w", err)
+	}
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("restic: failed to start: %w", err)
+	}
+
+	// Drain stdout to prevent the subprocess from blocking when its pipe buffer
+	// fills up. We ignore the JSON content for now — restore progress is not
+	// currently streamed to the UI.
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		// discard
+	}
+
+	if err := cmd.Wait(); err != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		if hostRoot != "" && isOnlyHostRootLchownErrors(stderr, hostRoot) {
+			return nil
+		}
+		return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+	}
+	return nil
+}
+
+// isOnlyHostRootLchownErrors returns true when every error restic encountered
+// was an lchown/permission-denied failure on a directory that lives under
+// hostRoot. This pattern occurs during in-place restores when the snapshot
+// paths include host-OS mount point ancestors (e.g. /hostfs/c, /hostfs/c/Users)
+// that the container cannot chown because the underlying filesystem (Windows
+// NTFS) does not support Unix ownership. File data is intact in these cases.
+// Errors on paths outside hostRoot are always treated as real failures.
+func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
+	foundLchownError := false
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// "ignoring error for /hostfs/c: lchown /hostfs/c: permission denied"
+		if strings.HasPrefix(line, "ignoring error for ") {
+			isLchown := strings.Contains(line, "lchown") && strings.Contains(line, "permission denied")
+			isUnderHostRoot := strings.Contains(line, hostRoot)
+			if isLchown && isUnderHostRoot {
+				foundLchownError = true
+				continue
+			}
+			return false // non-lchown error or path outside hostRoot → real problem
+		}
+		// "Fatal: There were 2 errors" — acceptable when all errors are lchown
+		if strings.HasPrefix(line, "Fatal: There were ") && strings.HasSuffix(line, "errors") {
+			continue
+		}
+		if strings.HasPrefix(line, "Fatal:") || strings.HasPrefix(line, "Error:") {
+			return false
+		}
+	}
+	return foundLchownError
 }
 
 // run executes a restic command and waits for it to finish.

@@ -478,7 +478,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 		Env:      payload.Destination.Env,
 	}
 
-	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, "", excludePaths); err != nil {
+	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, "", excludePaths, e.dockerHostRoot); err != nil {
 		if strings.Contains(err.Error(), "Access is denied") {
 			// On Windows, restic cannot set timestamps or file attributes on
 			// system-protected directories reconstructed under the target path.
