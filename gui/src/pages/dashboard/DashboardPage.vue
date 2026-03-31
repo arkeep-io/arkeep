@@ -147,6 +147,7 @@ const sizeChartData = computed(() => ({
 const chartOptions = computed(() => ({
     responsive: true,
     maintainAspectRatio: false,
+    animation: { duration: 300 },
     plugins: {
         legend: {
             labels: { color: labelColor.value, boxWidth: 12, padding: 16 },
@@ -166,7 +167,7 @@ const chartOptions = computed(() => ({
 }))
 
 // ---------------------------------------------------------------------------
-// Misc helpers
+// Table helpers — aligned with JobsPage
 // ---------------------------------------------------------------------------
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -174,6 +175,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
         case 'succeeded': return 'outline'
         case 'running': return 'outline'
         case 'failed': return 'destructive'
+        case 'pending': return 'outline'
         default: return 'secondary'
     }
 }
@@ -187,9 +189,25 @@ function statusClass(status: string): string {
     }
 }
 
+function statusLabel(status: string): string {
+    return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
 function formatDate(iso: string | null): string {
     if (!iso) return '—'
     return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function formatDuration(startedAt: string | null, finishedAt: string | null): string {
+    if (!startedAt || !finishedAt) return '—'
+    const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime()
+    if (ms < 0) return '—'
+    const s = Math.floor(ms / 1000)
+    if (s < 60) return `${s}s`
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m}m ${s % 60}s`
+    const h = Math.floor(m / 60)
+    return `${h}h ${m % 60}m`
 }
 
 function formatBytes(bytes: number): string {
@@ -201,7 +219,7 @@ function formatBytes(bytes: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Data fetching — dashboard aggregates + last 10 jobs in parallel
+// Data fetching — dashboard aggregates + last 5 jobs in parallel
 // ---------------------------------------------------------------------------
 
 async function fetchAll() {
@@ -344,7 +362,7 @@ onMounted(fetchAll)
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
-                    <div v-else class="h-44">
+                    <div v-else class="h-44 relative">
                         <Bar :data="jobsChartData" :options="chartOptions" />
                     </div>
                 </CardContent>
@@ -357,7 +375,7 @@ onMounted(fetchAll)
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
-                    <div v-else class="h-44">
+                    <div v-else class="h-44 relative">
                         <Line :data="sizeChartData" :options="chartOptions" />
                     </div>
                 </CardContent>
@@ -375,9 +393,11 @@ onMounted(fetchAll)
                     <TableHeader>
                         <TableRow>
                             <TableHead>Policy</TableHead>
+                            <TableHead>Type</TableHead>
                             <TableHead>Agent</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Started</TableHead>
+                            <TableHead>Duration</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -385,7 +405,7 @@ onMounted(fetchAll)
                         <!-- Loading skeletons -->
                         <template v-if="loading">
                             <TableRow v-for="n in 5" :key="n">
-                                <TableCell v-for="col in 4" :key="col">
+                                <TableCell v-for="col in 6" :key="col">
                                     <Skeleton class="w-full h-4" />
                                 </TableCell>
                             </TableRow>
@@ -394,7 +414,7 @@ onMounted(fetchAll)
                         <!-- Empty state -->
                         <template v-else-if="recentJobs.length === 0">
                             <TableRow>
-                                <TableCell colspan="4">
+                                <TableCell colspan="6">
                                     <div class="flex flex-col items-center justify-center gap-3 py-7 text-center">
                                         <div class="p-4 rounded-full bg-muted">
                                             <BriefcaseBusiness class="w-10 h-10 text-muted-foreground" />
@@ -415,14 +435,20 @@ onMounted(fetchAll)
                             <TableRow v-for="job in recentJobs" :key="job.id" class="cursor-pointer hover:bg-muted/50"
                                 @click="router.push(`/jobs/${job.id}`)">
                                 <TableCell class="font-medium">{{ job.policy_name }}</TableCell>
+                                <TableCell>
+                                    <Badge variant="outline" class="capitalize">{{ job.type }}</Badge>
+                                </TableCell>
                                 <TableCell class="text-muted-foreground">{{ job.agent_name }}</TableCell>
                                 <TableCell>
                                     <Badge :variant="statusVariant(job.status)" :class="statusClass(job.status)">
-                                        {{ job.status.charAt(0).toUpperCase() + job.status.slice(1) }}
+                                        {{ statusLabel(job.status) }}
                                     </Badge>
                                 </TableCell>
                                 <TableCell class="text-sm text-muted-foreground">
                                     {{ formatDate(job.started_at) }}
+                                </TableCell>
+                                <TableCell class="text-sm text-muted-foreground font-mono">
+                                    {{ formatDuration(job.started_at, job.ended_at) }}
                                 </TableCell>
                             </TableRow>
                         </template>
