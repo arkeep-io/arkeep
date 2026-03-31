@@ -110,16 +110,15 @@ type Executor struct {
 	hooks          *hooks.Runner
 	queue          chan JobAssignment
 	logger         *zap.Logger
-	dockerHostRoot string // ARKEEP_DOCKER_HOST_ROOT — when set, local paths are translated to this prefix
+	dockerHostRoot string // resolved by main.go: /hostfs when inside Docker, empty for native deployments, or user-supplied override
 }
 
 // New creates a new Executor. dockerClient may be nil — if it is, any job
 // that requires Docker volume discovery will fail gracefully.
-// dockerHostRoot is the value of ARKEEP_DOCKER_HOST_ROOT: when non-empty, any
-// local destination path or restore target path entered by the user is
-// automatically translated so it resolves inside the container. This lets
-// users enter native host paths (e.g. C:/Users/… on Windows or /home/user/…
-// on Linux) without having to pre-configure per-directory bind-mounts.
+// dockerHostRoot is resolved by main.go (defaults to /hostfs inside Docker,
+// empty for native deployments, or the user-supplied --docker-host-root value):
+// when non-empty, local destination paths and restore targets entered by the
+// user are automatically translated so they resolve inside the container.
 func New(
 	wrapper *restic.Wrapper,
 	dockerClient *docker.Client,
@@ -138,7 +137,7 @@ func New(
 }
 
 // translateLocalPath maps a user-provided filesystem path to the corresponding
-// container-accessible path when ARKEEP_DOCKER_HOST_ROOT is set.
+// container-accessible path when dockerHostRoot is set.
 //
 // Examples (hostRoot = "/hostfs"):
 //
@@ -146,8 +145,7 @@ func New(
 //	C:/Users/Filippo/Downloads → /hostfs/c/Users/Filippo/Downloads
 //	C:\Users\Filippo\Downloads → /hostfs/c/Users/Filippo/Downloads
 //
-// If hostRoot is empty the path is returned unchanged (non-Docker deployments
-// or the legacy /arkeep-backups bind-mount approach).
+// If hostRoot is empty the path is returned unchanged (non-Docker deployments).
 func translateLocalPath(path, hostRoot string) string {
 	if hostRoot == "" {
 		return path

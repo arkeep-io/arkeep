@@ -55,10 +55,9 @@ services:
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       TZ: "${TZ:-UTC}"
       # ── Local backup destinations ────────────────────────────────────────────
-      # Set ARKEEP_DOCKER_HOST_ROOT so users can enter any host path directly in
-      # the Arkeep UI (e.g. /home/user/backups or C:/Users/…) without adding a
-      # separate bind-mount per destination. Add the matching volume mount below.
-      #   ARKEEP_DOCKER_HOST_ROOT: "${ARKEEP_DOCKER_HOST_ROOT:-}"
+      # The agent auto-detects Docker and uses the /hostfs mount below for path
+      # translation — no env var required. Override only for custom mount points:
+      #   ARKEEP_DOCKER_HOST_ROOT: "/custom-mountpoint"
       # ── PUID / PGID (optional) ───────────────────────────────────────────────
       # Uncomment when writing to host directories via the hostfs mount and the
       # agent does not have write permission as root.
@@ -66,13 +65,13 @@ services:
       #   PGID: "${PGID:-}"
     volumes:
       - arkeep-agent-data:/var/lib/arkeep-agent
-      # ── Host filesystem mount (used with ARKEEP_DOCKER_HOST_ROOT) ────────────
-      # Mount the host FS once so any path entered in the UI resolves correctly.
-      # Linux:
-      #   - /:/hostfs:rw
-      # Windows (Docker Desktop) — one entry per drive:
-      #   - C:/:/hostfs/c:rw
-      #   - D:/:/hostfs/d:rw
+      # ── Host filesystem mount ─────────────────────────────────────────────────
+      # Mounts the entire host filesystem so any path entered in the UI resolves
+      # correctly. Use :ro for backup-only; change to :rw to also restore to local paths.
+      - /:/hostfs:ro
+      # Windows (Docker Desktop) — one entry per drive (replace the line above):
+      #   - C:/:/hostfs/c:ro
+      #   - D:/:/hostfs/d:ro
       # Docker socket — read-only, for automatic container and volume discovery.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Docker volumes root — required to back up Docker named volumes.

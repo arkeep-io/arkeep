@@ -80,7 +80,7 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.PersistentFlags().StringVar(&cfg.grpcTLSCA, "grpc-tls-ca", envOrDefault("ARKEEP_GRPC_TLS_CA", ""), "Path to CA certificate for gRPC TLS (for self-signed server certs; leave empty for system pool)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 	root.PersistentFlags().StringVar(&cfg.serverHTTPAddr, "server-http-addr", envOrDefault("ARKEEP_SERVER_HTTP_ADDR", ""), "Base URL of the server HTTP API for enrollment (default: derived from --server-addr with port 8080)")
-	root.PersistentFlags().StringVar(&cfg.dockerHostRoot, "docker-host-root", envOrDefault("ARKEEP_DOCKER_HOST_ROOT", ""), "Container path where the host filesystem is mounted (e.g. /hostfs). When set, local destination paths and restore targets entered in the UI are automatically translated so they resolve inside the container — users can enter native host paths without pre-configuring per-directory bind-mounts.")
+	root.PersistentFlags().StringVar(&cfg.dockerHostRoot, "docker-host-root", envOrDefault("ARKEEP_DOCKER_HOST_ROOT", ""), "Container path where the host filesystem is mounted (default: /hostfs when running inside Docker, empty otherwise). Override only if you mount the host filesystem at a custom path.")
 
 	return root
 }
@@ -111,6 +111,13 @@ func run(ctx context.Context, cfg *config) error {
 		zap.String("server", cfg.serverAddr),
 		zap.String("state_dir", cfg.stateDir),
 	)
+
+	// Auto-detect Docker: default docker-host-root to /hostfs when not set explicitly.
+	if cfg.dockerHostRoot == "" && isRunningInDocker() {
+		cfg.dockerHostRoot = "/hostfs"
+		logger.Info("running inside Docker: defaulting docker-host-root to /hostfs " +
+			"(override with --docker-host-root or ARKEEP_DOCKER_HOST_ROOT)")
+	}
 
 	// --- Signal handling ---
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -259,6 +266,13 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// isRunningInDocker reports whether the process is running inside a Docker
+// container by checking for the /.dockerenv marker file created by the Docker runtime.
+func isRunningInDocker() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
 }
 
 // fileExists returns true if path exists and is a regular file.
