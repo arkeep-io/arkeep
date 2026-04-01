@@ -173,18 +173,19 @@ task test:gui      # run GUI tests only
 
 ## Pull Request Process
 
-The repository uses a `develop` branch for active development. `main` is updated when a release
-is cut by merging from `develop`. External contributors should target `main`; the maintainer will
-rebase or merge your changes into `develop` as needed.
+The repository follows Gitflow. `develop` is the integration branch — all feature work and
+external contributions flow here. `main` receives merges only from `release/*` and `hotfix/*`
+branches, handled exclusively by the maintainer. External contributors always target `develop`,
+never `main`.
 
-1. Fork the repository and create a branch from `main`:
+1. Fork the repository and create a branch from `develop`:
    ```bash
    git checkout -b feat/my-feature
    ```
    Do not force-push to your branch after review has started — push additional commits instead.
 2. Make your changes. Write or update tests where appropriate.
 3. Run `task test` and `task lint` — both must pass locally before opening a PR.
-4. Open a pull request against `main` with a clear description of **what** changed and **why**.
+4. Open a pull request against `develop` with a clear description of **what** changed and **why**.
 5. Fill in the PR template. Incomplete PRs may be closed without review.
 6. A maintainer will review your PR. Address feedback and push additional commits to the same branch.
 7. Once approved, your PR will be squash-merged.
