@@ -21,6 +21,7 @@ func MountGUI(r *chi.Mux, assets fs.FS) {
 	fileServer := http.FileServer(http.FS(assets))
 
 	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFileFS(w, r, assets, "index.html")
 	}
 
