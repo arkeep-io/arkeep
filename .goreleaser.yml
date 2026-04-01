@@ -92,7 +92,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
-      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
   - id: server-arm64
     ids: [server]
@@ -110,7 +110,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
-      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
   - id: agent-amd64
     ids: [agent]
@@ -130,7 +130,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
-      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
   - id: agent-arm64
     ids: [agent]
@@ -150,7 +150,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .Commit }}"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.source=https://github.com/arkeep-io/arkeep"
-      - "--label=org.opencontainers.image.licenses=AGPL-3.0"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
 
 docker_manifests:
   - name_template: "ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}"

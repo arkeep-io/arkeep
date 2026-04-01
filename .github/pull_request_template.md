@@ -1,43 +1,22 @@
-## Summary
-
-<!-- What does this PR do? One or two sentences. -->
-
-## Motivation
-
-<!-- Why is this change needed? Link to the related issue if applicable. -->
-
-Closes #
-
-## Changes
-
-<!-- List the main changes. Be specific enough that a reviewer knows what to look at. -->
-
--
--
+<!-- Describe what this PR changes and why. One paragraph is enough. -->
 
 ## Type of Change
-
-<!-- Check all that apply -->
 
 - [ ] Bug fix
 - [ ] New feature
 - [ ] Refactor (no functional changes)
 - [ ] Documentation
 - [ ] Tests
-- [ ] Chore (dependency updates, CI, build tooling)
+- [ ] Chore / deps
 
-## Testing
-
-<!-- How did you test this? What cases did you cover? -->
+## Checklist
 
 - [ ] `task test` passes locally
 - [ ] `task lint` passes locally
-- [ ] Tested manually — describe how:
+- [ ] Tests added or updated if needed
+- [ ] Documentation updated if needed
+- [ ] Linked to a related issue (if applicable)
 
-## Screenshots / Recordings
+## Related Issues
 
-<!-- For GUI changes, add before/after screenshots or a short recording. Delete this section if not applicable. -->
-
-## Notes for Reviewers
-
-<!-- Anything specific you want reviewers to focus on or be aware of? -->
+Closes #

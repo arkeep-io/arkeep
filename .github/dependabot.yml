@@ -1,0 +1,77 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    groups:
+      all-go-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    groups:
+      all-go-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/shared"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    groups:
+      all-go-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/gui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    groups:
+      all-npm-deps:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "docker"
+    directory: "/agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    groups:
+      all-actions:
+        patterns:
+          - "*"
