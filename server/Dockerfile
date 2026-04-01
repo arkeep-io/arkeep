@@ -3,7 +3,7 @@
 #   docker build -f server/Dockerfile -t arkeep-server .
 
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
-FROM node:24-alpine AS gui-builder
+FROM node:25-alpine AS gui-builder
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
