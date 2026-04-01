@@ -3,13 +3,13 @@ module github.com/arkeep-io/arkeep/agent
 go 1.26
 
 require (
-	github.com/arkeep-io/arkeep/shared v0.0.0-20260331093505-90541410e508
+	github.com/arkeep-io/arkeep/shared v0.0.0-20260401115037-cbd42bcc5555
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/shirou/gopsutil/v4 v4.26.2
+	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.27.1
-	google.golang.org/grpc v1.79.3
+	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -51,7 +51,7 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260330182312-d5a96adf58d8 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )
 

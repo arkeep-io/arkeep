@@ -19,7 +19,7 @@
     "lucide-vue-next": "^1.0.0",
     "ofetch": "^1.5.1",
     "pinia": "^3.0.4",
-    "reka-ui": "^2.9.2",
+    "reka-ui": "^2.9.3",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
     "vee-validate": "^4.15.1",
