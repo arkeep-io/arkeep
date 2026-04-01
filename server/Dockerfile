@@ -5,7 +5,7 @@
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
 FROM node:25-alpine AS gui-builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN npm install -g pnpm
 
 WORKDIR /src/gui
 
