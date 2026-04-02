@@ -318,7 +318,9 @@ onMounted(fetchAll)
                                     :y="[(d: any) => d.succeeded, (d: any) => d.failed]"
                                     :color="(_d: any, i: number) => i === 0 ? 'var(--color-succeeded)' : 'var(--color-failed)'"
                                     :rounded-corners="4" :barMinHeight="0" />
-                                <VisAxis type="x" :tick-format="(v: number) => jobsData[Math.round(v)]?.date ?? ''" />
+                                <VisAxis type="x"
+                                    :tick-values="jobsData.map((_: any, i: number) => i)"
+                                    :tick-format="(v: number) => jobsData[Math.round(v)]?.date ?? ''" />
                                 <VisAxis type="y" />
                                 <ChartTooltip />
                                 <ChartCrosshair :template="jobsTooltip"
@@ -341,7 +343,9 @@ onMounted(fetchAll)
                             <VisXYContainer :data="sizeData">
                                 <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.size"
                                     color="var(--color-size)" :opacity="0.3" :line="true" />
-                                <VisAxis type="x" :tick-format="(v: number) => sizeData[Math.round(v)]?.date ?? ''" />
+                                <VisAxis type="x"
+                                    :tick-values="sizeData.map((_: any, i: number) => i)"
+                                    :tick-format="(v: number) => sizeData[Math.round(v)]?.date ?? ''" />
                                 <VisAxis type="y" />
                                 <ChartTooltip />
                                 <ChartCrosshair :template="sizeTooltip" color="var(--color-primary)" />

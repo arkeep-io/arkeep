@@ -94,15 +94,17 @@ interface MetricPoint { cpu: number; mem: number; disk: number }
 const metricsHistory = ref<MetricPoint[]>([])
 const hasMetrics = computed(() => metricsHistory.value.length > 0)
 
-// Labels: "Ns ago" strings. Index 0 = oldest (furthest in the past).
-const chartData = computed(() => [...metricsHistory.value].reverse())
+// Reversed so newest is at index 0 (left). Label embedded so the tooltip
+// cache key (which is based on the data object) naturally includes it.
+const chartData = computed(() =>
+    [...metricsHistory.value].reverse().map((p, i) => ({
+        ...p,
+        _label: `${i * 30}s ago`,
+    }))
+)
 
 const chartTickValues = computed(() =>
     chartData.value.map((_, i) => i)
-)
-
-const chartLabels = computed(() =>
-    chartData.value.map((_, i) => `${i * 30}s`)
 )
 
 const crosshairSeriesColors = [
@@ -265,11 +267,9 @@ const metricsChartConfig = {
 // componentToString must be called during setup (it calls useId internally).
 const metricsTooltip = componentToString(metricsChartConfig, ChartTooltipContent, {
     config: metricsChartConfig,
-    labelFormatter: (x: number | Date) => {
-        const index = Math.round(Number(x))
-        return chartLabels.value[index] ?? ''
-    },
-})
+    labelKey: '_label',
+    valueFormatter: (v: number) => `${v}%`,
+} as any)
 
 // ---------------------------------------------------------------------------
 // Latest metric values for the legend
@@ -425,7 +425,7 @@ onUnmounted(() => {
             <!-- Chart or placeholder -->
             <div class="h-48 relative">
                 <template v-if="hasMetrics">
-                    <ChartContainer :config="metricsChartConfig">
+                    <ChartContainer :config="metricsChartConfig" :cursor="true">
                         <VisXYContainer :data="chartData" :y-domain="[0, 100]">
                             <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.cpu"
                                 :color="() => 'var(--color-cpu)'" :opacity="0.15" :line="true" />
@@ -435,7 +435,7 @@ onUnmounted(() => {
                                 :color="() => 'var(--color-disk)'" :opacity="0.15" :line="true" />
 
                             <VisAxis type="x" :tickValues="chartTickValues"
-                                :tick-format="(v: number) => chartLabels[v] ?? ''" />
+                                :tick-format="(v: number) => chartData[Math.round(v)]?._label ?? ''" />
                             <VisAxis type="y" :tickValues="[0, 20, 40, 60, 80, 100]"
                                 :tick-format="(v: number) => `${v}%`" />
                             <ChartTooltip />

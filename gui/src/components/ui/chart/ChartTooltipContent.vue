@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   nameKey?: string
   labelKey?: string
   labelFormatter?: (d: number | Date) => string
+  valueFormatter?: (value: any) => string
   payload?: Record<string, any>
   config?: ChartConfig
   class?: HTMLAttributes["class"]
@@ -85,7 +86,7 @@ const tooltipLabel = computed(() => {
             />
           </template>
 
-          <div :class="cn('flex flex-1 justify-between leading-none', nestLabel ? 'items-end' : 'items-center')">
+          <div :class="cn('flex flex-1 justify-between leading-none gap-4', nestLabel ? 'items-end' : 'items-center')">
             <div class="grid gap-1.5">
               <div v-if="nestLabel" class="font-medium">
                 {{ tooltipLabel }}
@@ -94,8 +95,8 @@ const tooltipLabel = computed(() => {
                 {{ itemConfig?.label || value }}
               </span>
             </div>
-            <span v-if="value" class="text-foreground font-mono font-medium tabular-nums">
-              {{ value.toLocaleString() }}
+            <span v-if="value !== undefined && value !== null" class="text-foreground font-mono font-medium tabular-nums">
+              {{ valueFormatter ? valueFormatter(value) : value.toLocaleString() }}
             </span>
           </div>
         </div>
