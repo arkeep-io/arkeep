@@ -67,7 +67,7 @@ func (s *emailSender) sendPlain(addr string, cfg *SMTPConfig, to []string, msg [
 
 	client, err := smtp.NewClient(conn, cfg.Host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("%w: smtp.NewClient: %s", ErrSendFailed, err)
 	}
 	defer func() { _ = client.Close() }()
