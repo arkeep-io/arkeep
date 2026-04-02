@@ -54,18 +54,59 @@ func (s *emailSender) Send(ctx context.Context, to []string, subject, body strin
 	return s.sendPlain(addr, cfg, to, msg)
 }
 
-// sendPlain uses smtp.SendMail which handles both plaintext and STARTTLS
-// negotiation automatically. Suitable for port 25 and 587.
+// sendPlain opens a plain TCP connection and drives the SMTP session manually.
+// It upgrades to STARTTLS if the server advertises it, and authenticates only
+// if a username is configured. This avoids the Go stdlib restriction that
+// rejects AUTH advertisements on unencrypted connections — which would break
+// test servers like MailHog that announce AUTH without offering TLS.
 func (s *emailSender) sendPlain(addr string, cfg *SMTPConfig, to []string, msg []byte) error {
-	var auth smtp.Auth
-	if cfg.Username != "" {
-		auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("%w: dial: %s", ErrSendFailed, err)
 	}
 
-	if err := smtp.SendMail(addr, auth, cfg.From, to, msg); err != nil {
-		return fmt.Errorf("%w: smtp.SendMail: %s", ErrSendFailed, err)
+	client, err := smtp.NewClient(conn, cfg.Host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("%w: smtp.NewClient: %s", ErrSendFailed, err)
 	}
-	return nil
+	defer func() { _ = client.Close() }()
+
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		tlsCfg := &tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}
+		if err := client.StartTLS(tlsCfg); err != nil {
+			return fmt.Errorf("%w: STARTTLS: %s", ErrSendFailed, err)
+		}
+	}
+
+	if cfg.Username != "" {
+		auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("%w: smtp auth: %s", ErrSendFailed, err)
+		}
+	}
+
+	if err := client.Mail(cfg.From); err != nil {
+		return fmt.Errorf("%w: MAIL FROM: %s", ErrSendFailed, err)
+	}
+	for _, r := range to {
+		if err := client.Rcpt(r); err != nil {
+			return fmt.Errorf("%w: RCPT TO %s: %s", ErrSendFailed, r, err)
+		}
+	}
+
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("%w: DATA: %s", ErrSendFailed, err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("%w: write body: %s", ErrSendFailed, err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("%w: close DATA: %s", ErrSendFailed, err)
+	}
+
+	return client.Quit()
 }
 
 // sendTLS establishes an implicit TLS connection (SMTPS) before the SMTP

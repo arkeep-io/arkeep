@@ -36,8 +36,6 @@ const smtpTLS = ref(false)
 
 const smtpErrors = ref<Record<string, string>>({})
 
-// Password is required only when creating a new SMTP config.
-// On update (smtpExists), an empty password means "keep the existing one".
 const smtpSchema = computed(() =>
     z.object({
         host: z.string().min(1, 'Host is required'),
@@ -46,9 +44,6 @@ const smtpSchema = computed(() =>
             .int()
             .min(1, 'Port must be between 1 and 65535')
             .max(65535, 'Port must be between 1 and 65535'),
-        password: smtpExists.value
-            ? z.string()
-            : z.string().min(1, 'Password is required'),
         from: z.string().email('Must be a valid email address'),
     })
 )
@@ -89,7 +84,6 @@ function validateSMTP(): boolean {
     const result = smtpSchema.value.safeParse({
         host: smtpHost.value,
         port: smtpPort.value,
-        password: smtpPassword.value,
         from: smtpFrom.value,
     })
     if (!result.success) {
@@ -208,7 +202,9 @@ async function submitSMTP() {
                     <Input id="smtp-username" v-model="smtpUsername" autocomplete="off" />
                 </Field>
                 <Field>
-                    <FieldLabel for="smtp-password">Password</FieldLabel>
+                    <FieldLabel for="smtp-password">
+                        Password <span class="text-muted-foreground font-normal">(optional)</span>
+                    </FieldLabel>
                     <Input id="smtp-password" v-model="smtpPassword" type="password"
                         :placeholder="smtpExists ? '(unchanged)' : ''" autocomplete="new-password"
                         :class="smtpErrors.password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
