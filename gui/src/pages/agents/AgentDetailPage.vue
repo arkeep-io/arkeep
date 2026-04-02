@@ -1,16 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Line } from 'vue-chartjs'
-import {
-    Chart as ChartJS,
-    CategoryScale,
-    LinearScale,
-    PointElement,
-    LineElement,
-    Filler,
-    Tooltip,
-} from 'chart.js'
+import { VisXYContainer, VisArea, VisAxis } from '@unovis/vue'
 import {
     Table,
     TableBody,
@@ -48,15 +39,14 @@ import { api } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
-import { useTheme } from '@/composables/useTheme'
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip)
-
-// ---------------------------------------------------------------------------
-// Theme
-// ---------------------------------------------------------------------------
-
-const { isDark } = useTheme()
+import {
+    ChartContainer,
+    ChartCrosshair,
+    ChartTooltip,
+    ChartTooltipContent,
+    componentToString,
+    type ChartConfig,
+} from '@/components/ui/chart'
 
 // ---------------------------------------------------------------------------
 // Route / Router
@@ -104,11 +94,25 @@ interface MetricPoint { cpu: number; mem: number; disk: number }
 const metricsHistory = ref<MetricPoint[]>([])
 const hasMetrics = computed(() => metricsHistory.value.length > 0)
 
-// Labels are just indices — we don't have timestamps per point.
-const chartLabels = computed(() =>
-    metricsHistory.value.map((_, i) => `${(metricsHistory.value.length - i - 1) * 30}s`)
-        .reverse()
+// Labels: "Ns ago" strings. Index 0 = oldest (furthest in the past).
+const chartData = computed(() => [...metricsHistory.value].reverse())
+
+const chartTickValues = computed(() =>
+    chartData.value.map((_, i) => i)
 )
+
+const chartLabels = computed(() =>
+    chartData.value.map((_, i) => `${i * 30}s`)
+)
+
+const crosshairSeriesColors = [
+    'var(--color-cpu)',
+    'var(--color-mem)',
+    'var(--color-disk)',
+]
+
+const crosshairColor = (_d: unknown, i: number) =>
+    crosshairSeriesColors[i] ?? 'var(--foreground)'
 
 // ---------------------------------------------------------------------------
 // Edit / Delete sheet
@@ -249,60 +253,23 @@ function formatDate(date: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Chart options factory
+// Chart configuration — colours from the design-system palette
 // ---------------------------------------------------------------------------
 
-// Returns Chart.js dataset options for a metric line.
-function makeDataset(label: string, color: string, data: number[]) {
-    return {
-        label,
-        data,
-        borderColor: color,
-        backgroundColor: color + '20',
-        borderWidth: 2,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        fill: true,
-        tension: 0.4,
-    }
-}
+const metricsChartConfig = {
+    cpu: { label: 'CPU', color: 'var(--chart-2)' }, // teal
+    mem: { label: 'Memory', color: 'var(--chart-3)' }, // warm yellow
+    disk: { label: 'Disk', color: 'var(--chart-4)' }, // violet
+} satisfies ChartConfig
 
-const chartOptions = computed(() => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 300 },
-    scales: {
-        x: {
-            grid: { color: isDark.value ? '#3f3f46' : '#e4e4e7' },
-            ticks: { color: isDark.value ? '#a1a1aa' : '#71717a', font: { size: 11 } },
-        },
-        y: {
-            min: 0,
-            max: 100,
-            grid: { color: isDark.value ? '#3f3f46' : '#e4e4e7' },
-            ticks: {
-                color: isDark.value ? '#a1a1aa' : '#71717a',
-                font: { size: 11 },
-                callback: (v: string | number) => `${v}%`,
-            },
-        },
+// componentToString must be called during setup (it calls useId internally).
+const metricsTooltip = componentToString(metricsChartConfig, ChartTooltipContent, {
+    config: metricsChartConfig,
+    labelFormatter: (x: number | Date) => {
+        const index = Math.round(Number(x))
+        return chartLabels.value[index] ?? ''
     },
-    plugins: {
-        legend: { display: false },
-        tooltip: {
-            callbacks: { label: (ctx: any) => `${ctx.dataset.label}: ${ctx.parsed.y}%` },
-        },
-    },
-}))
-
-const chartData = computed(() => ({
-    labels: chartLabels.value,
-    datasets: [
-        makeDataset('CPU', '#3b82f6', metricsHistory.value.map(p => p.cpu)),
-        makeDataset('Memory', '#8b5cf6', metricsHistory.value.map(p => p.mem)),
-        makeDataset('Disk', '#10b981', metricsHistory.value.map(p => p.disk)),
-    ],
-}))
+})
 
 // ---------------------------------------------------------------------------
 // Latest metric values for the legend
@@ -344,7 +311,8 @@ onUnmounted(() => {
                     <template v-else-if="mergedAgent">
                         <div class="flex items-center gap-2.5">
                             <h1 class="text-2xl font-semibold tracking-tight">{{ mergedAgent.name }}</h1>
-                            <Badge :variant="statusVariant(mergedAgent.status)" class="gap-1.5" :class="statusClass(mergedAgent.status)">
+                            <Badge :variant="statusVariant(mergedAgent.status)" class="gap-1.5"
+                                :class="statusClass(mergedAgent.status)">
                                 <span class="inline-block h-1.5 w-1.5 rounded-full" :class="{
                                     'bg-emerald-400': mergedAgent.status === 'online',
                                     'bg-muted-foreground': mergedAgent.status === 'offline',
@@ -428,7 +396,7 @@ onUnmounted(() => {
                 <!-- Legend -->
                 <div class="flex items-center gap-4 text-xs text-muted-foreground">
                     <div class="flex items-center gap-1.5">
-                        <Cpu class="w-3.5 h-3.5 text-blue-500" />
+                        <Cpu class="w-3.5 h-3.5" :style="{ color: 'var(--chart-2)' }" />
                         <span>CPU</span>
                         <span v-if="latestMetrics" class="font-mono font-medium text-foreground">
                             {{ latestMetrics.cpu }}%
@@ -436,7 +404,7 @@ onUnmounted(() => {
                         <span v-else>—</span>
                     </div>
                     <div class="flex items-center gap-1.5">
-                        <MemoryStick class="w-3.5 h-3.5 text-violet-500" />
+                        <MemoryStick class="w-3.5 h-3.5" :style="{ color: 'var(--chart-3)' }" />
                         <span>Memory</span>
                         <span v-if="latestMetrics" class="font-mono font-medium text-foreground">
                             {{ latestMetrics.mem }}%
@@ -444,7 +412,7 @@ onUnmounted(() => {
                         <span v-else>—</span>
                     </div>
                     <div class="flex items-center gap-1.5">
-                        <HardDrive class="w-3.5 h-3.5 text-emerald-500" />
+                        <HardDrive class="w-3.5 h-3.5" :style="{ color: 'var(--chart-4)' }" />
                         <span>Disk</span>
                         <span v-if="latestMetrics" class="font-mono font-medium text-foreground">
                             {{ latestMetrics.disk }}%
@@ -457,7 +425,23 @@ onUnmounted(() => {
             <!-- Chart or placeholder -->
             <div class="h-48 relative">
                 <template v-if="hasMetrics">
-                    <Line :data="chartData" :options="chartOptions" />
+                    <ChartContainer :config="metricsChartConfig">
+                        <VisXYContainer :data="chartData" :y-domain="[0, 100]">
+                            <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.cpu"
+                                :color="() => 'var(--color-cpu)'" :opacity="0.15" :line="true" />
+                            <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.mem"
+                                :color="() => 'var(--color-mem)'" :opacity="0.15" :line="true" />
+                            <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.disk"
+                                :color="() => 'var(--color-disk)'" :opacity="0.15" :line="true" />
+
+                            <VisAxis type="x" :tickValues="chartTickValues"
+                                :tick-format="(v: number) => chartLabels[v] ?? ''" />
+                            <VisAxis type="y" :tickValues="[0, 20, 40, 60, 80, 100]"
+                                :tick-format="(v: number) => `${v}%`" />
+                            <ChartTooltip />
+                            <ChartCrosshair :template="metricsTooltip" :color="crosshairColor" />
+                        </VisXYContainer>
+                    </ChartContainer>
                 </template>
                 <div v-else class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
                     Waiting for first heartbeat…
@@ -555,8 +539,7 @@ onUnmounted(() => {
             </AlertDialogHeader>
             <AlertDialogFooter>
                 <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive"
-                    :disabled="deleteLoading" @click="confirmDelete">
+                <AlertDialogAction variant="destructive" :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
                 </AlertDialogAction>
             </AlertDialogFooter>
