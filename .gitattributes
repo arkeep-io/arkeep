@@ -1,0 +1,9 @@
+# Enforce LF line endings for files that are used inside Linux containers
+# or interpreted by the shell. Git will convert CRLF → LF on commit and
+# keep LF on checkout regardless of core.autocrlf / editor settings.
+
+# Shell scripts — must be LF or the Linux kernel can't find the interpreter
+*.sh        text eol=lf
+
+# Dockerfiles — must be LF; CRLF causes subtle build failures (e.g. COPY, RUN)
+Dockerfile  text eol=lf

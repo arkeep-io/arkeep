@@ -260,6 +260,7 @@ export interface SMTPSettings {
   password: string // write-only — always returned masked from the API
   from: string
   tls: boolean
+  recipients: string[] // explicit email recipient list; empty = all active admins
 }
 
 // WebhookSettings maps to the webhook.* keys in the settings table.

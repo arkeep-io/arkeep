@@ -119,13 +119,18 @@ const userInitials = computed(() =>
             <NavMain :items="visibleNav" />
         </SidebarContent>
         <SidebarFooter>
+            <NavUser :user="{
+                display_name: auth.user?.display_name ?? '',
+                email: auth.user?.email ?? '',
+                user_initials: userInitials
+            }" />
             <!-- Version card: fades and collapses when sidebar goes to icon mode.
                  Uses the same duration/easing as the sidebar's own transitions. -->
             <div class="overflow-hidden transition-[max-height,opacity] duration-200 ease-linear
-                        max-h-32 opacity-100
+                        max-h-16 opacity-100
                         group-data-[collapsible=icon]:max-h-0 group-data-[collapsible=icon]:opacity-0">
-                <Card>
-                    <CardContent>
+                <Card class="py-2">
+                    <CardContent class="px-3">
                         <div class="flex items-center justify-between text-xs">
                             <span class="text-muted-foreground">Server</span>
                             <div class="flex gap-1.5">
@@ -145,11 +150,6 @@ const userInitials = computed(() =>
                         group-data-[collapsible=icon]:max-h-8 group-data-[collapsible=icon]:opacity-100">
                 <UpgradeIndicator :show="true" :version="updateStore.latestVersion" tooltip-side="right" />
             </div>
-            <NavUser :user="{
-                display_name: auth.user?.display_name ?? '',
-                email: auth.user?.email ?? '',
-                user_initials: userInitials
-            }" />
         </SidebarFooter>
     </Sidebar>
 </template>

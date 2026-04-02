@@ -1,18 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Bar, Line } from 'vue-chartjs'
-import {
-    Chart as ChartJS,
-    CategoryScale,
-    LinearScale,
-    BarElement,
-    LineElement,
-    PointElement,
-    Filler,
-    Tooltip,
-    Legend,
-} from 'chart.js'
+import { VisXYContainer, VisGroupedBar, VisAxis, VisArea } from '@unovis/vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
     Table,
@@ -28,23 +17,15 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle } from 'lucide-vue-next'
 import { api } from '@/services/api'
-import { useTheme } from '@/composables/useTheme'
 import type { ApiResponse, Job } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Chart.js registration
-// ---------------------------------------------------------------------------
-
-ChartJS.register(
-    CategoryScale,
-    LinearScale,
-    BarElement,
-    LineElement,
-    PointElement,
-    Filler,
-    Tooltip,
-    Legend,
-)
+import {
+    ChartContainer,
+    ChartCrosshair,
+    ChartTooltip,
+    ChartTooltipContent,
+    componentToString,
+    type ChartConfig,
+} from '@/components/ui/chart'
 
 // ---------------------------------------------------------------------------
 // Local types — mirror dashboardResponse in server/internal/api/dashboard.go
@@ -76,15 +57,6 @@ interface DashboardData {
 }
 
 // ---------------------------------------------------------------------------
-// Theme — chart colours update when the user toggles dark mode
-// ---------------------------------------------------------------------------
-
-const { isDark } = useTheme()
-
-const gridColor = computed(() => isDark.value ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)')
-const labelColor = computed(() => isDark.value ? '#a1a1aa' : '#71717a')
-
-// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
@@ -93,6 +65,19 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 const data = ref<DashboardData | null>(null)
 const recentJobs = ref<Job[]>([])
+
+// ---------------------------------------------------------------------------
+// Chart configuration — colours come from the design-system CSS variables.
+// ---------------------------------------------------------------------------
+
+const jobsChartConfig = {
+    succeeded: { label: 'Succeeded', color: '#22c55e' }, // semantic green
+    failed: { label: 'Failed', color: '#ef4444' }, // semantic red
+} satisfies ChartConfig
+
+const sizeChartConfig = {
+    size: { label: 'Backed up (GB)', color: 'var(--chart-1)' }, // brand primary
+} satisfies ChartConfig
 
 // ---------------------------------------------------------------------------
 // Chart helpers
@@ -104,67 +89,31 @@ function shortLabel(iso: string): string {
     return `${d}/${m}`
 }
 
-const chartLabels = computed(() =>
-    data.value?.job_activity.map(d => shortLabel(d.date)) ?? []
+const jobsData = computed(() =>
+    data.value?.job_activity.map(d => ({
+        date: shortLabel(d.date),
+        succeeded: d.succeeded,
+        failed: d.failed,
+    })) ?? []
 )
 
-const jobsChartData = computed(() => ({
-    labels: chartLabels.value,
-    datasets: [
-        {
-            label: 'Succeeded',
-            data: data.value?.job_activity.map(d => d.succeeded) ?? [],
-            backgroundColor: '#22c55e',
-            borderRadius: 4,
-        },
-        {
-            label: 'Failed',
-            data: data.value?.job_activity.map(d => d.failed) ?? [],
-            backgroundColor: '#ef4444',
-            borderRadius: 4,
-        },
-    ],
-}))
+const sizeData = computed(() =>
+    data.value?.size_activity.map(d => ({
+        date: shortLabel(d.date),
+        size: parseFloat((d.size_bytes / 1073741824).toFixed(2)),
+    })) ?? []
+)
 
-const sizeChartData = computed(() => ({
-    labels: chartLabels.value,
-    datasets: [
-        {
-            label: 'Backed up (GB)',
-            data: data.value?.size_activity.map(d =>
-                parseFloat((d.size_bytes / 1073741824).toFixed(2))
-            ) ?? [],
-            borderColor: '#6366f1',
-            backgroundColor: isDark.value ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.10)',
-            fill: true,
-            tension: 0.4,
-            pointRadius: 3,
-        },
-    ],
-}))
+// componentToString must be called during setup (it calls useId internally).
+const jobsTooltip = componentToString(jobsChartConfig, ChartTooltipContent, {
+    config: jobsChartConfig,
+    labelFormatter: (x: number | Date) => jobsData.value[x as number]?.date ?? '',
+})
 
-// Shared options for both charts — grid and label colours react to the theme.
-const chartOptions = computed(() => ({
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 300 },
-    plugins: {
-        legend: {
-            labels: { color: labelColor.value, boxWidth: 12, padding: 16 },
-        },
-    },
-    scales: {
-        x: {
-            grid: { color: gridColor.value },
-            ticks: { color: labelColor.value },
-        },
-        y: {
-            beginAtZero: true,
-            grid: { color: gridColor.value },
-            ticks: { color: labelColor.value },
-        },
-    },
-}))
+const sizeTooltip = componentToString(sizeChartConfig, ChartTooltipContent, {
+    config: sizeChartConfig,
+    labelFormatter: (x: number | Date) => sizeData.value[x as number]?.date ?? '',
+})
 
 // ---------------------------------------------------------------------------
 // Table helpers — aligned with JobsPage
@@ -362,8 +311,22 @@ onMounted(fetchAll)
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
-                    <div v-else class="h-44 relative">
-                        <Bar :data="jobsChartData" :options="chartOptions" />
+                    <div v-else class="h-44">
+                        <ChartContainer :config="jobsChartConfig" :cursor="true">
+                            <VisXYContainer :data="jobsData">
+                                <VisGroupedBar :x="(_d: any, i: number) => i"
+                                    :y="[(d: any) => d.succeeded, (d: any) => d.failed]"
+                                    :color="(_d: any, i: number) => i === 0 ? 'var(--color-succeeded)' : 'var(--color-failed)'"
+                                    :rounded-corners="4" :barMinHeight="0" />
+                                <VisAxis type="x"
+                                    :tick-values="jobsData.map((_: any, i: number) => i)"
+                                    :tick-format="(v: number) => jobsData[Math.round(v)]?.date ?? ''" />
+                                <VisAxis type="y" />
+                                <ChartTooltip />
+                                <ChartCrosshair :template="jobsTooltip"
+                                    :color="(_d: any, i: number) => i === 0 ? 'var(--color-succeeded)' : 'var(--color-failed)'" />
+                            </VisXYContainer>
+                        </ChartContainer>
                     </div>
                 </CardContent>
             </Card>
@@ -375,8 +338,19 @@ onMounted(fetchAll)
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
-                    <div v-else class="h-44 relative">
-                        <Line :data="sizeChartData" :options="chartOptions" />
+                    <div v-else class="h-44">
+                        <ChartContainer :config="sizeChartConfig" :cursor="true">
+                            <VisXYContainer :data="sizeData">
+                                <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.size"
+                                    color="var(--color-size)" :opacity="0.3" :line="true" />
+                                <VisAxis type="x"
+                                    :tick-values="sizeData.map((_: any, i: number) => i)"
+                                    :tick-format="(v: number) => sizeData[Math.round(v)]?.date ?? ''" />
+                                <VisAxis type="y" />
+                                <ChartTooltip />
+                                <ChartCrosshair :template="sizeTooltip" color="var(--color-primary)" />
+                            </VisXYContainer>
+                        </ChartContainer>
                     </div>
                 </CardContent>
             </Card>
