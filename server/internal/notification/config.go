@@ -27,6 +27,11 @@ const (
 	KeyWebhookURL     = "webhook.url"
 	KeyWebhookSecret  = "webhook.secret"  // HMAC secret, stored encrypted
 	KeyWebhookEnabled = "webhook.enabled" // "true" or "false"
+
+	// KeyNotificationRecipients is a comma-separated list of email addresses
+	// that receive email notifications. When empty the service falls back to
+	// all active admin users' email addresses.
+	KeyNotificationRecipients = "notification.recipients"
 )
 
 // SMTPConfig holds the configuration needed to send emails via SMTP.

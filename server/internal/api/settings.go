@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -266,12 +267,13 @@ func (h *SettingsHandler) DeleteOIDC(w http.ResponseWriter, r *http.Request) {
 // =============================================================================
 
 type smtpResponse struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"` // always "***" on read
-	From     string `json:"from"`
-	TLS      bool   `json:"tls"`
+	Host       string   `json:"host"`
+	Port       int      `json:"port"`
+	Username   string   `json:"username"`
+	Password   string   `json:"password"` // always "***" on read
+	From       string   `json:"from"`
+	TLS        bool     `json:"tls"`
+	Recipients []string `json:"recipients"`
 }
 
 // GetSMTP handles GET /api/v1/settings/smtp (admin only).
@@ -288,26 +290,36 @@ func (h *SettingsHandler) GetSMTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	notifSettings, err := h.settingsRepo.GetMany(r.Context(), "notification.")
+	if err != nil {
+		h.logger.Error("failed to load notification settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
 	idx := settingsToMap(settings)
+	notifIdx := settingsToMap(notifSettings)
 	port, _ := strconv.Atoi(idx[notification.KeySMTPPort])
 
 	Ok(w, smtpResponse{
-		Host:     idx[notification.KeySMTPHost],
-		Port:     port,
-		Username: idx[notification.KeySMTPUsername],
-		Password: "***",
-		From:     idx[notification.KeySMTPFrom],
-		TLS:      idx[notification.KeySMTPTLS] == "true",
+		Host:       idx[notification.KeySMTPHost],
+		Port:       port,
+		Username:   idx[notification.KeySMTPUsername],
+		Password:   "***",
+		From:       idx[notification.KeySMTPFrom],
+		TLS:        idx[notification.KeySMTPTLS] == "true",
+		Recipients: splitRecipients(notifIdx[notification.KeyNotificationRecipients]),
 	})
 }
 
 type upsertSMTPRequest struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	From     string `json:"from"`
-	TLS      bool   `json:"tls"`
+	Host       string   `json:"host"`
+	Port       int      `json:"port"`
+	Username   string   `json:"username"`
+	Password   string   `json:"password"`
+	From       string   `json:"from"`
+	TLS        bool     `json:"tls"`
+	Recipients []string `json:"recipients"`
 }
 
 // UpsertSMTP handles PUT /api/v1/settings/smtp (admin only).
@@ -333,13 +345,17 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 		{notification.KeySMTPUsername, req.Username},
 		{notification.KeySMTPFrom, req.From},
 		{notification.KeySMTPTLS, strconv.FormatBool(req.TLS)},
+		{notification.KeyNotificationRecipients, strings.Join(req.Recipients, ",")},
 	}
 
-	// Only overwrite the stored password if a new one was provided.
-	// An empty password means "keep the existing value" (analogous to OIDC client_secret).
-	if req.Password != "" {
+	if req.Username == "" {
+		// Auth disabled — clear stored password so it doesn't linger in the DB.
+		pairs = append(pairs, struct{ key, value string }{notification.KeySMTPPassword, ""})
+	} else if req.Password != "" {
+		// Auth enabled with a new password provided.
 		pairs = append(pairs, struct{ key, value string }{notification.KeySMTPPassword, req.Password})
 	}
+	// else: auth enabled but password field left blank → keep existing value.
 
 	for _, p := range pairs {
 		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
@@ -355,12 +371,13 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("smtp settings updated")
 
 	Ok(w, smtpResponse{
-		Host:     req.Host,
-		Port:     req.Port,
-		Username: req.Username,
-		Password: "***",
-		From:     req.From,
-		TLS:      req.TLS,
+		Host:       req.Host,
+		Port:       req.Port,
+		Username:   req.Username,
+		Password:   "***",
+		From:       req.From,
+		TLS:        req.TLS,
+		Recipients: req.Recipients,
 	})
 }
 
@@ -380,6 +397,19 @@ func validateUpsertSMTP(req *upsertSMTPRequest) error {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+func splitRecipients(raw string) []string {
+	if raw == "" {
+		return []string{}
+	}
+	var out []string
+	for _, r := range strings.Split(raw, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 func settingsToMap(settings []db.Setting) map[string]string {
 	m := make(map[string]string, len(settings))

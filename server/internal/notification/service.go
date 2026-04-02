@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -203,9 +204,16 @@ func (s *notificationService) notify(ctx context.Context, ev event) error {
 		emailRecipients = append(emailRecipients, u.Email)
 	}
 
+	// For email delivery use the explicitly configured recipient list when set,
+	// otherwise fall back to the admin users collected above.
+	emailTo := s.configuredRecipients(ctx)
+	if len(emailTo) == 0 {
+		emailTo = emailRecipients
+	}
+
 	// External channels: errors are logged but not propagated — the in-app
 	// notification has already been saved, which is the authoritative channel.
-	if err := s.email.Send(ctx, emailRecipients, ev.title, ev.body); err != nil {
+	if err := s.email.Send(ctx, emailTo, ev.title, ev.body); err != nil {
 		s.logger.Warn("email notification delivery failed",
 			zap.String("type", ev.notifType),
 			zap.Error(err),
@@ -220,4 +228,25 @@ func (s *notificationService) notify(ctx context.Context, ev event) error {
 	}
 
 	return nil
+}
+
+// configuredRecipients loads the explicit email recipient list from settings.
+// Returns nil (not an empty slice) when not configured so the caller can
+// distinguish "not set" from "empty list" and fall back to admin emails.
+func (s *notificationService) configuredRecipients(ctx context.Context) []string {
+	settings, err := s.settingsRepo.GetMany(ctx, "notification.")
+	if err != nil || len(settings) == 0 {
+		return nil
+	}
+	raw := settingsIndex(settings)[KeyNotificationRecipients]
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, r := range strings.Split(raw, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
