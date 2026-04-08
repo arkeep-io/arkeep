@@ -109,6 +109,13 @@ func claimsFromCtx(ctx context.Context) *auth.Claims {
 	return claims
 }
 
+// isAdmin reports whether the authenticated user in r has the "admin" role.
+// Must be called after the Authenticate middleware has run.
+func isAdmin(r *http.Request) bool {
+	claims := claimsFromCtx(r.Context())
+	return claims != nil && claims.Role == "admin"
+}
+
 // SecurityHeaders adds defensive HTTP response headers to every request.
 // These headers are a low-cost defense-in-depth measure against common
 // web attacks (clickjacking, MIME sniffing, information leakage, etc.).

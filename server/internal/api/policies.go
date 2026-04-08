@@ -191,6 +191,12 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Hook commands execute with agent privileges — only admins may set them.
+	if (req.HookPreBackup != "" || req.HookPostBackup != "") && !isAdmin(r) {
+		ErrForbidden(w)
+		return
+	}
+
 	agentID, err := uuid.Parse(req.AgentID)
 	if err != nil {
 		ErrBadRequest(w, "agent_id must be a valid UUID")
@@ -390,9 +396,27 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		policy.RetentionYearly = *req.RetentionYearly
 	}
 	if req.HookPreBackup != nil {
+		if err := validateHookCommand(*req.HookPreBackup); err != nil {
+			ErrBadRequest(w, "hook_pre_backup: "+err.Error())
+			return
+		}
+		// Hook commands execute with agent privileges — only admins may change them.
+		if *req.HookPreBackup != policy.HookPreBackup && !isAdmin(r) {
+			ErrForbidden(w)
+			return
+		}
 		policy.HookPreBackup = *req.HookPreBackup
 	}
 	if req.HookPostBackup != nil {
+		if err := validateHookCommand(*req.HookPostBackup); err != nil {
+			ErrBadRequest(w, "hook_post_backup: "+err.Error())
+			return
+		}
+		// Hook commands execute with agent privileges — only admins may change them.
+		if *req.HookPostBackup != policy.HookPostBackup && !isAdmin(r) {
+			ErrForbidden(w)
+			return
+		}
 		policy.HookPostBackup = *req.HookPostBackup
 	}
 
@@ -492,7 +516,16 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	if req.RepoPassword == "" {
 		return errors.New("repo_password is required")
 	}
-	return validateSchedule(req.Schedule)
+	if err := validateSchedule(req.Schedule); err != nil {
+		return err
+	}
+	if err := validateHookCommand(req.HookPreBackup); err != nil {
+		return errors.New("hook_pre_backup: " + err.Error())
+	}
+	if err := validateHookCommand(req.HookPostBackup); err != nil {
+		return errors.New("hook_post_backup: " + err.Error())
+	}
+	return nil
 }
 
 // validateSchedule parses a cron expression to ensure it's valid.
