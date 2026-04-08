@@ -34,4 +34,8 @@ var (
 	// ErrOIDCCodeVerifierMissing is returned when the PKCE code verifier is
 	// absent from the session during the callback phase.
 	ErrOIDCCodeVerifierMissing = errors.New("auth: oidc code verifier missing")
+
+	// ErrTokenRevoked is returned when a syntactically valid access token has
+	// been explicitly revoked via the denylist (e.g. after logout).
+	ErrTokenRevoked = errors.New("auth: token has been revoked")
 )

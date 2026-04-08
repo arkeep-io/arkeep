@@ -3,12 +3,21 @@ package auth
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
+
+// TokenValidator abstracts access token validation. Both *JWTManager and
+// *AuthService satisfy this interface; middleware and handlers should accept
+// TokenValidator so they automatically benefit from denylist checking when
+// wired with AuthService in production.
+type TokenValidator interface {
+	ValidateAccessToken(tokenString string) (*Claims, error)
+}
 
 // AuthService is the entry point for all authentication operations.
 // It holds references to both providers and delegates to the appropriate one
@@ -20,6 +29,7 @@ type AuthService struct {
 	oidc       *OIDCAuthProvider
 	tokenRepo  repositories.RefreshTokenRepository
 	jwtManager *JWTManager
+	denylist   *Denylist
 }
 
 // NewAuthService creates an AuthService with the given providers and dependencies.
@@ -31,12 +41,14 @@ func NewAuthService(
 	oidc *OIDCAuthProvider,
 	tokenRepo repositories.RefreshTokenRepository,
 	jwtManager *JWTManager,
+	denylist *Denylist,
 ) *AuthService {
 	return &AuthService{
 		local:      local,
 		oidc:       oidc,
 		tokenRepo:  tokenRepo,
 		jwtManager: jwtManager,
+		denylist:   denylist,
 	}
 }
 
@@ -83,9 +95,24 @@ func (s *AuthService) LogoutAllSessions(ctx context.Context, userID uuid.UUID) e
 	return nil
 }
 
-// ValidateAccessToken parses and verifies a JWT access token.
+// ValidateAccessToken parses and verifies a JWT access token, then checks the
+// denylist to reject tokens that were explicitly revoked (e.g. after logout).
 func (s *AuthService) ValidateAccessToken(tokenString string) (*Claims, error) {
-	return s.jwtManager.ValidateAccessToken(tokenString)
+	claims, err := s.jwtManager.ValidateAccessToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+	if s.denylist.IsRevoked(claims.ID) {
+		return nil, ErrTokenRevoked
+	}
+	return claims, nil
+}
+
+// RevokeAccessToken adds the given JTI to the denylist until expiresAt.
+// Called on logout so the current access token is rejected immediately,
+// rather than remaining valid until its 15-minute TTL expires.
+func (s *AuthService) RevokeAccessToken(jti string, expiresAt time.Time) {
+	s.denylist.Add(jti, expiresAt)
 }
 
 // JWTManager exposes the underlying JWTManager for direct access.

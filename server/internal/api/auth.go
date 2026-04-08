@@ -93,6 +93,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 // Logout handles POST /api/v1/auth/logout.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	// Revoke the current access token immediately so it cannot be reused
+	// within its remaining TTL window, even from another device or tab.
+	if claims := claimsFromCtx(r.Context()); claims != nil && claims.ID != "" {
+		h.svc.RevokeAccessToken(claims.ID, claims.ExpiresAt.Time)
+	}
+
 	cookie, err := r.Cookie(refreshTokenCookie)
 	if err != nil {
 		NoContent(w)
