@@ -21,7 +21,17 @@ require (
 	modernc.org/sqlite v1.48.1
 )
 
-require golang.org/x/tools v0.43.0 // indirect
+require (
+	github.com/docker/docker v28.5.2+incompatible // indirect
+	github.com/docker/go-connections v0.6.0 // indirect
+	github.com/moby/term v0.5.2 // indirect
+	github.com/morikuni/aec v1.1.0 // indirect
+	github.com/opencontainers/image-spec v1.1.1 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0 // indirect
+	go.opentelemetry.io/otel v1.43.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.43.0 // indirect
+	golang.org/x/tools v0.43.0 // indirect
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
