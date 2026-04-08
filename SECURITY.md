@@ -61,6 +61,38 @@ All sensitive values (repository passwords, S3 keys, SFTP passwords, OIDC client
 secrets) are encrypted at rest using AES-256-GCM with a server-side encryption key.
 Credentials are never returned in API responses — they are write-only after creation.
 
+### Session and token revocation
+
+Arkeep uses two tokens per session:
+
+| Token | TTL | Storage | Revocation |
+|-------|-----|---------|------------|
+| Access token (JWT) | 15 minutes | Browser memory only | Immediate via in-memory denylist |
+| Refresh token | 7 days | `httpOnly` cookie | Immediate via database deletion |
+
+**On logout**, both tokens are revoked simultaneously: the refresh token is deleted from
+the database and the access token's JTI is added to an in-memory denylist. Any
+subsequent request using either token is rejected immediately.
+
+**Known limitation — `LogoutAllSessions`:** when an admin revokes all sessions for a
+user (e.g. after a password change or account suspension), all refresh tokens are
+deleted from the database. However, access tokens already issued cannot be enumerated
+retroactively because JWTs are stateless — their JTIs are not stored server-side.
+Active access tokens will remain valid until they expire naturally (≤ 15 minutes).
+
+If this window is unacceptable for your threat model, mitigations include:
+
+- Reducing `accessTokenDuration` in `server/internal/auth/jwt.go` (e.g. to 5 minutes).
+- Treating admin-initiated session revocation as requiring a short propagation delay
+  rather than an instant cut-off.
+- Running the server behind a reverse proxy that can enforce an emergency block at the
+  network layer.
+
+**Denylist persistence:** the access token denylist is in-memory and is cleared on
+server restart. Tokens revoked shortly before a restart may be accepted for up to
+their remaining TTL after the restart. Refresh token revocation is unaffected — it is
+persisted in the database.
+
 ### Agent authentication
 
 Agents authenticate to the server via mutual TLS (mTLS) using certificates issued by

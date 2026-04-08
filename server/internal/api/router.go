@@ -76,11 +76,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
-	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService.JWTManager(), cfg.Logger)
+	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler      := newVersionHandler(cfg.ServerVersion)
-
-	jwtMgr := cfg.AuthService.JWTManager()
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -120,7 +118,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 		// --- Authenticated routes ---
 		r.Group(func(r chi.Router) {
-			r.Use(Authenticate(jwtMgr))
+			r.Use(Authenticate(cfg.AuthService))
 
 			r.Get("/dashboard", dashboardHandler.Get)
 			r.Get("/version", versionHandler.Get)

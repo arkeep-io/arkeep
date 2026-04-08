@@ -185,7 +185,8 @@ func run(ctx context.Context, cfg *config) error {
 
 	localProvider := auth.NewLocalAuthProvider(userRepo, refreshTokenRepo, jwtManager, logger)
 	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager, logger)
-	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager)
+	denylist := auth.NewDenylist()
+	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager, denylist)
 
 	// --- gRPC PKI (auto-generated) ---
 	// EnsureCerts is only called when no external TLS cert is configured.
