@@ -23,17 +23,18 @@ import (
 //
 //	ws://host/api/v1/ws?token=<jwt>&topics=job:uuid1,agent:uuid2
 type WSHandler struct {
-	hub    *websocket.Hub
-	jwtMgr *auth.JWTManager
-	logger *zap.Logger
+	hub       *websocket.Hub
+	validator auth.TokenValidator
+	logger    *zap.Logger
 }
 
 // NewWSHandler creates a new WSHandler.
-func NewWSHandler(hub *websocket.Hub, jwtMgr *auth.JWTManager, logger *zap.Logger) *WSHandler {
+// validator should be *auth.AuthService so that revoked tokens are rejected.
+func NewWSHandler(hub *websocket.Hub, validator auth.TokenValidator, logger *zap.Logger) *WSHandler {
 	return &WSHandler{
-		hub:    hub,
-		jwtMgr: jwtMgr,
-		logger: logger.Named("ws_handler"),
+		hub:       hub,
+		validator: validator,
+		logger:    logger.Named("ws_handler"),
 	}
 }
 
@@ -53,7 +54,7 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := h.jwtMgr.ValidateAccessToken(tokenStr)
+	claims, err := h.validator.ValidateAccessToken(tokenStr)
 	if err != nil {
 		ErrUnauthorized(w)
 		return

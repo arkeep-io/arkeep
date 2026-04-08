@@ -27,7 +27,10 @@ const (
 // On failure it writes a 401 and stops the chain.
 //
 // Token format: "Authorization: Bearer <token>"
-func Authenticate(jwtMgr *auth.JWTManager) func(http.Handler) http.Handler {
+//
+// validator should be *auth.AuthService in production — it performs both
+// signature verification and denylist checking (revoked tokens are rejected).
+func Authenticate(validator auth.TokenValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
@@ -42,7 +45,7 @@ func Authenticate(jwtMgr *auth.JWTManager) func(http.Handler) http.Handler {
 				return
 			}
 
-			claims, err := jwtMgr.ValidateAccessToken(parts[1])
+			claims, err := validator.ValidateAccessToken(parts[1])
 			if err != nil {
 				ErrUnauthorized(w)
 				return
@@ -107,6 +110,13 @@ func RequestLogger(logger *zap.Logger) func(http.Handler) http.Handler {
 func claimsFromCtx(ctx context.Context) *auth.Claims {
 	claims, _ := ctx.Value(contextKeyUser).(*auth.Claims)
 	return claims
+}
+
+// isAdmin reports whether the authenticated user in r has the "admin" role.
+// Must be called after the Authenticate middleware has run.
+func isAdmin(r *http.Request) bool {
+	claims := claimsFromCtx(r.Context())
+	return claims != nil && claims.Role == "admin"
 }
 
 // SecurityHeaders adds defensive HTTP response headers to every request.
