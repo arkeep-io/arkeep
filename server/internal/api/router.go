@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -95,8 +96,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 		// --- Public routes ---
 		r.Group(func(r chi.Router) {
-			r.Post("/auth/login", authHandler.Login)
-			r.Post("/auth/refresh", authHandler.Refresh)
+			// Login and refresh are rate-limited to 5 requests per minute per IP
+			// to prevent brute-force attacks on credentials.
+			loginLimiter := NewRateLimiter(5, time.Minute)
+			r.With(RateLimit(loginLimiter)).Post("/auth/login", authHandler.Login)
+			r.With(RateLimit(loginLimiter)).Post("/auth/refresh", authHandler.Refresh)
 
 			// OIDC flow — public because the user is not yet authenticated.
 			// /providers lists enabled providers for the login page SSO buttons.
