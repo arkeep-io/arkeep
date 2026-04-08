@@ -12,6 +12,7 @@ import (
 func TestRateLimiter_Allow(t *testing.T) {
 	t.Run("allows requests up to the limit", func(t *testing.T) {
 		rl := NewRateLimiter(3, time.Minute)
+		t.Cleanup(rl.Stop)
 		for i := 0; i < 3; i++ {
 			if !rl.Allow("1.2.3.4") {
 				t.Fatalf("request %d should be allowed", i+1)
@@ -21,6 +22,7 @@ func TestRateLimiter_Allow(t *testing.T) {
 
 	t.Run("blocks once limit is exceeded", func(t *testing.T) {
 		rl := NewRateLimiter(3, time.Minute)
+		t.Cleanup(rl.Stop)
 		for i := 0; i < 3; i++ {
 			rl.Allow("1.2.3.4") //nolint:errcheck
 		}
@@ -31,6 +33,7 @@ func TestRateLimiter_Allow(t *testing.T) {
 
 	t.Run("different IPs are independent", func(t *testing.T) {
 		rl := NewRateLimiter(1, time.Minute)
+		t.Cleanup(rl.Stop)
 		if !rl.Allow("10.0.0.1") {
 			t.Fatal("first IP first request should be allowed")
 		}
@@ -44,6 +47,7 @@ func TestRateLimiter_Allow(t *testing.T) {
 
 	t.Run("resets after window expires", func(t *testing.T) {
 		rl := NewRateLimiter(1, 50*time.Millisecond)
+		t.Cleanup(rl.Stop)
 		if !rl.Allow("1.2.3.4") {
 			t.Fatal("first request should be allowed")
 		}
@@ -62,6 +66,7 @@ func TestRateLimiter_Allow(t *testing.T) {
 func TestRateLimiter_Allow_Concurrent(t *testing.T) {
 	const limit = 10
 	rl := NewRateLimiter(limit, time.Minute)
+	t.Cleanup(rl.Stop)
 
 	var (
 		wg      sync.WaitGroup
@@ -87,6 +92,14 @@ func TestRateLimiter_Allow_Concurrent(t *testing.T) {
 	}
 }
 
+// newTestLimiter creates a RateLimiter and registers Stop via t.Cleanup.
+func newTestLimiter(t *testing.T, maxRequests int, window time.Duration) *RateLimiter {
+	t.Helper()
+	rl := NewRateLimiter(maxRequests, window)
+	t.Cleanup(rl.Stop)
+	return rl
+}
+
 // TestRateLimit_Middleware tests the Chi middleware wrapper.
 func TestRateLimit_Middleware(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +107,7 @@ func TestRateLimit_Middleware(t *testing.T) {
 	})
 
 	t.Run("passes allowed request to next handler", func(t *testing.T) {
-		handler := RateLimit(NewRateLimiter(5, time.Minute))(next)
+		handler := RateLimit(newTestLimiter(t, 5, time.Minute))(next)
 
 		req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
 		req.RemoteAddr = "1.2.3.4:5678"
@@ -107,7 +120,7 @@ func TestRateLimit_Middleware(t *testing.T) {
 	})
 
 	t.Run("returns 429 when limit exceeded", func(t *testing.T) {
-		handler := RateLimit(NewRateLimiter(2, time.Minute))(next)
+		handler := RateLimit(newTestLimiter(t, 2, time.Minute))(next)
 
 		ip := "5.6.7.8"
 		for i := 0; i < 2; i++ {
@@ -127,7 +140,7 @@ func TestRateLimit_Middleware(t *testing.T) {
 	})
 
 	t.Run("blocked response includes Retry-After header", func(t *testing.T) {
-		handler := RateLimit(NewRateLimiter(1, 2*time.Minute))(next)
+		handler := RateLimit(newTestLimiter(t, 1, 2*time.Minute))(next)
 
 		ip := "9.9.9.9:1234"
 		// First request: allowed, exhausts the limit.
@@ -150,7 +163,7 @@ func TestRateLimit_Middleware(t *testing.T) {
 	})
 
 	t.Run("different IPs do not interfere via middleware", func(t *testing.T) {
-		handler := RateLimit(NewRateLimiter(1, time.Minute))(next)
+		handler := RateLimit(newTestLimiter(t, 1, time.Minute))(next)
 
 		// Exhaust limit for first IP.
 		for i := 0; i < 2; i++ {

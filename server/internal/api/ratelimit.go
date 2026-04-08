@@ -14,12 +14,13 @@ type rateBucket struct {
 }
 
 // RateLimiter is a simple fixed-window per-IP rate limiter.
-// It is safe for concurrent use.
+// It is safe for concurrent use. Call Stop to release the background goroutine.
 type RateLimiter struct {
 	maxRequests int
 	window      time.Duration
 	mu          sync.Mutex
 	buckets     map[string]*rateBucket
+	stop        chan struct{}
 }
 
 // NewRateLimiter creates a RateLimiter that allows at most maxRequests requests
@@ -29,9 +30,16 @@ func NewRateLimiter(maxRequests int, window time.Duration) *RateLimiter {
 		maxRequests: maxRequests,
 		window:      window,
 		buckets:     make(map[string]*rateBucket),
+		stop:        make(chan struct{}),
 	}
 	go rl.cleanupLoop()
 	return rl
+}
+
+// Stop terminates the background cleanup goroutine. The RateLimiter must not
+// be used after Stop is called.
+func (rl *RateLimiter) Stop() {
+	close(rl.stop)
 }
 
 // Allow returns true if the given IP has not exceeded the rate limit.
@@ -56,15 +64,20 @@ func (rl *RateLimiter) Allow(ip string) bool {
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(rl.window)
 	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for ip, b := range rl.buckets {
-			if now.After(b.resetAt) {
-				delete(rl.buckets, ip)
+	for {
+		select {
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, b := range rl.buckets {
+				if now.After(b.resetAt) {
+					delete(rl.buckets, ip)
+				}
 			}
+			rl.mu.Unlock()
+		case <-rl.stop:
+			return
 		}
-		rl.mu.Unlock()
 	}
 }
 
