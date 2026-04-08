@@ -50,6 +50,9 @@ import {
 } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import type { ApiResponse, Policy, Agent, Destination, VolumeInfo } from '@/types'
+import { useAuthStore } from '@/stores/auth'
+
+const authStore = useAuthStore()
 
 // ---------------------------------------------------------------------------
 // Props / emits
@@ -1014,27 +1017,36 @@ function onOpenChange(value: boolean) {
             <CollapsibleContent>
               <div class="flex flex-col gap-4 mt-4">
 
+                <!-- Admin-only warning -->
+                <Alert v-if="!authStore.isAdmin" variant="default" class="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+                  <AlertCircle class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <AlertDescription class="text-amber-800 dark:text-amber-300 text-xs">
+                    Hook commands run with agent process privileges. Only admins can configure hooks.
+                  </AlertDescription>
+                </Alert>
+
                 <!-- Pre-backup hook -->
                 <div class="rounded-md border p-3 flex flex-col gap-3">
                   <div class="flex items-center justify-between">
                     <p class="text-sm font-medium">Pre-backup</p>
                     <Switch :model-value="hookPreEnabled ?? false"
+                      :disabled="!authStore.isAdmin"
                       @update:model-value="(v: boolean) => hookPreEnabled = v" />
                   </div>
                   <template v-if="hookPreEnabled">
                     <div class="grid grid-cols-2 gap-3">
                       <div class="flex flex-col gap-1.5">
                         <Label for="hook-pre-name" class="text-sm">Name</Label>
-                        <Input id="hook-pre-name" v-model="hookPreName" placeholder="e.g. stop-container" />
+                        <Input id="hook-pre-name" v-model="hookPreName" placeholder="e.g. stop-container" :disabled="!authStore.isAdmin" />
                       </div>
                       <div class="flex flex-col gap-1.5">
                         <Label for="hook-pre-timeout" class="text-sm">Timeout (sec)</Label>
-                        <Input id="hook-pre-timeout" v-model="hookPreTimeout" type="number" min="0" />
+                        <Input id="hook-pre-timeout" v-model="hookPreTimeout" type="number" min="0" :disabled="!authStore.isAdmin" />
                       </div>
                     </div>
                     <div class="flex flex-col gap-1.5">
                       <Label for="hook-pre-cmd" class="text-sm">Command</Label>
-                      <Input id="hook-pre-cmd" v-model="hookPreCommand" class="font-mono" placeholder="e.g. docker" />
+                      <Input id="hook-pre-cmd" v-model="hookPreCommand" class="font-mono" placeholder="e.g. docker" :disabled="!authStore.isAdmin" />
                     </div>
                     <div class="flex flex-col gap-1.5">
                       <Label for="hook-pre-args" class="text-sm">
@@ -1042,7 +1054,7 @@ function onOpenChange(value: boolean) {
                         <span class="text-muted-foreground font-normal">(space-separated)</span>
                       </Label>
                       <Input id="hook-pre-args" v-model="hookPreArgs" class="font-mono"
-                        placeholder="e.g. stop my-container" />
+                        placeholder="e.g. stop my-container" :disabled="!authStore.isAdmin" />
                     </div>
                   </template>
                 </div>
@@ -1052,22 +1064,23 @@ function onOpenChange(value: boolean) {
                   <div class="flex items-center justify-between">
                     <p class="text-sm font-medium">Post-backup</p>
                     <Switch :model-value="hookPostEnabled ?? false"
+                      :disabled="!authStore.isAdmin"
                       @update:model-value="(v: boolean) => hookPostEnabled = v" />
                   </div>
                   <template v-if="hookPostEnabled">
                     <div class="grid grid-cols-2 gap-3">
                       <div class="flex flex-col gap-1.5">
                         <Label for="hook-post-name" class="text-sm">Name</Label>
-                        <Input id="hook-post-name" v-model="hookPostName" placeholder="e.g. start-container" />
+                        <Input id="hook-post-name" v-model="hookPostName" placeholder="e.g. start-container" :disabled="!authStore.isAdmin" />
                       </div>
                       <div class="flex flex-col gap-1.5">
                         <Label for="hook-post-timeout" class="text-sm">Timeout (sec)</Label>
-                        <Input id="hook-post-timeout" v-model="hookPostTimeout" type="number" min="0" />
+                        <Input id="hook-post-timeout" v-model="hookPostTimeout" type="number" min="0" :disabled="!authStore.isAdmin" />
                       </div>
                     </div>
                     <div class="flex flex-col gap-1.5">
                       <Label for="hook-post-cmd" class="text-sm">Command</Label>
-                      <Input id="hook-post-cmd" v-model="hookPostCommand" class="font-mono" placeholder="e.g. docker" />
+                      <Input id="hook-post-cmd" v-model="hookPostCommand" class="font-mono" placeholder="e.g. docker" :disabled="!authStore.isAdmin" />
                     </div>
                     <div class="flex flex-col gap-1.5">
                       <Label for="hook-post-args" class="text-sm">
@@ -1075,7 +1088,7 @@ function onOpenChange(value: boolean) {
                         <span class="text-muted-foreground font-normal">(space-separated)</span>
                       </Label>
                       <Input id="hook-post-args" v-model="hookPostArgs" class="font-mono"
-                        placeholder="e.g. start my-container" />
+                        placeholder="e.g. start my-container" :disabled="!authStore.isAdmin" />
                     </div>
                   </template>
                 </div>

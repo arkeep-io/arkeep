@@ -511,6 +511,37 @@ to access volume mountpoints at `/var/lib/docker/volumes/` on Linux, the agent
 needs to be in the `docker` group (or run as root). The Docker Compose deployment
 handles this automatically via the socket mount.
 
+**Are pre/post backup hooks safe?**
+
+Hooks are shell commands executed by the agent process on the backup target machine.
+This means **hooks run with the same privileges as the agent** — typically an unprivileged
+user, but root if you configured the agent that way, or with Docker socket access if you
+enabled Docker volume backup.
+
+Treat hook configuration with the same level of trust as SSH access to the machine.
+For this reason, only **admin** users can set or modify hook commands. Regular users
+can view policies but cannot change hook fields.
+
+Supported hook patterns:
+
+```bash
+# Database dump before backup
+pg_dump mydb > /var/backups/mydb.sql
+
+# Stop a container before backup, restart it after
+docker stop my-container
+docker start my-container
+
+# Custom script
+/opt/scripts/pre-backup.sh
+```
+
+The following patterns are rejected by the server to prevent credential exfiltration:
+
+- Command substitution: `$(...)` and backticks
+- Path traversal: `..`
+- Internal environment variable references: `$RESTIC_*`, `$RCLONE_*`, `$ARKEEP_*`
+
 **Why does the agent connect to the server, not the other way around?**
 
 Pull architecture means agents work behind NAT, firewalls, and dynamic IPs without
