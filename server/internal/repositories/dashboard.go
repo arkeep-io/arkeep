@@ -71,7 +71,7 @@ func NewDashboardRepository(db *gorm.DB) DashboardRepository {
 //   - PostgreSQL uses TO_CHAR which returns TEXT directly, avoiding type
 //     conversion issues when scanning into a Go string.
 func (r *gormDashboardRepository) dateColExpr(col string) string {
-	if r.db.Dialector.Name() == "postgres" {
+	if r.db.Name() == "postgres" {
 		return "TO_CHAR(" + col + ", 'YYYY-MM-DD')"
 	}
 	return "substr(" + col + ", 1, 10)"
