@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import { VisXYContainer, VisArea, VisAxis } from '@unovis/vue'
 import {
     Table,
@@ -48,12 +49,15 @@ import {
     type ChartConfig,
 } from '@/components/ui/chart'
 
+defineOptions({ inheritAttrs: false })
+
 // ---------------------------------------------------------------------------
 // Route / Router
 // ---------------------------------------------------------------------------
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const agentId = route.params.id as string
 
 // ---------------------------------------------------------------------------
@@ -337,7 +341,7 @@ onUnmounted(() => {
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Rename
                 </Button>
-                <Button variant="outline" size="sm"
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm"
                     class="text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/5"
                     @click="deleteDialogOpen = true">
                     <Trash2 class="w-4 h-4 mr-1.5" />

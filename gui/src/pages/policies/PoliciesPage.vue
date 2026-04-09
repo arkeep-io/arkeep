@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import {
     Table,
     TableBody,
@@ -53,6 +54,7 @@ interface PolicyListResponse {
 // ---------------------------------------------------------------------------
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const policies = ref<Policy[]>([])
 const total = ref(0)
@@ -280,18 +282,20 @@ onMounted(fetchPolicies)
                                         </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end">
-                                        <DropdownMenuItem :disabled="triggeringId === policy.id"
+                                        <DropdownMenuItem v-if="authStore.isAdmin"
+                                            :disabled="triggeringId === policy.id"
                                             @click="triggerPolicy(policy)">
                                             <Play class="w-4 h-4 mr-2" />
                                             Run Now
                                         </DropdownMenuItem>
-                                        <DropdownMenuSeparator />
+                                        <DropdownMenuSeparator v-if="authStore.isAdmin" />
                                         <DropdownMenuItem @click="openEditSheet(policy)">
                                             <PencilLine class="w-4 h-4 mr-2" />
                                             Edit
                                         </DropdownMenuItem>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem class="text-destructive focus:text-destructive"
+                                        <DropdownMenuSeparator v-if="authStore.isAdmin" />
+                                        <DropdownMenuItem v-if="authStore.isAdmin"
+                                            class="text-destructive focus:text-destructive"
                                             @click="openDeleteDialog(policy)">
                                             <Trash2 class="w-4 h-4 mr-2" />
                                             Delete

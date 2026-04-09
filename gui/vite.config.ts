@@ -43,11 +43,15 @@ export default defineConfig({
           },
           {
             // External fonts and stylesheets — cache first, long TTL.
+            // fetchOptions: cors ensures the SW never caches an opaque response
+            // (status 0) that lacks CORS headers, which would cause the browser
+            // to reject the cached font on subsequent requests.
             urlPattern: /^https:\/\/fonts\.(googleapis|gstatic)\.com\//,
             handler: 'CacheFirst',
             options: {
               cacheName: 'google-fonts',
-              cacheableResponse: { statuses: [0, 200] },
+              fetchOptions: { mode: 'cors' },
+              cacheableResponse: { statuses: [200] },
               expiration: {
                 maxEntries: 20,
                 maxAgeSeconds: 365 * 24 * 60 * 60,

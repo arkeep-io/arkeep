@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -216,12 +217,39 @@ func run(ctx context.Context, cfg *config) error {
 	// --- Start ---
 	// The executor worker and connection manager run concurrently.
 	// Both respect ctx cancellation for graceful shutdown.
-	go exec.Run(ctx, mgr, mgr)
+	//
+	// Shutdown sequence:
+	//  1. SIGINT/SIGTERM cancels ctx
+	//  2. mgr.Run returns (gRPC loops exit via ctx.Done)
+	//  3. We wait up to 30 s for the executor to finish its current job
+	//     (restic/rclone subprocess is killed by exec.CommandContext when ctx
+	//     is cancelled, so this is usually just a few seconds)
+	//  4. If the executor doesn't finish in time we log a warning and exit
+	//     anyway — the server-side orphan recovery will mark the job failed.
+	execDone := make(chan struct{})
+	go func() {
+		exec.Run(ctx, mgr, mgr)
+		close(execDone)
+	}()
 
-	// Run blocks until ctx is cancelled (SIGINT/SIGTERM).
+	// mgr.Run blocks until ctx is cancelled (SIGINT/SIGTERM).
 	mgr.Run(ctx)
 
-	logger.Info("arkeep agent stopped")
+	logger.Info("shutdown signal received, waiting for executor to finish")
+
+	const shutdownTimeout = 30 * time.Second
+	shutdownTimer := time.NewTimer(shutdownTimeout)
+	defer shutdownTimer.Stop()
+
+	select {
+	case <-execDone:
+		logger.Info("arkeep agent stopped cleanly")
+	case <-shutdownTimer.C:
+		logger.Warn("executor did not finish within shutdown timeout — exiting anyway",
+			zap.Duration("timeout", shutdownTimeout),
+		)
+	}
+
 	return nil
 }
 

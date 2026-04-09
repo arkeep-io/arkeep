@@ -133,7 +133,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/agents", agentHandler.Create)
 			r.Get("/agents/{id}", agentHandler.GetByID)
 			r.Patch("/agents/{id}", agentHandler.Update)
-			r.Delete("/agents/{id}", agentHandler.Delete)
+			r.With(RequireRole("admin")).Delete("/agents/{id}", agentHandler.Delete)
 			r.Get("/agents/{id}/volumes", agentHandler.ListVolumes)
 
 			// Destinations
@@ -148,8 +148,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/policies", policyHandler.Create)
 			r.Get("/policies/{id}", policyHandler.GetByID)
 			r.Patch("/policies/{id}", policyHandler.Update)
-			r.Delete("/policies/{id}", policyHandler.Delete)
-			r.Post("/policies/{id}/trigger", policyHandler.Trigger)
+			r.With(RequireRole("admin")).Delete("/policies/{id}", policyHandler.Delete)
+			r.With(RequireRole("admin")).Post("/policies/{id}/trigger", policyHandler.Trigger)
 			r.Get("/policies/{id}/jobs", jobHandler.ListByPolicy)
 
 			// Jobs
@@ -160,8 +160,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Snapshots
 			r.Get("/snapshots", snapshotHandler.List)
 			r.Get("/snapshots/{id}", snapshotHandler.GetByID)
-			r.Delete("/snapshots/{id}", snapshotHandler.Delete)
-			r.Post("/snapshots/{id}/restore", snapshotHandler.Restore)
+			r.With(RequireRole("admin")).Delete("/snapshots/{id}", snapshotHandler.Delete)
+			r.With(RequireRole("admin")).Post("/snapshots/{id}/restore", snapshotHandler.Restore)
 
 			// Notifications
 			r.Get("/notifications", notificationHandler.List)
