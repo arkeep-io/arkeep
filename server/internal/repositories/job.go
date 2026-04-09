@@ -134,6 +134,26 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 	return nil
 }
 
+// FailRunningJobsForAgent marks all jobs in "running" state for the given agent
+// as "failed" with the provided error message. Called during agent disconnection
+// cleanup to recover orphaned jobs that would otherwise be stuck in "running" forever.
+// Returns the number of rows updated.
+func (r *gormJobRepository) FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error) {
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Where("agent_id = ? AND status = ?", agentID, "running").
+		Updates(map[string]interface{}{
+			"status":   "failed",
+			"ended_at": now,
+			"error":    errMsg,
+		})
+	if result.Error != nil {
+		return 0, fmt.Errorf("jobs: fail running for agent: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
 // JobWithNames extends db.Job with denormalised policy and agent names.
 // Populated via LEFT JOIN in the List* methods so the API can return
 // display-ready responses without per-row lookups. LEFT JOIN ensures jobs

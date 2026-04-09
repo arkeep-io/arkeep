@@ -18,6 +18,7 @@ import {
     RefreshCw,
     FileText,
     Server,
+    Ban,
     CalendarClock,
     CheckCircle,
     XCircle,
@@ -61,6 +62,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
         case 'running': return 'outline'
         case 'failed': return 'destructive'
         case 'pending': return 'outline'
+        case 'cancelled': return 'outline'
         default: return 'secondary'
     }
 }
@@ -70,6 +72,7 @@ function statusClass(status: string): string {
         case 'succeeded': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
         case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
         case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        case 'cancelled': return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
         default: return ''
     }
 }
@@ -85,6 +88,7 @@ function statusIcon(status: string) {
         case 'succeeded': return CheckCircle
         case 'running': return Loader
         case 'failed': return XCircle
+        case 'cancelled': return Ban
         case 'pending':
         default: return Clock
     }
@@ -326,6 +330,10 @@ onMounted(fetchJob)
         <Alert v-if="!loading && job?.status === 'failed' && job.error" variant="destructive">
             <XCircle class="w-4 h-4" />
             <AlertDescription>{{ job.error }}</AlertDescription>
+        </Alert>
+        <Alert v-if="!loading && job?.status === 'cancelled'" class="border-slate-300 dark:border-slate-700">
+            <Ban class="w-4 h-4" />
+            <AlertDescription>{{ job.error || 'Job was cancelled.' }}</AlertDescription>
         </Alert>
 
         <!-- ── Destinations ────────────────────────────────────────────────── -->

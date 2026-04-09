@@ -289,6 +289,11 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// --- 5. Backup to each destination ---
 	backupFailed := false
 	for _, dest := range payload.Destinations {
+		// Stop immediately if the agent is shutting down.
+		if ctx.Err() != nil {
+			break
+		}
+
 		if dest.RepoURL == "" {
 			log("warn", fmt.Sprintf("destination %s has empty repo_url, skipping", dest.DestinationID))
 			continue
@@ -371,6 +376,16 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		if err := e.wrapper.Forget(ctx, d, retention); err != nil {
 			log("warn", fmt.Sprintf("retention policy failed for destination %s: %v", dest.DestinationID, err))
 		}
+	}
+
+	// If the context was cancelled (agent shutting down), the job was interrupted.
+	// Report it as cancelled so the UI shows the right state. The server-side
+	// orphan recovery will also mark it failed if this report doesn't reach the
+	// server (e.g. connection already closed).
+	if ctx.Err() != nil {
+		log("warn", "backup cancelled: agent shutting down")
+		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+		return
 	}
 
 	// --- 6. Post-backup hook (always runs) ---
@@ -477,6 +492,11 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	}
 
 	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, "", excludePaths, e.dockerHostRoot); err != nil {
+		if ctx.Err() != nil {
+			log("warn", "restore cancelled: agent shutting down")
+			reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+			return
+		}
 		if strings.Contains(err.Error(), "Access is denied") {
 			// On Windows, restic cannot set timestamps or file attributes on
 			// system-protected directories reconstructed under the target path.

@@ -74,6 +74,7 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
         case 'running': return 'outline'
         case 'failed': return 'destructive'
         case 'pending': return 'outline'
+        case 'cancelled': return 'outline'
         default: return 'secondary'
     }
 }
@@ -83,6 +84,7 @@ function statusClass(status: string): string {
         case 'succeeded': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
         case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
         case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        case 'cancelled': return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
         default: return ''
     }
 }
@@ -173,6 +175,7 @@ onMounted(fetchJobs)
                     <SelectItem value="running">Running</SelectItem>
                     <SelectItem value="succeeded">Succeeded</SelectItem>
                     <SelectItem value="failed">Failed</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
                 </SelectContent>
             </Select>
 

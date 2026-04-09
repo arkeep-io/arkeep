@@ -422,6 +422,23 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		)
 	}
 
+	// Orphan recovery: any job still "running" when the agent disconnects will
+	// never receive a terminal status report. Mark them as failed so they don't
+	// appear stuck in the UI indefinitely. The agent may have already reported
+	// "cancelled" for a job it was gracefully shutting down; UpdateStatus is
+	// idempotent for terminal states (RowsAffected == 0 if already terminal).
+	if n, err := s.jobRepo.FailRunningJobsForAgent(cleanupCtx, agentID, "agent disconnected"); err != nil {
+		s.logger.Warn("failed to recover orphaned jobs",
+			zap.String("agent_id", req.AgentId),
+			zap.Error(err),
+		)
+	} else if n > 0 {
+		s.logger.Info("recovered orphaned jobs",
+			zap.String("agent_id", req.AgentId),
+			zap.Int64("count", n),
+		)
+	}
+
 	if s.notifSvc != nil {
 		go func() {
 			notifCtx, notifCancel := context.WithTimeout(context.Background(), 10*time.Second)
