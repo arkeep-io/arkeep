@@ -704,7 +704,7 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 		)
 	}
 
-	if status == "success" || status == "failed" {
+	if status == "success" || status == "failed" || status == "cancelled" {
 		m.closeLogStream(jobID)
 	}
 }

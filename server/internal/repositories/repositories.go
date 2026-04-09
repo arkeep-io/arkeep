@@ -130,6 +130,7 @@ type JobRepository interface {
     GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
     Update(ctx context.Context, job *db.Job) error
     UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
+    FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
     List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
     ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
     ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
