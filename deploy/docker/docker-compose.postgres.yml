@@ -1,0 +1,85 @@
+# deploy/docker/docker-compose.postgres.yml — Server-only deployment with PostgreSQL
+#
+# Use this when you want to run the Arkeep server with a PostgreSQL database.
+# Agents on remote machines connect to this server via gRPC.
+#
+# Quick start:
+#   cd deploy/docker
+#   cp .env.example .env   # fill in ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET, POSTGRES_PASSWORD
+#   docker compose -f docker-compose.postgres.yml up -d
+#
+# The GUI is available at http://localhost:8080 after startup.
+
+services:
+  server:
+    image: ghcr.io/arkeep-io/arkeep-server:latest
+    container_name: arkeep-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${ARKEEP_HTTP_PORT:-8080}:8080"   # REST API + GUI
+      - "${ARKEEP_GRPC_PORT:-9090}:9090"   # gRPC (agents)
+    environment:
+      ARKEEP_SECRET_KEY: "${ARKEEP_SECRET_KEY:?ARKEEP_SECRET_KEY is required — generate with: openssl rand -hex 32}"
+      ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — generate with: openssl rand -hex 24}"
+      ARKEEP_DATA_DIR: "${ARKEEP_DATA_DIR:-/var/lib/arkeep/data}"
+      ARKEEP_DB_DRIVER: "postgres"
+      # The DSN is built here in the YAML so that ${POSTGRES_PASSWORD} is expanded
+      # correctly by Docker Compose. Do NOT put the full DSN in your .env file —
+      # .env does not support variable interpolation inside values.
+      ARKEEP_DB_DSN: "postgres://arkeep:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/arkeep?sslmode=disable"
+      ARKEEP_HTTP_ADDR: ":8080"
+      ARKEEP_GRPC_ADDR: ":9090"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      TZ: "${TZ:-UTC}"
+      # ── gRPC TLS ───────────────────────────────────────────────────────────────
+      # Auto-PKI (default): the server generates a private CA and server cert
+      # under data-dir/grpc/ on first startup. Agents auto-enroll via HTTP and
+      # connect with mTLS. No extra configuration is required.
+      #
+      # Option A — external cert (e.g. Let's Encrypt via certbot):
+      #   Mount your certificate files and uncomment the two lines below.
+      #   ARKEEP_GRPC_TLS_CERT: "/etc/arkeep/tls/tls.crt"
+      #   ARKEEP_GRPC_TLS_KEY:  "/etc/arkeep/tls/tls.key"
+      #
+      # Option B — terminate TLS at a reverse proxy (Caddy, Nginx, Traefik):
+      #   Leave these lines commented. Auto-PKI applies to direct gRPC connections
+      #   on port 9090. If port 8080 is not exposed directly (only via the proxy),
+      #   agents on remote machines must set ARKEEP_SERVER_HTTP_ADDR to the proxy
+      #   HTTPS URL for enrollment, e.g.:
+      #     ARKEEP_SERVER_HTTP_ADDR=https://arkeep.example.com
+    volumes:
+      - arkeep-data:/var/lib/arkeep
+      # Uncomment to mount TLS certificates (Option A above):
+      # - /etc/arkeep/tls:/etc/arkeep/tls:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: arkeep-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arkeep
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: arkeep
+    volumes:
+      - arkeep-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arkeep -d arkeep"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  arkeep-data:
+    driver: local
+  arkeep-postgres-data:
+    driver: local

@@ -1,0 +1,106 @@
+# deploy/docker/docker-compose.postgres-all.yml — All-in-one deployment with PostgreSQL
+#
+# Runs server + agent + PostgreSQL on the same machine. Use this when you want
+# to back up the local machine and also host the Arkeep server on it.
+#
+# Quick start:
+#   cd deploy/docker
+#   cp .env.example .env   # fill in ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET, POSTGRES_PASSWORD
+#   docker compose -f docker-compose.postgres-all.yml up -d
+#
+# The GUI is available at http://localhost:8080 after startup.
+
+services:
+  server:
+    image: ghcr.io/arkeep-io/arkeep-server:latest
+    container_name: arkeep-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${ARKEEP_HTTP_PORT:-8080}:8080"   # REST API + GUI
+      - "${ARKEEP_GRPC_PORT:-9090}:9090"   # gRPC (agents)
+    environment:
+      ARKEEP_SECRET_KEY: "${ARKEEP_SECRET_KEY:?ARKEEP_SECRET_KEY is required — generate with: openssl rand -hex 32}"
+      ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — generate with: openssl rand -hex 24}"
+      ARKEEP_DATA_DIR: "${ARKEEP_DATA_DIR:-/var/lib/arkeep/data}"
+      ARKEEP_DB_DRIVER: "postgres"
+      # The DSN is built here in the YAML so that ${POSTGRES_PASSWORD} is expanded
+      # correctly by Docker Compose. Do NOT put the full DSN in your .env file —
+      # .env does not support variable interpolation inside values.
+      ARKEEP_DB_DSN: "postgres://arkeep:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/arkeep?sslmode=disable"
+      ARKEEP_HTTP_ADDR: ":8080"
+      ARKEEP_GRPC_ADDR: ":9090"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      TZ: "${TZ:-UTC}"
+    volumes:
+      - arkeep-data:/var/lib/arkeep
+      # Uncomment to mount TLS certificates for gRPC:
+      # - /etc/arkeep/tls:/etc/arkeep/tls:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  agent:
+    image: ghcr.io/arkeep-io/arkeep-agent:latest
+    container_name: arkeep-agent
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      # In all-in-one mode the agent connects to the server container by
+      # service name — Docker Compose networking resolves "server" automatically.
+      ARKEEP_SERVER_ADDR: "server:9090"
+      ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET}"
+      ARKEEP_STATE_DIR: "/var/lib/arkeep-agent"
+      ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      TZ: "${TZ:-UTC}"
+      # ── Local backup destinations ────────────────────────────────────────────
+      # The agent auto-detects Docker and uses the /hostfs mount below for path
+      # translation — no env var required. Override only for custom mount points:
+      #   ARKEEP_DOCKER_HOST_ROOT: "/custom-mountpoint"
+    volumes:
+      - arkeep-agent-data:/var/lib/arkeep-agent
+      # ── Host filesystem mount ─────────────────────────────────────────────────
+      # Mounts the entire host filesystem so any path entered in the UI resolves
+      # correctly. Use :ro for backup-only; change to :rw to also restore to local paths.
+      - /:/hostfs:ro
+      # Windows (Docker Desktop) — one entry per drive (replace the line above):
+      #   - C:/:/hostfs/c:ro
+      #   - D:/:/hostfs/d:ro
+      # Docker socket — read-only, for automatic container and volume discovery.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker volumes root — required to back up Docker named volumes.
+      # :ro (default) — safe for backup; prevents accidental writes.
+      # :rw — required to restore Docker volumes in-place (stop affected containers first).
+      - /var/lib/docker/volumes:/var/lib/docker/volumes:ro
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: arkeep-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arkeep
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: arkeep
+    volumes:
+      - arkeep-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arkeep -d arkeep"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  arkeep-data:
+    driver: local
+  arkeep-agent-data:
+    driver: local
+  arkeep-postgres-data:
+    driver: local

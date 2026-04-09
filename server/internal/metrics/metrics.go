@@ -10,6 +10,9 @@
 package metrics
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -132,6 +135,19 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack implements http.Hijacker so that WebSocket upgrades work correctly
+// through this middleware. Gorilla websocket (and the stdlib) require the
+// underlying ResponseWriter to satisfy http.Hijacker to take over the TCP
+// connection. Without this, upgrader.Upgrade returns an error and the
+// WebSocket handshake fails.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("metrics: underlying ResponseWriter does not implement http.Hijacker")
+	}
+	return h.Hijack()
 }
 
 // routePattern extracts the matched Chi route pattern from the request context.

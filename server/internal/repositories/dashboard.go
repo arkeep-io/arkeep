@@ -64,6 +64,19 @@ func NewDashboardRepository(db *gorm.DB) DashboardRepository {
 	return &gormDashboardRepository{db: db}
 }
 
+// dateColExpr returns a SQL expression that formats a timestamp column as a
+// "YYYY-MM-DD" TEXT string, compatible with both SQLite and PostgreSQL.
+//
+//   - SQLite stores time.Time as RFC3339Nano text; substr extracts the date prefix.
+//   - PostgreSQL uses TO_CHAR which returns TEXT directly, avoiding type
+//     conversion issues when scanning into a Go string.
+func (r *gormDashboardRepository) dateColExpr(col string) string {
+	if r.db.Dialector.Name() == "postgres" {
+		return "TO_CHAR(" + col + ", 'YYYY-MM-DD')"
+	}
+	return "substr(" + col + ", 1, 10)"
+}
+
 // GetStats executes all dashboard aggregation queries and returns the results
 // as a single DashboardStats struct. Each query is a simple COUNT or SUM on
 // an indexed column — none require full table scans.
@@ -97,27 +110,23 @@ func (r *gormDashboardRepository) GetStats(ctx context.Context) (*DashboardStats
 
 	// ── Jobs today ───────────────────────────────────────────────────────────
 	// "Today" is defined as the current UTC calendar day (midnight to midnight).
-	// Using DATE() is portable across SQLite and PostgreSQL.
+	// Using a time range avoids any date-function incompatibilities between
+	// SQLite (text timestamps) and PostgreSQL (native TIMESTAMP).
 
-	today := time.Now().UTC().Format("2006-01-02")
+	todayStart := time.Now().UTC().Truncate(24 * time.Hour)
+	todayEnd := todayStart.Add(24 * time.Hour)
 
-	// substr(col, 1, 10) extracts the "YYYY-MM-DD" prefix from the stored
-	// timestamp string. SQLite's DATE() function only handles up to 3 fractional
-	// second digits, but GORM stores time.Time as RFC3339Nano (9 digits), so
-	// DATE() returns NULL for every row — causing all counts to be 0.
-	// substr is format-agnostic and works for any ISO 8601 timestamp.
-
-	if err := d.Raw(`SELECT COUNT(*) FROM jobs WHERE substr(created_at, 1, 10) = ?`, today).
+	if err := d.Raw(`SELECT COUNT(*) FROM jobs WHERE created_at >= ? AND created_at < ?`, todayStart, todayEnd).
 		Scan(&stats.JobsTodayTotal).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: jobs today total: %w", err)
 	}
 
-	if err := d.Raw(`SELECT COUNT(*) FROM jobs WHERE substr(created_at, 1, 10) = ? AND status = 'succeeded'`, today).
+	if err := d.Raw(`SELECT COUNT(*) FROM jobs WHERE created_at >= ? AND created_at < ? AND status = 'succeeded'`, todayStart, todayEnd).
 		Scan(&stats.JobsTodaySucceeded).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: jobs today succeeded: %w", err)
 	}
 
-	if err := d.Raw(`SELECT COUNT(*) FROM jobs WHERE substr(created_at, 1, 10) = ? AND status = 'failed'`, today).
+	if err := d.Raw(`SELECT COUNT(*) FROM jobs WHERE created_at >= ? AND created_at < ? AND status = 'failed'`, todayStart, todayEnd).
 		Scan(&stats.JobsTodayFailed).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: jobs today failed: %w", err)
 	}
@@ -144,19 +153,20 @@ func (r *gormDashboardRepository) GetStats(ctx context.Context) (*DashboardStats
 		Count  int64
 	}
 
-	weekStart := time.Now().UTC().AddDate(0, 0, -6).Format("2006-01-02")
+	weekStart := time.Now().UTC().AddDate(0, 0, -6).Truncate(24 * time.Hour)
 
+	dateExpr := r.dateColExpr("created_at")
 	var jobRows []jobActivityRow
-	if err := d.Raw(`
-		SELECT substr(created_at, 1, 10) AS date,
+	if err := d.Raw(fmt.Sprintf(`
+		SELECT %s AS date,
 		       status,
 		       COUNT(*) AS count
 		FROM jobs
-		WHERE substr(created_at, 1, 10) >= ?
+		WHERE created_at >= ?
 		  AND status IN ('succeeded', 'failed')
-		GROUP BY substr(created_at, 1, 10), status
+		GROUP BY %s, status
 		ORDER BY date ASC
-	`, weekStart).Scan(&jobRows).Error; err != nil {
+	`, dateExpr, dateExpr), weekStart).Scan(&jobRows).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: job activity: %w", err)
 	}
 
@@ -194,15 +204,16 @@ func (r *gormDashboardRepository) GetStats(ctx context.Context) (*DashboardStats
 		SizeBytes int64
 	}
 
+	snapshotDateExpr := r.dateColExpr("snapshot_at")
 	var sizeRows []sizeActivityRow
-	if err := d.Raw(`
-		SELECT substr(snapshot_at, 1, 10) AS date,
+	if err := d.Raw(fmt.Sprintf(`
+		SELECT %s AS date,
 		       COALESCE(SUM(size_bytes), 0) AS size_bytes
 		FROM snapshots
-		WHERE substr(snapshot_at, 1, 10) >= ?
-		GROUP BY substr(snapshot_at, 1, 10)
+		WHERE snapshot_at >= ?
+		GROUP BY %s
 		ORDER BY date ASC
-	`, weekStart).Scan(&sizeRows).Error; err != nil {
+	`, snapshotDateExpr, snapshotDateExpr), weekStart).Scan(&sizeRows).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: size activity: %w", err)
 	}
 
