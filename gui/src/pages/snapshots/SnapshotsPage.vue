@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import {
     Table,
     TableBody,
@@ -62,6 +63,8 @@ interface DestinationListResponse {
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+
+const authStore = useAuthStore()
 
 const snapshots = ref<Snapshot[]>([])
 const policies = ref<Policy[]>([])
@@ -300,9 +303,9 @@ onMounted(async () => {
                                 {{ formatDate(snapshot.created_at) }}
                             </TableCell>
 
-                            <!-- Actions dropdown -->
+                            <!-- Actions dropdown — only admins can restore/delete -->
                             <TableCell>
-                                <DropdownMenu>
+                                <DropdownMenu v-if="authStore.isAdmin">
                                     <DropdownMenuTrigger as-child>
                                         <Button variant="ghost" size="icon" class="w-8 h-8">
                                             <MoreHorizontal class="w-4 h-4" />

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import {
     Table,
     TableBody,
@@ -39,12 +40,15 @@ import { api } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 
+defineOptions({ inheritAttrs: false })
+
 // ---------------------------------------------------------------------------
 // Route / Router
 // ---------------------------------------------------------------------------
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const policyId = route.params.id as string
 
 // ---------------------------------------------------------------------------
@@ -229,7 +233,8 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                 <Button variant="outline" size="icon" :disabled="loading" @click="fetchPolicy(); fetchJobs()">
                     <RefreshCw class="w-4 h-4" />
                 </Button>
-                <Button variant="outline" size="sm" :disabled="triggerLoading" @click="triggerPolicy">
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" :disabled="triggerLoading"
+                    @click="triggerPolicy">
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
                     <Play v-else class="w-4 h-4 mr-1.5" />
                     Run Now
@@ -238,7 +243,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Edit
                 </Button>
-                <Button variant="outline" size="sm"
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm"
                     class="text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/5"
                     @click="deleteDialogOpen = true">
                     <Trash2 class="w-4 h-4 mr-1.5" />

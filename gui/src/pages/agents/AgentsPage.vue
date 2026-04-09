@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import {
     Table,
     TableBody,
@@ -58,6 +59,7 @@ interface AgentListResponse {
 
 const router = useRouter()
 const updateStore = useUpdateStore()
+const authStore = useAuthStore()
 
 const agents = ref<Agent[]>([])
 const total = ref(0)
@@ -394,8 +396,9 @@ onUnmounted(teardownSubscriptions)
                                             <PencilLine class="w-4 h-4 mr-2" />
                                             Edit
                                         </DropdownMenuItem>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem class="text-destructive focus:text-destructive"
+                                        <DropdownMenuSeparator v-if="authStore.isAdmin" />
+                                        <DropdownMenuItem v-if="authStore.isAdmin"
+                                            class="text-destructive focus:text-destructive"
                                             @click="openDeleteDialog(agent)">
                                             <Trash2 class="w-4 h-4 mr-2" />
                                             Delete
