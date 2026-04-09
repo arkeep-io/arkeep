@@ -11,6 +11,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -49,6 +50,10 @@ type RouterConfig struct {
 	// via ldflags). Used by the version endpoint to report the current version
 	// and check for updates.
 	ServerVersion string
+
+	// Metrics is the Prometheus metrics collector used to instrument HTTP
+	// requests. Optional — if nil, HTTP metrics are not recorded.
+	Metrics *metrics.Metrics
 }
 
 // NewRouter builds and returns the fully configured Chi router.
@@ -60,6 +65,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Use(RequestLogger(cfg.Logger))
 	r.Use(middleware.Recoverer)
 	r.Use(SecurityHeaders)
+	if cfg.Metrics != nil {
+		r.Use(cfg.Metrics.HTTPMiddleware)
+	}
 
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
@@ -85,6 +93,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok")) //nolint:errcheck
 	})
+
+	// Prometheus metrics endpoint — unauthenticated (protect at network level
+	// or via a reverse proxy in production).
+	r.Mount("/metrics", metrics.Handler())
 
 	// OIDC callback — registered at the root so the redirect URI registered
 	// with identity providers does not carry the /api/v1 prefix.

@@ -16,11 +16,14 @@ import (
 	"go.uber.org/zap"
 	gormlogger "gorm.io/gorm/logger"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
@@ -207,6 +210,12 @@ func run(ctx context.Context, cfg *config) error {
 	// --- Agent Manager ---
 	agentMgr := agentmanager.New(logger)
 
+	// --- Metrics ---
+	// Register custom collectors against the default Prometheus registry so that
+	// Go runtime and process metrics (from default collectors) are included automatically.
+	m := metrics.New(prometheus.DefaultRegisterer)
+	metrics.RegisterAgentsGauge(prometheus.DefaultRegisterer, agentMgr.ConnectedAgentsCount)
+
 	// --- Scheduler ---
 	sched, err := scheduler.New(policyRepo, jobRepo, destinationRepo, agentMgr, logger)
 	if err != nil {
@@ -247,6 +256,7 @@ func run(ctx context.Context, cfg *config) error {
 			TLSKeyFile:   cfg.grpcTLSKey,
 			AutoCerts:    autoCerts,
 			NotifService: notifService,
+			Metrics:      m,
 		},
 		agentMgr,
 		agentRepo,
@@ -265,6 +275,7 @@ func run(ctx context.Context, cfg *config) error {
 
 	// --- HTTP router ---
 	router := api.NewRouter(api.RouterConfig{
+		Metrics: m,
 		AuthService:   authService,
 		Scheduler:     sched,
 		AgentManager:  agentMgr,
