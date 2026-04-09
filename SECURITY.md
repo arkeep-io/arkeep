@@ -93,6 +93,12 @@ server restart. Tokens revoked shortly before a restart may be accepted for up t
 their remaining TTL after the restart. Refresh token revocation is unaffected — it is
 persisted in the database.
 
+### Health endpoints
+
+`GET /health/live` and `GET /health/ready` are unauthenticated and accessible on the HTTP port (default `:8080`). They do not expose credentials or user data.
+
+`/health/ready` returns a JSON body indicating the status of the database and scheduler. In environments where the server is exposed to untrusted networks, consider restricting these endpoints at the reverse-proxy level if you do not want to leak operational information.
+
 ### Metrics endpoint
 
 The `/metrics` endpoint (Prometheus text format) is **unauthenticated** and accessible on the same port as the HTTP API (default `:8080`). It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).

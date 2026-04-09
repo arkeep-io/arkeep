@@ -26,6 +26,8 @@ and manage everything from a single web interface — built on top of
   - [Server](#server-configuration)
   - [Agent](#agent-configuration)
 - [Observability](#observability)
+  - [Health endpoints](#health-endpoints)
+  - [Prometheus metrics](#prometheus-metrics)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Getting Started](#getting-started)
@@ -377,6 +379,29 @@ Volumes of containers that are still running when the restore starts are automat
 
 ## Observability
 
+### Health endpoints
+
+The server exposes two health endpoints, both unauthenticated on the HTTP port (default `:8080`):
+
+| Endpoint | Purpose | Response |
+|---|---|---|
+| `GET /health/live` | **Liveness** — is the process alive? | `200 ok` (plain text, always) |
+| `GET /health/ready` | **Readiness** — can the server serve traffic? | `200` / `503` + JSON |
+
+The `/health/ready` response checks the database and scheduler:
+
+```json
+{
+  "status": "healthy",
+  "checks": {
+    "database":  { "status": "ok", "latency_ms": 2 },
+    "scheduler": { "status": "ok" }
+  }
+}
+```
+
+Returns `503` with `"status": "unhealthy"` if any check fails (e.g. database unreachable). Docker Compose and Kubernetes probes use `/health/ready` so containers are automatically restarted or removed from rotation when the database is down.
+
 ### Prometheus metrics
 
 The server exposes a Prometheus-compatible metrics endpoint at `GET /metrics` (same port as the HTTP API, default `:8080`).
@@ -400,7 +425,7 @@ scrape_configs:
     scrape_interval: 15s
 ```
 
-**Security:** `/metrics` is unauthenticated (like `/health`). In production, restrict access at the reverse-proxy level so only your Prometheus scraper can reach it:
+**Security:** `/metrics` is unauthenticated (like `/health/live` and `/health/ready`). In production, restrict access at the reverse-proxy level so only your Prometheus scraper can reach it:
 
 ```nginx
 location /metrics {

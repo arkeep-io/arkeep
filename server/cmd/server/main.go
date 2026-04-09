@@ -276,6 +276,7 @@ func run(ctx context.Context, cfg *config) error {
 	// --- HTTP router ---
 	router := api.NewRouter(api.RouterConfig{
 		Metrics: m,
+		DB:      sqlDB,
 		AuthService:   authService,
 		Scheduler:     sched,
 		AgentManager:  agentMgr,

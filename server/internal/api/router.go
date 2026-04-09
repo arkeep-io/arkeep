@@ -1,7 +1,7 @@
 package api
 
 import (
-	"net/http"
+	"database/sql"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -54,6 +54,10 @@ type RouterConfig struct {
 	// Metrics is the Prometheus metrics collector used to instrument HTTP
 	// requests. Optional — if nil, HTTP metrics are not recorded.
 	Metrics *metrics.Metrics
+
+	// DB is the underlying sql.DB used by the /health/ready endpoint to
+	// verify database reachability. Required for readiness checks.
+	DB *sql.DB
 }
 
 // NewRouter builds and returns the fully configured Chi router.
@@ -88,11 +92,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler      := newVersionHandler(cfg.ServerVersion)
 
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok")) //nolint:errcheck
-	})
+	healthHandler := newHealthHandler(cfg.DB, cfg.Scheduler)
+	r.Get("/health/live", healthHandler.Live)
+	r.Get("/health/ready", healthHandler.Ready)
 
 	// Prometheus metrics endpoint — unauthenticated (protect at network level
 	// or via a reverse proxy in production).

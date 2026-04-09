@@ -16,16 +16,16 @@
 
 CREATE TABLE IF NOT EXISTS users (
     id              TEXT        NOT NULL PRIMARY KEY,
-    created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     email           TEXT        NOT NULL,
     password        TEXT        NOT NULL DEFAULT '',
     display_name    TEXT        NOT NULL,
     role            TEXT        NOT NULL DEFAULT 'user',
-    is_active       INTEGER     NOT NULL DEFAULT 1,
+    is_active       BOOLEAN     NOT NULL DEFAULT true,
     oidc_provider   TEXT        NOT NULL DEFAULT '',
     oidc_sub        TEXT        NOT NULL DEFAULT '',
-    last_login_at   DATETIME,
+    last_login_at   TIMESTAMP,
 
     CONSTRAINT users_role_check CHECK (role IN ('admin', 'user'))
 );
@@ -36,12 +36,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email);
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id          TEXT        NOT NULL PRIMARY KEY,
-    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id     TEXT        NOT NULL,
     token_hash  TEXT        NOT NULL,
-    expires_at  DATETIME    NOT NULL,
-    revoked_at  DATETIME,
+    expires_at  TIMESTAMP    NOT NULL,
+    revoked_at  TIMESTAMP,
     user_agent  TEXT        NOT NULL DEFAULT '',
     ip_address  TEXT        NOT NULL DEFAULT '',
 
@@ -56,15 +56,15 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires_at  ON refresh_tokens (exp
 
 CREATE TABLE IF NOT EXISTS oidc_providers (
     id              TEXT        NOT NULL PRIMARY KEY,
-    created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     name            TEXT        NOT NULL,
     issuer          TEXT        NOT NULL,
     client_id       TEXT        NOT NULL,
     client_secret   TEXT        NOT NULL,
     redirect_url    TEXT        NOT NULL,
     scopes          TEXT        NOT NULL DEFAULT 'openid email profile',
-    enabled         INTEGER     NOT NULL DEFAULT 0
+    enabled         BOOLEAN     NOT NULL DEFAULT false
 );
 
 -- -----------------------------------------------------------------------------
@@ -73,9 +73,9 @@ CREATE TABLE IF NOT EXISTS oidc_providers (
 
 CREATE TABLE IF NOT EXISTS agents (
     id                  TEXT        NOT NULL PRIMARY KEY,
-    created_at          DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deleted_at          DATETIME,
+    created_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at          TIMESTAMP,
     name                TEXT        NOT NULL,
     hostname            TEXT        NOT NULL,
     ip_address          TEXT        NOT NULL DEFAULT '',
@@ -83,8 +83,8 @@ CREATE TABLE IF NOT EXISTS agents (
     arch                TEXT        NOT NULL DEFAULT '',
     version             TEXT        NOT NULL DEFAULT '',
     status              TEXT        NOT NULL DEFAULT 'offline',
-    last_seen_at        DATETIME,
-    docker_available    INTEGER     NOT NULL DEFAULT 0,
+    last_seen_at        TIMESTAMP,
+    docker_available    BOOLEAN     NOT NULL DEFAULT false,
     labels              TEXT        NOT NULL DEFAULT '{}',
 
     CONSTRAINT agents_status_check CHECK (status IN ('online', 'offline', 'error'))
@@ -98,13 +98,13 @@ CREATE INDEX IF NOT EXISTS idx_agents_deleted_at ON agents (deleted_at);
 
 CREATE TABLE IF NOT EXISTS destinations (
     id          TEXT        NOT NULL PRIMARY KEY,
-    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     name        TEXT        NOT NULL,
     type        TEXT        NOT NULL,
     credentials TEXT        NOT NULL DEFAULT '',
     config      TEXT        NOT NULL DEFAULT '{}',
-    enabled     INTEGER     NOT NULL DEFAULT 1,
+    enabled     BOOLEAN     NOT NULL DEFAULT true,
 
     CONSTRAINT destinations_type_check CHECK (type IN ('local', 's3', 'sftp', 'rest', 'rclone'))
 );
@@ -115,13 +115,13 @@ CREATE TABLE IF NOT EXISTS destinations (
 
 CREATE TABLE IF NOT EXISTS policies (
     id                  TEXT        NOT NULL PRIMARY KEY,
-    created_at          DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deleted_at          DATETIME,
+    created_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at          TIMESTAMP,
     name                TEXT        NOT NULL,
     agent_id            TEXT        NOT NULL,
     schedule            TEXT        NOT NULL,
-    enabled             INTEGER     NOT NULL DEFAULT 1,
+    enabled             BOOLEAN     NOT NULL DEFAULT true,
     sources             TEXT        NOT NULL DEFAULT '[]',
     retention_daily     INTEGER     NOT NULL DEFAULT 7,
     retention_weekly    INTEGER     NOT NULL DEFAULT 4,
@@ -130,8 +130,8 @@ CREATE TABLE IF NOT EXISTS policies (
     repo_password       TEXT        NOT NULL DEFAULT '',
     hook_pre_backup     TEXT        NOT NULL DEFAULT '',
     hook_post_backup    TEXT        NOT NULL DEFAULT '',
-    last_run_at         DATETIME,
-    next_run_at         DATETIME,
+    last_run_at         TIMESTAMP,
+    next_run_at         TIMESTAMP,
 
     CONSTRAINT fk_policies_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE RESTRICT
 );
@@ -144,8 +144,8 @@ CREATE INDEX IF NOT EXISTS idx_policies_enabled    ON policies (enabled);
 
 CREATE TABLE IF NOT EXISTS policy_destinations (
     id              TEXT        NOT NULL PRIMARY KEY,
-    created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     policy_id       TEXT        NOT NULL,
     destination_id  TEXT        NOT NULL,
     priority        INTEGER     NOT NULL DEFAULT 0,
@@ -163,13 +163,13 @@ CREATE INDEX IF NOT EXISTS idx_policy_destinations_destination_id ON policy_dest
 
 CREATE TABLE IF NOT EXISTS jobs (
     id          TEXT        NOT NULL PRIMARY KEY,
-    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     policy_id   TEXT        NOT NULL,
     agent_id    TEXT        NOT NULL,
     status      TEXT        NOT NULL DEFAULT 'pending',
-    started_at  DATETIME,
-    ended_at    DATETIME,
+    started_at  TIMESTAMP,
+    ended_at    TIMESTAMP,
     error       TEXT        NOT NULL DEFAULT '',
 
     CONSTRAINT fk_jobs_policy FOREIGN KEY (policy_id) REFERENCES policies (id) ON DELETE RESTRICT,
@@ -185,15 +185,15 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status    ON jobs (status);
 
 CREATE TABLE IF NOT EXISTS job_destinations (
     id              TEXT        NOT NULL PRIMARY KEY,
-    created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     job_id          TEXT        NOT NULL,
     destination_id  TEXT        NOT NULL,
     status          TEXT        NOT NULL DEFAULT 'pending',
     snapshot_id     TEXT        NOT NULL DEFAULT '',
     size_bytes      INTEGER     NOT NULL DEFAULT 0,
-    started_at      DATETIME,
-    ended_at        DATETIME,
+    started_at      TIMESTAMP,
+    ended_at        TIMESTAMP,
     error           TEXT        NOT NULL DEFAULT '',
 
     CONSTRAINT fk_job_destinations_job         FOREIGN KEY (job_id)         REFERENCES jobs         (id) ON DELETE CASCADE,
@@ -208,12 +208,12 @@ CREATE INDEX IF NOT EXISTS idx_job_destinations_destination_id ON job_destinatio
 
 CREATE TABLE IF NOT EXISTS job_logs (
     id          TEXT        NOT NULL PRIMARY KEY,
-    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     job_id      TEXT        NOT NULL,
     level       TEXT        NOT NULL,
     message     TEXT        NOT NULL,
-    timestamp   DATETIME    NOT NULL,
+    timestamp   TIMESTAMP    NOT NULL,
 
     CONSTRAINT fk_job_logs_job   FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE,
     CONSTRAINT job_logs_level_check CHECK (level IN ('info', 'warn', 'error'))
@@ -228,8 +228,8 @@ CREATE INDEX IF NOT EXISTS idx_job_logs_timestamp ON job_logs (timestamp);
 
 CREATE TABLE IF NOT EXISTS snapshots (
     id              TEXT        NOT NULL PRIMARY KEY,
-    created_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     policy_id       TEXT        NOT NULL,
     destination_id  TEXT        NOT NULL,
     job_id          TEXT        NOT NULL,
@@ -237,7 +237,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     size_bytes      INTEGER     NOT NULL DEFAULT 0,
     file_count      INTEGER     NOT NULL DEFAULT 0,
     tags            TEXT        NOT NULL DEFAULT '[]',
-    snapshot_at     DATETIME    NOT NULL,
+    snapshot_at     TIMESTAMP    NOT NULL,
 
     CONSTRAINT fk_snapshots_policy      FOREIGN KEY (policy_id)      REFERENCES policies     (id) ON DELETE RESTRICT,
     CONSTRAINT fk_snapshots_destination FOREIGN KEY (destination_id) REFERENCES destinations (id) ON DELETE RESTRICT,
@@ -256,13 +256,13 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_snapshot_at    ON snapshots (snapshot_a
 
 CREATE TABLE IF NOT EXISTS notifications (
     id          TEXT        NOT NULL PRIMARY KEY,
-    created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     user_id     TEXT        NOT NULL,
     type        TEXT        NOT NULL,
     title       TEXT        NOT NULL,
     body        TEXT        NOT NULL,
-    read_at     DATETIME,
+    read_at     TIMESTAMP,
     payload     TEXT        NOT NULL DEFAULT '{}',
 
     CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -278,5 +278,5 @@ CREATE INDEX IF NOT EXISTS idx_notifications_read_at ON notifications (read_at);
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY NOT NULL,
     value      TEXT NOT NULL DEFAULT '',
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
