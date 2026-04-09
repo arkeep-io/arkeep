@@ -1,18 +1,23 @@
-# deploy/docker/docker-compose.yml — Server-only deployment
+# deploy/docker/docker-compose.postgres.yml — Server-only deployment with PostgreSQL
 #
-# Use this when you want to run only the Arkeep server (and GUI).
+# Use this when you want to run the Arkeep server with a PostgreSQL database.
 # Agents on remote machines connect to this server via gRPC.
 #
 # Quick start:
 #   cd deploy/docker
-#   cp .env.example .env   # fill in required values
-#   docker compose up -d
+#   cp .env.example .env   # fill in ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET, POSTGRES_PASSWORD
+#   docker compose -f docker-compose.postgres.yml up -d
+#
+# The GUI is available at http://localhost:8080 after startup.
 
 services:
   server:
     image: ghcr.io/arkeep-io/arkeep-server:latest
     container_name: arkeep-server
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${ARKEEP_HTTP_PORT:-8080}:8080"   # REST API + GUI
       - "${ARKEEP_GRPC_PORT:-9090}:9090"   # gRPC (agents)
@@ -20,8 +25,11 @@ services:
       ARKEEP_SECRET_KEY: "${ARKEEP_SECRET_KEY:?ARKEEP_SECRET_KEY is required — generate with: openssl rand -hex 32}"
       ARKEEP_AGENT_SECRET: "${ARKEEP_AGENT_SECRET:?ARKEEP_AGENT_SECRET is required — generate with: openssl rand -hex 24}"
       ARKEEP_DATA_DIR: "${ARKEEP_DATA_DIR:-/var/lib/arkeep/data}"
-      ARKEEP_DB_DRIVER: "${ARKEEP_DB_DRIVER:-sqlite}"
-      ARKEEP_DB_DSN: "${ARKEEP_DB_DSN:-/var/lib/arkeep/arkeep.db}"
+      ARKEEP_DB_DRIVER: "postgres"
+      # The DSN is built here in the YAML so that ${POSTGRES_PASSWORD} is expanded
+      # correctly by Docker Compose. Do NOT put the full DSN in your .env file —
+      # .env does not support variable interpolation inside values.
+      ARKEEP_DB_DSN: "postgres://arkeep:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/arkeep?sslmode=disable"
       ARKEEP_HTTP_ADDR: ":8080"
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
@@ -53,29 +61,25 @@ services:
       retries: 3
       start_period: 10s
 
-  # ── Optional: PostgreSQL ────────────────────────────────────────────────────
-  # Uncomment this service and set ARKEEP_DB_DRIVER=postgres and
-  # ARKEEP_DB_DSN=postgres://arkeep:${POSTGRES_PASSWORD}@postgres:5432/arkeep?sslmode=disable
-  # in your .env file to use PostgreSQL instead of SQLite.
-  #
-  # postgres:
-  #   image: postgres:16-alpine
-  #   container_name: arkeep-postgres
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_USER: arkeep
-  #     POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
-  #     POSTGRES_DB: arkeep
-  #   volumes:
-  #     - arkeep-postgres-data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U arkeep"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+  postgres:
+    image: postgres:17-alpine
+    container_name: arkeep-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arkeep
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_DB: arkeep
+    volumes:
+      - arkeep-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arkeep -d arkeep"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   arkeep-data:
     driver: local
-  # arkeep-postgres-data:
-  #   driver: local
+  arkeep-postgres-data:
+    driver: local
