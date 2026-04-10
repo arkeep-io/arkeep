@@ -25,6 +25,9 @@ and manage everything from a single web interface — built on top of
 - [Configuration](#configuration)
   - [Server](#server-configuration)
   - [Agent](#agent-configuration)
+- [Observability](#observability)
+  - [Health endpoints](#health-endpoints)
+  - [Prometheus metrics](#prometheus-metrics)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Getting Started](#getting-started)
@@ -374,6 +377,67 @@ Volumes of containers that are still running when the restore starts are automat
 
 ---
 
+## Observability
+
+### Health endpoints
+
+The server exposes two health endpoints, both unauthenticated on the HTTP port (default `:8080`):
+
+| Endpoint | Purpose | Response |
+|---|---|---|
+| `GET /health/live` | **Liveness** — is the process alive? | `200 ok` (plain text, always) |
+| `GET /health/ready` | **Readiness** — can the server serve traffic? | `200` / `503` + JSON |
+
+The `/health/ready` response checks the database and scheduler:
+
+```json
+{
+  "status": "healthy",
+  "checks": {
+    "database":  { "status": "ok", "latency_ms": 2 },
+    "scheduler": { "status": "ok" }
+  }
+}
+```
+
+Returns `503` with `"status": "unhealthy"` if any check fails (e.g. database unreachable). Docker Compose and Kubernetes probes use `/health/ready` so containers are automatically restarted or removed from rotation when the database is down.
+
+### Prometheus metrics
+
+The server exposes a Prometheus-compatible metrics endpoint at `GET /metrics` (same port as the HTTP API, default `:8080`).
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `arkeep_jobs_total` | Counter | `status`, `job_type` | Jobs that reached a terminal state (`succeeded`, `failed`, `cancelled`) |
+| `arkeep_job_duration_seconds` | Histogram | `job_type` | Job wall-clock duration in seconds |
+| `arkeep_agents_connected` | Gauge | — | Agents currently holding an active gRPC connection |
+| `arkeep_http_requests_total` | Counter | `method`, `route`, `status_code` | HTTP requests handled by the server |
+| `arkeep_http_request_duration_seconds` | Histogram | `method`, `route` | HTTP request latency in seconds |
+| `go_*`, `process_*` | various | — | Go runtime and process metrics (goroutines, GC, file descriptors) |
+
+**Prometheus scrape config:**
+
+```yaml
+scrape_configs:
+  - job_name: arkeep
+    static_configs:
+      - targets: ['arkeep-server:8080']
+    scrape_interval: 15s
+```
+
+**Security:** `/metrics` is unauthenticated (like `/health/live` and `/health/ready`). In production, restrict access at the reverse-proxy level so only your Prometheus scraper can reach it:
+
+```nginx
+location /metrics {
+    allow 10.0.0.0/8;   # your internal network / Prometheus scraper
+    deny all;
+}
+```
+
+See [SECURITY.md](SECURITY.md#metrics-endpoint) for details.
+
+---
+
 ## Development
 
 ### Prerequisites
@@ -447,6 +511,7 @@ arkeep/
 │       ├── agentmanager/       # In-memory registry of connected agents
 │       ├── scheduler/          # gocron-based backup scheduler
 │       ├── notification/       # Email (SMTP) and webhook notification senders
+│       ├── metrics/            # Prometheus metric collectors and HTTP middleware
 │       └── websocket/          # WebSocket hub for real-time GUI updates
 ├── shared/                     # Code shared between server and agent
 │   ├── proto/                  # Protobuf definitions and generated Go code

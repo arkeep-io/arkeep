@@ -93,6 +93,29 @@ server restart. Tokens revoked shortly before a restart may be accepted for up t
 their remaining TTL after the restart. Refresh token revocation is unaffected — it is
 persisted in the database.
 
+### Health endpoints
+
+`GET /health/live` and `GET /health/ready` are unauthenticated and accessible on the HTTP port (default `:8080`). They do not expose credentials or user data.
+
+`/health/ready` returns a JSON body indicating the status of the database and scheduler. In environments where the server is exposed to untrusted networks, consider restricting these endpoints at the reverse-proxy level if you do not want to leak operational information.
+
+### Metrics endpoint
+
+The `/metrics` endpoint (Prometheus text format) is **unauthenticated** and accessible on the same port as the HTTP API (default `:8080`). It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
+
+However, the endpoint can reveal information about your deployment (number of agents, job frequency, error rates) that you may not want public.
+
+**Recommendation:** restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
+
+```nginx
+location /metrics {
+    allow 10.0.0.0/8;   # your internal network / Prometheus scraper IP
+    deny all;
+}
+```
+
+If Arkeep is not behind a reverse proxy, use firewall rules to block port 8080 from untrusted sources, or run Prometheus on the same host and bind it to `localhost`.
+
 ### Agent authentication
 
 Agents authenticate to the server via mutual TLS (mTLS) using certificates issued by

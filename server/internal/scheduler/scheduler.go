@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -86,6 +87,7 @@ type Scheduler struct {
 	dests    repositories.DestinationRepository
 	agentMgr *agentmanager.Manager
 	logger   *zap.Logger
+	running  atomic.Bool
 }
 
 // New creates and configures a new Scheduler. Call Start to begin processing.
@@ -132,6 +134,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 
 	s.logger.Info("scheduler started", zap.Int("policies_scheduled", len(enabled)))
 	s.cron.Start()
+	s.running.Store(true)
 	return nil
 }
 
@@ -141,8 +144,15 @@ func (s *Scheduler) Stop() error {
 	if err := s.cron.Shutdown(); err != nil {
 		return fmt.Errorf("scheduler shutdown error: %w", err)
 	}
+	s.running.Store(false)
 	s.logger.Info("scheduler stopped")
 	return nil
+}
+
+// IsRunning reports whether the scheduler has been started and not yet stopped.
+// Used by the /health/ready endpoint.
+func (s *Scheduler) IsRunning() bool {
+	return s.running.Load()
 }
 
 // AddPolicy schedules a newly created or re-enabled policy. Safe to call while

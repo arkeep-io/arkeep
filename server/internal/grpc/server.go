@@ -29,6 +29,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -48,6 +49,7 @@ type Server struct {
 	snapshotRepo repositories.SnapshotRepository
 	hub          *websocket.Hub
 	notifSvc     notification.Service
+	metrics      *metrics.Metrics // may be nil when metrics are disabled
 	logger       *zap.Logger
 	sharedSecret string // shared secret agents must present in gRPC metadata
 	tlsCertFile  string
@@ -81,6 +83,9 @@ type Config struct {
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
+	// Metrics is the Prometheus metrics collector. Optional — if nil, no
+	// job metrics are recorded.
+	Metrics *metrics.Metrics
 }
 
 // New creates a new Server instance with the given dependencies.
@@ -100,6 +105,7 @@ func New(
 		snapshotRepo:      snapshotRepo,
 		hub:               hub,
 		notifSvc:          cfg.NotifService,
+		metrics:           cfg.Metrics,
 		logger:            logger.Named("grpc"),
 		sharedSecret:      cfg.SharedSecret,
 		tlsCertFile:       cfg.TLSCertFile,
@@ -514,6 +520,11 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 		go s.notifyJobTerminal(jobID, req.Status, req.Message)
 	}
 
+	// Record Prometheus metrics for terminal states. Non-fatal: goroutine.
+	if s.metrics != nil && dbStatus != "running" {
+		go s.recordJobMetrics(jobID, dbStatus)
+	}
+
 	s.logger.Info("job status updated",
 		zap.String("job_id", req.JobId),
 		zap.String("agent_id", req.AgentId),
@@ -548,6 +559,31 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 			s.logger.Warn("failed to send job-failed notification", zap.Error(err))
 		}
 	}
+}
+
+// recordJobMetrics fetches the minimal job fields needed to record Prometheus
+// metrics and calls Metrics.RecordJob. Runs in a goroutine — non-fatal.
+func (s *Server) recordJobMetrics(jobID uuid.UUID, dbStatus string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	job, err := s.jobRepo.GetByID(ctx, jobID)
+	if err != nil {
+		s.logger.Warn("recordJobMetrics: could not fetch job",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
+	var startedAt, endedAt time.Time
+	if job.StartedAt != nil {
+		startedAt = *job.StartedAt
+	}
+	if job.EndedAt != nil {
+		endedAt = *job.EndedAt
+	}
+	s.metrics.RecordJob(dbStatus, job.Type, startedAt, endedAt)
 }
 
 // StreamLogs handles the client-streaming RPC for job log ingestion.
