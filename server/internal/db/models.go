@@ -285,6 +285,42 @@ type NotificationDelivery struct {
 func (NotificationDelivery) TableName() string { return "notification_delivery_queue" }
 
 // -----------------------------------------------------------------------------
+// Audit Log
+// -----------------------------------------------------------------------------
+
+// AuditLog records every significant mutation performed via the API:
+// who did it, what was changed, when, and from which IP address.
+// The table is append-only — records are never updated or deleted.
+// user_email is stored denormalized so the log remains readable even if the
+// user account is later deleted.
+type AuditLog struct {
+	ID           uuid.UUID `gorm:"type:text;primaryKey"`
+	CreatedAt    time.Time `gorm:"not null"`
+	UserID       uuid.UUID `gorm:"type:text;not null;index"`
+	UserEmail    string    `gorm:"not null"`
+	Action       string    `gorm:"not null;index"` // e.g. "policy.update", "snapshot.restore"
+	ResourceType string    `gorm:"not null;default:''"`
+	ResourceID   string    `gorm:"type:text;not null;default:''"`
+	Details      string    `gorm:"type:text;not null;default:'{}'"` // JSON
+	IPAddress    string    `gorm:"not null;default:''"`
+}
+
+// BeforeCreate generates a UUID v7 for new audit records (no UpdatedAt — append-only).
+func (a *AuditLog) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == (uuid.UUID{}) {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		a.ID = id
+	}
+	return nil
+}
+
+// TableName maps to the migration-created table name.
+func (AuditLog) TableName() string { return "audit_log" }
+
+// -----------------------------------------------------------------------------
 // Settings
 // -----------------------------------------------------------------------------
 

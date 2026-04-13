@@ -17,15 +17,17 @@ import (
 // RequireRole("admin") in the router. The /users/me routes are accessible by
 // any authenticated user.
 type UserHandler struct {
-	repo   repositories.UserRepository
-	logger *zap.Logger
+	repo      repositories.UserRepository
+	auditRepo repositories.AuditRepository
+	logger    *zap.Logger
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(repo repositories.UserRepository, logger *zap.Logger) *UserHandler {
+func NewUserHandler(repo repositories.UserRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
 	return &UserHandler{
-		repo:   repo,
-		logger: logger.Named("user_handler"),
+		repo:      repo,
+		auditRepo: auditRepo,
+		logger:    logger.Named("user_handler"),
 	}
 }
 
@@ -154,6 +156,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "user.create", "user", user.ID.String(), map[string]any{"email": user.Email, "role": user.Role})
 	Created(w, userToResponse(user))
 }
 
@@ -247,6 +250,7 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "user.update", "user", id.String(), map[string]any{"email": user.Email, "role": user.Role})
 	Ok(w, userToResponse(user))
 }
 
@@ -265,6 +269,9 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch the user before deletion so we can include the email in the audit record.
+	targetUser, _ := h.repo.GetByID(r.Context(), id)
+
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
@@ -275,6 +282,11 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	email := ""
+	if targetUser != nil {
+		email = targetUser.Email
+	}
+	logAudit(r, h.auditRepo, h.logger, "user.delete", "user", id.String(), map[string]any{"email": email})
 	NoContent(w)
 }
 

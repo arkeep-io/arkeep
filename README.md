@@ -35,6 +35,12 @@ and manage everything from a single web interface — built on top of
   - [Available Tasks](#available-tasks)
 - [FAQ](#faq)
 - [Upgrading](#upgrading)
+  - [General procedure](#general-procedure)
+  - [Docker Compose](#docker-compose-1)
+  - [Standalone Binary](#standalone-binary-1)
+  - [Helm](#helm)
+  - [Breaking changes](#breaking-changes-by-version)
+  - [Backing up Arkeep itself](#backing-up-arkeep-itself)
 - [Roadmap](#roadmap)
 - [Telemetry](#telemetry)
 - [Contributing](#contributing)
@@ -632,19 +638,34 @@ Yes. A Helm chart is available in `deploy/helm/`. Set `grpc.tls.existingSecret` 
 [docs/operations/backup-recovery.md](docs/operations/backup-recovery.md) for
 the full procedure and disaster-recovery runbook.
 
+### General procedure
+
+1. **Back up the database** before every upgrade (see [Backing up Arkeep itself](#backing-up-arkeep-itself)).
+2. Pull the new image / download the new binary.
+3. Stop the server.
+4. Start the new server — schema migrations run automatically on startup.
+5. Verify `GET /health/ready` returns `"status": "healthy"` before sending traffic.
+
+The agent is independently versioned. Upgrade agents after the server is confirmed healthy.
+Agents running an older version continue to work during a rolling upgrade — the gRPC
+protocol is backwards-compatible within a major version.
+
 ### Docker Compose
 
 ```bash
 docker compose pull
 docker compose up -d
+docker compose logs -f arkeep-server   # watch for "migrations applied" + "server started"
 ```
 
 ### Standalone binary
 
 ```bash
+# Replace the binary, then restart the service
 sudo systemctl stop arkeep-server
 sudo cp arkeep-server-new /usr/local/bin/arkeep-server
 sudo systemctl start arkeep-server
+sudo journalctl -u arkeep-server -f
 ```
 
 ### Helm
@@ -666,6 +687,35 @@ during a rolling upgrade — the gRPC protocol is backwards-compatible within a 
 | From → To | Breaking change | Action required |
 |---|---|---|
 | any → 1.0.0 | None — all migrations are additive and run automatically | None |
+
+### Backing up Arkeep itself
+
+> Arkeep backs up your machines — but who backs up Arkeep? Back up the database
+> before every upgrade and on a regular schedule.
+
+**SQLite:**
+
+```bash
+# One-off snapshot (safe to run while the server is running — SQLite WAL mode)
+sqlite3 /var/lib/arkeep/arkeep.db ".backup '/var/lib/arkeep/arkeep.db.bak'"
+
+# Or with a timestamp
+sqlite3 /var/lib/arkeep/arkeep.db \
+  ".backup '/var/lib/arkeep/arkeep-$(date +%Y%m%d-%H%M%S).db'"
+```
+
+**PostgreSQL:**
+
+```bash
+pg_dump -Fc arkeep > arkeep-$(date +%Y%m%d-%H%M%S).dump
+```
+
+**What to back up:** the database file (SQLite) or database dump (PostgreSQL), plus the
+`--data-dir` directory (contains the CA private key and gRPC certificates). If you lose
+`--data-dir` you will need to re-enroll all agents.
+
+The underlying Restic repositories (your actual backup data) are stored on the destinations
+you configured — they are not affected by an Arkeep server failure.
 
 ---
 

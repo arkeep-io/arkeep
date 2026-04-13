@@ -19,15 +19,17 @@ type PolicyHandler struct {
 	repo      repositories.PolicyRepository
 	agentRepo repositories.AgentRepository
 	scheduler *scheduler.Scheduler
+	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, sched *scheduler.Scheduler, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, sched *scheduler.Scheduler, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
 		agentRepo: agentRepo,
 		scheduler: sched,
+		auditRepo: auditRepo,
 		logger:    logger.Named("policy_handler"),
 	}
 }
@@ -284,6 +286,7 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if agent, err := h.agentRepo.GetByID(r.Context(), policy.AgentID); err == nil {
 		agentName = agent.Name
 	}
+	logAudit(r, h.auditRepo, h.logger, "policy.create", "policy", policy.ID.String(), map[string]any{"name": policy.Name, "schedule": policy.Schedule, "enabled": policy.Enabled})
 	Created(w, policyToResponse(full, destinations, agentName))
 }
 
@@ -434,6 +437,7 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "policy.update", "policy", id.String(), map[string]any{"name": policy.Name, "enabled": policy.Enabled})
 	Ok(w, policyToResponse(policy, destinations, ""))
 }
 
@@ -462,6 +466,7 @@ func (h *PolicyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "policy.delete", "policy", id.String(), map[string]any{})
 	NoContent(w)
 }
 
@@ -492,6 +497,7 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "policy.trigger", "policy", id.String(), map[string]any{"job_id": job.ID.String()})
 	Ok(w, map[string]string{"job_id": job.ID.String()})
 }
 

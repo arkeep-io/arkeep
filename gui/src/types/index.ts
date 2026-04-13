@@ -436,6 +436,22 @@ export interface WSNotificationPayload {
   created_at: string
 }
 
+// AuditLog represents a single admin-action audit record returned by
+// GET /api/v1/admin/audit. The details field is a JSON object whose
+// shape varies by action type (e.g. policy events include "name",
+// auth events include "email").
+export interface AuditLog {
+  id: string
+  user_id: string
+  user_email: string
+  action: string
+  resource_type: string
+  resource_id: string
+  details: Record<string, unknown>
+  ip_address: string
+  created_at: string
+}
+
 // Standard response envelope returned by all server endpoints via Ok()
 export interface ApiResponse<T> {
   data: T

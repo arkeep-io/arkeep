@@ -176,6 +176,14 @@ const routes: RouteRecordRaw[] = [
         ],
       },
 
+      // Audit Log — admin only
+      {
+        path: 'audit',
+        name: 'audit',
+        component: () => import('@/pages/audit/AuditLogPage.vue'),
+        meta: { breadcrumb: 'Audit Log', requiresRole: 'admin' },
+      },
+
       // Profile — accessible to all authenticated users
       {
         path: 'profile',

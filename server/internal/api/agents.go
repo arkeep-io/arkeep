@@ -17,17 +17,19 @@ import (
 
 // AgentHandler groups all agent-related HTTP handlers.
 type AgentHandler struct {
-	repo    repositories.AgentRepository
-	manager *agentmanager.Manager
-	logger  *zap.Logger
+	repo      repositories.AgentRepository
+	manager   *agentmanager.Manager
+	auditRepo repositories.AuditRepository
+	logger    *zap.Logger
 }
 
 // NewAgentHandler creates a new AgentHandler.
-func NewAgentHandler(repo repositories.AgentRepository, manager *agentmanager.Manager, logger *zap.Logger) *AgentHandler {
+func NewAgentHandler(repo repositories.AgentRepository, manager *agentmanager.Manager, auditRepo repositories.AuditRepository, logger *zap.Logger) *AgentHandler {
 	return &AgentHandler{
-		repo:    repo,
-		manager: manager,
-		logger:  logger.Named("agent_handler"),
+		repo:      repo,
+		manager:   manager,
+		auditRepo: auditRepo,
+		logger:    logger.Named("agent_handler"),
 	}
 }
 
@@ -135,6 +137,7 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "agent.create", "agent", agent.ID.String(), map[string]any{"name": agent.Name})
 	Created(w, agentToResponse(agent))
 }
 
@@ -206,6 +209,7 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "agent.update", "agent", id.String(), map[string]any{"name": agent.Name})
 	Ok(w, agentToResponse(agent))
 }
 
@@ -227,6 +231,7 @@ func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "agent.delete", "agent", id.String(), map[string]any{})
 	NoContent(w)
 }
 
