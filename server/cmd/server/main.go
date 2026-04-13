@@ -247,6 +247,10 @@ func run(ctx context.Context, cfg *config) error {
 		Hub:          wsHub,
 		Logger:       logger,
 	})
+	// Start the background delivery retrier. It polls every 30 s for pending
+	// email/webhook deliveries and retries them with exponential backoff
+	// (max 3 attempts: +5 min → +30 min → exhausted).
+	go notifService.Start(ctx)
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(

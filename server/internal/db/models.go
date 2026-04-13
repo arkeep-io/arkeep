@@ -259,6 +259,31 @@ type Notification struct {
 	Payload string `gorm:"type:text;default:'{}'"` // JSON, extra context for the frontend
 }
 
+// NotificationDelivery tracks the delivery state of a single notification over
+// a single external channel (email or webhook). Each Notification can have at
+// most one NotificationDelivery row per channel type.
+//
+// Status transitions:
+//
+//	pending → sent      (delivery succeeded)
+//	pending → pending   (retry scheduled after backoff)
+//	pending → exhausted (max 3 retries exceeded, no further attempts)
+//
+// Rows are automatically removed when the parent Notification is deleted
+// (ON DELETE CASCADE on the foreign key).
+type NotificationDelivery struct {
+	Base
+	NotificationID uuid.UUID  `gorm:"type:text;not null;index"`
+	Type           string     `gorm:"not null"`          // "email" | "webhook"
+	Status         string     `gorm:"not null;default:'pending'"` // "pending" | "sent" | "exhausted"
+	Attempts       int        `gorm:"not null;default:0"`
+	LastError      string     `gorm:"type:text;not null;default:''"`
+	NextRetryAt    *time.Time // nil = ready to process immediately
+}
+
+// TableName maps to the migration-created table name.
+func (NotificationDelivery) TableName() string { return "notification_delivery_queue" }
+
 // -----------------------------------------------------------------------------
 // Settings
 // -----------------------------------------------------------------------------
