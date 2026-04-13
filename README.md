@@ -634,6 +634,10 @@ Yes. A Helm chart is available in `deploy/helm/`. Set `grpc.tls.existingSecret` 
 
 ## Upgrading
 
+**Always back up the database before upgrading** — see
+[docs/operations/backup-recovery.md](docs/operations/backup-recovery.md) for
+the full procedure and disaster-recovery runbook.
+
 ### General procedure
 
 1. **Back up the database** before every upgrade (see [Backing up Arkeep itself](#backing-up-arkeep-itself)).
@@ -672,11 +676,17 @@ helm upgrade arkeep arkeep/arkeep --reuse-values
 kubectl rollout status deployment/arkeep-server
 ```
 
-### Breaking changes by version
+After upgrading, verify `GET /health/ready` returns `"status": "healthy"` before
+sending traffic. Schema migrations run automatically on startup.
+
+The agent is independently versioned. Agents running an older version continue to work
+during a rolling upgrade — the gRPC protocol is backwards-compatible within a major version.
+
+### Breaking changes
 
 | From → To | Breaking change | Action required |
 |---|---|---|
-| any → 1.0.0 | None — schema is additive, all migrations run automatically | None |
+| any → 1.0.0 | None — all migrations are additive and run automatically | None |
 
 ### Backing up Arkeep itself
 
