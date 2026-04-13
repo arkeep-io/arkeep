@@ -36,6 +36,7 @@ type RouterConfig struct {
 	OIDCProviders repositories.OIDCProviderRepository
 	Settings      repositories.SettingsRepository
 	Dashboard     repositories.DashboardRepository
+	Audit         repositories.AuditRepository
 
 	// Secure controls whether auth cookies are set with the Secure flag.
 	Secure bool
@@ -75,22 +76,23 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
-	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Logger, cfg.Secure)
+	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Audit, cfg.Logger, cfg.Secure)
 	var enrollHandler *EnrollHandler
 	if cfg.AutoCerts != nil {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
-	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Logger)
-	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Logger)
-	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Logger)
+	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Audit, cfg.Logger)
+	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Audit, cfg.Logger)
 	jobHandler          := NewJobHandler(cfg.Jobs, cfg.Logger)
-	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Logger)
-	userHandler         := NewUserHandler(cfg.Users, cfg.Logger)
+	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	userHandler         := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Logger)
+	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.Logger)
 	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler      := newVersionHandler(cfg.ServerVersion)
+	auditHandler        := NewAuditHandler(cfg.Audit, cfg.Logger)
 
 	healthHandler := newHealthHandler(cfg.DB, cfg.Scheduler)
 	r.Get("/health/live", healthHandler.Live)
@@ -206,6 +208,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)
+
+				// Audit log — read-only, append-only records of admin mutations
+				r.Get("/audit", auditHandler.List)
 			})
 		})
 	})
