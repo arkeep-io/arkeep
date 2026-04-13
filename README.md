@@ -34,6 +34,7 @@ and manage everything from a single web interface — built on top of
   - [Project Structure](#project-structure)
   - [Available Tasks](#available-tasks)
 - [FAQ](#faq)
+- [Upgrading](#upgrading)
 - [Roadmap](#roadmap)
 - [Telemetry](#telemetry)
 - [Contributing](#contributing)
@@ -622,6 +623,49 @@ to run multiple server replicas behind a load balancer.
 **Is there a Kubernetes deployment?**
 
 Yes. A Helm chart is available in `deploy/helm/`. Set `grpc.tls.existingSecret` to the name of a TLS Secret (type `kubernetes.io/tls`) to enable TLS on the gRPC port — cert-manager with Let's Encrypt is the recommended approach. For simpler setups, Docker Compose on a single node is also supported.
+
+---
+
+## Upgrading
+
+**Always back up the database before upgrading** — see
+[docs/operations/backup-recovery.md](docs/operations/backup-recovery.md) for
+the full procedure and disaster-recovery runbook.
+
+### Docker Compose
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### Standalone binary
+
+```bash
+sudo systemctl stop arkeep-server
+sudo cp arkeep-server-new /usr/local/bin/arkeep-server
+sudo systemctl start arkeep-server
+```
+
+### Helm
+
+```bash
+helm repo update
+helm upgrade arkeep arkeep/arkeep --reuse-values
+kubectl rollout status deployment/arkeep-server
+```
+
+After upgrading, verify `GET /health/ready` returns `"status": "healthy"` before
+sending traffic. Schema migrations run automatically on startup.
+
+The agent is independently versioned. Agents running an older version continue to work
+during a rolling upgrade — the gRPC protocol is backwards-compatible within a major version.
+
+### Breaking changes
+
+| From → To | Breaking change | Action required |
+|---|---|---|
+| any → 1.0.0 | None — all migrations are additive and run automatically | None |
 
 ---
 
