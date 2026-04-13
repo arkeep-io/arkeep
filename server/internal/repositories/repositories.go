@@ -172,6 +172,24 @@ type NotificationRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListByUser(ctx context.Context, userID uuid.UUID, opts ListOptions) ([]db.Notification, int64, error)
 	DeleteReadOlderThan(ctx context.Context, t time.Time) error
+
+	// Delivery queue — used by the notification retrier goroutine.
+
+	// CreateDelivery inserts a new delivery row for the given channel type.
+	CreateDelivery(ctx context.Context, d *db.NotificationDelivery) error
+
+	// UpdateDelivery persists a delivery row after a send attempt (status,
+	// attempts, last_error, next_retry_at are the fields typically changed).
+	UpdateDelivery(ctx context.Context, d *db.NotificationDelivery) error
+
+	// ListPendingDeliveries returns up to limit delivery rows whose status is
+	// "pending" and whose next_retry_at is at or before `before`.
+	// Used by the retrier to find work to process.
+	ListPendingDeliveries(ctx context.Context, before time.Time, limit int) ([]*db.NotificationDelivery, error)
+
+	// ListDeliveriesByStatus returns delivery rows filtered by status, ordered
+	// newest first. Used by the admin queue visibility endpoint.
+	ListDeliveriesByStatus(ctx context.Context, status string, opts ListOptions) ([]db.NotificationDelivery, int64, error)
 }
 
 // -----------------------------------------------------------------------------
