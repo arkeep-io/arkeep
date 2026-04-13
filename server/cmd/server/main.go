@@ -176,6 +176,7 @@ func run(ctx context.Context, cfg *config) error {
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
+	auditRepo := repositories.NewAuditRepository(gormDB)
 
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
@@ -247,6 +248,10 @@ func run(ctx context.Context, cfg *config) error {
 		Hub:          wsHub,
 		Logger:       logger,
 	})
+	// Start the background delivery retrier. It polls every 30 s for pending
+	// email/webhook deliveries and retries them with exponential backoff
+	// (max 3 attempts: +5 min → +30 min → exhausted).
+	go notifService.Start(ctx)
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
@@ -293,6 +298,7 @@ func run(ctx context.Context, cfg *config) error {
 		Settings:      settingsRepo,
 		Secure:        cfg.secureCookies,
 		Dashboard:     dashboardRepo,
+		Audit:         auditRepo,
 		AutoCerts:     autoCerts,
 		AgentSecret:   cfg.agentSecret,
 		ServerVersion: version,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AppSidebar from "@/components/shared/AppSidebar.vue"
+import NotificationBell from "@/components/shared/NotificationBell.vue"
 import {
     Breadcrumb,
     BreadcrumbItem,
@@ -46,30 +47,31 @@ const breadcrumbs = computed<Crumb[]>(() => {
     <SidebarProvider class="h-screen overflow-hidden">
         <AppSidebar />
         <SidebarInset class="flex flex-col min-h-0">
-            <header class="flex items-center h-16 gap-2 shrink-0 border-b">
-                <div class="flex items-center gap-2 px-4">
-                    <SidebarTrigger class="-ml-1" aria-label="Toggle sidebar" />
-                    <Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
-                    <Breadcrumb>
-                        <BreadcrumbList>
-                            <template v-for="(c, i) in breadcrumbs" :key="i">
-                                <BreadcrumbItem>
-                                    <BreadcrumbPage v-if="i === breadcrumbs.length - 1">
+            <header class="flex items-center h-16 gap-2 shrink-0 border-b px-4">
+                <SidebarTrigger class="-ml-1" aria-label="Toggle sidebar" />
+                <Separator orientation="vertical" class="mr-2 data-[orientation=vertical]:h-4" />
+                <Breadcrumb>
+                    <BreadcrumbList>
+                        <template v-for="(c, i) in breadcrumbs" :key="i">
+                            <BreadcrumbItem>
+                                <BreadcrumbPage v-if="i === breadcrumbs.length - 1">
+                                    {{ c.label }}
+                                </BreadcrumbPage>
+
+                                <BreadcrumbLink v-else>
+                                    <RouterLink v-if="c.to" :to="c.to">
                                         {{ c.label }}
-                                    </BreadcrumbPage>
+                                    </RouterLink>
+                                    <span v-else>{{ c.label }}</span>
+                                </BreadcrumbLink>
+                            </BreadcrumbItem>
 
-                                    <BreadcrumbLink v-else>
-                                        <RouterLink v-if="c.to" :to="c.to">
-                                            {{ c.label }}
-                                        </RouterLink>
-                                        <span v-else>{{ c.label }}</span>
-                                    </BreadcrumbLink>
-                                </BreadcrumbItem>
-
-                                <BreadcrumbSeparator v-if="i < breadcrumbs.length - 1" />
-                            </template>
-                        </BreadcrumbList>
-                    </Breadcrumb>
+                            <BreadcrumbSeparator v-if="i < breadcrumbs.length - 1" />
+                        </template>
+                    </BreadcrumbList>
+                </Breadcrumb>
+                <div class="ml-auto">
+                    <NotificationBell />
                 </div>
             </header>
             <div class="flex-1 overflow-y-auto">

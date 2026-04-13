@@ -259,6 +259,67 @@ type Notification struct {
 	Payload string `gorm:"type:text;default:'{}'"` // JSON, extra context for the frontend
 }
 
+// NotificationDelivery tracks the delivery state of a single notification over
+// a single external channel (email or webhook). Each Notification can have at
+// most one NotificationDelivery row per channel type.
+//
+// Status transitions:
+//
+//	pending → sent      (delivery succeeded)
+//	pending → pending   (retry scheduled after backoff)
+//	pending → exhausted (max 3 retries exceeded, no further attempts)
+//
+// Rows are automatically removed when the parent Notification is deleted
+// (ON DELETE CASCADE on the foreign key).
+type NotificationDelivery struct {
+	Base
+	NotificationID uuid.UUID  `gorm:"type:text;not null;index"`
+	Type           string     `gorm:"not null"`          // "email" | "webhook"
+	Status         string     `gorm:"not null;default:'pending'"` // "pending" | "sent" | "exhausted"
+	Attempts       int        `gorm:"not null;default:0"`
+	LastError      string     `gorm:"type:text;not null;default:''"`
+	NextRetryAt    *time.Time // nil = ready to process immediately
+}
+
+// TableName maps to the migration-created table name.
+func (NotificationDelivery) TableName() string { return "notification_delivery_queue" }
+
+// -----------------------------------------------------------------------------
+// Audit Log
+// -----------------------------------------------------------------------------
+
+// AuditLog records every significant mutation performed via the API:
+// who did it, what was changed, when, and from which IP address.
+// The table is append-only — records are never updated or deleted.
+// user_email is stored denormalized so the log remains readable even if the
+// user account is later deleted.
+type AuditLog struct {
+	ID           uuid.UUID `gorm:"type:text;primaryKey"`
+	CreatedAt    time.Time `gorm:"not null"`
+	UserID       uuid.UUID `gorm:"type:text;not null;index"`
+	UserEmail    string    `gorm:"not null"`
+	Action       string    `gorm:"not null;index"` // e.g. "policy.update", "snapshot.restore"
+	ResourceType string    `gorm:"not null;default:''"`
+	ResourceID   string    `gorm:"type:text;not null;default:''"`
+	Details      string    `gorm:"type:text;not null;default:'{}'"` // JSON
+	IPAddress    string    `gorm:"not null;default:''"`
+}
+
+// BeforeCreate generates a UUID v7 for new audit records (no UpdatedAt — append-only).
+func (a *AuditLog) BeforeCreate(tx *gorm.DB) error {
+	if a.ID == (uuid.UUID{}) {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		a.ID = id
+	}
+	return nil
+}
+
+// TableName maps to the migration-created table name.
+func (AuditLog) TableName() string { return "audit_log" }
+
 // -----------------------------------------------------------------------------
 // Settings
 // -----------------------------------------------------------------------------

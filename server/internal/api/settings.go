@@ -22,6 +22,7 @@ import (
 type SettingsHandler struct {
 	oidcRepo     repositories.OIDCProviderRepository
 	settingsRepo repositories.SettingsRepository
+	auditRepo    repositories.AuditRepository
 	logger       *zap.Logger
 }
 
@@ -29,11 +30,13 @@ type SettingsHandler struct {
 func NewSettingsHandler(
 	oidcRepo repositories.OIDCProviderRepository,
 	settingsRepo repositories.SettingsRepository,
+	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
 ) *SettingsHandler {
 	return &SettingsHandler{
 		oidcRepo:     oidcRepo,
 		settingsRepo: settingsRepo,
+		auditRepo:    auditRepo,
 		logger:       logger.Named("settings_handler"),
 	}
 }
@@ -145,6 +148,7 @@ func (h *SettingsHandler) CreateOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "settings.oidc.create", "settings", provider.ID.String(), map[string]any{"name": provider.Name, "issuer": provider.Issuer})
 	Created(w, h.oidcToResponse(provider, requestCallbackURL(r)))
 }
 
@@ -238,6 +242,7 @@ func (h *SettingsHandler) UpdateOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "settings.oidc.update", "settings", id.String(), map[string]any{"name": existing.Name, "issuer": existing.Issuer})
 	Ok(w, h.oidcToResponse(existing, requestCallbackURL(r)))
 }
 
@@ -247,6 +252,9 @@ func (h *SettingsHandler) DeleteOIDC(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// Fetch name before deletion for the audit record.
+	existing, _ := h.oidcRepo.GetByID(r.Context(), id)
 
 	if err := h.oidcRepo.Delete(r.Context(), id); err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
@@ -258,6 +266,11 @@ func (h *SettingsHandler) DeleteOIDC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := ""
+	if existing != nil {
+		name = existing.Name
+	}
+	logAudit(r, h.auditRepo, h.logger, "settings.oidc.delete", "settings", id.String(), map[string]any{"name": name})
 	NoContent(w)
 }
 
@@ -370,6 +383,7 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("smtp settings updated")
 
+	logAudit(r, h.auditRepo, h.logger, "settings.smtp.update", "settings", "", map[string]any{"host": req.Host, "port": req.Port})
 	Ok(w, smtpResponse{
 		Host:       req.Host,
 		Port:       req.Port,

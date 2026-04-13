@@ -239,14 +239,15 @@ export interface Snapshot {
 
 // ─── Notification ─────────────────────────────────────────────────────────────
 
+// Notification mirrors the notificationResponse JSON shape returned by
+// GET /api/v1/notifications.
 export interface Notification {
   id: string
-  user_id: string
-  event_type: NotificationEventType
+  type: string       // "job_success" | "job_failure" | "agent_offline"
   title: string
-  message: string
-  read: boolean
-  channels: NotificationChannel[]
+  body: string
+  payload: string    // JSON string with extra event context
+  read_at: string | null
   created_at: string
 }
 
@@ -423,8 +424,32 @@ export interface AgentStatusPayload {
   last_seen_at: string
 }
 
-export interface NotificationPayload {
-  notification: Notification
+// WSNotificationPayload is the shape of msg.payload when msg.type === 'notification'.
+// The server sends the notification fields directly (not wrapped in a 'notification' key).
+// The payload field here is an object (not a JSON string like in the REST response).
+export interface WSNotificationPayload {
+  id: string
+  type: string
+  title: string
+  body: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+// AuditLog represents a single admin-action audit record returned by
+// GET /api/v1/admin/audit. The details field is a JSON object whose
+// shape varies by action type (e.g. policy events include "name",
+// auth events include "email").
+export interface AuditLog {
+  id: string
+  user_id: string
+  user_email: string
+  action: string
+  resource_type: string
+  resource_id: string
+  details: Record<string, unknown>
+  ip_address: string
+  created_at: string
 }
 
 // Standard response envelope returned by all server endpoints via Ok()

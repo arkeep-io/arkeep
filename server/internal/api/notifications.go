@@ -155,6 +155,68 @@ func (h *NotificationHandler) MarkAsRead(w http.ResponseWriter, r *http.Request)
 	NoContent(w)
 }
 
+// deliveryQueueResponse is the JSON representation of a delivery queue row.
+type deliveryQueueResponse struct {
+	ID             string  `json:"id"`
+	NotificationID string  `json:"notification_id"`
+	Type           string  `json:"type"`
+	Status         string  `json:"status"`
+	Attempts       int     `json:"attempts"`
+	LastError      string  `json:"last_error"`
+	NextRetryAt    *string `json:"next_retry_at"`
+	CreatedAt      string  `json:"created_at"`
+}
+
+// listDeliveryQueueResponse wraps a paginated list of delivery rows.
+type listDeliveryQueueResponse struct {
+	Items []deliveryQueueResponse `json:"items"`
+	Total int64                   `json:"total"`
+}
+
+// ListDeliveryQueue handles GET /api/v1/notifications/queue (admin only).
+// Returns delivery rows filtered by ?status= (default: "exhausted").
+// Used to inspect failed notification deliveries.
+func (h *NotificationHandler) ListDeliveryQueue(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = "exhausted"
+	}
+	switch status {
+	case "pending", "sent", "exhausted":
+	default:
+		ErrBadRequest(w, "status must be one of: pending, sent, exhausted")
+		return
+	}
+
+	opts := paginationOpts(r)
+	rows, total, err := h.repo.ListDeliveriesByStatus(r.Context(), status, opts)
+	if err != nil {
+		h.logger.Error("failed to list delivery queue", zap.String("status", status), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	items := make([]deliveryQueueResponse, len(rows))
+	for i, d := range rows {
+		item := deliveryQueueResponse{
+			ID:             d.ID.String(),
+			NotificationID: d.NotificationID.String(),
+			Type:           d.Type,
+			Status:         d.Status,
+			Attempts:       d.Attempts,
+			LastError:      d.LastError,
+			CreatedAt:      d.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		if d.NextRetryAt != nil {
+			s := d.NextRetryAt.UTC().Format(time.RFC3339)
+			item.NextRetryAt = &s
+		}
+		items[i] = item
+	}
+
+	Ok(w, listDeliveryQueueResponse{Items: items, Total: total})
+}
+
 // MarkAllAsRead handles PATCH /api/v1/notifications/read-all.
 // Marks all unread notifications for the authenticated user as read.
 func (h *NotificationHandler) MarkAllAsRead(w http.ResponseWriter, r *http.Request) {

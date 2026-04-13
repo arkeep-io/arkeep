@@ -128,3 +128,53 @@ func (r *gormNotificationRepository) DeleteReadOlderThan(ctx context.Context, t 
 	}
 	return nil
 }
+
+// ─── Delivery queue ───────────────────────────────────────────────────────────
+
+// CreateDelivery inserts a new delivery row into notification_delivery_queue.
+func (r *gormNotificationRepository) CreateDelivery(ctx context.Context, d *db.NotificationDelivery) error {
+	if err := r.db.WithContext(ctx).Create(d).Error; err != nil {
+		return fmt.Errorf("notifications: create delivery: %w", err)
+	}
+	return nil
+}
+
+// UpdateDelivery saves changes to an existing delivery row (typically status,
+// attempts, last_error, next_retry_at after a send attempt).
+func (r *gormNotificationRepository) UpdateDelivery(ctx context.Context, d *db.NotificationDelivery) error {
+	if err := r.db.WithContext(ctx).Save(d).Error; err != nil {
+		return fmt.Errorf("notifications: update delivery: %w", err)
+	}
+	return nil
+}
+
+// ListPendingDeliveries returns up to limit rows with status="pending" and
+// next_retry_at at or before `before`. Rows with a NULL next_retry_at are
+// always included (they are ready to be sent immediately).
+func (r *gormNotificationRepository) ListPendingDeliveries(ctx context.Context, before time.Time, limit int) ([]*db.NotificationDelivery, error) {
+	var rows []*db.NotificationDelivery
+	if err := r.db.WithContext(ctx).
+		Where("status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?)", before).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("notifications: list pending deliveries: %w", err)
+	}
+	return rows, nil
+}
+
+// ListDeliveriesByStatus returns delivery rows filtered by status, newest first.
+// Used by the admin queue visibility endpoint.
+func (r *gormNotificationRepository) ListDeliveriesByStatus(ctx context.Context, status string, opts ListOptions) ([]db.NotificationDelivery, int64, error) {
+	var rows []db.NotificationDelivery
+	var total int64
+
+	q := r.db.WithContext(ctx).Model(&db.NotificationDelivery{}).Where("status = ?", status)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("notifications: list deliveries count: %w", err)
+	}
+	if err := q.Order("created_at DESC").Limit(opts.Limit).Offset(opts.Offset).Find(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("notifications: list deliveries: %w", err)
+	}
+	return rows, total, nil
+}

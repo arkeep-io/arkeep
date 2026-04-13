@@ -23,12 +23,13 @@ import (
 // removes the cached record only — pruning the actual data from the backup
 // engine is handled separately by the retention policy enforcement.
 type SnapshotHandler struct {
-	repo     repositories.SnapshotRepository
-	dests    repositories.DestinationRepository
-	policies repositories.PolicyRepository
-	jobs     repositories.JobRepository
-	agentMgr *agentmanager.Manager
-	logger   *zap.Logger
+	repo      repositories.SnapshotRepository
+	dests     repositories.DestinationRepository
+	policies  repositories.PolicyRepository
+	jobs      repositories.JobRepository
+	agentMgr  *agentmanager.Manager
+	auditRepo repositories.AuditRepository
+	logger    *zap.Logger
 }
 
 // NewSnapshotHandler creates a new SnapshotHandler.
@@ -38,15 +39,17 @@ func NewSnapshotHandler(
 	policies repositories.PolicyRepository,
 	jobs repositories.JobRepository,
 	agentMgr *agentmanager.Manager,
+	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
 ) *SnapshotHandler {
 	return &SnapshotHandler{
-		repo:     repo,
-		dests:    dests,
-		policies: policies,
-		jobs:     jobs,
-		agentMgr: agentMgr,
-		logger:   logger.Named("snapshot_handler"),
+		repo:      repo,
+		dests:     dests,
+		policies:  policies,
+		jobs:      jobs,
+		agentMgr:  agentMgr,
+		auditRepo: auditRepo,
+		logger:    logger.Named("snapshot_handler"),
 	}
 }
 
@@ -215,6 +218,7 @@ func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "snapshot.delete", "snapshot", id.String(), map[string]any{})
 	NoContent(w)
 }
 
@@ -353,6 +357,12 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		zap.String("target_path", req.TargetPath),
 	)
 
+	logAudit(r, h.auditRepo, h.logger, "snapshot.restore", "snapshot", snapshotID.String(), map[string]any{
+		"snapshot_id":    snapshot.SnapshotID,
+		"destination_id": snapshot.DestinationID.String(),
+		"target_path":    req.TargetPath,
+		"agent_id":       agentID.String(),
+	})
 	Ok(w, restoreResponse{JobID: job.ID.String()})
 }
 

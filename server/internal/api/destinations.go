@@ -13,15 +13,17 @@ import (
 
 // DestinationHandler groups all destination-related HTTP handlers.
 type DestinationHandler struct {
-	repo   repositories.DestinationRepository
-	logger *zap.Logger
+	repo      repositories.DestinationRepository
+	auditRepo repositories.AuditRepository
+	logger    *zap.Logger
 }
 
 // NewDestinationHandler creates a new DestinationHandler.
-func NewDestinationHandler(repo repositories.DestinationRepository, logger *zap.Logger) *DestinationHandler {
+func NewDestinationHandler(repo repositories.DestinationRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *DestinationHandler {
 	return &DestinationHandler{
-		repo:   repo,
-		logger: logger.Named("destination_handler"),
+		repo:      repo,
+		auditRepo: auditRepo,
+		logger:    logger.Named("destination_handler"),
 	}
 }
 
@@ -130,6 +132,7 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "destination.create", "destination", dest.ID.String(), map[string]any{"name": dest.Name, "type": dest.Type})
 	Created(w, destinationToResponse(dest))
 }
 
@@ -209,6 +212,7 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name})
 	Ok(w, destinationToResponse(dest))
 }
 
@@ -232,5 +236,6 @@ func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logAudit(r, h.auditRepo, h.logger, "destination.delete", "destination", id.String(), map[string]any{})
 	NoContent(w)
 }

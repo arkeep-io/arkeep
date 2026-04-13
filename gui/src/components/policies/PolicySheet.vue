@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/collapsible'
 import {
   AlertCircle,
+  AlertTriangle,
   Loader2,
   Plus,
   Trash2,
@@ -105,6 +106,29 @@ const agentVolumes = ref<VolumeInfo[]>([])
 const volumesLoading = ref(false)
 const volumesError = ref('')
 
+// DisplayVolume extends VolumeInfo with an optional notFound flag for volumes
+// that are saved in the policy but no longer present in Docker on the agent.
+type DisplayVolume = VolumeInfo & { notFound?: true }
+
+// displayVolumes merges live Docker volumes with any "ghost" volumes that are
+// saved in selectedVolumes for this row but absent from the live discovery.
+// Ghost volumes are appended at the bottom so the user can see and remove them.
+// Discovered volumes are sorted alphabetically for stable ordering across refreshes.
+function displayVolumes(rowKey: string): DisplayVolume[] {
+  const selected = selectedVolumes.value[rowKey] ?? new Set<string>()
+  const knownNames = new Set(agentVolumes.value.map(v => v.name))
+
+  const ghosts: DisplayVolume[] = []
+  for (const name of selected) {
+    if (!knownNames.has(name)) {
+      ghosts.push({ name, mountpoint: '', driver: '', notFound: true })
+    }
+  }
+
+  // agentVolumes is already sorted alphabetically by fetchVolumes(); ghosts follow.
+  return [...agentVolumes.value, ...ghosts]
+}
+
 // selectedVolumes maps field.key -> Set of selected volume names.
 // Used for the multi-select UI when source type is docker-volume.
 // On submit, each source with multiple selected volumes is expanded into
@@ -134,7 +158,7 @@ async function fetchVolumes() {
   volumesLoading.value = true
   try {
     const res = await api<ApiResponse<VolumeInfo[]>>(`/api/v1/agents/${agentValue.value}/volumes`)
-    agentVolumes.value = res.data
+    agentVolumes.value = [...res.data].sort((a, b) => a.name.localeCompare(b.name))
   } catch (err: any) {
     const code = err?.data?.error?.code
     if (code === 'conflict') {
@@ -816,10 +840,13 @@ function onOpenChange(value: boolean) {
               <!-- docker-volume -->
               <template v-if="(field.value as any).type === 'docker-volume'">
 
-                <!-- Volumes loaded — multi-select checklist -->
-                <template v-if="agentVolumes.length > 0">
+                <!-- Multi-select checklist: shown whenever there are volumes to display
+                     (discovered volumes, ghost volumes saved in policy, or both).
+                     Ghost volumes are volumes saved in the policy that Docker no longer
+                     reports — they can still be deselected and removed from the policy. -->
+                <template v-if="!volumesLoading && (agentVolumes.length > 0 || getSelectedVolumes(String(idx)).size > 0)">
                   <div class="flex flex-col gap-1 rounded-md border p-2">
-                    <label v-for="vol in agentVolumes" :key="vol.name"
+                    <label v-for="vol in displayVolumes(String(idx))" :key="vol.name"
                       class="flex items-center gap-2.5 rounded px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors">
                       <div class="w-4 h-4 rounded border shrink-0 flex items-center justify-center transition-colors"
                         :class="getSelectedVolumes(String(idx)).has(vol.name)
@@ -834,15 +861,25 @@ function onOpenChange(value: boolean) {
                       <input type="checkbox" class="sr-only" :checked="getSelectedVolumes(String(idx)).has(vol.name)"
                         @change="toggleVolume(String(idx), vol.name)" />
                       <span class="font-mono text-sm truncate max-w-[60%]">{{ vol.name }}</span>
-                      <span class="text-xs text-muted-foreground ml-auto shrink-0">{{ vol.driver }}</span>
+                      <!-- Ghost volume: saved in policy but not found in Docker -->
+                      <span v-if="vol.notFound"
+                        class="text-xs text-orange-500 dark:text-orange-400 ml-auto shrink-0 flex items-center gap-1">
+                        <AlertTriangle class="size-3" /> Not found
+                      </span>
+                      <span v-else class="text-xs text-muted-foreground ml-auto shrink-0">{{ vol.driver }}</span>
                     </label>
                   </div>
+                  <!-- Error notice shown alongside the list (e.g. refresh failed but saved volumes still visible) -->
+                  <p v-if="volumesError" class="text-xs text-destructive">
+                    {{ volumesError }}.
+                    <button type="button" class="underline hover:no-underline" @click="fetchVolumes">Retry</button>
+                  </p>
                   <p v-if="getSelectedVolumes(String(idx)).size === 0" class="text-xs text-muted-foreground">
                     Select at least one volume.
                   </p>
                 </template>
 
-                <!-- Loading / error / no agent state -->
+                <!-- Loading / error / no agent state (shown only when list is empty) -->
                 <template v-else>
                   <div v-if="volumesLoading" class="flex items-center gap-2 text-sm text-muted-foreground py-2">
                     <Loader2 class="size-4 animate-spin" />
