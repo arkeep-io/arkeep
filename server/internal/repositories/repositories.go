@@ -193,6 +193,27 @@ type NotificationRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// AuditRepository
+// -----------------------------------------------------------------------------
+
+// AuditRepository provides append-only access to the audit_log table.
+// Records are never updated or deleted — only created and listed.
+type AuditRepository interface {
+	Create(ctx context.Context, entry *db.AuditLog) error
+	List(ctx context.Context, filter AuditFilter, opts ListOptions) ([]db.AuditLog, int64, error)
+}
+
+// AuditFilter restricts the result set returned by AuditRepository.List.
+// Zero values mean "no filter" for that field.
+type AuditFilter struct {
+	UserID       *uuid.UUID
+	Action       string     // prefix match: "policy." matches all policy events
+	ResourceType string
+	From         *time.Time
+	To           *time.Time
+}
+
+// -----------------------------------------------------------------------------
 // SettingsRepository
 // -----------------------------------------------------------------------------
 

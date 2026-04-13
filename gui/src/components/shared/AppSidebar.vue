@@ -6,6 +6,7 @@ import {
     ClipboardList,
     HardDrive,
     LayoutDashboard,
+    ScrollText,
     Server,
     Settings,
     Shield,
@@ -78,6 +79,7 @@ const nav: NavSection[] = [
         items: [
             { title: 'Users', url: '/users', icon: Users, adminOnly: true },
             { title: 'Settings', url: '/settings', icon: Settings, adminOnly: true },
+            { title: 'Audit Log', url: '/audit', icon: ScrollText, adminOnly: true },
         ],
     },
 ]

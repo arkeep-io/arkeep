@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/google/uuid"
 )
 
@@ -30,17 +31,19 @@ const (
 
 // AuthHandler groups all authentication-related HTTP handlers.
 type AuthHandler struct {
-	svc    *auth.AuthService
-	logger *zap.Logger
-	secure bool // true in production (HTTPS), false in development
+	svc       *auth.AuthService
+	auditRepo repositories.AuditRepository
+	logger    *zap.Logger
+	secure    bool // true in production (HTTPS), false in development
 }
 
 // NewAuthHandler creates a new AuthHandler.
-func NewAuthHandler(svc *auth.AuthService, logger *zap.Logger, secure bool) *AuthHandler {
+func NewAuthHandler(svc *auth.AuthService, auditRepo repositories.AuditRepository, logger *zap.Logger, secure bool) *AuthHandler {
 	return &AuthHandler{
-		svc:    svc,
-		logger: logger.Named("auth_handler"),
-		secure: secure,
+		svc:       svc,
+		auditRepo: auditRepo,
+		logger:    logger.Named("auth_handler"),
+		secure:    secure,
 	}
 }
 
@@ -84,6 +87,14 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log the login event. The JWT claims must be parsed from the issued token
+	// because the Authenticate middleware hasn't run yet at this point.
+	if claims, err := h.svc.ValidateAccessToken(pair.AccessToken); err == nil {
+		if uid, parseErr := uuid.Parse(claims.UserID); parseErr == nil {
+			logAuditDirect(r, h.auditRepo, h.logger, uid, claims.Email, "auth.login", "user", claims.UserID, map[string]any{"email": req.Email})
+		}
+	}
+
 	h.setRefreshCookie(w, pair.RefreshToken, pair.RefreshTokenExpiresAt)
 	Ok(w, loginResponse{
 		AccessToken: pair.AccessToken,
@@ -110,6 +121,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.clearRefreshCookie(w)
+	logAudit(r, h.auditRepo, h.logger, "auth.logout", "user", "", map[string]any{})
 	NoContent(w)
 }
 
