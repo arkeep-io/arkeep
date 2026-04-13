@@ -25,9 +25,9 @@ for your machines — this is about protecting the Arkeep installation.
 ### Scheduled backup (recommended)
 
 Use the provided script ([scripts/backup-arkeep-db.sh](../../scripts/backup-arkeep-db.sh))
-for regular automated backups. Set `DEPLOY_MODE` to match your installation:
+for regular automated backups. Set `ARKEEP_DEPLOY_MODE` to match your installation:
 
-| Deployment | `DEPLOY_MODE` |
+| Deployment | `ARKEEP_DEPLOY_MODE` |
 |---|---|
 | Binary / systemd | `standalone` (default) |
 | Docker Compose | `docker` |
@@ -63,11 +63,11 @@ sqlite3 /var/backups/arkeep/arkeep-YYYYMMDD-HHMMSS.db "PRAGMA integrity_check;"
 
 ### Docker Compose
 
-Use the script with `DEPLOY_MODE=docker` — it handles `docker exec` and `docker cp`
+Use the script with `ARKEEP_DEPLOY_MODE=docker` — it handles `docker exec` and `docker cp`
 automatically:
 
 ```bash
-DEPLOY_MODE=docker \
+ARKEEP_DEPLOY_MODE=docker \
 ARKEEP_DOCKER_CONTAINER=arkeep-server \
 ARKEEP_DB_DSN=/var/lib/arkeep/arkeep.db \
   /usr/local/bin/arkeep-backup
@@ -77,7 +77,7 @@ Or schedule it in cron:
 
 ```bash
 cat <<'EOF' | sudo tee /etc/cron.d/arkeep-backup
-DEPLOY_MODE=docker
+ARKEEP_DEPLOY_MODE=docker
 ARKEEP_DOCKER_CONTAINER=arkeep-server
 ARKEEP_DB_DSN=/var/lib/arkeep/arkeep.db
 ARKEEP_BACKUP_DIR=/var/backups/arkeep
@@ -137,22 +137,51 @@ sudo nano /usr/local/bin/arkeep-backup
 echo "0 3 * * * root /usr/local/bin/arkeep-backup" | sudo tee /etc/cron.d/arkeep-backup
 ```
 
-The script defaults to `DEPLOY_MODE=standalone`. For Docker Compose, set
-`DEPLOY_MODE=docker` (see [Docker Compose](#docker-compose) below).
+The script defaults to `ARKEEP_DEPLOY_MODE=standalone`. For Docker Compose, set
+`ARKEEP_DEPLOY_MODE=docker` (see [Docker Compose](#docker-compose) below).
 
 ---
 
 ## PostgreSQL
 
-### Scheduled backup
+### Using the script (recommended)
+
+Use `ARKEEP_DEPLOY_MODE=postgres` with the provided script. If `pg_dump` is not
+installed on the host (e.g. Windows, or a server without the PostgreSQL client),
+set `ARKEEP_POSTGRES_CONTAINER` to run `pg_dump` inside the database container:
 
 ```bash
-# Add to crontab (runs at 03:00 as postgres user)
-echo "0 3 * * * pg_dump -Fc arkeep > /var/backups/arkeep/arkeep-\$(date +\%Y\%m\%d-\%H\%M\%S).dump" \
-  | sudo tee /etc/cron.d/arkeep-db-backup
+# pg_dump available locally
+ARKEEP_DEPLOY_MODE=postgres \
+ARKEEP_DB_DSN="postgres://arkeep:password@localhost:5432/arkeep" \
+ARKEEP_BACKUP_DIR=/var/backups/arkeep \
+  /usr/local/bin/arkeep-backup
+
+# pg_dump not installed locally — run via docker exec (Docker Compose or Windows)
+ARKEEP_DEPLOY_MODE=postgres \
+ARKEEP_DB_DSN="postgres://arkeep:password@localhost:5432/arkeep" \
+ARKEEP_POSTGRES_CONTAINER=arkeep-postgres \
+ARKEEP_BACKUP_DIR=/var/backups/arkeep \
+  /usr/local/bin/arkeep-backup
 ```
 
-### Manual backup
+Schedule with cron:
+
+```bash
+cat <<'EOF' | sudo tee /etc/cron.d/arkeep-backup
+ARKEEP_DEPLOY_MODE=postgres
+ARKEEP_DB_DSN=postgres://arkeep:password@localhost:5432/arkeep
+ARKEEP_POSTGRES_CONTAINER=arkeep-postgres
+ARKEEP_BACKUP_DIR=/var/backups/arkeep
+0 3 * * * root /usr/local/bin/arkeep-backup
+EOF
+```
+
+> **Windows (Git Bash):** the script automatically detects Git Bash (`$OSTYPE=msys`)
+> and applies two workarounds: skips `chmod` (no-op on NTFS) and sets
+> `MSYS_NO_PATHCONV=1` on `docker` calls to prevent path translation inside containers.
+
+### Manual backup (without the script)
 
 ```bash
 # Custom format (compressed, most flexible for restore)
