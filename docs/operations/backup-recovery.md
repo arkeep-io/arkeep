@@ -429,6 +429,5 @@ dropdb -U postgres arkeep_verify
 - [ ] Back up the database (`scripts/backup-arkeep-db.sh` or `pg_dump`)
 - [ ] Back up the data directory (`tar -czf ...`)
 - [ ] Note the current version (`GET /api/v1/version` or `arkeep-server --version`)
-- [ ] Read the [CHANGELOG](../../CHANGELOG.md) for breaking changes
 - [ ] Pull the new image / binary
 - [ ] Restart the server and verify `GET /health/ready` returns healthy
