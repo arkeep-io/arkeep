@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/google/uuid"
@@ -21,8 +22,12 @@ func NewUserRepository(db *gorm.DB) UserRepository {
 }
 
 // Create inserts a new user record into the database.
+// Returns ErrConflict if the email address is already taken.
 func (r *gormUserRepository) Create(ctx context.Context, user *db.User) error {
 	if err := r.db.WithContext(ctx).Create(user).Error; err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return ErrConflict
+		}
 		return fmt.Errorf("users: create: %w", err)
 	}
 	return nil
