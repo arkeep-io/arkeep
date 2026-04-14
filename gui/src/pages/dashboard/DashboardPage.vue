@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle } from 'lucide-vue-next'
+import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {
@@ -26,6 +26,7 @@ import {
     componentToString,
     type ChartConfig,
 } from '@/components/ui/chart'
+import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration } from '@/lib/jobUtils'
 
 // ---------------------------------------------------------------------------
 // Local types — mirror dashboardResponse in server/internal/api/dashboard.go
@@ -71,8 +72,8 @@ const recentJobs = ref<Job[]>([])
 // ---------------------------------------------------------------------------
 
 const jobsChartConfig = {
-    succeeded: { label: 'Succeeded', color: '#22c55e' }, // semantic green
-    failed: { label: 'Failed', color: '#ef4444' }, // semantic red
+    succeeded: { label: 'Succeeded', color: 'var(--chart-2)' },
+    failed: { label: 'Failed', color: 'var(--chart-5)' },
 } satisfies ChartConfig
 
 const sizeChartConfig = {
@@ -104,6 +105,21 @@ const sizeData = computed(() =>
     })) ?? []
 )
 
+// Accessible aria-labels summarising each chart for screen readers.
+const jobsChartAriaLabel = computed(() => {
+    if (!data.value) return 'Jobs activity chart — loading'
+    const total = data.value.job_activity.reduce((s, d) => s + d.succeeded + d.failed, 0)
+    const failed = data.value.job_activity.reduce((s, d) => s + d.failed, 0)
+    return `Jobs last 7 days: ${total} total, ${failed} failed`
+})
+
+const sizeChartAriaLabel = computed(() => {
+    if (!data.value) return 'Backup size chart — loading'
+    const totalGb = data.value.size_activity
+        .reduce((s, d) => s + d.size_bytes, 0) / 1073741824
+    return `Size backed up last 7 days: ${totalGb.toFixed(1)} GB total`
+})
+
 // componentToString must be called during setup (it calls useId internally).
 const jobsTooltip = componentToString(jobsChartConfig, ChartTooltipContent, {
     config: jobsChartConfig,
@@ -116,48 +132,8 @@ const sizeTooltip = componentToString(sizeChartConfig, ChartTooltipContent, {
 })
 
 // ---------------------------------------------------------------------------
-// Table helpers — aligned with JobsPage
+// Table helpers — imported from @/lib/jobUtils
 // ---------------------------------------------------------------------------
-
-function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-    switch (status) {
-        case 'succeeded': return 'outline'
-        case 'running': return 'outline'
-        case 'failed': return 'destructive'
-        case 'pending': return 'outline'
-        default: return 'secondary'
-    }
-}
-
-function statusClass(status: string): string {
-    switch (status) {
-        case 'succeeded': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
-        case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
-        case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
-        default: return ''
-    }
-}
-
-function statusLabel(status: string): string {
-    return status.charAt(0).toUpperCase() + status.slice(1)
-}
-
-function formatDate(iso: string | null): string {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-}
-
-function formatDuration(startedAt: string | null, finishedAt: string | null): string {
-    if (!startedAt || !finishedAt) return '—'
-    const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime()
-    if (ms < 0) return '—'
-    const s = Math.floor(ms / 1000)
-    if (s < 60) return `${s}s`
-    const m = Math.floor(s / 60)
-    if (m < 60) return `${m}m ${s % 60}s`
-    const h = Math.floor(m / 60)
-    return `${h}h ${m % 60}m`
-}
 
 function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B'
@@ -268,10 +244,14 @@ onMounted(fetchAll)
                     </template>
                     <template v-else>
                         <p class="text-3xl font-bold tracking-tight">{{ data?.jobs_today_total }}</p>
-                        <p class="mt-1 text-xs text-muted-foreground">
-                            <span class="text-green-500 font-medium">{{ data?.jobs_today_succeeded }} succeeded</span>
-                            <span class="mx-1">·</span>
-                            <span :class="(data?.jobs_today_failed ?? 0) > 0 ? 'text-red-500 font-medium' : ''">
+                        <p class="mt-1 flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+                            <span class="inline-flex items-center gap-1 text-green-600 dark:text-green-400 font-medium">
+                                <CheckCircle class="w-3 h-3 shrink-0" />
+                                {{ data?.jobs_today_succeeded }} succeeded
+                            </span>
+                            <span class="inline-flex items-center gap-1 font-medium"
+                                :class="(data?.jobs_today_failed ?? 0) > 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'">
+                                <XCircle class="w-3 h-3 shrink-0" />
                                 {{ data?.jobs_today_failed }} failed
                             </span>
                         </p>
@@ -311,7 +291,7 @@ onMounted(fetchAll)
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
-                    <div v-else class="h-44">
+                    <div v-else class="h-44" role="img" :aria-label="jobsChartAriaLabel">
                         <ChartContainer :config="jobsChartConfig" :cursor="true">
                             <VisXYContainer :data="jobsData">
                                 <VisGroupedBar :x="(_d: any, i: number) => i"
@@ -338,7 +318,7 @@ onMounted(fetchAll)
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
-                    <div v-else class="h-44">
+                    <div v-else class="h-44" role="img" :aria-label="sizeChartAriaLabel">
                         <ChartContainer :config="sizeChartConfig" :cursor="true">
                             <VisXYContainer :data="sizeData">
                                 <VisArea :x="(_d: any, i: number) => i" :y="(d: any) => d.size"
@@ -406,15 +386,22 @@ onMounted(fetchAll)
 
                         <!-- Data rows -->
                         <template v-else>
-                            <TableRow v-for="job in recentJobs" :key="job.id" class="cursor-pointer hover:bg-muted/50"
-                                @click="router.push(`/jobs/${job.id}`)">
+                            <TableRow v-for="job in recentJobs" :key="job.id"
+                                class="cursor-pointer hover:bg-muted/50"
+                                tabindex="0"
+                                role="link"
+                                :aria-label="`View job ${job.policy_name}`"
+                                @click="router.push(`/jobs/${job.id}`)"
+                                @keyup.enter="router.push(`/jobs/${job.id}`)">
                                 <TableCell class="font-medium">{{ job.policy_name }}</TableCell>
                                 <TableCell>
                                     <Badge variant="outline" class="capitalize">{{ job.type }}</Badge>
                                 </TableCell>
                                 <TableCell class="text-muted-foreground">{{ job.agent_name }}</TableCell>
                                 <TableCell>
-                                    <Badge :variant="statusVariant(job.status)" :class="statusClass(job.status)">
+                                    <Badge :variant="statusVariant(job.status)" class="gap-1" :class="statusClass(job.status)">
+                                        <component :is="statusIcon(job.status)" class="w-3 h-3"
+                                            :class="{ 'animate-spin': job.status === 'running' }" />
                                         {{ statusLabel(job.status) }}
                                     </Badge>
                                 </TableCell>
