@@ -305,7 +305,7 @@ func assertStatus(t *testing.T, resp *http.Response, want int) {
 	t.Helper()
 	if resp.StatusCode != want {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		t.Errorf("status = %d, want %d; body: %s", resp.StatusCode, want, strings.TrimSpace(string(body)))
 	}
 }

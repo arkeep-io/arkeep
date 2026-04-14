@@ -31,7 +31,7 @@ func TestHealthHandler_Ready(t *testing.T) {
 		// /health/ready returns 503 in tests because the scheduler is not
 		// started (deterministic for tests), but the shape must be correct.
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		var payload healthResponse
 		if err := json.Unmarshal(body, &payload); err != nil {
@@ -53,7 +53,7 @@ func TestHealthHandler_Ready(t *testing.T) {
 		resp := e.get(t, "/health/ready", "")
 
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		var payload healthResponse
 		json.Unmarshal(body, &payload) //nolint:errcheck
