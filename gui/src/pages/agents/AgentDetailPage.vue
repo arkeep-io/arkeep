@@ -500,8 +500,13 @@ onUnmounted(() => {
 
                         <!-- Rows -->
                         <template v-else>
-                            <TableRow v-for="job in jobs" :key="job.id" class="cursor-pointer hover:bg-muted/50"
-                                @click="router.push(`/jobs/${job.id}`)">
+                            <TableRow v-for="job in jobs" :key="job.id"
+                                class="cursor-pointer hover:bg-muted/50"
+                                tabindex="0"
+                                role="link"
+                                :aria-label="`View job for ${job.policy_name}`"
+                                @click="router.push(`/jobs/${job.id}`)"
+                                @keyup.enter="router.push(`/jobs/${job.id}`)">
                                 <TableCell class="font-medium">
                                     {{ (job as any).policy_name || job.policy_id }}
                                 </TableCell>

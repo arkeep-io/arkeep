@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import {
     Table,
     TableBody,
@@ -23,6 +23,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { BriefcaseBusiness, RefreshCw } from 'lucide-vue-next'
 import { api } from '@/services/api'
 import type { ApiResponse, Job, JobStatus, JobType } from '@/types'
+import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration } from '@/lib/jobUtils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,83 +39,42 @@ interface JobListResponse {
 // ---------------------------------------------------------------------------
 
 const router = useRouter()
+const route = useRoute()
 
 const jobs = ref<Job[]>([])
 const total = ref(0)
 const loading = ref(true)
 const error = ref<string | null>(null)
 
-// Filter: 'all' is a sentinel value meaning no filter applied.
-// SelectItem does not accept empty string as a value in shadcn-vue.
-const statusFilter = ref<JobStatus | 'all'>('all')
-const typeFilter = ref<JobType | 'all'>('all')
+const pageSize = 50
+
+// Initialise filters and page from the URL query string so that state is
+// preserved when the user navigates back from a job detail page.
+const statusFilter = ref<JobStatus | 'all'>((route.query.status as JobStatus | 'all') || 'all')
+const typeFilter = ref<JobType | 'all'>((route.query.type as JobType | 'all') || 'all')
+const page = ref(Number(route.query.page) || 1)
 
 // ---------------------------------------------------------------------------
-// Derived list
+// Computed
 // ---------------------------------------------------------------------------
 
-// Client-side filter on the already-fetched jobs. The API supports server-side
-// filtering too, but since we load the last 50 jobs in one shot, filtering
-// locally avoids an extra round-trip on every select change.
-const filteredJobs = computed(() => {
-    let result = jobs.value
-    if (statusFilter.value !== 'all') result = result.filter((j) => j.status === statusFilter.value)
-    if (typeFilter.value !== 'all') result = result.filter((j) => j.type === typeFilter.value)
-    return result
-})
+const offset = computed(() => (page.value - 1) * pageSize)
+const totalPages = computed(() => Math.ceil(total.value / pageSize))
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — imported from @/lib/jobUtils
 // ---------------------------------------------------------------------------
 
-// statusVariant maps a JobStatus to the appropriate shadcn Badge variant.
-function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-    switch (status) {
-        case 'succeeded': return 'outline'
-        case 'running': return 'outline'
-        case 'failed': return 'destructive'
-        case 'pending': return 'outline'
-        case 'cancelled': return 'outline'
-        default: return 'secondary'
-    }
-}
+// ---------------------------------------------------------------------------
+// URL sync — keep query string in sync with filter/page state
+// ---------------------------------------------------------------------------
 
-function statusClass(status: string): string {
-    switch (status) {
-        case 'succeeded': return 'bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/20'
-        case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
-        case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
-        case 'cancelled': return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
-        default: return ''
-    }
-}
-
-// statusLabel returns a capitalised display string for a job status.
-function statusLabel(status: string): string {
-    return status.charAt(0).toUpperCase() + status.slice(1)
-}
-
-// formatDate returns a locale date+time string, or a dash if the value is null.
-function formatDate(iso: string | null): string {
-    if (!iso) return '—'
-    return new Date(iso).toLocaleString(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-    })
-}
-
-// formatDuration returns a human-readable duration between two ISO timestamps.
-// If the end timestamp is absent (job still running), returns "—".
-function formatDuration(startedAt: string | null, finishedAt: string | null): string {
-    if (!startedAt || !finishedAt) return '—'
-    const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime()
-    if (ms < 0) return '—'
-    const s = Math.floor(ms / 1000)
-    if (s < 60) return `${s}s`
-    const m = Math.floor(s / 60)
-    if (m < 60) return `${m}m ${s % 60}s`
-    const h = Math.floor(m / 60)
-    return `${h}h ${m % 60}m`
+function syncUrl() {
+    const query: Record<string, string> = {}
+    if (statusFilter.value !== 'all') query.status = statusFilter.value
+    if (typeFilter.value !== 'all') query.type = typeFilter.value
+    if (page.value > 1) query.page = String(page.value)
+    router.replace({ query })
 }
 
 // ---------------------------------------------------------------------------
@@ -124,10 +84,12 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
 async function fetchJobs() {
     loading.value = true
     error.value = null
+    syncUrl()
     try {
-        // Load the 50 most-recent jobs regardless of status. Client-side filtering
-        // handles the status select without additional API calls.
-        const res = await api<ApiResponse<JobListResponse>>('/api/v1/jobs?limit=50')
+        const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset.value) })
+        if (statusFilter.value !== 'all') params.set('status', statusFilter.value)
+        if (typeFilter.value !== 'all') params.set('type', typeFilter.value)
+        const res = await api<ApiResponse<JobListResponse>>(`/api/v1/jobs?${params}`)
         jobs.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
@@ -135,6 +97,18 @@ async function fetchJobs() {
     } finally {
         loading.value = false
     }
+}
+
+// Re-fetch when filters change; reset to page 1.
+watch([statusFilter, typeFilter], () => {
+    page.value = 1
+    fetchJobs()
+})
+
+async function goToPage(p: number) {
+    if (p < 1 || p > totalPages.value) return
+    page.value = p
+    await fetchJobs()
 }
 
 onMounted(fetchJobs)
@@ -190,10 +164,9 @@ onMounted(fetchJobs)
                 </SelectContent>
             </Select>
 
-            <!-- Total count hint — only shown when all data is loaded -->
+            <!-- Result count -->
             <span v-if="!loading" class="text-sm text-muted-foreground">
-                {{ filteredJobs.length }} job{{ filteredJobs.length !== 1 ? 's' : '' }}
-                <template v-if="total > 50"> (showing last 50)</template>
+                {{ total }} job{{ total !== 1 ? 's' : '' }}
             </span>
         </div>
 
@@ -222,7 +195,7 @@ onMounted(fetchJobs)
                     </template>
 
                     <!-- Empty state -->
-                    <template v-else-if="filteredJobs.length === 0">
+                    <template v-else-if="jobs.length === 0">
                         <TableRow>
                             <TableCell colspan="6">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -242,15 +215,22 @@ onMounted(fetchJobs)
 
                     <!-- Data rows -->
                     <template v-else>
-                        <TableRow v-for="job in filteredJobs" :key="job.id" class="cursor-pointer hover:bg-muted/50"
-                            @click="router.push(`/jobs/${job.id}`)">
+                        <TableRow v-for="job in jobs" :key="job.id"
+                            class="cursor-pointer hover:bg-muted/50"
+                            tabindex="0"
+                            role="link"
+                            :aria-label="`View job ${job.policy_name}`"
+                            @click="router.push(`/jobs/${job.id}`)"
+                            @keyup.enter="router.push(`/jobs/${job.id}`)">
                             <TableCell class="font-medium">{{ job.policy_name }}</TableCell>
                             <TableCell>
                                 <Badge variant="outline" class="capitalize">{{ job.type }}</Badge>
                             </TableCell>
                             <TableCell class="text-muted-foreground">{{ job.agent_name }}</TableCell>
                             <TableCell>
-                                <Badge :variant="statusVariant(job.status)" :class="statusClass(job.status)">
+                                <Badge :variant="statusVariant(job.status)" class="gap-1" :class="statusClass(job.status)">
+                                    <component :is="statusIcon(job.status)" class="w-3 h-3"
+                                        :class="{ 'animate-spin': job.status === 'running' }" />
                                     {{ statusLabel(job.status) }}
                                 </Badge>
                             </TableCell>
@@ -264,6 +244,22 @@ onMounted(fetchJobs)
                     </template>
                 </TableBody>
             </Table>
+        </div>
+
+        <!-- Pagination -->
+        <div v-if="!loading && totalPages > 1" class="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+                Showing {{ offset + 1 }}–{{ Math.min(offset + pageSize, total) }} of {{ total }} jobs
+            </span>
+            <div class="flex items-center gap-2">
+                <Button variant="outline" size="sm" :disabled="page === 1" @click="goToPage(page - 1)">
+                    Previous
+                </Button>
+                <span class="px-2">{{ page }} / {{ totalPages }}</span>
+                <Button variant="outline" size="sm" :disabled="page === totalPages" @click="goToPage(page + 1)">
+                    Next
+                </Button>
+            </div>
         </div>
 
     </div>

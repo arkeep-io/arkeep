@@ -255,8 +255,13 @@ onMounted(fetchPolicies)
 
                     <!-- Data rows -->
                     <template v-else>
-                        <TableRow v-for="policy in policies" :key="policy.id" class="cursor-pointer hover:bg-muted/50"
-                            @click="router.push(`/policies/${policy.id}`)">
+                        <TableRow v-for="policy in policies" :key="policy.id"
+                            class="cursor-pointer hover:bg-muted/50"
+                            tabindex="0"
+                            role="link"
+                            :aria-label="`View policy ${policy.name}`"
+                            @click="router.push(`/policies/${policy.id}`)"
+                            @keyup.enter="router.push(`/policies/${policy.id}`)">
                             <TableCell class="font-medium">{{ policy.name }}</TableCell>
                             <TableCell class="text-sm text-muted-foreground">
                                 {{ policy.agent_name }}

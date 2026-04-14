@@ -27,6 +27,9 @@ import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from 'lucide-vue-next'
 import { useTheme } from '@/composables/useTheme'
 import type { OIDCProviderSummary } from '@/types'
 
+// Respect the user's OS "reduce motion" preference for the decorative login video.
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
 // ─── Validation schema ────────────────────────────────────────────────────────
 
 const schema = toTypedSchema(
@@ -150,9 +153,9 @@ onMounted(fetchOIDCProviders)
                                 <Field>
                                     <div class="flex items-center">
                                         <FieldLabel for="password">Password</FieldLabel>
-                                        <a href="#" class="ml-auto text-sm underline-offset-2 hover:underline">
+                                        <span class="ml-auto text-xs text-muted-foreground" title="Ask your administrator to reset your password">
                                             Forgot password?
-                                        </a>
+                                        </span>
                                     </div>
                                     <div class="relative">
                                         <Input id="password" v-model="passwordValue"
@@ -200,7 +203,7 @@ onMounted(fetchOIDCProviders)
                         <!-- Decorative panel -->
                         <div class="relative hidden bg-black md:block overflow-hidden">
                             <video src="/login-bg.mp4" class="absolute inset-0 h-full w-full object-contain scale-130"
-                                autoplay loop muted playsinline />
+                                :autoplay="!prefersReducedMotion" loop muted playsinline />
                         </div>
 
                     </CardContent>

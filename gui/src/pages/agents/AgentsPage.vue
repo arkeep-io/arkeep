@@ -340,8 +340,13 @@ onUnmounted(teardownSubscriptions)
 
                     <!-- Data rows -->
                     <template v-else>
-                        <TableRow v-for="agent in mergedAgents" :key="agent.id" class="cursor-pointer hover:bg-muted/50"
-                            @click="goToDetail(agent)">
+                        <TableRow v-for="agent in mergedAgents" :key="agent.id"
+                            class="cursor-pointer hover:bg-muted/50"
+                            tabindex="0"
+                            role="link"
+                            :aria-label="`View agent ${agent.name}`"
+                            @click="goToDetail(agent)"
+                            @keyup.enter="goToDetail(agent)">
                             <TableCell class="font-medium">{{ agent.name }}</TableCell>
                             <TableCell class="font-mono text-sm text-muted-foreground">
                                 {{ agent.hostname || '—' }}

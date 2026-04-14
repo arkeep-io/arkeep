@@ -45,6 +45,11 @@ const breadcrumbs = computed<Crumb[]>(() => {
 
 <template>
     <SidebarProvider class="h-screen overflow-hidden">
+        <!-- Skip link: visible only on keyboard focus, jumps past sidebar nav -->
+        <a href="#main-content"
+            class="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-background focus:border focus:rounded-md focus:text-sm focus:font-medium focus:shadow-md">
+            Skip to content
+        </a>
         <AppSidebar />
         <SidebarInset class="flex flex-col min-h-0">
             <header class="flex items-center h-16 gap-2 shrink-0 border-b px-4">
@@ -74,7 +79,7 @@ const breadcrumbs = computed<Crumb[]>(() => {
                     <NotificationBell />
                 </div>
             </header>
-            <div class="flex-1 overflow-y-auto">
+            <div id="main-content" class="flex-1 overflow-y-auto">
                 <RouterView />
             </div>
         </SidebarInset>
