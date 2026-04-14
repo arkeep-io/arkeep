@@ -313,7 +313,7 @@ func assertStatus(t *testing.T, resp *http.Response, want int) {
 // decodeData unmarshals {"data": ...} into dst.
 func decodeData(t *testing.T, resp *http.Response, dst any) {
 	t.Helper()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var env map[string]json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		t.Fatalf("decodeData: decode envelope: %v", err)
