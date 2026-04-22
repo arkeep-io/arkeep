@@ -28,6 +28,12 @@ and manage everything from a single web interface — built on top of
 - [Observability](#observability)
   - [Health endpoints](#health-endpoints)
   - [Prometheus metrics](#prometheus-metrics)
+- [Notifications](#notifications)
+  - [Configuring notifications](#configuring-notifications)
+  - [Webhook payload](#webhook-payload)
+  - [Event types](#event-types)
+  - [Signature verification](#signature-verification)
+  - [Integrations](#integrations)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Getting Started](#getting-started)
@@ -442,6 +448,168 @@ location /metrics {
 ```
 
 See [SECURITY.md](SECURITY.md#metrics-endpoint) for details.
+
+---
+
+## Notifications
+
+### Configuring notifications
+
+Navigate to **Settings → Notifications** in the Arkeep web UI to configure:
+
+- **SMTP** — email notifications sent to admin addresses (or a custom recipient list)
+- **Webhook** — HTTP POST to any URL on every backup event
+
+Both channels support automatic retry with exponential backoff (up to 3 attempts: immediately, +5 min, +30 min). Failed and exhausted deliveries are visible under `GET /api/v1/admin/notifications/queue`.
+
+### Webhook payload
+
+Every event sends a `POST` request with a JSON body and `Content-Type: application/json`.
+The `text` field is named for Slack/Discord compatibility — it contains the same human-readable message as `title` but includes full context.
+
+**`job_success` example:**
+
+```json
+{
+  "type": "job_success",
+  "title": "Backup completed: my-server",
+  "text": "Policy \"my-server\" completed successfully at 2026-01-15T10:30:00Z.",
+  "payload": {
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "policy_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "policy_name": "my-server"
+  },
+  "timestamp": "2026-01-15T10:30:00Z"
+}
+```
+
+**`job_failure` example:**
+
+```json
+{
+  "type": "job_failure",
+  "title": "Backup failed: my-server",
+  "text": "Policy \"my-server\" failed at 2026-01-15T10:30:00Z: exit status 1",
+  "payload": {
+    "job_id": "550e8400-e29b-41d4-a716-446655440000",
+    "policy_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+    "policy_name": "my-server",
+    "error": "exit status 1"
+  },
+  "timestamp": "2026-01-15T10:30:00Z"
+}
+```
+
+**`agent_offline` example:**
+
+```json
+{
+  "type": "agent_offline",
+  "title": "Agent offline: prod-node-1",
+  "text": "Agent \"prod-node-1\" stopped responding at 2026-01-15T10:30:00Z.",
+  "payload": {
+    "agent_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+    "agent_name": "prod-node-1"
+  },
+  "timestamp": "2026-01-15T10:30:00Z"
+}
+```
+
+### Event types
+
+| `type` | Trigger | Extra `payload` fields |
+|---|---|---|
+| `job_success` | Backup completed successfully | `job_id`, `policy_id`, `policy_name` |
+| `job_failure` | Backup failed with an error | `job_id`, `policy_id`, `policy_name`, `error` |
+| `agent_offline` | Agent stopped sending heartbeats | `agent_id`, `agent_name` |
+
+### Signature verification
+
+When a **Webhook secret** is set in the Arkeep UI, every request includes an `X-Arkeep-Signature` header carrying an HMAC-SHA256 signature of the raw request body:
+
+```
+X-Arkeep-Signature: sha256=<lowercase hex>
+```
+
+This follows the same convention as GitHub and Stripe webhooks. Always verify the signature **before** processing the payload.
+
+**Go:**
+
+```go
+import (
+    "crypto/hmac"
+    "crypto/sha256"
+    "encoding/hex"
+    "strings"
+)
+
+func verifyArkeepSignature(body []byte, secret, header string) bool {
+    expected := strings.TrimPrefix(header, "sha256=")
+    mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write(body)
+    actual := hex.EncodeToString(mac.Sum(nil))
+    return hmac.Equal([]byte(expected), []byte(actual))
+}
+```
+
+**Python:**
+
+```python
+import hmac, hashlib
+
+def verify_arkeep_signature(body: bytes, secret: str, header: str) -> bool:
+    expected = header.removeprefix("sha256=")
+    actual = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, actual)
+```
+
+**Node.js:**
+
+```js
+const crypto = require('crypto')
+
+function verifyArkeepSignature(body, secret, header) {
+  const expected = header.replace(/^sha256=/, '')
+  const actual = crypto.createHmac('sha256', secret).update(body).digest('hex')
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual))
+}
+```
+
+### Integrations
+
+#### Slack
+
+1. Create an [incoming webhook](https://api.slack.com/messaging/webhooks) in your Slack workspace.
+2. Paste the URL into **Settings → Notifications → Webhook URL**.
+3. Done — Arkeep's `text` field maps directly to Slack's message body. No additional configuration required.
+
+#### Discord
+
+1. In your Discord server, open **Channel Settings → Integrations → Webhooks** and create a new webhook.
+2. Copy the webhook URL and paste it into Arkeep's Webhook URL setting.
+3. Discord accepts Slack-compatible payloads at the `/slack` URL suffix — append it if you want richer formatting:
+   ```
+   https://discord.com/api/webhooks/<id>/<token>/slack
+   ```
+   Without the suffix, Discord renders the `text` field as the message content, which works for plain-text alerts.
+
+#### n8n
+
+1. Add a **Webhook** trigger node (Method: `POST`, Response mode: `Immediately`).
+2. Paste the generated URL into Arkeep's Webhook URL setting.
+3. *(Optional)* Add a **Code** node after the trigger to verify `X-Arkeep-Signature` (see [Signature verification](#signature-verification)).
+4. Add a **Switch** node that routes on `{{ $json.type }}` — `job_failure`, `job_success`, `agent_offline`.
+5. Connect downstream nodes (Slack, PagerDuty, Telegram, email, etc.) to each branch.
+
+All event fields are available as `{{ $json.payload.policy_name }}`, `{{ $json.payload.error }}`, and so on.
+
+#### Zapier
+
+1. Create a new Zap and add a **Webhooks by Zapier → Catch Hook** trigger.
+2. Paste the generated hook URL into Arkeep's Webhook URL setting.
+3. Send a test backup event from the Arkeep UI to populate Zapier's sample data.
+4. Use `type`, `title`, `text`, `payload__policy_name`, `payload__error`, and `timestamp` fields in your Zap actions.
+5. Add a **Filter** step to route on `type` (e.g. only trigger downstream actions for `job_failure`).
 
 ---
 
