@@ -136,9 +136,13 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 // pre-created net.Listener so callers (e.g. integration tests) can control
 // the bind address and retrieve the actual port before Serve is called.
 func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
+	const maxMsgSize = 16 * 1024 * 1024 // 16 MB — matches agent client config
+
 	opts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(s.authUnaryInterceptor),
 		grpc.StreamInterceptor(s.authStreamInterceptor),
+		grpc.MaxRecvMsgSize(maxMsgSize),
+		grpc.MaxSendMsgSize(maxMsgSize),
 	}
 
 	switch {
