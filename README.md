@@ -97,6 +97,8 @@ way to verify everything ran successfully. Arkeep fixes this.
 
 **Agent** runs on each machine to be backed up. It initiates a persistent outbound gRPC connection to the server — it never listens on any port. This makes deployment behind NAT and corporate firewalls effortless.
 
+**gRPC transport limits:** the server and agent both enforce a maximum message size of **16 MB** per RPC call. The agent also sends keepalive pings every 30 seconds (10-second timeout) to detect stale connections early. These values are fixed in the binary; no configuration is required.
+
 **GUI** is a Vue 3 PWA served directly by the server as embedded static files. No separate web server required.
 
 ---

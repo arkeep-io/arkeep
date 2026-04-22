@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -368,9 +369,20 @@ func (m *Manager) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to build transport credentials: %w", err)
 	}
 
+	const maxMsgSize = 16 * 1024 * 1024 // 16 MB — matches server config
+
 	conn, err := grpc.NewClient(
 		m.cfg.ServerAddr,
 		grpc.WithTransportCredentials(transportCreds),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxMsgSize),
+			grpc.MaxCallSendMsgSize(maxMsgSize),
+		),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
 	)
 	if err != nil {
 		return fmt.Errorf("dial failed: %w", err)
