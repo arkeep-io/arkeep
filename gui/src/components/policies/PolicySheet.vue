@@ -1,27 +1,20 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import { useForm, useField, useFieldArray } from 'vee-validate'
-import { toTypedSchema } from '@vee-validate/zod'
-import * as z from 'zod'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   Field,
   FieldError,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -30,28 +23,35 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { Badge } from '@/components/ui/badge'
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import { Switch } from '@/components/ui/switch'
+import { api } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
+import type { Agent, ApiResponse, Destination, Policy, VolumeInfo } from '@/types'
+import { toTypedSchema } from '@vee-validate/zod'
 import {
   AlertCircle,
   AlertTriangle,
-  Loader2,
-  Plus,
-  Trash2,
-  ChevronUp,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Eye,
   EyeOff,
+  Loader2,
+  Plus,
   RefreshCw,
+  Trash2,
 } from 'lucide-vue-next'
-import { api } from '@/services/api'
-import type { ApiResponse, Policy, Agent, Destination, VolumeInfo } from '@/types'
-import { useAuthStore } from '@/stores/auth'
+import { useField, useFieldArray, useForm } from 'vee-validate'
+import { computed, ref, watch } from 'vue'
+import * as z from 'zod'
 
 const authStore = useAuthStore()
 
@@ -493,10 +493,17 @@ watch(
 // ---------------------------------------------------------------------------
 
 function populateForm(p: Policy) {
-  let parsedSources: { type: string; path: string; label?: string }[] = []
+  let parsedSources: RawSource[] = []
+  let parsedPreHook: RawHook | null = null
+  let parsedPostHook: RawHook | null = null
+
   try {
     parsedSources = typeof p.sources === 'string' ? JSON.parse(p.sources) : (p.sources ?? [])
+    parsedPreHook = typeof p.hook_pre_backup === "string" ? JSON.parse(p.hook_pre_backup) : null
+    parsedPostHook = typeof p.hook_post_backup === "string" ? JSON.parse(p.hook_post_backup) : null
   } catch { /* fallback to empty */ }
+
+  type RawHook = {name: string, command: string, args: string[], timeout_secs: number}
 
   // Re-group docker-volume entries that were expanded on save back into a
   // single source row per group. Two entries belong to the same group when
@@ -563,8 +570,8 @@ function populateForm(p: Policy) {
     retention_keep_monthly: p.retention_monthly ?? 6,
     retention_keep_yearly: p.retention_yearly ?? 1,
     ordered_destination_ids: preDestIds,
-    hook_pre: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
-    hook_post: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
+    hook_pre: parsedPreHook === null ? { enabled: false, name: '', command: '', args: '', timeout_secs: 30 } : { enabled: true, ...parsedPreHook, args: parsedPreHook.args.join(" ") },
+    hook_post: parsedPostHook === null ? { enabled: false, name: '', command: '', args: '', timeout_secs: 30 } : { enabled: true, ...parsedPostHook, args: parsedPostHook.args.join(" ") },
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
