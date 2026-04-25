@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -69,18 +70,24 @@ func NewRunner(timeout time.Duration) *Runner {
 // A non-zero exit code returns ErrHookFailed wrapping the underlying
 // exec.ExitError — the Result is still populated so the caller can log
 // the output regardless.
-func (r *Runner) Run(ctx context.Context, command string) (*Result, error) {
+func (r *Runner) Run(ctx context.Context, command string, args []string, timeout time.Duration) (*Result, error) {
 	if command == "" {
 		// No hook configured — treat as success with no output.
 		return &Result{}, nil
 	}
 
-	// Apply the runner timeout on top of any deadline already in ctx.
+	timeoutToUse := r.Timeout
+
+	if timeout > 0 {
+		timeoutToUse = timeout
+	}
+
+	// Apply the command timeout (or the runner if it's zero) on top of any deadline already in ctx.
 	// context.WithTimeout returns the shorter of the two deadlines.
-	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeoutToUse)
 	defer cancel()
 
-	cmd := buildShellCmd(ctx, command)
+	cmd := buildShellCmd(ctx, command, args, timeout)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -130,9 +137,16 @@ func (r *Runner) Run(ctx context.Context, command string) (*Result, error) {
 // hooks can use pipes, environment variable expansion, conditionals, and
 // other shell features — consistent with what users expect from a "shell
 // command" field in the GUI.
-func buildShellCmd(ctx context.Context, command string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "cmd", "/C", command)
+func buildShellCmd(ctx context.Context, command string, args []string, timeout time.Duration) *exec.Cmd {
+
+	shellCmd := command
+
+	if len(args) > 0 {
+		shellCmd = shellCmd + " " + strings.Join(args, " ")
 	}
-	return exec.CommandContext(ctx, "/bin/sh", "-c", command)
+
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd", "/C", shellCmd)
+	}
+	return exec.CommandContext(ctx, "/bin/sh", "-c", shellCmd)
 }
