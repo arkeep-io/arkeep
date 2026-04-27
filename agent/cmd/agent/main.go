@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -297,10 +298,19 @@ func envOrDefault(key, defaultVal string) string {
 }
 
 // isRunningInDocker reports whether the process is running inside a Docker
-// container by checking for the /.dockerenv marker file created by the Docker runtime.
+// container. It checks /.dockerenv first (created by the Docker runtime in
+// most configurations), then falls back to scanning /proc/self/cgroup for
+// "docker" or "containerd" markers — necessary on some platforms (e.g. Unraid)
+// where the container root is an overlay mount that may not include /.dockerenv.
 func isRunningInDocker() bool {
-	_, err := os.Stat("/.dockerenv")
-	return err == nil
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(data, []byte("docker")) || bytes.Contains(data, []byte("containerd"))
 }
 
 // fileExists returns true if path exists and is a regular file.

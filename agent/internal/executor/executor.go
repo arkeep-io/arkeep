@@ -326,15 +326,30 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		// restic. This produces a clear, actionable error instead of the
 		// cryptic "permission denied" from restic internals.
 		if dest.Type == "local" {
+			originalURL := dest.RepoURL
 			dest.RepoURL = translateLocalPath(dest.RepoURL, e.dockerHostRoot)
+			if dest.RepoURL != originalURL {
+				log("debug", fmt.Sprintf("translated local path %q → %q (ARKEEP_DOCKER_HOST_ROOT=%q)", originalURL, dest.RepoURL, e.dockerHostRoot))
+			}
 			if err := os.MkdirAll(dest.RepoURL, 0755); err != nil {
-				errMsg := fmt.Sprintf(
-					"local path %q is not writable: %v — "+
-						"if running inside Docker, set ARKEEP_DOCKER_HOST_ROOT and mount the host "+
-						"filesystem (e.g. /:/hostfs:rw on Linux, C:/:/hostfs/c:rw on Windows), "+
-						"or set PUID/PGID to match the directory owner",
-					dest.RepoURL, err,
-				)
+				var errMsg string
+				if e.dockerHostRoot == "" {
+					errMsg = fmt.Sprintf(
+						"local path %q is not writable: %v — "+
+							"running without ARKEEP_DOCKER_HOST_ROOT: if this agent is inside Docker, "+
+							"set ARKEEP_DOCKER_HOST_ROOT=/hostfs and mount the backup share "+
+							"(e.g. -v /mnt/user:/hostfs/mnt/user:rw), or mount the full host root "+
+							"(-v /:/hostfs:ro on Linux); or set PUID/PGID to match the directory owner",
+						dest.RepoURL, err,
+					)
+				} else {
+					errMsg = fmt.Sprintf(
+						"local path %q is not writable (translated from %q via ARKEEP_DOCKER_HOST_ROOT=%q): %v — "+
+							"verify the share is mounted at the expected container path and is writable, "+
+							"or set PUID/PGID to match the directory owner",
+						dest.RepoURL, originalURL, e.dockerHostRoot, err,
+					)
+				}
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, errMsg)
 				backupFailed = true
