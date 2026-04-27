@@ -200,7 +200,7 @@ const hookFieldSchema = z.object({
   enabled: z.boolean(),
   name: z.string().optional(),
   command: z.string().optional(),
-  args: z.array(z.string()).optional().default([]),
+  args: z.array(z.string()).optional(),
   timeout_secs: z.coerce.number().int().min(0).optional(),
 })
 
