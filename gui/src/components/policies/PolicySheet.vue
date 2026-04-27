@@ -200,8 +200,7 @@ const hookFieldSchema = z.object({
   enabled: z.boolean(),
   name: z.string().optional(),
   command: z.string().optional(),
-  // Args edited as a space-separated string and split on submit.
-  args: z.string().optional(),
+  args: z.array(z.string()).optional().default([]),
   timeout_secs: z.coerce.number().int().min(0).optional(),
 })
 
@@ -406,14 +405,30 @@ function destByIdName(id: string): string {
 const { value: hookPreEnabled } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName } = useField<string>('hook_pre.name')
 const { value: hookPreCommand } = useField<string>('hook_pre.command')
-const { value: hookPreArgs } = useField<string>('hook_pre.args')
+const { value: hookPreArgs } = useField<string[]>('hook_pre.args')
 const { value: hookPreTimeout } = useField<number>('hook_pre.timeout_secs')
 
 const { value: hookPostEnabled } = useField<boolean>('hook_post.enabled')
 const { value: hookPostName } = useField<string>('hook_post.name')
 const { value: hookPostCommand } = useField<string>('hook_post.command')
-const { value: hookPostArgs } = useField<string>('hook_post.args')
+const { value: hookPostArgs } = useField<string[]>('hook_post.args')
 const { value: hookPostTimeout } = useField<number>('hook_post.timeout_secs')
+
+function addHookPreArg() { hookPreArgs.value = [...(hookPreArgs.value ?? []), ''] }
+function removeHookPreArg(idx: number) { hookPreArgs.value = (hookPreArgs.value ?? []).filter((_, i) => i !== idx) }
+function updateHookPreArg(idx: number, val: string) {
+  const arr = [...(hookPreArgs.value ?? [])]
+  arr[idx] = val
+  hookPreArgs.value = arr
+}
+
+function addHookPostArg() { hookPostArgs.value = [...(hookPostArgs.value ?? []), ''] }
+function removeHookPostArg(idx: number) { hookPostArgs.value = (hookPostArgs.value ?? []).filter((_, i) => i !== idx) }
+function updateHookPostArg(idx: number, val: string) {
+  const arr = [...(hookPostArgs.value ?? [])]
+  arr[idx] = val
+  hookPostArgs.value = arr
+}
 
 const hooksOpen = ref(false)
 
@@ -435,8 +450,8 @@ function defaultValues(): FormValues {
     retention_keep_monthly: 6,
     retention_keep_yearly: 1,
     ordered_destination_ids: [],
-    hook_pre: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
-    hook_post: { enabled: false, name: '', command: '', args: '', timeout_secs: 30 },
+    hook_pre: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
+    hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
   }
 }
 
@@ -499,9 +514,15 @@ function populateForm(p: Policy) {
 
   try {
     parsedSources = typeof p.sources === 'string' ? JSON.parse(p.sources) : (p.sources ?? [])
-    parsedPreHook = typeof p.hook_pre_backup === "string" ? JSON.parse(p.hook_pre_backup) : null
-    parsedPostHook = typeof p.hook_post_backup === "string" ? JSON.parse(p.hook_post_backup) : null
   } catch { /* fallback to empty */ }
+
+  try {
+    parsedPreHook = typeof p.hook_pre_backup === 'string' ? JSON.parse(p.hook_pre_backup) : null
+  } catch { /* fallback to null */ }
+
+  try {
+    parsedPostHook = typeof p.hook_post_backup === 'string' ? JSON.parse(p.hook_post_backup) : null
+  } catch { /* fallback to null */ }
 
   type RawHook = {name: string, command: string, args: string[], timeout_secs: number}
 
@@ -570,8 +591,8 @@ function populateForm(p: Policy) {
     retention_keep_monthly: p.retention_monthly ?? 6,
     retention_keep_yearly: p.retention_yearly ?? 1,
     ordered_destination_ids: preDestIds,
-    hook_pre: parsedPreHook === null ? { enabled: false, name: '', command: '', args: '', timeout_secs: 30 } : { enabled: true, ...parsedPreHook, args: parsedPreHook.args.join(" ") },
-    hook_post: parsedPostHook === null ? { enabled: false, name: '', command: '', args: '', timeout_secs: 30 } : { enabled: true, ...parsedPostHook, args: parsedPostHook.args.join(" ") },
+    hook_pre: parsedPreHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPreHook },
+    hook_post: parsedPostHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPostHook },
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
@@ -599,7 +620,7 @@ function serialiseHook(hook: z.infer<typeof hookFieldSchema>): string {
   return JSON.stringify({
     name: hook.name ?? '',
     command: hook.command,
-    args: hook.args ? hook.args.split(/\s+/).filter(Boolean) : [],
+    args: hook.args ?? [],
     timeout_secs: hook.timeout_secs ?? 30,
   })
 }
@@ -1093,12 +1114,29 @@ function onOpenChange(value: boolean) {
                       <Input id="hook-pre-cmd" v-model="hookPreCommand" class="font-mono" placeholder="e.g. docker" :disabled="!authStore.isAdmin" />
                     </div>
                     <div class="flex flex-col gap-1.5">
-                      <Label for="hook-pre-args" class="text-sm">
-                        Arguments
-                        <span class="text-muted-foreground font-normal">(space-separated)</span>
-                      </Label>
-                      <Input id="hook-pre-args" v-model="hookPreArgs" class="font-mono"
-                        placeholder="e.g. stop my-container" :disabled="!authStore.isAdmin" />
+                      <div class="flex items-center justify-between">
+                        <Label class="text-sm">Arguments</Label>
+                        <Button type="button" variant="outline" size="sm" :disabled="!authStore.isAdmin"
+                          @click="addHookPreArg">
+                          <Plus class="w-3 h-3" />
+                          Add
+                        </Button>
+                      </div>
+                      <p v-if="!hookPreArgs || hookPreArgs.length === 0"
+                        class="text-xs text-muted-foreground">
+                        No arguments.
+                      </p>
+                      <div v-for="(arg, argIdx) in (hookPreArgs ?? [])" :key="argIdx"
+                        class="flex items-center gap-2">
+                        <Input :model-value="arg" class="font-mono flex-1"
+                          :placeholder="`arg ${argIdx + 1}`" :disabled="!authStore.isAdmin"
+                          @update:model-value="updateHookPreArg(argIdx, String($event))" />
+                        <Button type="button" variant="ghost" size="icon"
+                          class="w-6 h-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          :disabled="!authStore.isAdmin" @click="removeHookPreArg(argIdx)">
+                          <Trash2 class="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     </div>
                   </template>
                 </div>
@@ -1127,12 +1165,29 @@ function onOpenChange(value: boolean) {
                       <Input id="hook-post-cmd" v-model="hookPostCommand" class="font-mono" placeholder="e.g. docker" :disabled="!authStore.isAdmin" />
                     </div>
                     <div class="flex flex-col gap-1.5">
-                      <Label for="hook-post-args" class="text-sm">
-                        Arguments
-                        <span class="text-muted-foreground font-normal">(space-separated)</span>
-                      </Label>
-                      <Input id="hook-post-args" v-model="hookPostArgs" class="font-mono"
-                        placeholder="e.g. start my-container" :disabled="!authStore.isAdmin" />
+                      <div class="flex items-center justify-between">
+                        <Label class="text-sm">Arguments</Label>
+                        <Button type="button" variant="outline" size="sm" :disabled="!authStore.isAdmin"
+                          @click="addHookPostArg">
+                          <Plus class="w-3 h-3" />
+                          Add
+                        </Button>
+                      </div>
+                      <p v-if="!hookPostArgs || hookPostArgs.length === 0"
+                        class="text-xs text-muted-foreground">
+                        No arguments.
+                      </p>
+                      <div v-for="(arg, argIdx) in (hookPostArgs ?? [])" :key="argIdx"
+                        class="flex items-center gap-2">
+                        <Input :model-value="arg" class="font-mono flex-1"
+                          :placeholder="`arg ${argIdx + 1}`" :disabled="!authStore.isAdmin"
+                          @update:model-value="updateHookPostArg(argIdx, String($event))" />
+                        <Button type="button" variant="ghost" size="icon"
+                          class="w-6 h-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          :disabled="!authStore.isAdmin" @click="removeHookPostArg(argIdx)">
+                          <Trash2 class="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     </div>
                   </template>
                 </div>
