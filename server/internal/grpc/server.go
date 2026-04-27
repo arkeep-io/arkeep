@@ -126,10 +126,23 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 	if err != nil {
 		return fmt.Errorf("grpc: failed to listen on %s: %w", listenAddr, err)
 	}
+	return s.Serve(ctx, lis)
+}
+
+// Serve starts the gRPC server on an existing listener and blocks until the
+// context is cancelled or a fatal error occurs.
+//
+// This is the lower-level counterpart to ListenAndServe — it accepts a
+// pre-created net.Listener so callers (e.g. integration tests) can control
+// the bind address and retrieve the actual port before Serve is called.
+func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
+	const maxMsgSize = 16 * 1024 * 1024 // 16 MB — matches agent client config
 
 	opts := []grpc.ServerOption{
 		grpc.UnaryInterceptor(s.authUnaryInterceptor),
 		grpc.StreamInterceptor(s.authStreamInterceptor),
+		grpc.MaxRecvMsgSize(maxMsgSize),
+		grpc.MaxSendMsgSize(maxMsgSize),
 	}
 
 	switch {
@@ -144,7 +157,7 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
 		s.logger.Info("gRPC mTLS enabled (auto-PKI)",
 			zap.String("ca_cert", s.autoCerts.CACertFile),
-			zap.String("addr", listenAddr),
+			zap.String("addr", lis.Addr().String()),
 		)
 
 	case s.tlsCertFile != "" && s.tlsKeyFile != "":
@@ -156,12 +169,12 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 		opts = append(opts, grpc.Creds(creds))
 		s.logger.Info("gRPC TLS enabled (external cert)",
 			zap.String("cert", s.tlsCertFile),
-			zap.String("addr", listenAddr),
+			zap.String("addr", lis.Addr().String()),
 		)
 
 	default:
 		s.logger.Warn("gRPC running without TLS (insecure mode) — do not use in production",
-			zap.String("addr", listenAddr),
+			zap.String("addr", lis.Addr().String()),
 		)
 	}
 
@@ -177,7 +190,7 @@ func (s *Server) ListenAndServe(ctx context.Context, listenAddr string) error {
 		grpcServer.GracefulStop()
 	}()
 
-	s.logger.Info("grpc server listening", zap.String("addr", listenAddr))
+	s.logger.Info("grpc server listening", zap.String("addr", lis.Addr().String()))
 
 	if err := grpcServer.Serve(lis); err != nil {
 		return fmt.Errorf("grpc: server error: %w", err)

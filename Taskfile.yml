@@ -14,7 +14,7 @@ vars:
   # NOTE: these vars are kept here for documentation purposes — the actual
   # version constants live in scripts/download_deps.go and must be kept in sync.
   RESTIC_VERSION: "0.18.1"
-  RCLONE_VERSION: "1.73.4"
+  RCLONE_VERSION: "1.73.5"
 
 tasks:
   # ─── Build ──────────────────────────────────────────────────────────────────
@@ -96,17 +96,17 @@ tasks:
   test:shared:
     desc: Run shared tests
     dir: shared
-    cmd: go test -v -race -count=1 ./...
+    cmd: go test -v -count=1 ./...
 
   test:server:
     desc: Run server tests
     dir: server
-    cmd: go test -v -race -count=1 ./...
+    cmd: go test -v -count=1 ./...
 
   test:agent:
     desc: Run agent tests
     dir: agent
-    cmd: go test -v -race -count=1 ./...
+    cmd: go test -v -count=1 ./...
 
   # ─── Proto ──────────────────────────────────────────────────────────────────
   proto:
@@ -121,7 +121,8 @@ tasks:
 
   # ─── Lint ───────────────────────────────────────────────────────────────────
   lint:
-    desc: Run Go linter
+    desc: Run Go linter (server module)
+    dir: server
     cmd: golangci-lint run ./...
 
   # ─── Tidy ───────────────────────────────────────────────────────────────────

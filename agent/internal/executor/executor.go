@@ -97,6 +97,13 @@ type retentionPayload struct {
 	Yearly  int `json:"yearly"`
 }
 
+type hookPayload struct {
+	Name        string   `json:"name"`
+	Command     string   `json:"command"`
+	Args    		[]string `json:"args"`
+	TimeoutSecs int      `json:"timeout_secs"`
+}
+
 // queueSize is the maximum number of jobs that can be buffered in the channel
 // while waiting to be executed. Jobs beyond this limit are rejected — the
 // server will retry them on the next reconnect via DispatchPending.
@@ -276,7 +283,15 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// --- 4. Pre-backup hook ---
 	if payload.HookPreBackup != "" {
 		log("info", fmt.Sprintf("running pre-backup hook: %s", payload.HookPreBackup))
-		result, err := e.hooks.Run(ctx, payload.HookPreBackup)
+
+		hook, err := e.resolveHook(ctx, payload.HookPreBackup)
+		if err != nil {
+			fail(fmt.Sprintf("failed to resolve pre-backup hook: %v", err))
+			return
+		}
+
+		result, err := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
+		
 		if result.Output != "" {
 			log("info", "pre-backup hook output: "+result.Output)
 		}
@@ -311,15 +326,30 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		// restic. This produces a clear, actionable error instead of the
 		// cryptic "permission denied" from restic internals.
 		if dest.Type == "local" {
+			originalURL := dest.RepoURL
 			dest.RepoURL = translateLocalPath(dest.RepoURL, e.dockerHostRoot)
+			if dest.RepoURL != originalURL {
+				log("debug", fmt.Sprintf("translated local path %q → %q (ARKEEP_DOCKER_HOST_ROOT=%q)", originalURL, dest.RepoURL, e.dockerHostRoot))
+			}
 			if err := os.MkdirAll(dest.RepoURL, 0755); err != nil {
-				errMsg := fmt.Sprintf(
-					"local path %q is not writable: %v — "+
-						"if running inside Docker, set ARKEEP_DOCKER_HOST_ROOT and mount the host "+
-						"filesystem (e.g. /:/hostfs:rw on Linux, C:/:/hostfs/c:rw on Windows), "+
-						"or set PUID/PGID to match the directory owner",
-					dest.RepoURL, err,
-				)
+				var errMsg string
+				if e.dockerHostRoot == "" {
+					errMsg = fmt.Sprintf(
+						"local path %q is not writable: %v — "+
+							"running without ARKEEP_DOCKER_HOST_ROOT: if this agent is inside Docker, "+
+							"set ARKEEP_DOCKER_HOST_ROOT=/hostfs and mount the backup share "+
+							"(e.g. -v /mnt/user:/hostfs/mnt/user:rw), or mount the full host root "+
+							"(-v /:/hostfs:ro on Linux); or set PUID/PGID to match the directory owner",
+						dest.RepoURL, err,
+					)
+				} else {
+					errMsg = fmt.Sprintf(
+						"local path %q is not writable (translated from %q via ARKEEP_DOCKER_HOST_ROOT=%q): %v — "+
+							"verify the share is mounted at the expected container path and is writable, "+
+							"or set PUID/PGID to match the directory owner",
+						dest.RepoURL, originalURL, e.dockerHostRoot, err,
+					)
+				}
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, errMsg)
 				backupFailed = true
@@ -391,9 +421,15 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// --- 6. Post-backup hook (always runs) ---
 	if payload.HookPostBackup != "" {
 		log("info", fmt.Sprintf("running post-backup hook: %s", payload.HookPostBackup))
-		result, _ := e.hooks.Run(ctx, payload.HookPostBackup)
-		if result.Output != "" {
-			log("info", "post-backup hook output: "+result.Output)
+
+		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
+		if err != nil {
+			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
+		} else {
+			result, _ := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
+			if result.Output != "" {
+				log("info", "post-backup hook output: "+result.Output)
+			}
 		}
 	}
 
@@ -622,4 +658,13 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 	}
 
 	return resolved, nil
+}
+
+func (e *Executor) resolveHook(ctx context.Context, hookJSON string) (*hookPayload, error) {
+	var hook hookPayload
+	if err := json.Unmarshal([]byte(hookJSON), &hook); err != nil {
+		return nil, fmt.Errorf("invalid hook JSON: %w", err)
+	}
+
+	return &hook, nil
 }
