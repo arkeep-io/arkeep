@@ -137,16 +137,22 @@ func (r *Runner) Run(ctx context.Context, command string, args []string, timeout
 // hooks can use pipes, environment variable expansion, conditionals, and
 // other shell features — consistent with what users expect from a "shell
 // command" field in the GUI.
+//
+// On Unix the POSIX form "sh -c command_string -- arg..." is used: args are
+// passed as positional parameters ($1, $2, …) rather than concatenated into
+// the command string, so args that contain spaces are handled correctly.
+// The command string can reference them via "$@" or "$1", "$2", etc.
+//
+// On Windows cmd /C is still used with a joined string (no equivalent
+// positional-parameter mechanism exists in cmd).
 func buildShellCmd(ctx context.Context, command string, args []string, timeout time.Duration) *exec.Cmd {
-
-	shellCmd := command
-
-	if len(args) > 0 {
-		shellCmd = shellCmd + " " + strings.Join(args, " ")
-	}
-
 	if runtime.GOOS == "windows" {
+		shellCmd := command
+		if len(args) > 0 {
+			shellCmd = shellCmd + " " + strings.Join(args, " ")
+		}
 		return exec.CommandContext(ctx, "cmd", "/C", shellCmd)
 	}
-	return exec.CommandContext(ctx, "/bin/sh", "-c", shellCmd)
+	cmdArgs := append([]string{"-c", command, "--"}, args...)
+	return exec.CommandContext(ctx, "/bin/sh", cmdArgs...)
 }

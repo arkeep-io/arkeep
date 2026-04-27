@@ -424,13 +424,12 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 
 		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
 		if err != nil {
-			fail(fmt.Sprintf("failed to resolve post-backup hook: %v", err))
-			return
-		}
-
-		result, _ := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
-		if result.Output != "" {
-			log("info", "post-backup hook output: "+result.Output)
+			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
+		} else {
+			result, _ := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
+			if result.Output != "" {
+				log("info", "post-backup hook output: "+result.Output)
+			}
 		}
 	}
 
