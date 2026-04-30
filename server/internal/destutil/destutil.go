@@ -111,6 +111,20 @@ func BuildEnv(dest *db.Destination) map[string]string {
 				env[k] = v
 			}
 		}
+	case "rest":
+		var c struct {
+			User     string `json:"user"`
+			Password string `json:"password"`
+		}
+
+		if err := json.Unmarshal([]byte(creds), &c); err == nil {
+			if c.User != "" {
+				env["RESTIC_REST_USERNAME"] = c.User
+			}
+			if c.Password != "" {
+				env["RESTIC_REST_PASSWORD"] = c.Password
+			}
+		}
 	}
 
 	return env
