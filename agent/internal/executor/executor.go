@@ -182,6 +182,29 @@ func translateLocalPath(path, hostRoot string) string {
 	return path
 }
 
+// ensureWritableDir ensures dir exists and is writable.
+//
+// Unlike os.MkdirAll alone, this function avoids false failures on setups
+// where intermediate path components exist but are read-only (e.g. Unraid
+// with -v /:/hostfs:ro plus -v /mnt/user:/hostfs/mnt/user:rw: /hostfs/mnt
+// is read-only but /hostfs/mnt/user/Arkeep is writable). It only calls
+// MkdirAll when the directory is absent, then probes writability with a
+// temporary file on the leaf directory itself.
+func ensureWritableDir(dir string) error {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	tmp, err := os.CreateTemp(dir, ".arkeep-write-test-*")
+	if err != nil {
+		return err
+	}
+	tmp.Close()
+	os.Remove(tmp.Name())
+	return nil
+}
+
 // Run starts the worker loop. It blocks until ctx is cancelled, processing
 // one job at a time from the queue.
 // sink and reporter are provided here (not at construction) so they can be
@@ -331,7 +354,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if dest.RepoURL != originalURL {
 				log("debug", fmt.Sprintf("translated local path %q → %q (ARKEEP_DOCKER_HOST_ROOT=%q)", originalURL, dest.RepoURL, e.dockerHostRoot))
 			}
-			if err := os.MkdirAll(dest.RepoURL, 0755); err != nil {
+			if err := ensureWritableDir(dest.RepoURL); err != nil {
 				var errMsg string
 				if e.dockerHostRoot == "" {
 					errMsg = fmt.Sprintf(

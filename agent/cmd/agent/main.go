@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -298,10 +299,18 @@ func envOrDefault(key, defaultVal string) string {
 }
 
 // isRunningInDocker reports whether the process is running inside a Docker
-// container. It checks /.dockerenv first (created by the Docker runtime in
-// most configurations), then falls back to scanning /proc/self/cgroup for
-// "docker" or "containerd" markers — necessary on some platforms (e.g. Unraid)
-// where the container root is an overlay mount that may not include /.dockerenv.
+// container. Three checks in order:
+//
+//  1. /.dockerenv — created by the Docker runtime in most configurations.
+//  2. /proc/self/cgroup contains "docker" or "containerd" — reliable on
+//     cgroupv1 or when the container uses the host cgroup namespace.
+//  3. cgroupv2 + private cgroup namespace (Docker 20.10+ default): the
+//     container sees only "0::/" without any Docker markers. In this case
+//     we distinguish container from host by reading /proc/1/comm: on the
+//     host PID 1 is always an init system; inside a container it is the
+//     container entry-point. This covers platforms like Unraid with the
+//     btrfs storage driver where /.dockerenv may be absent and cgroup
+//     paths carry no "docker" marker.
 func isRunningInDocker() bool {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true
@@ -310,7 +319,21 @@ func isRunningInDocker() bool {
 	if err != nil {
 		return false
 	}
-	return bytes.Contains(data, []byte("docker")) || bytes.Contains(data, []byte("containerd"))
+	if bytes.Contains(data, []byte("docker")) || bytes.Contains(data, []byte("containerd")) {
+		return true
+	}
+	// cgroupv2 with private cgroup namespace: single line "0::/" with no Docker marker.
+	if bytes.Equal(bytes.TrimSpace(data), []byte("0::/")) {
+		comm, err := os.ReadFile("/proc/1/comm")
+		if err == nil {
+			switch strings.TrimSpace(string(comm)) {
+			case "systemd", "init", "openrc-init", "runit", "s6-svscan", "dinit":
+				return false // host init process — not a container
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // fileExists returns true if path exists and is a regular file.
