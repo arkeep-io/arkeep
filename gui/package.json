@@ -20,13 +20,13 @@
     "lucide-vue-next": "^1.0.0",
     "ofetch": "^1.5.1",
     "pinia": "^3.0.4",
-    "reka-ui": "^2.9.6",
+    "reka-ui": "^2.9.7",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.4",
     "vee-validate": "^4.15.1",
     "vue": "^3.5.33",
     "vue-router": "^5.0.6",
-    "workbox-window": "^7.4.0",
+    "workbox-window": "^7.4.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

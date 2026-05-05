@@ -200,8 +200,8 @@ func ensureWritableDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	tmp.Close()
-	os.Remove(tmp.Name())
+	tmp.Close()           //nolint:errcheck
+	os.Remove(tmp.Name()) //nolint:errcheck
 	return nil
 }
 
