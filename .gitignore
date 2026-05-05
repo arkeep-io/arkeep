@@ -45,6 +45,11 @@ desktop.ini
 .env.local
 *.env
 
+# ─── AI Assistants ────────────────────────────────────────────────────────────
+
+.claude
+CLAUDE.md
+
 # ─── Helm ─────────────────────────────────────────────────────────────────────
 # Subchart tarballs are regenerated with `helm dependency update`; only Chart.lock is committed.
 deploy/helm/**/charts/*.tgz

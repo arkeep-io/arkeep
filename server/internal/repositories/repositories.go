@@ -118,6 +118,8 @@ type PolicyRepository interface {
 	AddDestination(ctx context.Context, pd *db.PolicyDestination) error
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error
 	UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error
+	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
+	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]db.PolicyDestination, error)
 }
 
 // -----------------------------------------------------------------------------
