@@ -668,9 +668,10 @@ const onSubmit = handleSubmit(async (values) => {
     }
 
     if (isEdit.value) {
-      // PATCH-only: enabled, optional new password
+      // PATCH-only: enabled, optional new password, destinations
       body.enabled = values.enabled
       if (values.repo_password) body.repo_password = values.repo_password
+      body.destinations = destinationsPayload
     } else {
       // POST-only: agent, password (required), destinations
       body.agent_id = values.agent_id

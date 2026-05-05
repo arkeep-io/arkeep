@@ -122,6 +122,11 @@ export default defineConfig({
     // Increase chunk size warning threshold — we accept slightly larger bundles
     // in exchange for fewer HTTP round trips when loading the SPA
     chunkSizeWarningLimit: 600,
+    rolldownOptions: {
+      output: {
+        strictExecutionOrder: true,
+      },
+    },
   },
   server: {
     port: 5173,

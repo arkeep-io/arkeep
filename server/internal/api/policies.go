@@ -319,18 +319,20 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 
 // updatePolicyRequest is the JSON body for PATCH /api/v1/policies/{id}.
 // All fields are optional — only non-nil values are applied.
+// Destinations replaces the full set when non-empty; omitting it leaves destinations unchanged.
 type updatePolicyRequest struct {
-	Name             *string `json:"name"`
-	Schedule         *string `json:"schedule"`
-	Enabled          *bool   `json:"enabled"`
-	Sources          *string `json:"sources"`
-	RepoPassword     *string `json:"repo_password"`
-	RetentionDaily   *int    `json:"retention_daily"`
-	RetentionWeekly  *int    `json:"retention_weekly"`
-	RetentionMonthly *int    `json:"retention_monthly"`
-	RetentionYearly  *int    `json:"retention_yearly"`
-	HookPreBackup    *string `json:"hook_pre_backup"`
-	HookPostBackup   *string `json:"hook_post_backup"`
+	Name             *string                    `json:"name"`
+	Schedule         *string                    `json:"schedule"`
+	Enabled          *bool                      `json:"enabled"`
+	Sources          *string                    `json:"sources"`
+	RepoPassword     *string                    `json:"repo_password"`
+	RetentionDaily   *int                       `json:"retention_daily"`
+	RetentionWeekly  *int                       `json:"retention_weekly"`
+	RetentionMonthly *int                       `json:"retention_monthly"`
+	RetentionYearly  *int                       `json:"retention_yearly"`
+	HookPreBackup    *string                    `json:"hook_pre_backup"`
+	HookPostBackup   *string                    `json:"hook_post_backup"`
+	Destinations     []destinationEntryRequest  `json:"destinations"`
 }
 
 // Update handles PATCH /api/v1/policies/{id}.
@@ -421,6 +423,38 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		policy.HookPostBackup = *req.HookPostBackup
+	}
+
+	if len(req.Destinations) > 0 {
+		if err := h.repo.DeleteAllDestinations(r.Context(), id); err != nil {
+			h.logger.Error("failed to remove destinations on update", zap.String("id", id.String()), zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		for _, d := range req.Destinations {
+			destID, err := uuid.Parse(d.DestinationID)
+			if err != nil {
+				ErrBadRequest(w, "invalid destination_id: "+d.DestinationID)
+				return
+			}
+			pd := &db.PolicyDestination{
+				PolicyID:      id,
+				DestinationID: destID,
+				Priority:      d.Priority,
+			}
+			if err := h.repo.AddDestination(r.Context(), pd); err != nil {
+				h.logger.Error("failed to add destination on update", zap.String("id", id.String()), zap.Error(err))
+				ErrInternal(w)
+				return
+			}
+		}
+		var err error
+		destinations, err = h.repo.GetDestinations(r.Context(), id)
+		if err != nil {
+			h.logger.Error("failed to reload destinations after update", zap.String("id", id.String()), zap.Error(err))
+			ErrInternal(w)
+			return
+		}
 	}
 
 	if err := h.repo.Update(r.Context(), policy); err != nil {

@@ -89,16 +89,16 @@ func BuildEnv(dest *db.Destination) map[string]string {
 	switch dest.Type {
 	case "s3":
 		var c struct {
-			AccessKeyID     string `json:"access_key_id"`
-			SecretAccessKey string `json:"secret_access_key"`
-			Region          string `json:"region"`
+			AccessKey string `json:"access_key"`
+			SecretKey string `json:"secret_key"`
+			Region    string `json:"region"`
 		}
 		if err := json.Unmarshal([]byte(creds), &c); err == nil {
-			if c.AccessKeyID != "" {
-				env["AWS_ACCESS_KEY_ID"] = c.AccessKeyID
+			if c.AccessKey != "" {
+				env["AWS_ACCESS_KEY_ID"] = c.AccessKey
 			}
-			if c.SecretAccessKey != "" {
-				env["AWS_SECRET_ACCESS_KEY"] = c.SecretAccessKey
+			if c.SecretKey != "" {
+				env["AWS_SECRET_ACCESS_KEY"] = c.SecretKey
 			}
 			if c.Region != "" {
 				env["AWS_DEFAULT_REGION"] = c.Region
@@ -109,6 +109,20 @@ func BuildEnv(dest *db.Destination) map[string]string {
 		if err := json.Unmarshal([]byte(creds), &c); err == nil {
 			for k, v := range c {
 				env[k] = v
+			}
+		}
+	case "rest":
+		var c struct {
+			User     string `json:"user"`
+			Password string `json:"password"`
+		}
+
+		if err := json.Unmarshal([]byte(creds), &c); err == nil {
+			if c.User != "" {
+				env["RESTIC_REST_USERNAME"] = c.User
+			}
+			if c.Password != "" {
+				env["RESTIC_REST_PASSWORD"] = c.Password
 			}
 		}
 	}
