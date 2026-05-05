@@ -210,6 +210,24 @@ func (r *gormPolicyRepository) RemoveDestination(ctx context.Context, policyID, 
 	return nil
 }
 
+// DeleteAllDestinations removes all destination associations for a policy.
+// Used during policy update to replace the full set of destinations.
+func (r *gormPolicyRepository) DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error {
+	return r.db.WithContext(ctx).
+		Where("policy_id = ?", policyID).
+		Delete(&db.PolicyDestination{}).Error
+}
+
+// GetDestinations returns all destination associations for a policy ordered by priority.
+func (r *gormPolicyRepository) GetDestinations(ctx context.Context, policyID uuid.UUID) ([]db.PolicyDestination, error) {
+	var dests []db.PolicyDestination
+	err := r.db.WithContext(ctx).
+		Where("policy_id = ?", policyID).
+		Order("priority ASC").
+		Find(&dests).Error
+	return dests, err
+}
+
 // UpdateDestinationPriority updates the priority of a destination within a policy.
 // Lower priority values are tried first during backup execution.
 func (r *gormPolicyRepository) UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error {
