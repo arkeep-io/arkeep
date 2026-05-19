@@ -244,6 +244,8 @@ export interface Snapshot {
   policy_name: string // denormalized for display
   destination_id: string
   destination_name: string // denormalized for display
+  agent_id: string
+  agent_name: string
   restic_snapshot_id: string // the actual Restic snapshot hash
   hostname: string
   paths: string[]
