@@ -272,6 +272,15 @@ export interface WebhookSettings {
   enabled: boolean
 }
 
+// NotificationSettings controls which event types trigger external delivery
+// (email + webhook). In-app notifications are always shown regardless.
+export interface NotificationSettings {
+  job_success: boolean
+  job_failure: boolean
+  agent_offline: boolean
+  agent_online: boolean
+}
+
 // OIDCProvider maps to the oidc_providers table (admin settings view).
 // callback_url is computed server-side and returned read-only — copy it into
 // the identity provider's allowed redirect URIs.

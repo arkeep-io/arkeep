@@ -32,6 +32,12 @@ const (
 	// that receive email notifications. When empty the service falls back to
 	// all active admin users' email addresses.
 	KeyNotificationRecipients = "notification.recipients"
+
+	// Per-event toggle keys — "true" or "false", default true except agent_online.
+	KeyEventJobSuccess   = "notification.events.job_success"
+	KeyEventJobFailure   = "notification.events.job_failure"
+	KeyEventAgentOffline = "notification.events.agent_offline"
+	KeyEventAgentOnline  = "notification.events.agent_online"
 )
 
 // SMTPConfig holds the configuration needed to send emails via SMTP.
@@ -122,6 +128,47 @@ func loadWebhookConfig(ctx context.Context, repo repositories.SettingsRepository
 		Secret:  idx[KeyWebhookSecret],
 		Enabled: enabled,
 	}, nil
+}
+
+// NotificationEventsConfig holds the per-event enable/disable toggles for
+// external deliveries (email + webhook). In-app notifications are unaffected.
+// Default: all true except AgentOnline.
+type NotificationEventsConfig struct {
+	JobSuccess   bool
+	JobFailure   bool
+	AgentOffline bool
+	AgentOnline  bool
+}
+
+// loadNotificationEventsConfig reads the four event toggle keys from the
+// settings repository and returns the config with the following defaults:
+//
+//	job_success=true, job_failure=true, agent_offline=true, agent_online=false
+func loadNotificationEventsConfig(ctx context.Context, repo repositories.SettingsRepository) NotificationEventsConfig {
+	cfg := NotificationEventsConfig{
+		JobSuccess:   true,
+		JobFailure:   true,
+		AgentOffline: true,
+		AgentOnline:  false,
+	}
+	settings, err := repo.GetMany(ctx, "notification.events.")
+	if err != nil || len(settings) == 0 {
+		return cfg
+	}
+	idx := settingsIndex(settings)
+	if v, ok := idx[KeyEventJobSuccess]; ok {
+		cfg.JobSuccess = v == "true"
+	}
+	if v, ok := idx[KeyEventJobFailure]; ok {
+		cfg.JobFailure = v == "true"
+	}
+	if v, ok := idx[KeyEventAgentOffline]; ok {
+		cfg.AgentOffline = v == "true"
+	}
+	if v, ok := idx[KeyEventAgentOnline]; ok {
+		cfg.AgentOnline = v == "true"
+	}
+	return cfg
 }
 
 // settingsIndex converts a slice of Setting into a map[key]value string for

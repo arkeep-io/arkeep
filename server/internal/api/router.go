@@ -206,6 +206,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/smtp", settingsHandler.GetSMTP)
 				r.Put("/settings/smtp", settingsHandler.UpsertSMTP)
 
+				// Notification event toggles
+				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
+				r.Put("/settings/notifications", settingsHandler.UpsertNotificationSettings)
+
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)
 
