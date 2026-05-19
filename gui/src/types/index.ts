@@ -124,6 +124,7 @@ export interface Destination {
   // repository_password is always masked ("***") on read
   repository_password: string
   enabled: boolean
+  skip_init: boolean
   created_at: string
   updated_at: string
 }

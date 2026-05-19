@@ -127,6 +127,7 @@ type Destination struct {
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
 	Config      string          `gorm:"type:text;default:'{}'"` // JSON, not sensitive
 	Enabled     bool            `gorm:"not null;default:true"`
+	SkipInit    bool            `gorm:"not null;default:false"`
 }
 
 // -----------------------------------------------------------------------------
