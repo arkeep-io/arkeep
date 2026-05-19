@@ -10,6 +10,7 @@ and manage everything from a single web interface — built on top of
 > 🚧 Arkeep is in early access — core features are working and ready for testing.
 > Not yet recommended for production use. Star the repository to follow progress.
 
+![Arkeep dashboard](docs/images/1.jpg)
 ---
 
 ## Table of Contents
