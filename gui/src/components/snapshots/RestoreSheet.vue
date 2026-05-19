@@ -236,7 +236,7 @@ function onOpenChange(value: boolean) {
 
 <template>
     <Sheet :open="props.open" @update:open="onOpenChange">
-        <SheetContent class="sm:max-w-md">
+        <SheetContent class="sm:max-w-md flex flex-col">
             <SheetHeader>
                 <SheetTitle>Restore snapshot</SheetTitle>
                 <SheetDescription>
@@ -246,7 +246,7 @@ function onOpenChange(value: boolean) {
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="py-6 px-4" novalidate @submit.prevent="onSubmit">
+            <form class="py-6 px-4 flex-1 overflow-y-auto" novalidate @submit.prevent="onSubmit">
                 <FieldGroup>
 
                     <Transition enter-active-class="transition-all duration-200"
