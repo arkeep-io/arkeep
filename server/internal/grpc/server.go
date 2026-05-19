@@ -448,6 +448,8 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 				s.logger.Warn("failed to send agent-online notification", zap.Error(err))
 			}
 		}()
+	}
+
 	// Flush any jobs that were created while the agent was offline.
 	if s.pendingDispatch != nil {
 		go s.pendingDispatch.DispatchPending(context.Background(), agentID)
