@@ -424,6 +424,16 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 	// Register RPC — StreamJobsRequest does not carry capability fields.
 	s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
 
+	if s.notifSvc != nil {
+		go func() {
+			notifCtx, notifCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer notifCancel()
+			if err := s.notifSvc.NotifyAgentOnline(notifCtx, agentID, agent.Hostname); err != nil {
+				s.logger.Warn("failed to send agent-online notification", zap.Error(err))
+			}
+		}()
+	}
+
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
 

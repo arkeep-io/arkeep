@@ -36,6 +36,9 @@ type Service interface {
 	// NotifyAgentOffline creates a notification when an agent stops sending
 	// heartbeats and is marked offline by the agent manager.
 	NotifyAgentOffline(ctx context.Context, agentID uuid.UUID, agentName string) error
+
+	// NotifyAgentOnline creates a notification when an agent reconnects.
+	NotifyAgentOnline(ctx context.Context, agentID uuid.UUID, agentName string) error
 }
 
 // NotificationService is the concrete implementation of Service.
@@ -152,6 +155,19 @@ func (s *NotificationService) NotifyAgentOffline(ctx context.Context, agentID uu
 	})
 }
 
+func (s *NotificationService) NotifyAgentOnline(ctx context.Context, agentID uuid.UUID, agentName string) error {
+	payload := map[string]any{
+		"agent_id":   agentID.String(),
+		"agent_name": agentName,
+	}
+	return s.notify(ctx, event{
+		notifType: "agent_online",
+		title:     fmt.Sprintf("Agent back online: %s", agentName),
+		body:      fmt.Sprintf("Agent \"%s\" reconnected at %s.", agentName, time.Now().UTC().Format(time.RFC3339)),
+		payload:   payload,
+	})
+}
+
 // -----------------------------------------------------------------------------
 // Internal event dispatch
 // -----------------------------------------------------------------------------
@@ -236,6 +252,13 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 	// firstNotif.ID so the retrier can reload title/body/payload on retry.
 	// Skip if no notifications were persisted (e.g. no active admins).
 	if firstNotif == nil {
+		return nil
+	}
+
+	// Check per-event toggles before creating any external delivery rows.
+	// In-app notifications (above) are always created regardless of these settings.
+	eventsConfig := loadNotificationEventsConfig(ctx, s.settingsRepo)
+	if !isEventEnabled(eventsConfig, ev.notifType) {
 		return nil
 	}
 
@@ -430,6 +453,23 @@ func (s *NotificationService) configuredRecipients(ctx context.Context) []string
 		}
 	}
 	return out
+}
+
+// isEventEnabled returns whether external delivery (email + webhook) should be
+// sent for the given event type, based on the loaded events config.
+func isEventEnabled(cfg NotificationEventsConfig, eventType string) bool {
+	switch eventType {
+	case "job_success":
+		return cfg.JobSuccess
+	case "job_failure":
+		return cfg.JobFailure
+	case "agent_offline":
+		return cfg.AgentOffline
+	case "agent_online":
+		return cfg.AgentOnline
+	default:
+		return true
+	}
 }
 
 // truncateError returns the error message truncated to 500 characters to avoid

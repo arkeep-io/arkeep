@@ -1,0 +1,1 @@
+-- no schema change was made in the up migration.

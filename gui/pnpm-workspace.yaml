@@ -1,3 +1,6 @@
+allowBuilds:
+  maplibre-gl: true
+  vue-demi: true
 onlyBuiltDependencies:
   - esbuild
   - maplibre-gl

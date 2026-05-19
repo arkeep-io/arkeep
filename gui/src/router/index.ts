@@ -173,6 +173,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/pages/settings/SMTPPage.vue'),
             meta: { breadcrumb: 'SMTP', requiresRole: 'admin' },
           },
+          {
+            path: 'notifications',
+            name: 'settings-notifications',
+            component: () => import('@/pages/settings/NotificationsPage.vue'),
+            meta: { breadcrumb: 'Notifications', requiresRole: 'admin' },
+          },
         ],
       },
 
