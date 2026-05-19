@@ -227,6 +227,7 @@ const schema = z.object({
 
   hook_pre: hookFieldSchema,
   hook_post: hookFieldSchema,
+  exclude_patterns_text: z.string().optional(),
 }).superRefine((data, ctx) => {
   if (!isEdit.value) {
     if (!data.repo_password || data.repo_password.length < 8) {
@@ -432,6 +433,9 @@ function updateHookPostArg(idx: number, val: string) {
 
 const hooksOpen = ref(false)
 
+// Exclude patterns
+const { value: excludePatternsText } = useField<string>('exclude_patterns_text')
+
 // ---------------------------------------------------------------------------
 // Reset / populate
 // ---------------------------------------------------------------------------
@@ -452,6 +456,7 @@ function defaultValues(): FormValues {
     ordered_destination_ids: [],
     hook_pre: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
+    exclude_patterns_text: '',
   }
 }
 
@@ -593,6 +598,12 @@ function populateForm(p: Policy) {
     ordered_destination_ids: preDestIds,
     hook_pre: parsedPreHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPreHook },
     hook_post: parsedPostHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPostHook },
+    exclude_patterns_text: (() => {
+      try {
+        const arr = JSON.parse(p.exclude_patterns || '[]')
+        return Array.isArray(arr) ? arr.join('\n') : ''
+      } catch { return '' }
+    })(),
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
@@ -665,6 +676,12 @@ const onSubmit = handleSubmit(async (values) => {
       retention_yearly: values.retention_keep_yearly,
       hook_pre_backup: serialiseHook(values.hook_pre),
       hook_post_backup: serialiseHook(values.hook_post),
+      exclude_patterns: JSON.stringify(
+        (values.exclude_patterns_text ?? '')
+          .split('\n')
+          .map(l => l.trim())
+          .filter(l => l.length > 0 && !l.startsWith('#'))
+      ),
     }
 
     if (isEdit.value) {
@@ -1196,6 +1213,26 @@ function onOpenChange(value: boolean) {
               </div>
             </CollapsibleContent>
           </Collapsible>
+
+          <!-- Exclude Patterns -->
+          <Separator />
+          <div class="space-y-2">
+            <div>
+              <p class="text-sm font-medium">Exclude Patterns</p>
+              <p class="text-muted-foreground text-xs">
+                One pattern per line. Passed as <code class="font-mono">--exclude</code> to restic.
+                Supports glob syntax (e.g. <code class="font-mono">*.log</code>, <code class="font-mono">**/.cache</code>).
+                Lines starting with <code class="font-mono">#</code> are ignored.
+              </p>
+            </div>
+            <textarea
+              id="exclude-patterns"
+              v-model="excludePatternsText"
+              rows="4"
+              placeholder="*.log&#10;**/.cache&#10;/tmp"
+              class="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring flex w-full rounded-md border px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 font-mono"
+            />
+          </div>
 
           <!-- Enabled toggle — edit mode only -->
           <template v-if="isEdit">

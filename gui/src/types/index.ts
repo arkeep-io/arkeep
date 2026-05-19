@@ -169,6 +169,7 @@ export interface Policy {
   retention_yearly: number
   hook_pre_backup: string   // JSON string or empty
   hook_post_backup: string  // JSON string or empty
+  exclude_patterns: string  // JSON array string or empty
   enabled: boolean
   destinations: PolicyDestination[]
   last_run_at: string | null

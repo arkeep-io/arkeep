@@ -3,7 +3,7 @@
 #   docker build -f server/Dockerfile -t arkeep-server .
 
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
-FROM node:25-alpine AS gui-builder
+FROM node:26-alpine AS gui-builder
 
 RUN npm install -g pnpm
 

@@ -62,13 +62,14 @@ type JobAssignment struct {
 // All credentials arrive already decrypted — the server handles encryption
 // at rest, the gRPC channel handles transport security.
 type backupPayload struct {
-	Sources        string               `json:"sources"`
-	RepoPassword   string               `json:"repo_password"`
-	Destinations   []destinationPayload `json:"destinations"`
-	Retention      retentionPayload     `json:"retention"`
-	HookPreBackup  string               `json:"hook_pre_backup"`
-	HookPostBackup string               `json:"hook_post_backup"`
-	Tags           []string             `json:"tags"`
+	Sources         string               `json:"sources"`
+	RepoPassword    string               `json:"repo_password"`
+	Destinations    []destinationPayload `json:"destinations"`
+	Retention       retentionPayload     `json:"retention"`
+	HookPreBackup   string               `json:"hook_pre_backup"`
+	HookPostBackup  string               `json:"hook_post_backup"`
+	Tags            []string             `json:"tags"`
+	ExcludePatterns []string             `json:"exclude_patterns"`
 }
 
 // restorePayload mirrors the struct serialized by the server snapshot handler.
@@ -388,8 +389,9 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		opts := restic.BackupOptions{
-			Sources: sources,
-			Tags:    payload.Tags,
+			Sources:         sources,
+			Tags:            payload.Tags,
+			ExcludePatterns: payload.ExcludePatterns,
 		}
 
 		result, err := e.wrapper.Backup(ctx, d, opts, func(ev restic.ProgressEvent) error {
