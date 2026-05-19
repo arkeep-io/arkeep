@@ -124,6 +124,7 @@ export interface Destination {
   // repository_password is always masked ("***") on read
   repository_password: string
   enabled: boolean
+  skip_init: boolean
   created_at: string
   updated_at: string
 }
@@ -169,6 +170,7 @@ export interface Policy {
   retention_yearly: number
   hook_pre_backup: string   // JSON string or empty
   hook_post_backup: string  // JSON string or empty
+  exclude_patterns: string  // JSON array string or empty
   enabled: boolean
   destinations: PolicyDestination[]
   last_run_at: string | null
@@ -221,6 +223,19 @@ export interface Job {
 // JobListItem is the leaner shape returned by the list endpoint.
 export type JobListItem = Omit<Job, 'destinations'>
 
+// ─── Snapshot Browse ──────────────────────────────────────────────────────────
+
+export interface SnapshotFileEntry {
+  path: string
+  type: 'file' | 'dir'
+  size: number
+  mtime: string
+}
+
+export interface SnapshotBrowseResponse {
+  entries: SnapshotFileEntry[]
+}
+
 // ─── Snapshot ─────────────────────────────────────────────────────────────────
 
 export interface Snapshot {
@@ -269,6 +284,15 @@ export interface WebhookSettings {
   url: string
   secret: string // HMAC signing secret — write-only, returned masked
   enabled: boolean
+}
+
+// NotificationSettings controls which event types trigger external delivery
+// (email + webhook). In-app notifications are always shown regardless.
+export interface NotificationSettings {
+  job_success: boolean
+  job_failure: boolean
+  agent_offline: boolean
+  agent_online: boolean
 }
 
 // OIDCProvider maps to the oidc_providers table (admin settings view).
@@ -382,6 +406,7 @@ export interface UpdateMeRequest {
 export interface RestoreRequest {
   agent_id: string
   target_path: string
+  include_paths?: string[]
 }
 
 export interface RestoreResponse {

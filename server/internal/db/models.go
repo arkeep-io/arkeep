@@ -127,6 +127,7 @@ type Destination struct {
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
 	Config      string          `gorm:"type:text;default:'{}'"` // JSON, not sensitive
 	Enabled     bool            `gorm:"not null;default:true"`
+	SkipInit    bool            `gorm:"not null;default:false"`
 }
 
 // -----------------------------------------------------------------------------
@@ -155,6 +156,7 @@ type Policy struct {
 	RepoPassword     EncryptedString `gorm:"type:text;not null"` // Restic repository password
 	HookPreBackup    string          `gorm:"type:text;default:''"` // shell command, optional
 	HookPostBackup   string          `gorm:"type:text;default:''"` // shell command, optional
+	ExcludePatterns  string          `gorm:"type:text;default:'[]'"` // JSON array of --exclude patterns
 	LastRunAt        *time.Time
 	NextRunAt        *time.Time
 
@@ -240,6 +242,7 @@ type Snapshot struct {
 	SizeBytes     int64     `gorm:"default:0"`
 	FileCount     int64     `gorm:"default:0"`
 	Tags          string    `gorm:"type:text;default:'[]'"` // JSON array
+	Sources       string    `gorm:"type:text;default:'[]'"` // JSON array of paths backed up
 	SnapshotAt    time.Time `gorm:"not null;index"`
 }
 

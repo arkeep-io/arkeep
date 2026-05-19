@@ -409,6 +409,76 @@ func validateUpsertSMTP(req *upsertSMTPRequest) error {
 }
 
 // =============================================================================
+// Notification event settings
+// =============================================================================
+
+type notificationSettingsResponse struct {
+	JobSuccess   bool `json:"job_success"`
+	JobFailure   bool `json:"job_failure"`
+	AgentOffline bool `json:"agent_offline"`
+	AgentOnline  bool `json:"agent_online"`
+}
+
+// GetNotificationSettings handles GET /api/v1/settings/notifications (admin only).
+// Returns the current per-event toggle configuration with defaults applied.
+func (h *SettingsHandler) GetNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.settingsRepo.GetMany(r.Context(), "notification.events.")
+	if err != nil {
+		h.logger.Error("failed to load notification event settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	idx := settingsToMap(settings)
+	resp := notificationSettingsResponse{
+		JobSuccess:   boolSetting(idx, notification.KeyEventJobSuccess, true),
+		JobFailure:   boolSetting(idx, notification.KeyEventJobFailure, true),
+		AgentOffline: boolSetting(idx, notification.KeyEventAgentOffline, true),
+		AgentOnline:  boolSetting(idx, notification.KeyEventAgentOnline, false),
+	}
+	Ok(w, resp)
+}
+
+type upsertNotificationSettingsRequest struct {
+	JobSuccess   bool `json:"job_success"`
+	JobFailure   bool `json:"job_failure"`
+	AgentOffline bool `json:"agent_offline"`
+	AgentOnline  bool `json:"agent_online"`
+}
+
+// UpsertNotificationSettings handles PUT /api/v1/settings/notifications (admin only).
+func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	var req upsertNotificationSettingsRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	ctx := r.Context()
+	pairs := []struct {
+		key   string
+		value string
+	}{
+		{notification.KeyEventJobSuccess, strconv.FormatBool(req.JobSuccess)},
+		{notification.KeyEventJobFailure, strconv.FormatBool(req.JobFailure)},
+		{notification.KeyEventAgentOffline, strconv.FormatBool(req.AgentOffline)},
+		{notification.KeyEventAgentOnline, strconv.FormatBool(req.AgentOnline)},
+	}
+	for _, p := range pairs {
+		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
+			h.logger.Error("failed to save notification event setting",
+				zap.String("key", p.key),
+				zap.Error(err),
+			)
+			ErrInternal(w)
+			return
+		}
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "", nil)
+	Ok(w, notificationSettingsResponse(req))
+}
+
+// =============================================================================
 // Internal helpers
 // =============================================================================
 
@@ -423,6 +493,14 @@ func splitRecipients(raw string) []string {
 		}
 	}
 	return out
+}
+
+func boolSetting(idx map[string]string, key string, defaultVal bool) bool {
+	v, ok := idx[key]
+	if !ok {
+		return defaultVal
+	}
+	return v == "true"
 }
 
 func settingsToMap(settings []db.Setting) map[string]string {

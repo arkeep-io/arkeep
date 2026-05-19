@@ -121,6 +121,7 @@ const submitting = ref(false)
 const name = ref('')
 const nameError = ref('')
 const enabled = ref(true)
+const skipInit = ref(false)
 
 // Config fields — one ref per possible field
 const localPath = ref('')
@@ -153,6 +154,7 @@ function resetFields() {
     name.value = ''
     nameError.value = ''
     enabled.value = true
+    skipInit.value = false
     submitError.value = null
     fieldErrors.value = {}
     localPath.value = ''
@@ -168,6 +170,7 @@ function populateFromDestination(dest: Destination) {
     selectedType.value = dest.type as DestType
     name.value = dest.name
     enabled.value = dest.enabled
+    skipInit.value = dest.skip_init
 
     // Parse config JSON — credentials are write-only and never populated
     let config: Record<string, string> = {}
@@ -310,6 +313,7 @@ async function onSubmit() {
                     config: JSON.stringify(config),
                     credentials: JSON.stringify(creds),
                     enabled: enabled.value,
+                    skip_init: skipInit.value,
                 },
             })
         } else {
@@ -320,6 +324,7 @@ async function onSubmit() {
                     type: selectedType.value,
                     config: JSON.stringify(config),
                     credentials: JSON.stringify(creds),
+                    skip_init: skipInit.value,
                 },
             })
         }
@@ -559,6 +564,19 @@ function onOpenChange(value: boolean) {
                             <Switch :model-value="enabled" @update:model-value="enabled = $event" />
                         </div>
                     </template>
+
+                    <!-- Use existing repository toggle -->
+                    <Separator />
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium">Use existing repository</p>
+                            <p class="text-muted-foreground text-xs">
+                                Skip initialization. Enable if this destination already contains a
+                                Restic repository created outside of Arkeep.
+                            </p>
+                        </div>
+                        <Switch :model-value="skipInit" @update:model-value="skipInit = $event" />
+                    </div>
 
                     <SheetFooter class="mt-2 px-0">
                         <Button type="button" variant="outline" :disabled="submitting" @click="onOpenChange(false)">

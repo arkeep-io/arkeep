@@ -21,6 +21,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { ofetch } from 'ofetch'
 import type { User, ApiResponse, TokenResponse } from '@/types'
+import { router } from '@/router'
 
 export const useAuthStore = defineStore('auth', () => {
   // ─── State ──────────────────────────────────────────────────────────────────
@@ -120,7 +121,6 @@ export const useAuthStore = defineStore('auth', () => {
     refreshTimer = setTimeout(async () => {
       const ok = await refresh()
       if (!ok) {
-        const { router } = await import('@/router')
         router.push('/login')
       }
     }, delayMs)

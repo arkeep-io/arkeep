@@ -178,6 +178,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/snapshots/{id}", snapshotHandler.GetByID)
 			r.With(RequireRole("admin")).Delete("/snapshots/{id}", snapshotHandler.Delete)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/restore", snapshotHandler.Restore)
+			r.Get("/snapshots/{id}/browse", snapshotHandler.Browse)
 
 			// Notifications
 			r.Get("/notifications", notificationHandler.List)
@@ -205,6 +206,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// SMTP configuration
 				r.Get("/settings/smtp", settingsHandler.GetSMTP)
 				r.Put("/settings/smtp", settingsHandler.UpsertSMTP)
+
+				// Notification event toggles
+				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
+				r.Put("/settings/notifications", settingsHandler.UpsertNotificationSettings)
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)

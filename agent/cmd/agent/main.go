@@ -212,9 +212,9 @@ func run(ctx context.Context, cfg *config) error {
 		Insecure:        cfg.grpcInsecure,
 	}
 
-	// Pass dockerClient so the connection manager can handle JOB_TYPE_LIST_VOLUMES
-	// requests from the server. May be nil if Docker is unavailable on this host.
-	mgr := connection.New(connCfg, exec, dockerClient, logger)
+	// Pass dockerClient and wrapper so the connection manager can handle
+	// JOB_TYPE_LIST_VOLUMES and JOB_TYPE_LIST_SNAPSHOT_FILES requests inline.
+	mgr := connection.New(connCfg, exec, dockerClient, wrapper, logger)
 
 	// --- Start ---
 	// The executor worker and connection manager run concurrently.

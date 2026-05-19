@@ -45,13 +45,14 @@ import (
 // before dispatch. The gRPC channel provides transport security.
 // The agent must never log or expose these values.
 type backupPayload struct {
-	Sources        string               `json:"sources"`
-	RepoPassword   string               `json:"repo_password"`
-	Destinations   []destinationPayload `json:"destinations"`
-	Retention      retentionPayload     `json:"retention"`
-	HookPreBackup  string               `json:"hook_pre_backup"`
-	HookPostBackup string               `json:"hook_post_backup"`
-	Tags           []string             `json:"tags"`
+	Sources         string               `json:"sources"`
+	RepoPassword    string               `json:"repo_password"`
+	Destinations    []destinationPayload `json:"destinations"`
+	Retention       retentionPayload     `json:"retention"`
+	HookPreBackup   string               `json:"hook_pre_backup"`
+	HookPostBackup  string               `json:"hook_post_backup"`
+	Tags            []string             `json:"tags"`
+	ExcludePatterns []string             `json:"exclude_patterns"`
 }
 
 // destinationPayload carries the resolved details of a single backup target.
@@ -65,6 +66,7 @@ type destinationPayload struct {
 	Config        string            `json:"config"`
 	Env           map[string]string `json:"env"`
 	Priority      int               `json:"priority"`
+	SkipInit      bool              `json:"skip_init"`
 }
 
 // retentionPayload mirrors the keep_* fields from db.Policy.
@@ -389,12 +391,23 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []db.Po
 			Config:        dest.Config,
 			Env:           destutil.BuildEnv(dest),
 			Priority:      pd.Priority,
+			SkipInit:      dest.SkipInit,
 		})
 	}
 
 	sourcesFlat, err := buildSourcesList(policy.Sources)
 	if err != nil {
 		return fmt.Errorf("failed to build sources list: %w", err)
+	}
+
+	var excludePatterns []string
+	if policy.ExcludePatterns != "" && policy.ExcludePatterns != "[]" {
+		if err := json.Unmarshal([]byte(policy.ExcludePatterns), &excludePatterns); err != nil {
+			s.logger.Warn("failed to parse exclude_patterns, ignoring",
+				zap.String("policy_id", policy.ID.String()),
+				zap.Error(err),
+			)
+		}
 	}
 
 	payload := backupPayload{
@@ -407,9 +420,10 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []db.Po
 			Monthly: policy.RetentionMonthly,
 			Yearly:  policy.RetentionYearly,
 		},
-		HookPreBackup:  policy.HookPreBackup,
-		HookPostBackup: policy.HookPostBackup,
-		Tags:           []string{fmt.Sprintf("policy:%s", policy.ID.String())},
+		HookPreBackup:   policy.HookPreBackup,
+		HookPostBackup:  policy.HookPostBackup,
+		Tags:            []string{fmt.Sprintf("policy:%s", policy.ID.String())},
+		ExcludePatterns: excludePatterns,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -452,6 +466,10 @@ func buildSourcesList(sourcesJSON string) (string, error) {
 	paths := make([]string, 0, len(sources))
 	for _, s := range sources {
 		if s.Type == "docker-volume" {
+			if s.Path == "" {
+				// skip malformed entries to avoid dispatching docker-volume:// with no name
+				continue
+			}
 			paths = append(paths, "docker-volume://"+s.Path)
 		} else {
 			paths = append(paths, s.Path)

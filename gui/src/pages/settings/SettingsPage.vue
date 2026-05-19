@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { KeyRound, Mail } from 'lucide-vue-next'
+import { Bell, KeyRound, Mail } from 'lucide-vue-next'
 </script>
 
 <template>
@@ -29,6 +29,12 @@ import { KeyRound, Mail } from 'lucide-vue-next'
                         active-class="bg-accent text-accent-foreground">
                         <Mail class="size-4 shrink-0" />
                         SMTP
+                    </RouterLink>
+                    <RouterLink :to="{ name: 'settings-notifications' }"
+                        class="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                        active-class="bg-accent text-accent-foreground">
+                        <Bell class="size-4 shrink-0" />
+                        Notifications
                     </RouterLink>
                 </nav>
             </aside>

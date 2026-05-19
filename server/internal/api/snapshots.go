@@ -79,8 +79,9 @@ type listSnapshotsResponse struct {
 
 // restoreRequest is the body for POST /api/v1/snapshots/{id}/restore.
 type restoreRequest struct {
-	AgentID    string `json:"agent_id"`
-	TargetPath string `json:"target_path"`
+	AgentID      string   `json:"agent_id"`
+	TargetPath   string   `json:"target_path"`
+	IncludePaths []string `json:"include_paths,omitempty"`
 }
 
 // restoreResponse is returned after a restore job is successfully dispatched.
@@ -94,7 +95,29 @@ type restorePayload struct {
 	ResticSnapshotID string            `json:"restic_snapshot_id"`
 	RepoPassword     string            `json:"repo_password"`
 	TargetPath       string            `json:"target_path"`
+	IncludePaths     []string          `json:"include_paths,omitempty"`
 	Destination      destinationFields `json:"destination"`
+}
+
+// snapshotBrowsePayload is the JSON-encoded payload for JOB_TYPE_LIST_SNAPSHOT_FILES.
+// Sent inline (not persisted) via the StreamJobs stream as a correlation request.
+type snapshotBrowsePayload struct {
+	ResticSnapshotID string            `json:"restic_snapshot_id"`
+	RepoPassword     string            `json:"repo_password"`
+	Destination      destinationFields `json:"destination"`
+}
+
+// snapshotFileEntryResponse is a single file or directory within a snapshot.
+type snapshotFileEntryResponse struct {
+	Path  string `json:"path"`
+	Type  string `json:"type"`
+	Size  int64  `json:"size"`
+	Mtime string `json:"mtime"`
+}
+
+// snapshotBrowseResponse is the body returned by GET /api/v1/snapshots/{id}/browse.
+type snapshotBrowseResponse struct {
+	Entries []snapshotFileEntryResponse `json:"entries"`
 }
 
 // destinationFields carries the resolved details of the backup destination
@@ -314,6 +337,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		ResticSnapshotID: snapshot.SnapshotID,
 		RepoPassword:     string(policy.RepoPassword),
 		TargetPath:       req.TargetPath,
+		IncludePaths:     req.IncludePaths,
 		Destination: destinationFields{
 			DestinationID: dest.ID.String(),
 			Type:          dest.Type,
@@ -364,6 +388,119 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		"agent_id":       agentID.String(),
 	})
 	Ok(w, restoreResponse{JobID: job.ID.String()})
+}
+
+// Browse handles GET /api/v1/snapshots/{id}/browse.
+// Returns the full file/directory tree of the snapshot by dispatching a
+// JOB_TYPE_LIST_SNAPSHOT_FILES request to the policy's agent via the existing
+// StreamJobs stream (same pattern as JOB_TYPE_LIST_VOLUMES).
+//
+// Flow:
+//  1. Load snapshot → restic_snapshot_id, destination_id, policy_id
+//  2. Load policy → agent_id, repo_password
+//  3. Load destination → repo URL and env
+//  4. Dispatch browse request to agent; block until result or timeout (60 s)
+//  5. Return flat list of SnapshotFileEntry — the frontend builds the tree
+func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
+	snapshotID, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+
+	// --- 1. Load snapshot ---
+	snapshot, err := h.repo.GetByID(ctx, snapshotID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to load snapshot for browse", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	// --- 2. Load policy (for agent_id and repo_password) ---
+	policy, err := h.policies.GetByID(ctx, snapshot.PolicyID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, "policy not found")
+			return
+		}
+		h.logger.Error("failed to load policy for browse", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	agentID := policy.AgentID.String()
+	if !h.agentMgr.IsConnected(agentID) {
+		ErrServiceUnavailable(w, "agent is not connected — ensure the agent is online and try again")
+		return
+	}
+
+	// --- 3. Load destination ---
+	dest, err := h.dests.GetByID(ctx, snapshot.DestinationID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, "destination not found")
+			return
+		}
+		h.logger.Error("failed to load destination for browse", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	// --- 4. Build and dispatch browse request ---
+	browsePayload := snapshotBrowsePayload{
+		ResticSnapshotID: snapshot.SnapshotID,
+		RepoPassword:     string(policy.RepoPassword),
+		Destination: destinationFields{
+			DestinationID: dest.ID.String(),
+			Type:          dest.Type,
+			RepoURL:       destutil.BuildRepoURL(dest),
+			Env:           destutil.BuildEnv(dest),
+		},
+	}
+
+	payloadBytes, err := json.Marshal(browsePayload)
+	if err != nil {
+		h.logger.Error("failed to marshal browse payload", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	correlationID := uuid.NewString()
+	result, err := h.agentMgr.RequestSnapshotBrowse(ctx, agentID, correlationID, payloadBytes)
+	if err != nil {
+		switch {
+		case errors.Is(err, agentmanager.ErrAgentNotConnected):
+			ErrServiceUnavailable(w, "agent is not connected")
+		case errors.Is(err, agentmanager.ErrSnapshotBrowseTimeout):
+			http.Error(w, `{"error":"snapshot browse timed out"}`, http.StatusGatewayTimeout)
+		default:
+			h.logger.Error("snapshot browse failed", zap.Error(err))
+			ErrInternal(w)
+		}
+		return
+	}
+	if result.Err != "" {
+		h.logger.Warn("agent reported error during snapshot browse", zap.String("error", result.Err))
+		http.Error(w, `{"error":"`+result.Err+`"}`, http.StatusBadGateway)
+		return
+	}
+
+	// --- 5. Map proto entries to response ---
+	entries := make([]snapshotFileEntryResponse, len(result.Entries))
+	for i, e := range result.Entries {
+		entries[i] = snapshotFileEntryResponse{
+			Path:  e.Path,
+			Type:  e.Type,
+			Size:  e.Size,
+			Mtime: e.Mtime,
+		}
+	}
+	Ok(w, snapshotBrowseResponse{Entries: entries})
 }
 
 // -----------------------------------------------------------------------------

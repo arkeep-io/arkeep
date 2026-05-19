@@ -19,6 +19,7 @@
 
 import { ofetch, type FetchOptions } from 'ofetch'
 import { useAuthStore } from '@/stores/auth'
+import { router } from '@/router'
 
 // Shared in-flight refresh promise — deduplicates concurrent refresh attempts.
 let refreshPromise: Promise<boolean> | null = null
@@ -85,7 +86,6 @@ export async function api<T = unknown>(
 
   if (!refreshed || !auth.accessToken) {
     // Refresh token is also expired — the session is gone.
-    const { router } = await import('@/router')
     router.push('/login')
     // Throw so the original caller's await rejects cleanly rather than
     // silently returning undefined.

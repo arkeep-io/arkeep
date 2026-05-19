@@ -29,8 +29,10 @@ import {
     FieldLabel,
 } from '@/components/ui/field'
 import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { Separator } from '@/components/ui/separator'
 import { api } from '@/services/api'
-import type { Agent, ApiResponse, RestoreResponse, Snapshot } from '@/types'
+import type { Agent, ApiResponse, RestoreResponse, Snapshot, SnapshotFileEntry } from '@/types'
+import SnapshotFileTree from '@/components/snapshots/SnapshotFileTree.vue'
 
 // ---------------------------------------------------------------------------
 // Props & emits
@@ -111,6 +113,10 @@ const defaultTargetPath = computed(() =>
 const router = useRouter()
 const agents = ref<Agent[]>([])
 const submitError = ref<string | null>(null)
+const isBrowsing = ref(false)
+const browseError = ref<string | null>(null)
+const browseEntries = ref<SnapshotFileEntry[]>([])
+const selectedPaths = ref<string[]>([])
 
 // ---------------------------------------------------------------------------
 // Watchers
@@ -128,6 +134,9 @@ watch(
             target_path: '/tmp/arkeep-restore',
         })
         submitError.value = null
+        browseEntries.value = []
+        selectedPaths.value = []
+        browseError.value = null
         await fetchAgents()
     },
 )
@@ -159,6 +168,23 @@ watch(selectedAgent, (agent) => {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+async function browseSnapshot() {
+    if (!props.snapshot) return
+    isBrowsing.value = true
+    browseError.value = null
+    try {
+        const res = await api<{ data: { entries: SnapshotFileEntry[] } }>(
+            `/api/v1/snapshots/${props.snapshot.id}/browse`,
+        )
+        browseEntries.value = res.data.entries ?? []
+        selectedPaths.value = []
+    } catch (e: any) {
+        browseError.value = e?.data?.error ?? e?.message ?? 'Failed to browse snapshot.'
+    } finally {
+        isBrowsing.value = false
+    }
+}
+
 async function fetchAgents() {
     try {
         const res = await api<ApiResponse<{ items: Agent[]; total: number }>>('/api/v1/agents?limit=100')
@@ -185,6 +211,7 @@ const onSubmit = handleSubmit(async () => {
                 body: JSON.stringify({
                     agent_id: agentId.value,
                     target_path: resolvedTargetPath.value,
+                    ...(selectedPaths.value.length > 0 && { include_paths: selectedPaths.value }),
                 }),
             },
         )
@@ -199,6 +226,9 @@ function onOpenChange(value: boolean) {
     if (!value) {
         resetForm()
         submitError.value = null
+        browseEntries.value = []
+        selectedPaths.value = []
+        browseError.value = null
     }
     emit('update:open', value)
 }
@@ -206,7 +236,7 @@ function onOpenChange(value: boolean) {
 
 <template>
     <Sheet :open="props.open" @update:open="onOpenChange">
-        <SheetContent class="sm:max-w-md">
+        <SheetContent class="sm:max-w-md flex flex-col">
             <SheetHeader>
                 <SheetTitle>Restore snapshot</SheetTitle>
                 <SheetDescription>
@@ -216,7 +246,7 @@ function onOpenChange(value: boolean) {
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="py-6 px-4" novalidate @submit.prevent="onSubmit">
+            <form class="py-6 px-4 flex-1 overflow-y-auto" novalidate @submit.prevent="onSubmit">
                 <FieldGroup>
 
                     <Transition enter-active-class="transition-all duration-200"
@@ -291,6 +321,36 @@ function onOpenChange(value: boolean) {
                             existing data. This action cannot be undone.
                         </AlertDescription>
                     </Alert>
+
+                    <!-- File selection -->
+                    <Separator />
+                    <div class="space-y-2">
+                        <p class="text-sm font-medium">Files to restore</p>
+                        <p class="text-xs text-muted-foreground">
+                            Leave empty to restore the entire snapshot, or browse to select specific files.
+                        </p>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            :disabled="isBrowsing || isSubmitting"
+                            @click="browseSnapshot"
+                        >
+                            <Loader2 v-if="isBrowsing" class="mr-2 h-4 w-4 animate-spin" />
+                            {{ browseEntries.length > 0 ? 'Refresh file list' : 'Browse files' }}
+                        </Button>
+                        <p v-if="browseError" class="text-xs text-destructive">{{ browseError }}</p>
+                        <div v-if="browseEntries.length > 0" class="space-y-1">
+                            <p v-if="selectedPaths.length > 0" class="text-xs text-muted-foreground">
+                                {{ selectedPaths.length }} item(s) selected
+                            </p>
+                            <SnapshotFileTree
+                                v-model="selectedPaths"
+                                :entries="browseEntries"
+                                class="max-h-64 overflow-y-auto rounded border"
+                            />
+                        </div>
+                    </div>
 
                     <SheetFooter class="mt-2 px-0">
                         <Button type="button" variant="outline" :disabled="isSubmitting" @click="onOpenChange(false)">
