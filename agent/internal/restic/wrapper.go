@@ -60,6 +60,9 @@ type BackupOptions struct {
 	Tags     []string
 	// ExcludePatterns are passed to restic as --exclude flags.
 	ExcludePatterns []string
+	// SkipInit skips repository initialization. Use when the destination
+	// already contains a Restic repository created outside of Arkeep.
+	SkipInit bool
 }
 
 // SnapshotInfo holds the metadata of a single snapshot returned by restic.
@@ -172,8 +175,10 @@ func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
 // summary event, and an error if the backup fails. A non-zero restic exit
 // code is always wrapped in the returned error with stderr included.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
-	if err := w.Init(ctx, dest); err != nil {
-		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
+	if !opts.SkipInit {
+		if err := w.Init(ctx, dest); err != nil {
+			return nil, fmt.Errorf("restic: failed to init repository: %w", err)
+		}
 	}
 
 	args := []string{"backup", "--json"}

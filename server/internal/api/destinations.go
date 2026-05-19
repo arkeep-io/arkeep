@@ -36,6 +36,7 @@ type destinationResponse struct {
 	Type      string `json:"type"`
 	Config    string `json:"config"`
 	Enabled   bool   `json:"enabled"`
+	SkipInit  bool   `json:"skip_init"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -48,6 +49,7 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 		Type:      d.Type,
 		Config:    d.Config,
 		Enabled:   d.Enabled,
+		SkipInit:  d.SkipInit,
 		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: d.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -97,6 +99,7 @@ type createDestinationRequest struct {
 	Type        string `json:"type"`
 	Credentials string `json:"credentials"` // JSON, stored encrypted
 	Config      string `json:"config"`      // JSON, not sensitive
+	SkipInit    bool   `json:"skip_init"`
 }
 
 // Create handles POST /api/v1/destinations.
@@ -124,6 +127,7 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Credentials: db.EncryptedString(req.Credentials),
 		Config:      req.Config,
 		Enabled:     true,
+		SkipInit:    req.SkipInit,
 	}
 
 	if err := h.repo.Create(r.Context(), dest); err != nil {
@@ -164,6 +168,7 @@ type updateDestinationRequest struct {
 	Credentials *string `json:"credentials"`
 	Config      *string `json:"config"`
 	Enabled     *bool   `json:"enabled"`
+	SkipInit    *bool   `json:"skip_init"`
 }
 
 // Update handles PATCH /api/v1/destinations/{id}.
@@ -204,6 +209,9 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Enabled != nil {
 		dest.Enabled = *req.Enabled
+	}
+	if req.SkipInit != nil {
+		dest.SkipInit = *req.SkipInit
 	}
 
 	if err := h.repo.Update(r.Context(), dest); err != nil {
