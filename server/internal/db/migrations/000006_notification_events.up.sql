@@ -1,1 +1,0 @@
--- notification event settings are stored in the settings key-value table; no schema change needed.
