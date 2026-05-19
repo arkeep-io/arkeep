@@ -138,6 +138,10 @@ watch(
         selectedPaths.value = []
         browseError.value = null
         await fetchAgents()
+        // Pre-select the snapshot's original agent if it's online.
+        if (props.snapshot?.agent_id && agents.value.some((a) => a.id === props.snapshot?.agent_id)) {
+            agentId.value = props.snapshot.agent_id
+        }
     },
 )
 
@@ -179,7 +183,7 @@ async function browseSnapshot() {
         browseEntries.value = res.data.entries ?? []
         selectedPaths.value = []
     } catch (e: any) {
-        browseError.value = e?.data?.error ?? e?.message ?? 'Failed to browse snapshot.'
+        browseError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to browse snapshot.'
     } finally {
         isBrowsing.value = false
     }

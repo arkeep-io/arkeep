@@ -64,6 +64,8 @@ type snapshotResponse struct {
 	PolicyName       string `json:"policy_name"`
 	DestinationID    string `json:"destination_id"`
 	DestinationName  string `json:"destination_name"`
+	AgentID          string `json:"agent_id"`
+	AgentName        string `json:"agent_name"`
 	JobID            string `json:"job_id"`
 	ResticSnapshotID string `json:"restic_snapshot_id"`
 	SizeBytes        int64  `json:"size_bytes"`
@@ -137,6 +139,8 @@ func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotRespo
 		PolicyName:       s.PolicyName,
 		DestinationID:    s.DestinationID.String(),
 		DestinationName:  s.DestinationName,
+		AgentID:          s.AgentID,
+		AgentName:        s.AgentName,
 		JobID:            s.JobID.String(),
 		ResticSnapshotID: s.SnapshotID,
 		SizeBytes:        s.SizeBytes,
@@ -477,7 +481,7 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, agentmanager.ErrAgentNotConnected):
 			ErrServiceUnavailable(w, "agent is not connected")
 		case errors.Is(err, agentmanager.ErrSnapshotBrowseTimeout):
-			http.Error(w, `{"error":"snapshot browse timed out"}`, http.StatusGatewayTimeout)
+			errJSON(w, http.StatusGatewayTimeout, "snapshot browse timed out", "gateway_timeout")
 		default:
 			h.logger.Error("snapshot browse failed", zap.Error(err))
 			ErrInternal(w)
@@ -486,7 +490,7 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.Err != "" {
 		h.logger.Warn("agent reported error during snapshot browse", zap.String("error", result.Err))
-		http.Error(w, `{"error":"`+result.Err+`"}`, http.StatusBadGateway)
+		errJSON(w, http.StatusBadGateway, result.Err, "agent_error")
 		return
 	}
 
