@@ -256,17 +256,19 @@ func run(ctx context.Context, cfg *config) error {
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
 		grpcserver.Config{
-			SharedSecret: cfg.agentSecret,
-			TLSCertFile:  cfg.grpcTLSCert,
-			TLSKeyFile:   cfg.grpcTLSKey,
-			AutoCerts:    autoCerts,
-			NotifService: notifService,
-			Metrics:      m,
+			SharedSecret:    cfg.agentSecret,
+			TLSCertFile:     cfg.grpcTLSCert,
+			TLSKeyFile:      cfg.grpcTLSKey,
+			AutoCerts:       autoCerts,
+			PendingDispatch: sched,
+			NotifService:    notifService,
+			Metrics:         m,
 		},
 		agentMgr,
 		agentRepo,
 		jobRepo,
 		snapshotRepo,
+		policyRepo,
 		wsHub,
 		logger,
 	)

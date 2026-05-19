@@ -37,24 +37,33 @@ import (
 	"github.com/google/uuid"
 )
 
+// PendingDispatcher is implemented by the scheduler to flush pending jobs when
+// an agent reconnects. Defined as an interface to avoid importing the scheduler
+// package from the grpc package.
+type PendingDispatcher interface {
+	DispatchPending(ctx context.Context, agentID uuid.UUID)
+}
+
 // Server is the gRPC server that handles agent connections.
 // It wraps the generated UnimplementedAgentServiceServer to ensure
 // forward compatibility when new RPCs are added to the proto.
 type Server struct {
 	proto.UnimplementedAgentServiceServer
 
-	agentManager *agentmanager.Manager
-	agentRepo    repositories.AgentRepository
-	jobRepo      repositories.JobRepository
-	snapshotRepo repositories.SnapshotRepository
-	hub          *websocket.Hub
-	notifSvc     notification.Service
-	metrics      *metrics.Metrics // may be nil when metrics are disabled
-	logger       *zap.Logger
-	sharedSecret string // shared secret agents must present in gRPC metadata
-	tlsCertFile  string
-	tlsKeyFile   string
-	autoCerts    *AutoCerts // non-nil when auto-PKI + mTLS is active
+	agentManager     *agentmanager.Manager
+	agentRepo        repositories.AgentRepository
+	jobRepo          repositories.JobRepository
+	snapshotRepo     repositories.SnapshotRepository
+	policyRepo       repositories.PolicyRepository
+	hub              *websocket.Hub
+	pendingDispatch  PendingDispatcher // may be nil in tests that don't need it
+	notifSvc         notification.Service
+	metrics          *metrics.Metrics // may be nil when metrics are disabled
+	logger           *zap.Logger
+	sharedSecret     string // shared secret agents must present in gRPC metadata
+	tlsCertFile      string
+	tlsKeyFile       string
+	autoCerts        *AutoCerts // non-nil when auto-PKI + mTLS is active
 
 	// capabilitiesMu guards capabilitiesCache.
 	capabilitiesMu sync.Mutex
@@ -80,6 +89,10 @@ type Config struct {
 	// mTLS (RequireAndVerifyClientCert) and the shared-secret token check is
 	// bypassed — the client certificate is the authentication proof.
 	AutoCerts *AutoCerts
+	// PendingDispatch is called once when an agent opens its StreamJobs stream
+	// to flush any jobs that were created while the agent was offline. Optional
+	// — if nil, pending jobs are not re-dispatched on reconnect (test default).
+	PendingDispatch PendingDispatcher
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
@@ -95,6 +108,7 @@ func New(
 	agentRepo repositories.AgentRepository,
 	jobRepo repositories.JobRepository,
 	snapshotRepo repositories.SnapshotRepository,
+	policyRepo repositories.PolicyRepository,
 	hub *websocket.Hub,
 	logger *zap.Logger,
 ) *Server {
@@ -103,7 +117,9 @@ func New(
 		agentRepo:         agentRepo,
 		jobRepo:           jobRepo,
 		snapshotRepo:      snapshotRepo,
+		policyRepo:        policyRepo,
 		hub:               hub,
+		pendingDispatch:   cfg.PendingDispatch,
 		notifSvc:          cfg.NotifService,
 		metrics:           cfg.Metrics,
 		logger:            logger.Named("grpc"),
@@ -423,6 +439,11 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 	// Docker availability is read from the capabilities cached during the
 	// Register RPC — StreamJobsRequest does not carry capability fields.
 	s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
+
+	// Flush any jobs that were created while the agent was offline.
+	if s.pendingDispatch != nil {
+		go s.pendingDispatch.DispatchPending(context.Background(), agentID)
+	}
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
@@ -790,6 +811,14 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 				zap.Error(err),
 			)
 		} else {
+			// Populate Sources from the current policy so the snapshot record
+			// reflects what was backed up. This uses the policy's current sources,
+			// which is accurate for the vast majority of cases.
+			snapshotSources := "[]"
+			if policy, pErr := s.policyRepo.GetByID(ctx, job.PolicyID); pErr == nil {
+				snapshotSources = policy.Sources
+			}
+
 			snap := &db.Snapshot{
 				PolicyID:      job.PolicyID,
 				DestinationID: destID,
@@ -797,6 +826,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 				SnapshotID:    req.SnapshotId,
 				SizeBytes:     req.SizeBytes,
 				Tags:          "[]",
+				Sources:       snapshotSources,
 				SnapshotAt:    now,
 			}
 			if err := s.snapshotRepo.Create(ctx, snap); err != nil {
