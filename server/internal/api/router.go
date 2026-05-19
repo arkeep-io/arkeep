@@ -178,6 +178,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/snapshots/{id}", snapshotHandler.GetByID)
 			r.With(RequireRole("admin")).Delete("/snapshots/{id}", snapshotHandler.Delete)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/restore", snapshotHandler.Restore)
+			r.Get("/snapshots/{id}/browse", snapshotHandler.Browse)
 
 			// Notifications
 			r.Get("/notifications", notificationHandler.List)

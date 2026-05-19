@@ -874,6 +874,14 @@ func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListRepo
 	return &proto.VolumeListResponse{Ok: true}, nil
 }
 
+// ReportSnapshotBrowse receives the snapshot file listing from an agent in
+// response to a JOB_TYPE_LIST_SNAPSHOT_FILES request. It delivers the result
+// to the waiting RequestSnapshotBrowse call via the agent manager.
+func (s *Server) ReportSnapshotBrowse(ctx context.Context, req *proto.SnapshotBrowseReport) (*proto.SnapshotBrowseResponse, error) {
+	s.agentManager.DeliverSnapshotBrowse(req)
+	return &proto.SnapshotBrowseResponse{Ok: true}, nil
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // parseAgentID parses a string UUID sent by the agent over gRPC into the

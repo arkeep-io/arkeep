@@ -43,6 +43,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/docker"
 	"github.com/arkeep-io/arkeep/agent/internal/executor"
 	"github.com/arkeep-io/arkeep/agent/internal/metrics"
+	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -156,10 +157,11 @@ type Config struct {
 // It implements executor.LogSink and executor.StatusReporter so the executor
 // can forward log lines and status changes without knowing about gRPC.
 type Manager struct {
-	cfg    Config
-	exec   *executor.Executor
-	docker *docker.Client // may be nil if Docker is unavailable on this host
-	logger *zap.Logger
+	cfg     Config
+	exec    *executor.Executor
+	docker  *docker.Client  // may be nil if Docker is unavailable on this host
+	wrapper *restic.Wrapper // used to run restic ls for snapshot browse requests
+	logger  *zap.Logger
 
 	// mu protects client and logStreams — both are replaced on every reconnect.
 	mu         sync.RWMutex
@@ -174,11 +176,12 @@ type Manager struct {
 // New creates a Manager. Call Run to start the connection loop.
 // dockerClient may be nil — if it is, LIST_VOLUMES requests are answered
 // with an error instead of crashing.
-func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, logger *zap.Logger) *Manager {
+func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapper *restic.Wrapper, logger *zap.Logger) *Manager {
 	return &Manager{
 		cfg:        cfg,
 		exec:       exec,
 		docker:     dockerClient,
+		wrapper:    wrapper,
 		logger:     logger.Named("connection"),
 		logStreams:  make(map[string]proto.AgentService_StreamLogsClient),
 	}
@@ -535,6 +538,13 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			continue
 		}
 
+		// LIST_SNAPSHOT_FILES is a synthetic request that runs restic ls and
+		// returns the file tree via ReportSnapshotBrowse, without creating a job.
+		if assignment.Type == proto.JobType_JOB_TYPE_LIST_SNAPSHOT_FILES {
+			go m.handleSnapshotBrowseRequest(assignment.JobId, agentID, assignment.Payload)
+			continue
+		}
+
 		job, err := m.protoToJob(assignment)
 		if err != nil {
 			m.logger.Error("failed to parse job assignment",
@@ -594,6 +604,85 @@ func (m *Manager) handleVolumeListRequest(correlationID, agentID string) {
 
 	if _, err := client.ReportVolumeList(ctx, report); err != nil {
 		m.logger.Warn("handleVolumeListRequest: ReportVolumeList RPC failed",
+			zap.String("correlation_id", correlationID),
+			zap.Error(err),
+		)
+	}
+}
+
+// snapshotBrowsePayload is the JSON body sent by the server inside a
+// JOB_TYPE_LIST_SNAPSHOT_FILES JobAssignment.
+type snapshotBrowsePayload struct {
+	ResticSnapshotID string `json:"restic_snapshot_id"`
+	RepoPassword     string `json:"repo_password"`
+	Destination      struct {
+		Type    string            `json:"type"`
+		RepoURL string            `json:"repo_url"`
+		Env     map[string]string `json:"env"`
+	} `json:"destination"`
+}
+
+// handleSnapshotBrowseRequest runs restic ls for the requested snapshot and
+// reports the file entries back to the server via ReportSnapshotBrowse.
+// Runs in its own goroutine so it does not block the job stream loop.
+func (m *Manager) handleSnapshotBrowseRequest(correlationID, agentID string, payload []byte) {
+	m.mu.RLock()
+	client := m.client
+	ctx := m.sessionCtx
+	m.mu.RUnlock()
+
+	report := &proto.SnapshotBrowseReport{
+		AgentId:       agentID,
+		CorrelationId: correlationID,
+	}
+
+	if client == nil {
+		report.Error = "no active gRPC client"
+		return
+	}
+
+	if m.wrapper == nil {
+		report.Error = "restic is unavailable on this agent"
+		if _, err := client.ReportSnapshotBrowse(ctx, report); err != nil {
+			m.logger.Warn("handleSnapshotBrowseRequest: ReportSnapshotBrowse RPC failed",
+				zap.String("correlation_id", correlationID),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+
+	var p snapshotBrowsePayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		report.Error = fmt.Sprintf("failed to parse browse payload: %v", err)
+		_, _ = client.ReportSnapshotBrowse(ctx, report)
+		return
+	}
+
+	dest := restic.Destination{
+		Type:     restic.DestinationType(p.Destination.Type),
+		RepoURL:  p.Destination.RepoURL,
+		Password: p.RepoPassword,
+		Env:      p.Destination.Env,
+	}
+
+	entries, err := m.wrapper.Ls(ctx, dest, p.ResticSnapshotID)
+	if err != nil {
+		report.Error = err.Error()
+	} else {
+		report.Entries = make([]*proto.SnapshotFileEntry, len(entries))
+		for i, e := range entries {
+			report.Entries[i] = &proto.SnapshotFileEntry{
+				Path:  e.Path,
+				Type:  e.Type,
+				Size:  e.Size,
+				Mtime: e.Mtime,
+			}
+		}
+	}
+
+	if _, err := client.ReportSnapshotBrowse(ctx, report); err != nil {
+		m.logger.Warn("handleSnapshotBrowseRequest: ReportSnapshotBrowse RPC failed",
 			zap.String("correlation_id", correlationID),
 			zap.Error(err),
 		)
