@@ -221,6 +221,19 @@ export interface Job {
 // JobListItem is the leaner shape returned by the list endpoint.
 export type JobListItem = Omit<Job, 'destinations'>
 
+// ─── Snapshot Browse ──────────────────────────────────────────────────────────
+
+export interface SnapshotFileEntry {
+  path: string
+  type: 'file' | 'dir'
+  size: number
+  mtime: string
+}
+
+export interface SnapshotBrowseResponse {
+  entries: SnapshotFileEntry[]
+}
+
 // ─── Snapshot ─────────────────────────────────────────────────────────────────
 
 export interface Snapshot {
@@ -382,6 +395,7 @@ export interface UpdateMeRequest {
 export interface RestoreRequest {
   agent_id: string
   target_path: string
+  include_paths?: string[]
 }
 
 export interface RestoreResponse {

@@ -62,6 +62,14 @@ type BackupOptions struct {
 	ExcludePatterns []string
 }
 
+// LsEntry represents a single file or directory returned by `restic ls --json`.
+type LsEntry struct {
+	Path  string `json:"path"`
+	Type  string `json:"type"`  // "file" or "dir"
+	Size  int64  `json:"size"`
+	Mtime string `json:"mtime"`
+}
+
 // SnapshotInfo holds the metadata of a single snapshot returned by restic.
 type SnapshotInfo struct {
 	ID       string   `json:"id"`
@@ -245,9 +253,10 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 	return snapshots, nil
 }
 
-// Restore restores a snapshot (or a path within it) to targetDir.
+// Restore restores a snapshot (or specific paths within it) to targetDir.
 // snapshotID may be "latest" to restore the most recent snapshot.
-// includePath, if non-empty, limits restoration to a sub-path inside the snapshot.
+// includePaths, if non-empty, limits restoration to those sub-paths inside the
+// snapshot (each maps to a separate restic --include flag).
 // excludePaths lists paths to skip during restore (e.g. read-only volume mounts).
 // hostRoot, if non-empty, is the container path where the host filesystem is
 // bind-mounted (e.g. "/hostfs"). When set, lchown failures on paths under
@@ -255,15 +264,75 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 // (typically Windows NTFS) does not support Unix ownership operations, but the
 // file data is restored correctly. When empty (native Linux/Windows deployments),
 // all errors are propagated as-is.
-func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePath string, excludePaths []string, hostRoot string) error {
+func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePaths []string, excludePaths []string, hostRoot string) error {
 	args := []string{"restore", snapshotID, "--target", targetDir, "--json"}
-	if includePath != "" {
-		args = append(args, "--include", includePath)
+	for _, p := range includePaths {
+		args = append(args, "--include", p)
 	}
 	for _, ex := range excludePaths {
 		args = append(args, "--exclude", ex)
 	}
 	return w.runRestoreJSON(ctx, dest, args, hostRoot)
+}
+
+// Ls returns the list of files and directories stored in snapshotID.
+// It runs `restic ls --json <snapshotID>` and parses the newline-delimited
+// JSON output. The first line is the snapshot header and is skipped.
+func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID string) ([]LsEntry, error) {
+	cmd := w.buildCmd(ctx, dest, []string{"ls", "--json", snapshotID})
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("restic: failed to open stdout pipe: %w", err)
+	}
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("restic: failed to start: %w", err)
+	}
+
+	var entries []LsEntry
+	scanner := bufio.NewScanner(stdout)
+	// restic ls --json uses a 16 MB buffer limit internally; set a generous
+	// scanner buffer so very long path lines don't cause a token-too-long error.
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 4*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		// The first object has struct_type "snapshot" — skip it.
+		if strings.Contains(string(line), `"struct_type":"snapshot"`) {
+			continue
+		}
+		var raw struct {
+			Path  string `json:"path"`
+			Type  string `json:"type"`
+			Size  int64  `json:"size"`
+			Mtime string `json:"mtime"`
+		}
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		entries = append(entries, LsEntry{
+			Path:  raw.Path,
+			Type:  raw.Type,
+			Size:  raw.Size,
+			Mtime: raw.Mtime,
+		})
+	}
+	if err := scanner.Err(); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, fmt.Errorf("restic: error reading ls output: %w", err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		return nil, fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+	}
+	return entries, nil
 }
 
 // runRestoreJSON runs restic restore --json, consuming stdout as a JSON event
