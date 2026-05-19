@@ -475,12 +475,7 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "", nil)
-	Ok(w, notificationSettingsResponse{
-		JobSuccess:   req.JobSuccess,
-		JobFailure:   req.JobFailure,
-		AgentOffline: req.AgentOffline,
-		AgentOnline:  req.AgentOnline,
-	})
+	Ok(w, notificationSettingsResponse(req))
 }
 
 // =============================================================================
