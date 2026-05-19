@@ -61,6 +61,7 @@ type policyResponse struct {
 	RetentionYearly  int                         `json:"retention_yearly"`
 	HookPreBackup    string                      `json:"hook_pre_backup"`
 	HookPostBackup   string                      `json:"hook_post_backup"`
+	ExcludePatterns  string                      `json:"exclude_patterns"`
 	Destinations     []policyDestinationResponse `json:"destinations"`
 	LastRunAt        *string                     `json:"last_run_at"`
 	NextRunAt        *string                     `json:"next_run_at"`
@@ -86,6 +87,7 @@ func policyToResponse(p *db.Policy, destinations []db.PolicyDestination, agentNa
 		RetentionYearly:  p.RetentionYearly,
 		HookPreBackup:    p.HookPreBackup,
 		HookPostBackup:   p.HookPostBackup,
+		ExcludePatterns:  p.ExcludePatterns,
 		Destinations:     make([]policyDestinationResponse, len(destinations)),
 		CreatedAt:        p.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -170,6 +172,7 @@ type createPolicyRequest struct {
 	RetentionYearly  int                       `json:"retention_yearly"`
 	HookPreBackup    string                    `json:"hook_pre_backup"`
 	HookPostBackup   string                    `json:"hook_post_backup"`
+	ExcludePatterns  string                    `json:"exclude_patterns"` // JSON array
 	Destinations     []destinationEntryRequest `json:"destinations"`
 }
 
@@ -232,6 +235,7 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		RetentionYearly:  req.RetentionYearly,
 		HookPreBackup:    req.HookPreBackup,
 		HookPostBackup:   req.HookPostBackup,
+		ExcludePatterns:  normalizeJSONArray(req.ExcludePatterns),
 	}
 
 	if err := h.repo.Create(r.Context(), policy); err != nil {
@@ -332,6 +336,7 @@ type updatePolicyRequest struct {
 	RetentionYearly  *int                       `json:"retention_yearly"`
 	HookPreBackup    *string                    `json:"hook_pre_backup"`
 	HookPostBackup   *string                    `json:"hook_post_backup"`
+	ExcludePatterns  *string                    `json:"exclude_patterns"`
 	Destinations     []destinationEntryRequest  `json:"destinations"`
 }
 
@@ -423,6 +428,9 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		policy.HookPostBackup = *req.HookPostBackup
+	}
+	if req.ExcludePatterns != nil {
+		policy.ExcludePatterns = normalizeJSONArray(*req.ExcludePatterns)
 	}
 
 	if len(req.Destinations) > 0 {
@@ -575,4 +583,13 @@ func validateSchedule(schedule string) error {
 		return errors.New("invalid schedule: " + err.Error())
 	}
 	return nil
+}
+
+// normalizeJSONArray returns s unchanged if non-empty, or "[]" as the default
+// for optional JSON-array fields (e.g. exclude_patterns).
+func normalizeJSONArray(s string) string {
+	if s == "" {
+		return "[]"
+	}
+	return s
 }
