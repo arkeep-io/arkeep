@@ -56,7 +56,8 @@ func TestNotificationHandler_List(t *testing.T) {
 		createDBNotification(t, e.deps, userID)
 		createDBNotification(t, e.deps, userID)
 		// Notification for a different user — should not appear.
-		createDBNotification(t, e.deps, uuid.New())
+		otherID := createDBUser(t, e.deps, "other-notif@example.com", "user")
+		createDBNotification(t, e.deps, otherID)
 
 		resp := e.get(t, "/api/v1/notifications", token)
 		assertStatus(t, resp, http.StatusOK)
@@ -94,7 +95,8 @@ func TestNotificationHandler_MarkAsRead(t *testing.T) {
 	t.Run("returns 404 when notification belongs to another user", func(t *testing.T) {
 		e := newTestEnv(t)
 		// Create notification owned by a different user.
-		n := createDBNotification(t, e.deps, uuid.New())
+		otherID := createDBUser(t, e.deps, "other-owner@example.com", "user")
+		n := createDBNotification(t, e.deps, otherID)
 
 		resp := e.patch(t, "/api/v1/notifications/"+n.ID.String()+"/read",
 			e.userToken(t), nil)

@@ -295,7 +295,7 @@ func (s *Scheduler) addJob(policy *db.Policy) error {
 // via TriggerNow). It creates the Job and JobDestination DB records, updates
 // policy timestamps, and dispatches the assignment to the agent.
 // It returns the created Job so callers can surface its ID.
-func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestination) (*db.Job, error) {
+func (s *Scheduler) runJob(policy *db.Policy, destinations []repositories.PolicyDestinationWithName) (*db.Job, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -368,7 +368,7 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []db.PolicyDestinatio
 // sends it to the agent via AgentManager. It loads full destination records
 // (including decrypted credentials) so the agent has everything it needs
 // without making additional calls back to the server.
-func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []db.PolicyDestination) error {
+func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repositories.PolicyDestinationWithName) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

@@ -72,6 +72,11 @@ func New(cfg Config) (*gorm.DB, error) {
 		if err != nil {
 			return nil, fmt.Errorf("db: failed to initialize gorm with sqlite: %w", err)
 		}
+		// Enable foreign key enforcement. SQLite disables FK constraints by default;
+		// without this, ON DELETE RESTRICT/CASCADE constraints are silently ignored.
+		if err := database.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+			return nil, fmt.Errorf("db: failed to enable foreign keys: %w", err)
+		}
 		drvName = "sqlite"
 
 	case "postgres":

@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/arkeep-io/arkeep/server/internal/db"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -29,15 +28,7 @@ func TestJobDispatch(t *testing.T) {
 
 	// Create a job record in the DB (normally done by the scheduler).
 	agentUUID := mustParseUUID(t, agentID)
-	job := &db.Job{
-		PolicyID: uuid.New(),
-		AgentID:  agentUUID,
-		Type:     "backup",
-		Status:   "pending",
-	}
-	if err := ts.jobRepo.Create(context.Background(), job); err != nil {
-		t.Fatalf("create job: %v", err)
-	}
+	job := createIntegrationJob(t, ts, agentUUID)
 	jobID := job.ID.String()
 
 	// Dispatch the job via agentManager (same path the scheduler uses).
@@ -103,15 +94,7 @@ func TestJobDispatchFailed(t *testing.T) {
 	waitForAgentStatus(t, ts.agentRepo, agentID, "online")
 
 	agentUUID := mustParseUUID(t, agentID)
-	job := &db.Job{
-		PolicyID: uuid.New(),
-		AgentID:  agentUUID,
-		Type:     "backup",
-		Status:   "pending",
-	}
-	if err := ts.jobRepo.Create(context.Background(), job); err != nil {
-		t.Fatalf("create job: %v", err)
-	}
+	job := createIntegrationJob(t, ts, agentUUID)
 
 	if err := ts.agentMgr.Dispatch(agentID, &proto.JobAssignment{
 		JobId:       job.ID.String(),

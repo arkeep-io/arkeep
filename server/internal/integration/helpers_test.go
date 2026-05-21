@@ -45,11 +45,12 @@ func TestMain(m *testing.M) {
 // testServer bundles the live gRPC server with all its dependencies so tests
 // can reach both the network endpoint and the underlying repositories directly.
 type testServer struct {
-	addr      string // "127.0.0.1:<port>" of the live gRPC listener
-	agentMgr  *agentmanager.Manager
-	agentRepo repositories.AgentRepository
-	jobRepo   repositories.JobRepository
-	cancel    context.CancelFunc // cancels the server context → graceful stop
+	addr       string // "127.0.0.1:<port>" of the live gRPC listener
+	agentMgr   *agentmanager.Manager
+	agentRepo  repositories.AgentRepository
+	jobRepo    repositories.JobRepository
+	policyRepo repositories.PolicyRepository
+	cancel     context.CancelFunc // cancels the server context → graceful stop
 }
 
 // newTestServer starts a real gRPC server on a free loopback port backed by a
@@ -95,11 +96,12 @@ func newTestServer(t *testing.T) *testServer {
 	go func() { _ = srv.Serve(ctx, lis) }()
 
 	ts := &testServer{
-		addr:      lis.Addr().String(),
-		agentMgr:  agentMgr,
-		agentRepo: agentRepo,
-		jobRepo:   jobRepo,
-		cancel:    cancel,
+		addr:       lis.Addr().String(),
+		agentMgr:   agentMgr,
+		agentRepo:  agentRepo,
+		jobRepo:    jobRepo,
+		policyRepo: policyRepo,
+		cancel:     cancel,
 	}
 
 	t.Cleanup(func() {
@@ -108,6 +110,35 @@ func newTestServer(t *testing.T) *testServer {
 	})
 
 	return ts
+}
+
+// createIntegrationJob inserts a job record with a real policy (and the given
+// agentID) to satisfy FK constraints. Returns the created job.
+func createIntegrationJob(t *testing.T, ts *testServer, agentUUID uuid.UUID) *db.Job {
+	t.Helper()
+	ctx := context.Background()
+
+	p := &db.Policy{
+		AgentID:  agentUUID,
+		Name:     "integration-test-policy",
+		Schedule: "@daily",
+		Enabled:  true,
+		Sources:  `["/data"]`,
+	}
+	if err := ts.policyRepo.Create(ctx, p); err != nil {
+		t.Fatalf("createIntegrationJob: create policy: %v", err)
+	}
+
+	job := &db.Job{
+		PolicyID: p.ID,
+		AgentID:  agentUUID,
+		Type:     "backup",
+		Status:   "pending",
+	}
+	if err := ts.jobRepo.Create(ctx, job); err != nil {
+		t.Fatalf("createIntegrationJob: create job: %v", err)
+	}
+	return job
 }
 
 // ─── fakeAgent ────────────────────────────────────────────────────────────────
