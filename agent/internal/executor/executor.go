@@ -78,6 +78,7 @@ type restorePayload struct {
 	ResticSnapshotID string             `json:"restic_snapshot_id"`
 	RepoPassword     string             `json:"repo_password"`
 	TargetPath       string             `json:"target_path"`
+	IncludePaths     []string           `json:"include_paths,omitempty"`
 	Destination      destinationPayload `json:"destination"`
 }
 
@@ -552,7 +553,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 		Env:      payload.Destination.Env,
 	}
 
-	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, "", excludePaths, e.dockerHostRoot); err != nil {
+	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, payload.IncludePaths, excludePaths, e.dockerHostRoot); err != nil {
 		if ctx.Err() != nil {
 			log("warn", "restore cancelled: agent shutting down")
 			reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")

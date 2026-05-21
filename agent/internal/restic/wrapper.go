@@ -70,6 +70,14 @@ type LsEntry struct {
 	Mtime string `json:"mtime"`
 }
 
+// LsEntry represents a single file or directory returned by `restic ls --json`.
+type LsEntry struct {
+	Path  string `json:"path"`
+	Type  string `json:"type"`  // "file" or "dir"
+	Size  int64  `json:"size"`
+	Mtime string `json:"mtime"`
+}
+
 // SnapshotInfo holds the metadata of a single snapshot returned by restic.
 type SnapshotInfo struct {
 	ID       string   `json:"id"`
@@ -253,9 +261,10 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 	return snapshots, nil
 }
 
-// Restore restores a snapshot (or a path within it) to targetDir.
+// Restore restores a snapshot (or specific paths within it) to targetDir.
 // snapshotID may be "latest" to restore the most recent snapshot.
-// includePath, if non-empty, limits restoration to a sub-path inside the snapshot.
+// includePaths, if non-empty, limits restoration to those sub-paths inside the
+// snapshot (each maps to a separate restic --include flag).
 // excludePaths lists paths to skip during restore (e.g. read-only volume mounts).
 // hostRoot, if non-empty, is the container path where the host filesystem is
 // bind-mounted (e.g. "/hostfs"). When set, lchown failures on paths under
@@ -263,10 +272,10 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 // (typically Windows NTFS) does not support Unix ownership operations, but the
 // file data is restored correctly. When empty (native Linux/Windows deployments),
 // all errors are propagated as-is.
-func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePath string, excludePaths []string, hostRoot string) error {
+func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePaths []string, excludePaths []string, hostRoot string) error {
 	args := []string{"restore", snapshotID, "--target", targetDir, "--json"}
-	if includePath != "" {
-		args = append(args, "--include", includePath)
+	for _, p := range includePaths {
+		args = append(args, "--include", p)
 	}
 	for _, ex := range excludePaths {
 		args = append(args, "--exclude", ex)
