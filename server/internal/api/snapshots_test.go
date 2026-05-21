@@ -11,14 +11,16 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
-// createDBSnapshot inserts a snapshot record directly.
+// createDBSnapshot inserts a snapshot record with real FK records to satisfy constraints.
 func createDBSnapshot(t *testing.T, deps *testDeps) *db.Snapshot {
 	t.Helper()
+	job := createDBJob(t, deps)
+	dest := createDBDestination(t, deps, "test-dest-"+uuid.NewString(), "local")
 	s := &db.Snapshot{
-		PolicyID:      uuid.New(),
-		DestinationID: uuid.New(),
-		JobID:         uuid.New(),
-		SnapshotID:    "abc123",
+		PolicyID:      job.PolicyID,
+		DestinationID: dest.ID,
+		JobID:         job.ID,
+		SnapshotID:    uuid.NewString(),
 		SizeBytes:     1024,
 		SnapshotAt:    time.Now(),
 	}
@@ -115,8 +117,8 @@ func TestSnapshotHandler_GetByID(t *testing.T) {
 		if data.ID != s.ID.String() {
 			t.Errorf("id = %q, want %q", data.ID, s.ID.String())
 		}
-		if data.ResticSnapshotID != "abc123" {
-			t.Errorf("restic_snapshot_id = %q, want abc123", data.ResticSnapshotID)
+		if data.ResticSnapshotID != s.SnapshotID {
+			t.Errorf("restic_snapshot_id = %q, want %q", data.ResticSnapshotID, s.SnapshotID)
 		}
 	})
 

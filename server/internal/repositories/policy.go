@@ -56,7 +56,7 @@ func (r *gormPolicyRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.P
 //	for _, pd := range destinations {
 //	    // pd.DestinationID, pd.Priority
 //	}
-func (r *gormPolicyRepository) GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []db.PolicyDestination, error) {
+func (r *gormPolicyRepository) GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []PolicyDestinationWithName, error) {
 	var policy db.Policy
 	err := r.db.WithContext(ctx).First(&policy, "id = ?", id).Error
 	if err != nil {
@@ -66,12 +66,9 @@ func (r *gormPolicyRepository) GetByIDWithDestinations(ctx context.Context, id u
 		return nil, nil, fmt.Errorf("policies: get by id with destinations: %w", err)
 	}
 
-	var destinations []db.PolicyDestination
-	if err := r.db.WithContext(ctx).
-		Where("policy_id = ?", id).
-		Order("priority ASC").
-		Find(&destinations).Error; err != nil {
-		return nil, nil, fmt.Errorf("policies: get destinations for policy %s: %w", id, err)
+	destinations, err := r.GetDestinations(ctx, id)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return &policy, destinations, nil
@@ -218,13 +215,17 @@ func (r *gormPolicyRepository) DeleteAllDestinations(ctx context.Context, policy
 		Delete(&db.PolicyDestination{}).Error
 }
 
-// GetDestinations returns all destination associations for a policy ordered by priority.
-func (r *gormPolicyRepository) GetDestinations(ctx context.Context, policyID uuid.UUID) ([]db.PolicyDestination, error) {
-	var dests []db.PolicyDestination
+// GetDestinations returns active destination associations for a policy ordered
+// by priority. Destinations that have been deleted are excluded via INNER JOIN.
+func (r *gormPolicyRepository) GetDestinations(ctx context.Context, policyID uuid.UUID) ([]PolicyDestinationWithName, error) {
+	var dests []PolicyDestinationWithName
 	err := r.db.WithContext(ctx).
-		Where("policy_id = ?", policyID).
-		Order("priority ASC").
-		Find(&dests).Error
+		Table("policy_destinations pd").
+		Select("pd.*, d.name AS destination_name").
+		Joins("INNER JOIN destinations d ON d.id = pd.destination_id").
+		Where("pd.policy_id = ?", policyID).
+		Order("pd.priority ASC").
+		Scan(&dests).Error
 	return dests, err
 }
 

@@ -10,14 +10,14 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
-// createDBJob inserts a job record directly using random policy/agent UUIDs.
-// SQLite does not enforce foreign keys by default, so the UUIDs do not need
-// to reference real records.
+// createDBJob inserts a job record with a real agent and policy to satisfy FK constraints.
 func createDBJob(t *testing.T, deps *testDeps) *db.Job {
 	t.Helper()
+	agent := createDBAgent(t, deps, "test-agent-"+uuid.NewString())
+	policy := createDBPolicy(t, deps, "test-policy-"+uuid.NewString(), agent.ID)
 	job := &db.Job{
-		PolicyID: uuid.New(),
-		AgentID:  uuid.New(),
+		PolicyID: policy.ID,
+		AgentID:  agent.ID,
 		Type:     "backup",
 		Status:   "succeeded",
 	}
@@ -180,7 +180,7 @@ func TestJobHandler_ListByPolicy(t *testing.T) {
 		// Insert a second job with the same policy ID.
 		job2 := &db.Job{
 			PolicyID: j.PolicyID,
-			AgentID:  uuid.New(),
+			AgentID:  j.AgentID,
 			Type:     "backup",
 			Status:   "pending",
 		}

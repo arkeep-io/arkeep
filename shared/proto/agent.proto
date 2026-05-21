@@ -74,6 +74,11 @@ service AgentService {
   // snapshot and returns the file/directory entries. The server correlates the
   // response to the waiting REST request via the correlation_id.
   rpc ReportSnapshotBrowse(SnapshotBrowseReport) returns (SnapshotBrowseResponse);
+
+  // ReportSnapshotImport is called by the agent in response to a
+  // JOB_TYPE_IMPORT_SNAPSHOTS assignment. The agent runs restic snapshots on the
+  // destination and returns all snapshot metadata for the server to persist.
+  rpc ReportSnapshotImport(SnapshotImportReport) returns (SnapshotImportResponse);
 }
 
 // ─── Register ────────────────────────────────────────────────────────────────
@@ -208,6 +213,10 @@ enum JobType {
   // browse the contents of a Restic snapshot. The job_id carries a correlation_id;
   // the agent responds via ReportSnapshotBrowse.
   JOB_TYPE_LIST_SNAPSHOT_FILES = 6;
+  // JOB_TYPE_IMPORT_SNAPSHOTS is a synthetic, non-persisted job type used to
+  // enumerate all snapshots in an existing Restic repository on a destination.
+  // The agent responds via ReportSnapshotImport.
+  JOB_TYPE_IMPORT_SNAPSHOTS = 7;
 }
 
 // ─── ReportJobStatus ─────────────────────────────────────────────────────────
@@ -382,5 +391,42 @@ message SnapshotBrowseReport {
 
 // SnapshotBrowseResponse acknowledges receipt of the snapshot browse report.
 message SnapshotBrowseResponse {
+  bool ok = 1;
+}
+
+// ─── ReportSnapshotImport ────────────────────────────────────────────────────
+
+// ImportedSnapshotInfo holds the metadata of a single snapshot found in an
+// existing Restic repository, as returned by `restic snapshots --json`.
+message ImportedSnapshotInfo {
+  // restic_snapshot_id is the full SHA256 snapshot ID.
+  string restic_snapshot_id = 1;
+  // snapshot_time is the creation time of the snapshot in RFC3339 format.
+  string snapshot_time      = 2;
+  // paths is the list of source paths included in the snapshot.
+  repeated string paths     = 3;
+  // tags is the list of tags attached to the snapshot.
+  repeated string tags      = 4;
+  // hostname is the hostname of the machine that created the snapshot.
+  string hostname           = 5;
+}
+
+// SnapshotImportReport is sent by the agent in response to a
+// JOB_TYPE_IMPORT_SNAPSHOTS assignment. The correlation_id echoes the job_id
+// so the server can match this response to the waiting REST request.
+message SnapshotImportReport {
+  // agent_id identifies the reporting agent.
+  string agent_id                        = 1;
+  // correlation_id echoes the job_id from the JobAssignment.
+  string correlation_id                  = 2;
+  // snapshots is the list of all snapshots found in the repository.
+  repeated ImportedSnapshotInfo snapshots = 3;
+  // error is set when the listing failed (e.g. wrong password, repo not found).
+  // An empty string means success.
+  string error                           = 4;
+}
+
+// SnapshotImportResponse acknowledges receipt of the snapshot import report.
+message SnapshotImportResponse {
   bool ok = 1;
 }

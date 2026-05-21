@@ -18,6 +18,14 @@ type ListOptions struct {
 	Offset int
 }
 
+// PolicyDestinationWithName extends db.PolicyDestination with the denormalised
+// destination name resolved via JOIN. Deleted destinations are excluded from
+// all queries that return this type.
+type PolicyDestinationWithName struct {
+	db.PolicyDestination
+	DestinationName string
+}
+
 // -----------------------------------------------------------------------------
 // UserRepository
 // -----------------------------------------------------------------------------
@@ -101,7 +109,8 @@ type PolicyRepository interface {
 	// PolicyDestination records. The destinations are returned as a separate
 	// slice rather than embedded in the Policy struct, because GORM cannot
 	// auto-resolve UUID-typed foreign keys. Callers iterate the slice directly.
-	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []db.PolicyDestination, error)
+	// Destinations that have been deleted are excluded automatically.
+	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []PolicyDestinationWithName, error)
 
 	Update(ctx context.Context, policy *db.Policy) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -119,7 +128,9 @@ type PolicyRepository interface {
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error
 	UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error
 	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
-	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]db.PolicyDestination, error)
+	// GetDestinations returns active (non-deleted) destination associations for a
+	// policy ordered by priority. Deleted destinations are excluded automatically.
+	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]PolicyDestinationWithName, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -157,6 +168,7 @@ type SnapshotRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Snapshot, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteBySnapshotID(ctx context.Context, snapshotID string) error
+	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)
 	List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)

@@ -359,3 +359,4 @@ func createDBAgent(t *testing.T, deps *testDeps, name string) *db.Agent {
 	}
 	return a
 }
+

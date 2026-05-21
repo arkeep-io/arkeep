@@ -90,7 +90,6 @@ type destinationPayload struct {
 	Config        string            `json:"config"`
 	Env           map[string]string `json:"env"`
 	Priority      int               `json:"priority"`
-	SkipInit      bool              `json:"skip_init"`
 }
 
 type retentionPayload struct {
@@ -394,7 +393,6 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			Sources:         sources,
 			Tags:            payload.Tags,
 			ExcludePatterns: payload.ExcludePatterns,
-			SkipInit:        dest.SkipInit,
 		}
 
 		result, err := e.wrapper.Backup(ctx, d, opts, func(ev restic.ProgressEvent) error {
