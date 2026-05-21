@@ -124,6 +124,7 @@ const importAgentId = ref('')
 const importAgentError = ref('')
 const importRepoPassword = ref('')
 const importPasswordError = ref('')
+const importError = ref<string | null>(null)
 const importResult = ref<ImportDestinationResponse | null>(null)
 const creationDone = ref(false)
 
@@ -177,6 +178,7 @@ function resetFields() {
     importAgentError.value = ''
     importRepoPassword.value = ''
     importPasswordError.value = ''
+    importError.value = null
     importResult.value = null
     creationDone.value = false
 }
@@ -242,6 +244,11 @@ watch(
 watch(selectedType, () => {
     fieldErrors.value = {}
     submitError.value = null
+})
+
+// Clear import error when toggle is turned off
+watch(importEnabled, () => {
+    importError.value = null
 })
 
 // ---------------------------------------------------------------------------
@@ -327,6 +334,7 @@ async function onSubmit() {
 
     submitting.value = true
     submitError.value = null
+    importError.value = null
 
     const { config, creds } = buildConfigAndCreds()
 
@@ -369,7 +377,12 @@ async function onSubmit() {
         emit('update:open', false)
         emit('saved')
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save destination'
+        const msg = e?.data?.error?.message ?? e?.message ?? 'An error occurred'
+        if (importEnabled.value && !isEdit.value) {
+            importError.value = msg
+        } else {
+            submitError.value = msg
+        }
     } finally {
         submitting.value = false
     }
@@ -682,6 +695,14 @@ function onOpenChange(value: boolean) {
                                             @input="importPasswordError = ''" />
                                         <FieldError v-if="importPasswordError">{{ importPasswordError }}</FieldError>
                                     </Field>
+                                    <Transition enter-active-class="transition-all duration-200"
+                                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                                        leave-to-class="-translate-y-1 opacity-0">
+                                        <p v-if="importError" class="text-xs text-destructive flex items-start gap-1.5">
+                                            <AlertCircle class="size-3.5 mt-0.5 shrink-0" />
+                                            {{ importError }}
+                                        </p>
+                                    </Transition>
                                     <p class="text-xs text-muted-foreground">
                                         The connection will be tested on submit. If it fails, the destination will not be created.
                                     </p>
