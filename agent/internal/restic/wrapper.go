@@ -70,14 +70,6 @@ type LsEntry struct {
 	Mtime string `json:"mtime"`
 }
 
-// LsEntry represents a single file or directory returned by `restic ls --json`.
-type LsEntry struct {
-	Path  string `json:"path"`
-	Type  string `json:"type"`  // "file" or "dir"
-	Size  int64  `json:"size"`
-	Mtime string `json:"mtime"`
-}
-
 // SnapshotInfo holds the metadata of a single snapshot returned by restic.
 type SnapshotInfo struct {
 	ID       string   `json:"id"`
