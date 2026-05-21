@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ChevronRight, ChevronDown, Folder, FolderOpen, File } from 'lucide-vue-next'
 import type { SnapshotFileEntry } from '@/types'
 
@@ -14,6 +14,11 @@ const emit = defineEmits<{
 
 // collapsed keeps track of which directory paths are collapsed.
 const collapsed = ref(new Set<string>())
+
+// Start with all directories collapsed whenever entries are (re)loaded.
+watch(() => props.entries, (entries) => {
+  collapsed.value = new Set(entries.filter(e => e.type === 'dir').map(e => e.path))
+}, { immediate: true })
 
 function toggleDir(path: string) {
   if (collapsed.value.has(path)) {
@@ -106,6 +111,7 @@ function toggle(entry: SnapshotFileEntry) {
       <!-- dir chevron -->
       <button
         v-if="entry.type === 'dir'"
+        type="button"
         class="shrink-0 p-0 text-muted-foreground"
         @click.stop="toggleDir(entry.path)"
       >
