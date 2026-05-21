@@ -124,7 +124,6 @@ export interface Destination {
   // repository_password is always masked ("***") on read
   repository_password: string
   enabled: boolean
-  skip_init: boolean
   created_at: string
   updated_at: string
 }
@@ -227,15 +226,26 @@ export type JobListItem = Omit<Job, 'destinations'>
 
 export interface Snapshot {
   id: string
-  policy_id: string
-  policy_name: string // denormalized for display
+  policy_id: string | null
+  policy_name: string
   destination_id: string
+<<<<<<< Updated upstream
   destination_name: string // denormalized for display
   restic_snapshot_id: string // the actual Restic snapshot hash
   hostname: string
   paths: string[]
   tags: string[]
+=======
+  destination_name: string
+  agent_id: string
+  agent_name: string
+  job_id: string | null
+  restic_snapshot_id: string
+>>>>>>> Stashed changes
   size_bytes: number
+  tags: string
+  hostname: string
+  is_imported: boolean
   created_at: string
 }
 
@@ -302,6 +312,18 @@ export interface OIDCProvider {
 export interface OIDCProviderSummary {
   id: string
   name: string
+}
+
+// ImportDestinationRequest is sent to POST /api/v1/destinations/{id}/import.
+export interface ImportDestinationRequest {
+  agent_id: string
+  repo_password: string
+}
+
+// ImportDestinationResponse is returned by the import endpoint.
+export interface ImportDestinationResponse {
+  found: number
+  imported: number
 }
 
 // ─── API request / response shapes ───────────────────────────────────────────

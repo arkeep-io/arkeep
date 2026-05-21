@@ -2,7 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import { z } from 'zod'
 import { api } from '@/services/api'
-import type { Destination } from '@/types'
+import type { Agent, ApiResponse, Destination, ImportDestinationResponse } from '@/types'
 import {
     Sheet,
     SheetContent,
@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-vue-next'
 
 // ---------------------------------------------------------------------------
 // Props / emits
@@ -117,11 +117,20 @@ const selectedType = ref<DestType>('local')
 const submitError = ref<string | null>(null)
 const submitting = ref(false)
 
+// Import state
+const agents = ref<Agent[]>([])
+const importAgentId = ref('')
+const importRepoPassword = ref('')
+const importLoading = ref(false)
+const importResult = ref<ImportDestinationResponse | null>(null)
+const importError = ref<string | null>(null)
+// Tracks the ID of a destination saved in create-mode so import can use it
+const savedId = ref<string | null>(null)
+
 // Base fields
 const name = ref('')
 const nameError = ref('')
 const enabled = ref(true)
-const skipInit = ref(false)
 
 // Config fields — one ref per possible field
 const localPath = ref('')
@@ -154,7 +163,6 @@ function resetFields() {
     name.value = ''
     nameError.value = ''
     enabled.value = true
-    skipInit.value = false
     submitError.value = null
     fieldErrors.value = {}
     localPath.value = ''
@@ -164,13 +172,18 @@ function resetFields() {
     sftpPassword.value = sftpPrivateKey.value = ''
     restUrl.value = restUser.value = restPassword.value = ''
     rcloneRemote.value = rclonePath.value = ''
+    importAgentId.value = ''
+    importRepoPassword.value = ''
+    importLoading.value = false
+    importResult.value = null
+    importError.value = null
+    savedId.value = null
 }
 
 function populateFromDestination(dest: Destination) {
     selectedType.value = dest.type as DestType
     name.value = dest.name
     enabled.value = dest.enabled
-    skipInit.value = dest.skip_init
 
     // Parse config JSON — credentials are write-only and never populated
     let config: Record<string, string> = {}
@@ -202,16 +215,22 @@ function populateFromDestination(dest: Destination) {
     }
 }
 
-// Prefill or reset when the sheet opens
+// Prefill or reset when the sheet opens; also load agent list for import section.
 watch(
     () => props.open,
-    (open) => {
+    async (open) => {
         if (open) {
             resetFields()
             if (props.destination) {
                 populateFromDestination(props.destination)
             } else {
                 selectedType.value = 'local'
+            }
+            try {
+                const res = await api<ApiResponse<{ items: Agent[]; total: number }>>('/api/v1/agents')
+                agents.value = res.data.items ?? []
+            } catch {
+                agents.value = []
             }
         }
     },
@@ -313,20 +332,19 @@ async function onSubmit() {
                     config: JSON.stringify(config),
                     credentials: JSON.stringify(creds),
                     enabled: enabled.value,
-                    skip_init: skipInit.value,
                 },
             })
         } else {
-            await api('/api/v1/destinations', {
+            const res = await api<ApiResponse<Destination>>('/api/v1/destinations', {
                 method: 'POST',
                 body: {
                     name: name.value,
                     type: selectedType.value,
                     config: JSON.stringify(config),
                     credentials: JSON.stringify(creds),
-                    skip_init: skipInit.value,
                 },
             })
+            savedId.value = res.data.id
         }
         emit('update:open', false)
         emit('saved')
@@ -334,6 +352,58 @@ async function onSubmit() {
         submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save destination'
     } finally {
         submitting.value = false
+    }
+}
+
+async function onImport() {
+    // Resolve the destination ID — either existing (edit mode) or newly saved (create mode)
+    let destId = props.destination?.id ?? savedId.value
+    if (!destId) {
+        // Save the destination first, then import
+        if (!validate()) return
+        submitting.value = true
+        submitError.value = null
+        const { config, creds } = buildConfigAndCreds()
+        try {
+            const res = await api<ApiResponse<Destination>>('/api/v1/destinations', {
+                method: 'POST',
+                body: {
+                    name: name.value,
+                    type: selectedType.value,
+                    config: JSON.stringify(config),
+                    credentials: JSON.stringify(creds),
+                },
+            })
+            savedId.value = res.data.id
+            destId = res.data.id
+            emit('saved')
+        } catch (e: any) {
+            submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save destination'
+            return
+        } finally {
+            submitting.value = false
+        }
+    }
+
+    importLoading.value = true
+    importResult.value = null
+    importError.value = null
+    try {
+        const res = await api<ApiResponse<ImportDestinationResponse>>(
+            `/api/v1/destinations/${destId}/import`,
+            {
+                method: 'POST',
+                body: {
+                    agent_id: importAgentId.value,
+                    repo_password: importRepoPassword.value,
+                },
+            }
+        )
+        importResult.value = res.data
+    } catch (e: any) {
+        importError.value = e?.data?.error?.message ?? e?.message ?? 'Import failed'
+    } finally {
+        importLoading.value = false
     }
 }
 
@@ -565,17 +635,60 @@ function onOpenChange(value: boolean) {
                         </div>
                     </template>
 
-                    <!-- Use existing repository toggle -->
+                    <!-- Import existing repository -->
                     <Separator />
-                    <div class="flex items-center justify-between">
+                    <div class="space-y-3">
                         <div>
-                            <p class="text-sm font-medium">Use existing repository</p>
-                            <p class="text-muted-foreground text-xs">
-                                Skip initialization. Enable if this destination already contains a
-                                Restic repository created outside of Arkeep.
+                            <p class="text-sm font-medium">Import existing repository</p>
+                            <p class="text-muted-foreground text-xs mt-0.5">
+                                If this destination already contains a Restic repository, select an agent
+                                and provide the repository password to import its existing snapshots.
                             </p>
                         </div>
-                        <Switch :model-value="skipInit" @update:model-value="skipInit = $event" />
+
+                        <Field>
+                            <FieldLabel for="import-agent">Agent</FieldLabel>
+                            <Select :model-value="importAgentId"
+                                @update:model-value="importAgentId = ($event as string) ?? ''">
+                                <SelectTrigger id="import-agent">
+                                    <SelectValue placeholder="Select an agent" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem v-for="a in agents" :key="a.id" :value="a.id">
+                                        {{ a.name }}
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </Field>
+
+                        <Field>
+                            <FieldLabel for="import-password">Repository Password</FieldLabel>
+                            <Input id="import-password" v-model="importRepoPassword" type="password"
+                                autocomplete="off" placeholder="Restic repository password" />
+                        </Field>
+
+                        <Button type="button" variant="outline" size="sm"
+                            :disabled="importLoading || !importAgentId || !importRepoPassword"
+                            @click="onImport">
+                            <Loader2 v-if="importLoading" class="size-4 animate-spin" />
+                            {{ importLoading ? 'Importing…' : 'Test & Import' }}
+                        </Button>
+
+                        <div v-if="importResult" class="flex items-start gap-2 text-sm text-green-600 dark:text-green-400">
+                            <CheckCircle2 class="size-4 mt-0.5 shrink-0" />
+                            <span>
+                                Found {{ importResult.found }}
+                                snapshot{{ importResult.found !== 1 ? 's' : '' }} —
+                                {{ importResult.imported }} new imported
+                                <span v-if="importResult.found === 0" class="text-muted-foreground">
+                                    (repository is empty or not yet initialized)
+                                </span>
+                            </span>
+                        </div>
+                        <div v-if="importError" class="flex items-start gap-2 text-sm text-destructive">
+                            <AlertCircle class="size-4 mt-0.5 shrink-0" />
+                            <span>{{ importError }}</span>
+                        </div>
                     </div>
 
                     <SheetFooter class="mt-2 px-0">

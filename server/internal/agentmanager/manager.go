@@ -30,9 +30,31 @@ var ErrAgentNotConnected = errors.New("agent not connected")
 // LIST_VOLUMES request within the deadline.
 var ErrVolumeListTimeout = errors.New("volume list request timed out")
 
+<<<<<<< Updated upstream
 // volumeListTimeout is how long RequestVolumeList waits for the agent to reply.
 const volumeListTimeout = 10 * time.Second
 
+=======
+// ErrSnapshotBrowseTimeout is returned when the agent does not respond to a
+// LIST_SNAPSHOT_FILES request within the deadline.
+var ErrSnapshotBrowseTimeout = errors.New("snapshot browse request timed out")
+
+// ErrSnapshotImportTimeout is returned when the agent does not respond to a
+// IMPORT_SNAPSHOTS request within the deadline.
+var ErrSnapshotImportTimeout = errors.New("snapshot import request timed out")
+
+// volumeListTimeout is how long RequestVolumeList waits for the agent to reply.
+const volumeListTimeout = 10 * time.Second
+
+// snapshotBrowseTimeout is how long RequestSnapshotBrowse waits for the agent.
+// Generous because restic ls on a remote repository can take tens of seconds.
+const snapshotBrowseTimeout = 60 * time.Second
+
+// snapshotImportTimeout is how long RequestSnapshotImport waits for the agent.
+// Generous because restic snapshots on a large remote repository can be slow.
+const snapshotImportTimeout = 60 * time.Second
+
+>>>>>>> Stashed changes
 // ConnectedAgent represents an agent that has an active gRPC connection
 // and an open StreamJobs stream through which jobs can be dispatched.
 type ConnectedAgent struct {
@@ -65,6 +87,21 @@ type VolumeListResult struct {
 	Err     string // non-empty when the agent reported an error
 }
 
+<<<<<<< Updated upstream
+=======
+// SnapshotBrowseResult carries the outcome of a JOB_TYPE_LIST_SNAPSHOT_FILES request.
+type SnapshotBrowseResult struct {
+	Entries []*proto.SnapshotFileEntry
+	Err     string // non-empty when the agent reported an error
+}
+
+// SnapshotImportResult carries the outcome of a JOB_TYPE_IMPORT_SNAPSHOTS request.
+type SnapshotImportResult struct {
+	Snapshots []*proto.ImportedSnapshotInfo
+	Err       string // non-empty when the agent reported an error
+}
+
+>>>>>>> Stashed changes
 // Manager is the in-memory registry of currently connected agents.
 // It is safe for concurrent use by multiple goroutines (gRPC server +
 // scheduler run in separate goroutines).
@@ -75,20 +112,39 @@ type Manager struct {
 	agents map[string]*ConnectedAgent // keyed by agent ID
 	logger *zap.Logger
 
+<<<<<<< Updated upstream
 	// pendingVolumeLists maps correlation IDs to response channels.
 	// When the REST handler calls RequestVolumeList, it registers a channel here.
 	// When the agent calls ReportVolumeList via gRPC, DeliverVolumeList sends
 	// the result on the matching channel and removes the entry.
 	pendingMu          sync.Mutex
 	pendingVolumeLists map[string]chan VolumeListResult // keyed by correlation ID
+=======
+	// pendingMu protects both pending maps.
+	// When a REST handler calls RequestVolumeList / RequestSnapshotBrowse, it
+	// registers a channel here. The matching Deliver* method sends on the channel
+	// when the agent RPC arrives.
+	pendingMu               sync.Mutex
+	pendingVolumeLists      map[string]chan VolumeListResult     // keyed by correlation ID
+	pendingSnapshotBrowses  map[string]chan SnapshotBrowseResult // keyed by correlation ID
+	pendingSnapshotImports  map[string]chan SnapshotImportResult // keyed by correlation ID
+>>>>>>> Stashed changes
 }
 
 // New creates a new Manager instance.
 func New(logger *zap.Logger) *Manager {
 	return &Manager{
+<<<<<<< Updated upstream
 		agents:             make(map[string]*ConnectedAgent),
 		pendingVolumeLists: make(map[string]chan VolumeListResult),
 		logger:             logger.Named("agentmanager"),
+=======
+		agents:                  make(map[string]*ConnectedAgent),
+		pendingVolumeLists:      make(map[string]chan VolumeListResult),
+		pendingSnapshotBrowses:  make(map[string]chan SnapshotBrowseResult),
+		pendingSnapshotImports:  make(map[string]chan SnapshotImportResult),
+		logger:                  logger.Named("agentmanager"),
+>>>>>>> Stashed changes
 	}
 }
 
@@ -309,4 +365,165 @@ func (m *Manager) DeliverVolumeList(report *proto.VolumeListReport) {
 		Volumes: report.Volumes,
 		Err:     report.Error,
 	}
+<<<<<<< Updated upstream
+=======
+}
+
+// RequestSnapshotBrowse sends a JOB_TYPE_LIST_SNAPSHOT_FILES assignment to the
+// agent and blocks until the agent responds via ReportSnapshotBrowse or the
+// request times out.
+//
+// payloadJSON is the JSON-encoded browse payload (restic_snapshot_id, repo_password,
+// destination). correlationID must be a unique UUID per call.
+//
+// Returns ErrAgentNotConnected if the agent is offline, or
+// ErrSnapshotBrowseTimeout if the agent does not respond within
+// snapshotBrowseTimeout.
+func (m *Manager) RequestSnapshotBrowse(ctx context.Context, agentID, correlationID string, payloadJSON []byte) (SnapshotBrowseResult, error) {
+	m.mu.RLock()
+	agent, exists := m.agents[agentID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return SnapshotBrowseResult{}, ErrAgentNotConnected
+	}
+
+	ch := make(chan SnapshotBrowseResult, 1)
+	m.pendingMu.Lock()
+	m.pendingSnapshotBrowses[correlationID] = ch
+	m.pendingMu.Unlock()
+
+	defer func() {
+		m.pendingMu.Lock()
+		delete(m.pendingSnapshotBrowses, correlationID)
+		m.pendingMu.Unlock()
+	}()
+
+	assignment := &proto.JobAssignment{
+		JobId:   correlationID,
+		Type:    proto.JobType_JOB_TYPE_LIST_SNAPSHOT_FILES,
+		Payload: payloadJSON,
+	}
+	if err := agent.stream.Send(assignment); err != nil {
+		return SnapshotBrowseResult{}, fmt.Errorf("failed to send snapshot browse request to agent %s: %w", agentID, err)
+	}
+
+	m.logger.Debug("snapshot browse request sent",
+		zap.String("agent_id", agentID),
+		zap.String("correlation_id", correlationID),
+	)
+
+	timeout := time.NewTimer(snapshotBrowseTimeout)
+	defer timeout.Stop()
+
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-timeout.C:
+		return SnapshotBrowseResult{}, ErrSnapshotBrowseTimeout
+	case <-ctx.Done():
+		return SnapshotBrowseResult{}, ctx.Err()
+	}
+}
+
+// DeliverSnapshotBrowse is called by the gRPC server when it receives a
+// ReportSnapshotBrowse RPC from an agent. It matches the report to the waiting
+// RequestSnapshotBrowse call via the correlation_id and delivers the result.
+func (m *Manager) DeliverSnapshotBrowse(report *proto.SnapshotBrowseReport) {
+	m.pendingMu.Lock()
+	ch, ok := m.pendingSnapshotBrowses[report.CorrelationId]
+	m.pendingMu.Unlock()
+
+	if !ok {
+		m.logger.Warn("DeliverSnapshotBrowse: no waiter for correlation_id, discarding",
+			zap.String("correlation_id", report.CorrelationId),
+			zap.String("agent_id", report.AgentId),
+		)
+		return
+	}
+
+	ch <- SnapshotBrowseResult{
+		Entries: report.Entries,
+		Err:     report.Error,
+	}
+}
+
+// RequestSnapshotImport sends a JOB_TYPE_IMPORT_SNAPSHOTS assignment to the
+// agent and blocks until the agent responds via ReportSnapshotImport or the
+// request times out.
+//
+// payloadJSON is the JSON-encoded import payload (type, repo_url, env including
+// RESTIC_PASSWORD). correlationID must be a unique UUID per call.
+//
+// Returns ErrAgentNotConnected if the agent is offline, or
+// ErrSnapshotImportTimeout if the agent does not respond within
+// snapshotImportTimeout.
+func (m *Manager) RequestSnapshotImport(ctx context.Context, agentID, correlationID string, payloadJSON []byte) (SnapshotImportResult, error) {
+	m.mu.RLock()
+	agent, exists := m.agents[agentID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return SnapshotImportResult{}, ErrAgentNotConnected
+	}
+
+	ch := make(chan SnapshotImportResult, 1)
+	m.pendingMu.Lock()
+	m.pendingSnapshotImports[correlationID] = ch
+	m.pendingMu.Unlock()
+
+	defer func() {
+		m.pendingMu.Lock()
+		delete(m.pendingSnapshotImports, correlationID)
+		m.pendingMu.Unlock()
+	}()
+
+	assignment := &proto.JobAssignment{
+		JobId:   correlationID,
+		Type:    proto.JobType_JOB_TYPE_IMPORT_SNAPSHOTS,
+		Payload: payloadJSON,
+	}
+	if err := agent.stream.Send(assignment); err != nil {
+		return SnapshotImportResult{}, fmt.Errorf("failed to send snapshot import request to agent %s: %w", agentID, err)
+	}
+
+	m.logger.Debug("snapshot import request sent",
+		zap.String("agent_id", agentID),
+		zap.String("correlation_id", correlationID),
+	)
+
+	timeout := time.NewTimer(snapshotImportTimeout)
+	defer timeout.Stop()
+
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-timeout.C:
+		return SnapshotImportResult{}, ErrSnapshotImportTimeout
+	case <-ctx.Done():
+		return SnapshotImportResult{}, ctx.Err()
+	}
+}
+
+// DeliverSnapshotImport is called by the gRPC server when it receives a
+// ReportSnapshotImport RPC from an agent. It matches the report to the waiting
+// RequestSnapshotImport call via the correlation_id and delivers the result.
+func (m *Manager) DeliverSnapshotImport(report *proto.SnapshotImportReport) {
+	m.pendingMu.Lock()
+	ch, ok := m.pendingSnapshotImports[report.CorrelationId]
+	m.pendingMu.Unlock()
+
+	if !ok {
+		m.logger.Warn("DeliverSnapshotImport: no waiter for correlation_id, discarding",
+			zap.String("correlation_id", report.CorrelationId),
+			zap.String("agent_id", report.AgentId),
+		)
+		return
+	}
+
+	ch <- SnapshotImportResult{
+		Snapshots: report.Snapshots,
+		Err:       report.Error,
+	}
+>>>>>>> Stashed changes
 }

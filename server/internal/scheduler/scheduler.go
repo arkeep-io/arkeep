@@ -66,7 +66,6 @@ type destinationPayload struct {
 	Config        string            `json:"config"`
 	Env           map[string]string `json:"env"`
 	Priority      int               `json:"priority"`
-	SkipInit      bool              `json:"skip_init"`
 }
 
 // retentionPayload mirrors the keep_* fields from db.Policy.
@@ -391,7 +390,6 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []db.Po
 			Config:        dest.Config,
 			Env:           destutil.BuildEnv(dest),
 			Priority:      pd.Priority,
-			SkipInit:      dest.SkipInit,
 		})
 	}
 

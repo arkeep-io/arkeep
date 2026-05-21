@@ -1,29 +1,44 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 // DestinationHandler groups all destination-related HTTP handlers.
 type DestinationHandler struct {
-	repo      repositories.DestinationRepository
-	auditRepo repositories.AuditRepository
-	logger    *zap.Logger
+	repo         repositories.DestinationRepository
+	snapshotRepo repositories.SnapshotRepository
+	agentMgr     *agentmanager.Manager
+	auditRepo    repositories.AuditRepository
+	logger       *zap.Logger
 }
 
 // NewDestinationHandler creates a new DestinationHandler.
-func NewDestinationHandler(repo repositories.DestinationRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *DestinationHandler {
+func NewDestinationHandler(
+	repo repositories.DestinationRepository,
+	snapshotRepo repositories.SnapshotRepository,
+	agentMgr *agentmanager.Manager,
+	auditRepo repositories.AuditRepository,
+	logger *zap.Logger,
+) *DestinationHandler {
 	return &DestinationHandler{
-		repo:      repo,
-		auditRepo: auditRepo,
-		logger:    logger.Named("destination_handler"),
+		repo:         repo,
+		snapshotRepo: snapshotRepo,
+		agentMgr:     agentMgr,
+		auditRepo:    auditRepo,
+		logger:       logger.Named("destination_handler"),
 	}
 }
 
@@ -36,7 +51,6 @@ type destinationResponse struct {
 	Type      string `json:"type"`
 	Config    string `json:"config"`
 	Enabled   bool   `json:"enabled"`
-	SkipInit  bool   `json:"skip_init"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -49,7 +63,6 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 		Type:      d.Type,
 		Config:    d.Config,
 		Enabled:   d.Enabled,
-		SkipInit:  d.SkipInit,
 		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: d.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -99,7 +112,6 @@ type createDestinationRequest struct {
 	Type        string `json:"type"`
 	Credentials string `json:"credentials"` // JSON, stored encrypted
 	Config      string `json:"config"`      // JSON, not sensitive
-	SkipInit    bool   `json:"skip_init"`
 }
 
 // Create handles POST /api/v1/destinations.
@@ -127,7 +139,6 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Credentials: db.EncryptedString(req.Credentials),
 		Config:      req.Config,
 		Enabled:     true,
-		SkipInit:    req.SkipInit,
 	}
 
 	if err := h.repo.Create(r.Context(), dest); err != nil {
@@ -168,7 +179,6 @@ type updateDestinationRequest struct {
 	Credentials *string `json:"credentials"`
 	Config      *string `json:"config"`
 	Enabled     *bool   `json:"enabled"`
-	SkipInit    *bool   `json:"skip_init"`
 }
 
 // Update handles PATCH /api/v1/destinations/{id}.
@@ -210,10 +220,6 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		dest.Enabled = *req.Enabled
 	}
-	if req.SkipInit != nil {
-		dest.SkipInit = *req.SkipInit
-	}
-
 	if err := h.repo.Update(r.Context(), dest); err != nil {
 		h.logger.Error("failed to update destination", zap.String("id", id.String()), zap.Error(err))
 		ErrInternal(w)
@@ -222,6 +228,147 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name})
 	Ok(w, destinationToResponse(dest))
+}
+
+// importDestinationRequest is the body for POST /api/v1/destinations/{id}/import.
+type importDestinationRequest struct {
+	AgentID      string `json:"agent_id"`
+	RepoPassword string `json:"repo_password"`
+}
+
+// importDestinationResponse reports how many snapshots were found and saved.
+type importDestinationResponse struct {
+	Found    int `json:"found"`
+	Imported int `json:"imported"`
+}
+
+// snapshotImportPayload is the JSON payload sent to the agent for IMPORT_SNAPSHOTS.
+type snapshotImportPayload struct {
+	Type    string            `json:"type"`
+	RepoURL string            `json:"repo_url"`
+	Env     map[string]string `json:"env"`
+}
+
+// Import handles POST /api/v1/destinations/{id}/import.
+// It dispatches a JOB_TYPE_IMPORT_SNAPSHOTS request to the chosen agent and
+// persists any snapshots not already present in the database.
+func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var req importDestinationRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.AgentID == "" {
+		ErrBadRequest(w, "agent_id is required")
+		return
+	}
+	if req.RepoPassword == "" {
+		ErrBadRequest(w, "repo_password is required")
+		return
+	}
+
+	agentID, err := uuid.Parse(req.AgentID)
+	if err != nil {
+		ErrBadRequest(w, "invalid agent_id: must be a valid UUID")
+		return
+	}
+	_ = agentID // used as string below
+
+	ctx := r.Context()
+
+	dest, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get destination for import", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	env := destutil.BuildEnv(dest)
+	env["RESTIC_PASSWORD"] = req.RepoPassword
+
+	payload := snapshotImportPayload{
+		Type:    dest.Type,
+		RepoURL: destutil.BuildRepoURL(dest),
+		Env:     env,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("failed to marshal import payload", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	correlationID := uuid.New().String()
+	result, err := h.agentMgr.RequestSnapshotImport(ctx, req.AgentID, correlationID, payloadBytes)
+	if err != nil {
+		if errors.Is(err, agentmanager.ErrAgentNotConnected) {
+			ErrConflict(w, "agent is not connected")
+			return
+		}
+		if errors.Is(err, agentmanager.ErrSnapshotImportTimeout) {
+			ErrServiceUnavailable(w, "agent did not respond in time")
+			return
+		}
+		h.logger.Error("snapshot import request failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if result.Err != "" {
+		ErrServiceUnavailable(w, fmt.Sprintf("restic error: %s", result.Err))
+		return
+	}
+
+	imported := 0
+	for _, info := range result.Snapshots {
+		exists, err := h.snapshotRepo.ExistsBySnapshotIDAndDestination(ctx, info.ResticSnapshotId, dest.ID)
+		if err != nil {
+			h.logger.Error("failed to check snapshot existence", zap.Error(err))
+			continue
+		}
+		if exists {
+			continue
+		}
+
+		snapshotAt, err := time.Parse(time.RFC3339Nano, info.SnapshotTime)
+		if err != nil {
+			snapshotAt, _ = time.Parse(time.RFC3339, info.SnapshotTime)
+		}
+
+		sourcesJSON, _ := json.Marshal(info.Paths)
+		tagsJSON, _ := json.Marshal(info.Tags)
+
+		snap := &db.Snapshot{
+			PolicyID:      uuid.Nil,
+			JobID:         uuid.Nil,
+			DestinationID: dest.ID,
+			IsImported:    true,
+			SnapshotID:    info.ResticSnapshotId,
+			Hostname:      info.Hostname,
+			Sources:       string(sourcesJSON),
+			Tags:          string(tagsJSON),
+			SnapshotAt:    snapshotAt,
+		}
+		if err := h.snapshotRepo.Create(ctx, snap); err != nil {
+			h.logger.Error("failed to create imported snapshot", zap.Error(err))
+			continue
+		}
+		imported++
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", id.String(), map[string]any{
+		"found":    len(result.Snapshots),
+		"imported": imported,
+	})
+	Ok(w, importDestinationResponse{Found: len(result.Snapshots), Imported: imported})
 }
 
 // Delete handles DELETE /api/v1/destinations/{id}.

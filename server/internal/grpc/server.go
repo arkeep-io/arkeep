@@ -874,6 +874,25 @@ func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListRepo
 	return &proto.VolumeListResponse{Ok: true}, nil
 }
 
+<<<<<<< Updated upstream
+=======
+// ReportSnapshotBrowse receives the snapshot file listing from an agent in
+// response to a JOB_TYPE_LIST_SNAPSHOT_FILES request. It delivers the result
+// to the waiting RequestSnapshotBrowse call via the agent manager.
+func (s *Server) ReportSnapshotBrowse(ctx context.Context, req *proto.SnapshotBrowseReport) (*proto.SnapshotBrowseResponse, error) {
+	s.agentManager.DeliverSnapshotBrowse(req)
+	return &proto.SnapshotBrowseResponse{Ok: true}, nil
+}
+
+// ReportSnapshotImport receives the snapshot list from an agent in response to
+// a JOB_TYPE_IMPORT_SNAPSHOTS request. It delivers the result to the waiting
+// RequestSnapshotImport call via the agent manager.
+func (s *Server) ReportSnapshotImport(ctx context.Context, req *proto.SnapshotImportReport) (*proto.SnapshotImportResponse, error) {
+	s.agentManager.DeliverSnapshotImport(req)
+	return &proto.SnapshotImportResponse{Ok: true}, nil
+}
+
+>>>>>>> Stashed changes
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // parseAgentID parses a string UUID sent by the agent over gRPC into the
