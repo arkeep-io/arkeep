@@ -1,10 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -110,8 +111,15 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 type createDestinationRequest struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
-	Credentials string `json:"credentials"` // JSON, stored encrypted
-	Config      string `json:"config"`      // JSON, not sensitive
+	Credentials string `json:"credentials"`        // JSON, stored encrypted
+	Config      string `json:"config"`              // JSON, not sensitive
+	ImportAgentID      string `json:"import_agent_id,omitempty"`
+	ImportRepoPassword string `json:"import_repo_password,omitempty"`
+}
+
+type createDestinationResponse struct {
+	destinationResponse
+	Import *importDestinationResponse `json:"import,omitempty"`
 }
 
 // Create handles POST /api/v1/destinations.
@@ -141,14 +149,67 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Enabled:     true,
 	}
 
-	if err := h.repo.Create(r.Context(), dest); err != nil {
+	ctx := r.Context()
+
+	// If import fields are provided, test via agent BEFORE persisting anything.
+	// BuildEnv/BuildRepoURL work on the in-memory dest because db.EncryptedString
+	// returns the raw string when not persisted through GORM.
+	var importResult *agentmanager.SnapshotImportResult
+	if req.ImportAgentID != "" {
+		env := destutil.BuildEnv(dest)
+		env["RESTIC_PASSWORD"] = req.ImportRepoPassword
+		payload := snapshotImportPayload{
+			Type:    dest.Type,
+			RepoURL: destutil.BuildRepoURL(dest),
+			Env:     env,
+		}
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			h.logger.Error("failed to marshal import payload", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		correlationID := uuid.New().String()
+		res, err := h.agentMgr.RequestSnapshotImport(ctx, req.ImportAgentID, correlationID, payloadBytes)
+		if err != nil {
+			if errors.Is(err, agentmanager.ErrAgentNotConnected) {
+				ErrConflict(w, "agent is not connected")
+				return
+			}
+			if errors.Is(err, agentmanager.ErrSnapshotImportTimeout) {
+				ErrServiceUnavailable(w, "agent did not respond in time")
+				return
+			}
+			h.logger.Error("snapshot import test failed", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		if res.Err != "" {
+			ErrUnprocessable(w, extractResticMessage(res.Err))
+			return
+		}
+		importResult = &res
+	}
+
+	if err := h.repo.Create(ctx, dest); err != nil {
 		h.logger.Error("failed to create destination", zap.Error(err))
 		ErrInternal(w)
 		return
 	}
 
+	resp := createDestinationResponse{destinationResponse: destinationToResponse(dest)}
+
+	if importResult != nil {
+		imported := h.persistImportedSnapshots(ctx, dest, importResult)
+		logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", dest.ID.String(), map[string]any{
+			"found":    len(importResult.Snapshots),
+			"imported": imported,
+		})
+		resp.Import = &importDestinationResponse{Found: len(importResult.Snapshots), Imported: imported}
+	}
+
 	logAudit(r, h.auditRepo, h.logger, "destination.create", "destination", dest.ID.String(), map[string]any{"name": dest.Name, "type": dest.Type})
-	Created(w, destinationToResponse(dest))
+	Created(w, resp)
 }
 
 // GetByID handles GET /api/v1/destinations/{id}.
@@ -323,10 +384,23 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result.Err != "" {
-		ErrServiceUnavailable(w, fmt.Sprintf("restic error: %s", result.Err))
+		ErrServiceUnavailable(w, extractResticMessage(result.Err))
 		return
 	}
 
+	imported := h.persistImportedSnapshots(ctx, dest, &result)
+
+	logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", id.String(), map[string]any{
+		"found":    len(result.Snapshots),
+		"imported": imported,
+	})
+	Ok(w, importDestinationResponse{Found: len(result.Snapshots), Imported: imported})
+}
+
+// persistImportedSnapshots saves snapshots returned by a JOB_TYPE_IMPORT_SNAPSHOTS
+// RPC call that have not yet been seen for this destination. Returns the count of
+// newly persisted snapshots.
+func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest *db.Destination, result *agentmanager.SnapshotImportResult) int {
 	imported := 0
 	for _, info := range result.Snapshots {
 		exists, err := h.snapshotRepo.ExistsBySnapshotIDAndDestination(ctx, info.ResticSnapshotId, dest.ID)
@@ -363,12 +437,7 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 		}
 		imported++
 	}
-
-	logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", id.String(), map[string]any{
-		"found":    len(result.Snapshots),
-		"imported": imported,
-	})
-	Ok(w, importDestinationResponse{Found: len(result.Snapshots), Imported: imported})
+	return imported
 }
 
 // Delete handles DELETE /api/v1/destinations/{id}.
@@ -393,4 +462,23 @@ func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	logAudit(r, h.auditRepo, h.logger, "destination.delete", "destination", id.String(), map[string]any{})
 	NoContent(w)
+}
+
+// extractResticMessage parses a restic error string and returns only the
+// human-readable message. Restic errors often look like:
+//
+//	restic: command failed: exit status 12 {"message_type":"exit_error","code":12,"message":"Fatal: ..."}
+//
+// If a JSON object with a "message" field is found, that value is returned.
+// Otherwise the original string is returned unchanged.
+func extractResticMessage(s string) string {
+	if i := strings.Index(s, "{"); i >= 0 {
+		var v struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(s[i:]), &v); err == nil && v.Message != "" {
+			return v.Message
+		}
+	}
+	return s
 }

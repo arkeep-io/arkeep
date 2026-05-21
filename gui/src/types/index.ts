@@ -331,6 +331,12 @@ export interface ImportDestinationResponse {
   imported: number
 }
 
+// CreateDestinationResponse is returned by POST /api/v1/destinations.
+// The import field is present only when import_agent_id was supplied in the request.
+export interface CreateDestinationResponse extends Destination {
+  import?: ImportDestinationResponse
+}
+
 // ─── API request / response shapes ───────────────────────────────────────────
 
 // Pagination params accepted by list endpoints
