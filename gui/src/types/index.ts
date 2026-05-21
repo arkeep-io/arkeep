@@ -229,19 +229,11 @@ export interface Snapshot {
   policy_id: string | null
   policy_name: string
   destination_id: string
-<<<<<<< Updated upstream
-  destination_name: string // denormalized for display
-  restic_snapshot_id: string // the actual Restic snapshot hash
-  hostname: string
-  paths: string[]
-  tags: string[]
-=======
   destination_name: string
   agent_id: string
   agent_name: string
   job_id: string | null
   restic_snapshot_id: string
->>>>>>> Stashed changes
   size_bytes: number
   tags: string
   hostname: string

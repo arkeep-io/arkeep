@@ -17,6 +17,8 @@ type SnapshotWithNames struct {
 	db.Snapshot
 	PolicyName      string
 	DestinationName string
+	AgentID         string
+	AgentName       string
 }
 
 // gormSnapshotRepository is the GORM implementation of SnapshotRepository.
@@ -75,10 +77,13 @@ func (r *gormSnapshotRepository) listWithNamesQuery(ctx context.Context) *gorm.D
 	return r.db.WithContext(ctx).
 		Table("snapshots").
 		Select(`snapshots.*,
-			policies.name   AS policy_name,
-			destinations.name AS destination_name`).
+			policies.name        AS policy_name,
+			destinations.name    AS destination_name,
+			policies.agent_id    AS agent_id,
+			agents.name          AS agent_name`).
 		Joins("LEFT JOIN policies ON policies.id = snapshots.policy_id").
 		Joins("LEFT JOIN destinations ON destinations.id = snapshots.destination_id").
+		Joins("LEFT JOIN agents ON agents.id = policies.agent_id").
 		Order("snapshots.snapshot_at DESC")
 }
 

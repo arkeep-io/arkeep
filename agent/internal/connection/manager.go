@@ -43,6 +43,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/docker"
 	"github.com/arkeep-io/arkeep/agent/internal/executor"
 	"github.com/arkeep-io/arkeep/agent/internal/metrics"
+	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -156,10 +157,11 @@ type Config struct {
 // It implements executor.LogSink and executor.StatusReporter so the executor
 // can forward log lines and status changes without knowing about gRPC.
 type Manager struct {
-	cfg    Config
-	exec   *executor.Executor
-	docker *docker.Client // may be nil if Docker is unavailable on this host
-	logger *zap.Logger
+	cfg     Config
+	exec    *executor.Executor
+	docker  *docker.Client  // may be nil if Docker is unavailable on this host
+	wrapper *restic.Wrapper // may be nil if restic is unavailable on this host
+	logger  *zap.Logger
 
 	// mu protects client and logStreams — both are replaced on every reconnect.
 	mu         sync.RWMutex
@@ -174,11 +176,14 @@ type Manager struct {
 // New creates a Manager. Call Run to start the connection loop.
 // dockerClient may be nil — if it is, LIST_VOLUMES requests are answered
 // with an error instead of crashing.
-func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, logger *zap.Logger) *Manager {
+// wrapper may be nil — if it is, LIST_SNAPSHOT_FILES and IMPORT_SNAPSHOTS
+// requests are answered with an error instead of crashing.
+func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapper *restic.Wrapper, logger *zap.Logger) *Manager {
 	return &Manager{
 		cfg:        cfg,
 		exec:       exec,
 		docker:     dockerClient,
+		wrapper:    wrapper,
 		logger:     logger.Named("connection"),
 		logStreams:  make(map[string]proto.AgentService_StreamLogsClient),
 	}
@@ -535,8 +540,6 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			continue
 		}
 
-<<<<<<< Updated upstream
-=======
 		// LIST_SNAPSHOT_FILES is a synthetic request that runs restic ls and
 		// returns the file tree via ReportSnapshotBrowse, without creating a job.
 		if assignment.Type == proto.JobType_JOB_TYPE_LIST_SNAPSHOT_FILES {
@@ -551,7 +554,6 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			continue
 		}
 
->>>>>>> Stashed changes
 		job, err := m.protoToJob(assignment)
 		if err != nil {
 			m.logger.Error("failed to parse job assignment",
@@ -617,8 +619,6 @@ func (m *Manager) handleVolumeListRequest(correlationID, agentID string) {
 	}
 }
 
-<<<<<<< Updated upstream
-=======
 // snapshotBrowsePayload is the JSON body sent by the server inside a
 // JOB_TYPE_LIST_SNAPSHOT_FILES JobAssignment.
 type snapshotBrowsePayload struct {
@@ -773,7 +773,6 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 	}
 }
 
->>>>>>> Stashed changes
 // SendLog implements executor.LogSink. It writes a log entry to the open
 // StreamLogs stream for the given job. If no stream is open the line is
 // dropped with a warning — this should not happen in normal operation because

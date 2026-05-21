@@ -64,6 +64,8 @@ type snapshotResponse struct {
 	PolicyName       string `json:"policy_name"`
 	DestinationID    string `json:"destination_id"`
 	DestinationName  string `json:"destination_name"`
+	AgentID          string `json:"agent_id"`
+	AgentName        string `json:"agent_name"`
 	JobID            string `json:"job_id"`
 	ResticSnapshotID string `json:"restic_snapshot_id"`
 	SizeBytes        int64  `json:"size_bytes"`
@@ -124,13 +126,9 @@ func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotRespo
 		PolicyName:       policyName,
 		DestinationID:    s.DestinationID.String(),
 		DestinationName:  s.DestinationName,
-<<<<<<< Updated upstream
-		JobID:            s.JobID.String(),
-=======
 		AgentID:          s.AgentID,
 		AgentName:        s.AgentName,
 		JobID:            jobID,
->>>>>>> Stashed changes
 		ResticSnapshotID: s.SnapshotID,
 		SizeBytes:        s.SizeBytes,
 		Tags:             s.Tags,

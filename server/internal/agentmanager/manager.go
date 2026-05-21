@@ -30,11 +30,6 @@ var ErrAgentNotConnected = errors.New("agent not connected")
 // LIST_VOLUMES request within the deadline.
 var ErrVolumeListTimeout = errors.New("volume list request timed out")
 
-<<<<<<< Updated upstream
-// volumeListTimeout is how long RequestVolumeList waits for the agent to reply.
-const volumeListTimeout = 10 * time.Second
-
-=======
 // ErrSnapshotBrowseTimeout is returned when the agent does not respond to a
 // LIST_SNAPSHOT_FILES request within the deadline.
 var ErrSnapshotBrowseTimeout = errors.New("snapshot browse request timed out")
@@ -53,8 +48,6 @@ const snapshotBrowseTimeout = 60 * time.Second
 // snapshotImportTimeout is how long RequestSnapshotImport waits for the agent.
 // Generous because restic snapshots on a large remote repository can be slow.
 const snapshotImportTimeout = 60 * time.Second
-
->>>>>>> Stashed changes
 // ConnectedAgent represents an agent that has an active gRPC connection
 // and an open StreamJobs stream through which jobs can be dispatched.
 type ConnectedAgent struct {
@@ -87,8 +80,6 @@ type VolumeListResult struct {
 	Err     string // non-empty when the agent reported an error
 }
 
-<<<<<<< Updated upstream
-=======
 // SnapshotBrowseResult carries the outcome of a JOB_TYPE_LIST_SNAPSHOT_FILES request.
 type SnapshotBrowseResult struct {
 	Entries []*proto.SnapshotFileEntry
@@ -101,7 +92,6 @@ type SnapshotImportResult struct {
 	Err       string // non-empty when the agent reported an error
 }
 
->>>>>>> Stashed changes
 // Manager is the in-memory registry of currently connected agents.
 // It is safe for concurrent use by multiple goroutines (gRPC server +
 // scheduler run in separate goroutines).
@@ -112,14 +102,6 @@ type Manager struct {
 	agents map[string]*ConnectedAgent // keyed by agent ID
 	logger *zap.Logger
 
-<<<<<<< Updated upstream
-	// pendingVolumeLists maps correlation IDs to response channels.
-	// When the REST handler calls RequestVolumeList, it registers a channel here.
-	// When the agent calls ReportVolumeList via gRPC, DeliverVolumeList sends
-	// the result on the matching channel and removes the entry.
-	pendingMu          sync.Mutex
-	pendingVolumeLists map[string]chan VolumeListResult // keyed by correlation ID
-=======
 	// pendingMu protects both pending maps.
 	// When a REST handler calls RequestVolumeList / RequestSnapshotBrowse, it
 	// registers a channel here. The matching Deliver* method sends on the channel
@@ -128,23 +110,16 @@ type Manager struct {
 	pendingVolumeLists      map[string]chan VolumeListResult     // keyed by correlation ID
 	pendingSnapshotBrowses  map[string]chan SnapshotBrowseResult // keyed by correlation ID
 	pendingSnapshotImports  map[string]chan SnapshotImportResult // keyed by correlation ID
->>>>>>> Stashed changes
 }
 
 // New creates a new Manager instance.
 func New(logger *zap.Logger) *Manager {
 	return &Manager{
-<<<<<<< Updated upstream
-		agents:             make(map[string]*ConnectedAgent),
-		pendingVolumeLists: make(map[string]chan VolumeListResult),
-		logger:             logger.Named("agentmanager"),
-=======
 		agents:                  make(map[string]*ConnectedAgent),
 		pendingVolumeLists:      make(map[string]chan VolumeListResult),
 		pendingSnapshotBrowses:  make(map[string]chan SnapshotBrowseResult),
 		pendingSnapshotImports:  make(map[string]chan SnapshotImportResult),
 		logger:                  logger.Named("agentmanager"),
->>>>>>> Stashed changes
 	}
 }
 
@@ -365,8 +340,6 @@ func (m *Manager) DeliverVolumeList(report *proto.VolumeListReport) {
 		Volumes: report.Volumes,
 		Err:     report.Error,
 	}
-<<<<<<< Updated upstream
-=======
 }
 
 // RequestSnapshotBrowse sends a JOB_TYPE_LIST_SNAPSHOT_FILES assignment to the
@@ -525,5 +498,4 @@ func (m *Manager) DeliverSnapshotImport(report *proto.SnapshotImportReport) {
 		Snapshots: report.Snapshots,
 		Err:       report.Error,
 	}
->>>>>>> Stashed changes
 }
