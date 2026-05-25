@@ -141,7 +141,7 @@ type JobRepository interface {
     // JobDestination
     CreateDestination(ctx context.Context, jd *db.JobDestination) error
     ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
-    UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+    UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
     // JobLog
     BulkCreateLogs(ctx context.Context, logs []db.JobLog) error

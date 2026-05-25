@@ -309,10 +309,12 @@ func (r *gormJobRepository) ListDestinationsByJob(ctx context.Context, jobID uui
 
 // UpdateDestinationStatus updates the result fields of a job destination
 // after the backup to that destination completes or fails.
-func (r *gormJobRepository) UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error {
+// The row is identified by (jobID, destID) rather than the surrogate PK to
+// avoid the fragile two-step: scan PK via JOIN then UPDATE by PK.
+func (r *gormJobRepository) UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.JobDestination{}).
-		Where("id = ?", id).
+		Where("job_id = ? AND destination_id = ?", jobID, destID).
 		Updates(map[string]interface{}{
 			"status":      status,
 			"started_at":  startedAt,

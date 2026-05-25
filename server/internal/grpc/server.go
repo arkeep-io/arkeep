@@ -759,34 +759,6 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		return nil, status.Error(codes.InvalidArgument, "invalid destination_id")
 	}
 
-	// Find the JobDestination record that matches this job + destination pair.
-	// UpdateDestinationStatus identifies the row by JobDestination.ID (not
-	// DestinationID), so we need to resolve it first.
-	destinations, err := s.jobRepo.ListDestinationsByJob(ctx, jobID)
-	if err != nil {
-		s.logger.Error("ReportDestinationStatus: failed to list destinations",
-			zap.String("job_id", req.JobId),
-			zap.Error(err),
-		)
-		return nil, status.Error(codes.Internal, "failed to look up job destinations")
-	}
-
-	var jobDestID uuid.UUID
-	for _, d := range destinations {
-		if d.DestinationID == destID {
-			jobDestID = d.ID
-			break
-		}
-	}
-
-	if jobDestID == (uuid.UUID{}) {
-		s.logger.Warn("ReportDestinationStatus: no matching job destination found",
-			zap.String("job_id", req.JobId),
-			zap.String("destination_id", req.DestinationId),
-		)
-		return nil, status.Error(codes.NotFound, "job destination not found")
-	}
-
 	now := time.Now().UTC()
 
 	// started_at is sent by the agent as the moment restic was invoked for this
@@ -796,7 +768,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		startedAt = req.StartedAt.AsTime().UTC()
 	}
 
-	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobDestID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
+	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobID, destID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
 		s.logger.Error("ReportDestinationStatus: failed to update destination status",
 			zap.String("job_id", req.JobId),
 			zap.String("destination_id", req.DestinationId),
