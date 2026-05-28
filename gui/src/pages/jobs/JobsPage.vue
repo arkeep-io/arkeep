@@ -52,6 +52,8 @@ const pageSize = 50
 // preserved when the user navigates back from a job detail page.
 const statusFilter = ref<JobStatus | 'all'>((route.query.status as JobStatus | 'all') || 'all')
 const typeFilter = ref<JobType | 'all'>((route.query.type as JobType | 'all') || 'all')
+const policyIdFilter = ref<string>((route.query.policy_id as string) || '')
+const agentIdFilter = ref<string>((route.query.agent_id as string) || '')
 const page = ref(Number(route.query.page) || 1)
 
 // ---------------------------------------------------------------------------
@@ -73,6 +75,8 @@ function syncUrl() {
     const query: Record<string, string> = {}
     if (statusFilter.value !== 'all') query.status = statusFilter.value
     if (typeFilter.value !== 'all') query.type = typeFilter.value
+    if (policyIdFilter.value) query.policy_id = policyIdFilter.value
+    if (agentIdFilter.value) query.agent_id = agentIdFilter.value
     if (page.value > 1) query.page = String(page.value)
     router.replace({ query })
 }
@@ -89,6 +93,8 @@ async function fetchJobs() {
         const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset.value) })
         if (statusFilter.value !== 'all') params.set('status', statusFilter.value)
         if (typeFilter.value !== 'all') params.set('type', typeFilter.value)
+        if (policyIdFilter.value) params.set('policy_id', policyIdFilter.value)
+        if (agentIdFilter.value) params.set('agent_id', agentIdFilter.value)
         const res = await api<ApiResponse<JobListResponse>>(`/api/v1/jobs?${params}`)
         jobs.value = res.data.items
         total.value = res.data.total
