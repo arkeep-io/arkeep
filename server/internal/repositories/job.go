@@ -254,6 +254,45 @@ func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, 
 	return rows, total, nil
 }
 
+// ListFiltered returns a paginated list of jobs filtered by any combination of
+// status and type. Zero-valued fields in filter are ignored (no constraint added).
+func (r *gormJobRepository) ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error) {
+	countQ := r.db.WithContext(ctx).Model(&db.Job{})
+	if filter.Status != "" {
+		countQ = countQ.Where("status = ?", filter.Status)
+	}
+	if filter.Type != "" {
+		countQ = countQ.Where("type = ?", filter.Type)
+	}
+
+	var total int64
+	if err := countQ.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("jobs: list filtered count: %w", err)
+	}
+
+	listQ := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Limit(opts.Limit).
+		Offset(opts.Offset).
+		Order("jobs.created_at DESC")
+	if filter.Status != "" {
+		listQ = listQ.Where("jobs.status = ?", filter.Status)
+	}
+	if filter.Type != "" {
+		listQ = listQ.Where("jobs.type = ?", filter.Type)
+	}
+
+	var rows []JobWithNames
+	if err := listQ.Scan(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("jobs: list filtered: %w", err)
+	}
+
+	return rows, total, nil
+}
+
 // ListByType returns a paginated list of jobs filtered by type ("backup" or
 // "restore"), with policy and agent names, ordered by creation time descending.
 func (r *gormJobRepository) ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error) {
