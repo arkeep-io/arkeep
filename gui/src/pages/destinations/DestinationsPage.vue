@@ -40,7 +40,7 @@ import {
   Globe,
   Network,
   Cloud,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import type { Destination, ApiResponse } from '@/types'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'

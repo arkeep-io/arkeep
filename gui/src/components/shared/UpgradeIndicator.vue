@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CircleArrowUp, ExternalLink } from 'lucide-vue-next'
+import { CircleArrowUp, ExternalLink } from '@lucide/vue'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '../ui/hover-card';
 
 defineProps<{

@@ -35,7 +35,7 @@ import {
     FolderOpen,
     Container,
     CalendarClock,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'

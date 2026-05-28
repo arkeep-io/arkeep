@@ -38,7 +38,7 @@ import {
     Server,
     RefreshCw,
     Eye,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, ApiResponse } from '@/types'

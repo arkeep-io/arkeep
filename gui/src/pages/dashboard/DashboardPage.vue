@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from 'lucide-vue-next'
+import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {

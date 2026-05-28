@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Archive, CheckCircle2, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, Archive, CheckCircle2, Loader2 } from '@lucide/vue'
 
 // ---------------------------------------------------------------------------
 // Props / emits

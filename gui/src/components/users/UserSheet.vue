@@ -14,7 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, Loader2 } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { User } from '@/types'
 

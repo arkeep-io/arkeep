@@ -30,7 +30,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from 'lucide-vue-next'
+import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { ApiResponse, Snapshot } from '@/types'
 import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'

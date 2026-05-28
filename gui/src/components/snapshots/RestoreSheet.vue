@@ -22,7 +22,7 @@ import {
     FieldGroup,
     FieldLabel,
 } from '@/components/ui/field'
-import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, Loader2 } from '@lucide/vue'
 import { Separator } from '@/components/ui/separator'
 import { api } from '@/services/api'
 import type { Agent, ApiResponse, RestoreResponse, Snapshot, SnapshotFileEntry } from '@/types'

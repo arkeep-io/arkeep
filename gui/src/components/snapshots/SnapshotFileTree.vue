@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ChevronRight, ChevronDown, Folder, FolderOpen, File } from 'lucide-vue-next'
+import { ChevronRight, ChevronDown, Folder, FolderOpen, File } from '@lucide/vue'
 import type { SnapshotFileEntry } from '@/types'
 
 const props = defineProps<{

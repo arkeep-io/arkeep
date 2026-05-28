@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, RefreshCw, X } from 'lucide-vue-next'
+import { AlertCircle, Loader2, RefreshCw, X } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { ApiResponse, SMTPSettings } from '@/types'
 

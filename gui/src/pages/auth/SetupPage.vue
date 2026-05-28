@@ -26,7 +26,7 @@ import {
     FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from 'lucide-vue-next'
+import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
 
 // ─── Validation schema ────────────────────────────────────────────────────────

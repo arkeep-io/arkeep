@@ -11,7 +11,7 @@ import {
     Settings,
     Shield,
     Users,
-} from "lucide-vue-next"
+} from "@lucide/vue"
 
 import NavMain from "@/components/shared/NavMain.vue"
 import NavUser from "@/components/shared/NavUser.vue"

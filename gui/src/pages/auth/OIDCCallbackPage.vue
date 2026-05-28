@@ -13,7 +13,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { AlertCircle, Loader2, Moon, Sun } from 'lucide-vue-next'
+import { AlertCircle, Loader2, Moon, Sun } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
 
 const route = useRoute()

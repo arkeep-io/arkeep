@@ -35,7 +35,7 @@ import {
     MemoryStick,
     HardDrive,
     ClipboardList,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'

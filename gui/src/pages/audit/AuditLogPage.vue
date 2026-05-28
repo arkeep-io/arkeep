@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ChevronLeft, ChevronRight, RefreshCw, ScrollText } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, RefreshCw, ScrollText } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { ApiResponse, AuditLog } from '@/types'
 

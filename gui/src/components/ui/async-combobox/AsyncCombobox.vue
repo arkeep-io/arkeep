@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
-import { ChevronDown, Check, Search } from 'lucide-vue-next'
+import { ChevronDown, Check, Search } from '@lucide/vue'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/services/api'

@@ -50,7 +50,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { useField, useFieldArray, useForm } from 'vee-validate'
 import { computed, ref, watch } from 'vue'
 import { useDebounceFn } from '@vueuse/core'

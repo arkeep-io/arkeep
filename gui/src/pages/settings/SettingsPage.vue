@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, KeyRound, Mail } from 'lucide-vue-next'
+import { Bell, KeyRound, Mail } from '@lucide/vue'
 </script>
 
 <template>

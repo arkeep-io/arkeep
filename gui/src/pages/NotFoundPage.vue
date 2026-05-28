@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, Home, Moon, Sun } from 'lucide-vue-next'
+import { ArrowLeft, Home, Moon, Sun } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
 
 const router = useRouter()
