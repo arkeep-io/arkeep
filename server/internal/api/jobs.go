@@ -136,7 +136,7 @@ type listJobsResponse struct {
 // -----------------------------------------------------------------------------
 
 // List handles GET /api/v1/jobs.
-// Supports optional filtering by policy_id or agent_id via query parameters.
+// Supports optional filtering by policy_id, agent_id, status, and type via query parameters.
 // Destinations are not included in list responses — use GET /jobs/{id} for details.
 func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
@@ -167,6 +167,39 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		jobs, total, err := h.repo.ListByAgent(r.Context(), id, opts)
 		if err != nil {
 			h.logger.Error("failed to list jobs by agent", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		h.writeJobList(w, jobs, total)
+		return
+	}
+
+	var filter repositories.JobFilter
+
+	if status := r.URL.Query().Get("status"); status != "" {
+		switch status {
+		case "pending", "running", "succeeded", "failed", "cancelled":
+			filter.Status = status
+		default:
+			ErrBadRequest(w, "invalid status: must be one of pending, running, succeeded, failed, cancelled")
+			return
+		}
+	}
+
+	if jobType := r.URL.Query().Get("type"); jobType != "" {
+		switch jobType {
+		case "backup", "restore":
+			filter.Type = jobType
+		default:
+			ErrBadRequest(w, "invalid type: must be one of backup, restore")
+			return
+		}
+	}
+
+	if filter.Status != "" || filter.Type != "" {
+		jobs, total, err := h.repo.ListFiltered(r.Context(), filter, opts)
+		if err != nil {
+			h.logger.Error("failed to list filtered jobs", zap.Error(err))
 			ErrInternal(w)
 			return
 		}

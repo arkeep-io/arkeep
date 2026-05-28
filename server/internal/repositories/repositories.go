@@ -137,6 +137,13 @@ type PolicyRepository interface {
 // JobRepository
 // -----------------------------------------------------------------------------
 
+// JobFilter restricts the result set returned by JobRepository.ListFiltered.
+// Zero values mean "no filter" for that field.
+type JobFilter struct {
+	Status string // e.g. "pending", "running", "succeeded", "failed", "cancelled"
+	Type   string // e.g. "backup", "restore"
+}
+
 type JobRepository interface {
     Create(ctx context.Context, job *db.Job) error
     GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
@@ -145,6 +152,7 @@ type JobRepository interface {
     UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
     FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
     List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
+    ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
     ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
     ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
     ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
