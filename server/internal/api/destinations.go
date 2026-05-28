@@ -85,10 +85,19 @@ var validDestinationTypes = map[string]bool{
 }
 
 // List handles GET /api/v1/destinations.
+// Supports an optional ?search= query parameter for substring name filtering.
 func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
 
-	destinations, total, err := h.repo.List(r.Context(), opts)
+	var destinations []db.Destination
+	var total int64
+	var err error
+
+	if search := r.URL.Query().Get("search"); search != "" {
+		destinations, total, err = h.repo.ListFiltered(r.Context(), repositories.DestinationFilter{Search: search}, opts)
+	} else {
+		destinations, total, err = h.repo.List(r.Context(), opts)
+	}
 	if err != nil {
 		h.logger.Error("failed to list destinations", zap.Error(err))
 		ErrInternal(w)

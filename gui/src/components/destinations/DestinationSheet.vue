@@ -2,7 +2,8 @@
 import { ref, watch, computed } from 'vue'
 import { z } from 'zod'
 import { api } from '@/services/api'
-import type { Agent, ApiResponse, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
+import type { ApiResponse, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
+import { AsyncCombobox } from '@/components/ui/async-combobox'
 import {
     Sheet,
     SheetContent,
@@ -118,7 +119,6 @@ const submitError = ref<string | null>(null)
 const submitting = ref(false)
 
 // Import state — only used during creation, not edit
-const agents = ref<Agent[]>([])
 const importEnabled = ref(false)
 const importAgentId = ref('')
 const importAgentError = ref('')
@@ -228,12 +228,6 @@ watch(
                 populateFromDestination(props.destination)
             } else {
                 selectedType.value = 'local'
-            }
-            try {
-                const res = await api<ApiResponse<{ items: Agent[]; total: number }>>('/api/v1/agents')
-                agents.value = res.data.items ?? []
-            } catch {
-                agents.value = []
             }
         }
     },
@@ -674,17 +668,13 @@ function onOpenChange(value: boolean) {
                                 <div v-if="importEnabled" class="space-y-3 pt-1">
                                     <Field>
                                         <FieldLabel for="import-agent">Agent</FieldLabel>
-                                        <Select :model-value="importAgentId"
-                                            @update:model-value="importAgentId = ($event as string) ?? ''; importAgentError = ''">
-                                            <SelectTrigger id="import-agent" :class="importAgentError ? 'border-destructive focus-visible:ring-destructive/30' : ''">
-                                                <SelectValue placeholder="Select an agent" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem v-for="a in agents" :key="a.id" :value="a.id">
-                                                    {{ a.name }}
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
+                                        <AsyncCombobox
+                                            endpoint="/api/v1/agents"
+                                            :model-value="importAgentId"
+                                            placeholder="Select an agent"
+                                            :class="importAgentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
+                                            @update:model-value="importAgentId = $event; importAgentError = ''"
+                                        />
                                         <FieldError v-if="importAgentError">{{ importAgentError }}</FieldError>
                                     </Field>
                                     <Field>

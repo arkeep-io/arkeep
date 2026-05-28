@@ -424,6 +424,14 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                         </template>
                     </TableBody>
                 </Table>
+                <div class="flex justify-end px-4 py-2 border-t">
+                    <RouterLink
+                        :to="{ name: 'jobs', query: { policy_id: policyId } }"
+                        class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        View all jobs →
+                    </RouterLink>
+                </div>
             </div>
         </div>
 

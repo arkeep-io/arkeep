@@ -13,6 +13,7 @@ import {
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import { AsyncCombobox } from '@/components/ui/async-combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -47,10 +48,12 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Search,
   Trash2,
 } from 'lucide-vue-next'
 import { useField, useFieldArray, useForm } from 'vee-validate'
 import { computed, ref, watch } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
 import * as z from 'zod'
 
 const authStore = useAuthStore()
@@ -75,25 +78,26 @@ const isEdit = computed(() => !!props.policy)
 // Remote data
 // ---------------------------------------------------------------------------
 
-const agents = ref<Agent[]>([])
 const availableDestinations = ref<Destination[]>([])
 const loadingData = ref(false)
+const destSearch = ref('')
 
 async function loadRemoteData() {
   loadingData.value = true
   try {
-    const [agentsRes, destRes] = await Promise.all([
-      api<ApiResponse<{ items: Agent[]; total: number }>>('/api/v1/agents'),
-      api<ApiResponse<{ items: Destination[]; total: number }>>('/api/v1/destinations'),
-    ])
-    agents.value = agentsRes.data.items ?? []
+    const params = new URLSearchParams({ limit: '50' })
+    if (destSearch.value) params.set('search', destSearch.value)
+    const destRes = await api<ApiResponse<{ items: Destination[]; total: number }>>(`/api/v1/destinations?${params}`)
     availableDestinations.value = (destRes.data.items ?? []).filter(d => d.enabled)
   } catch {
-    // Non-fatal — selects will render empty.
+    // Non-fatal — destination list may render empty.
   } finally {
     loadingData.value = false
   }
 }
+
+const debouncedDestSearch = useDebounceFn(loadRemoteData, 300)
+watch(destSearch, debouncedDestSearch)
 
 // ---------------------------------------------------------------------------
 // Docker volume auto-discovery
@@ -278,9 +282,12 @@ const { value: agentValue, errorMessage: agentError } = useField<string>('agent_
 
 // The agent currently selected in the form — used to decide whether
 // to show the Docker Volume option and to fetch volumes on demand.
-const selectedAgent = computed<Agent | null>(() =>
-  agents.value.find(a => a.id === agentValue.value) ?? null
-)
+// Updated when the user selects from the AsyncCombobox or when editing.
+const selectedAgent = ref<Agent | null>(null)
+
+function onAgentSelected(item: Record<string, unknown> | null) {
+  selectedAgent.value = item as Agent | null
+}
 
 // When the agent selection changes, clear the cached volume list.
 // It will be re-fetched on demand when the user opens a docker-volume source.
@@ -468,6 +475,8 @@ watch(
       agentVolumes.value = []
       volumesError.value = ''
       selectedVolumes.value = {}
+      selectedAgent.value = null
+      destSearch.value = ''
       return
     }
 
@@ -485,15 +494,23 @@ watch(
       selectedPreset.value = '0 2 * * *'
     }
 
-    // Load agents/destinations and — for edit mode — the full policy record
-    // (which includes destinations) concurrently to minimise total wait time.
+    // Load destinations and — for edit mode — the full policy record and
+    // selected agent details concurrently.
     const remoteDataPromise = loadRemoteData()
 
     if (props.policy) {
-      const [, fullRes] = await Promise.allSettled([
+      const [, fullRes, agentRes] = await Promise.allSettled([
         remoteDataPromise,
         api<ApiResponse<Policy>>(`/api/v1/policies/${props.policy.id}`),
+        props.policy.agent_id
+          ? api<ApiResponse<Agent>>(`/api/v1/agents/${props.policy.agent_id}`)
+          : Promise.resolve(null),
       ])
+
+      // Populate selected agent to enable docker_available checks.
+      if (agentRes.status === 'fulfilled' && agentRes.value) {
+        selectedAgent.value = agentRes.value.data
+      }
 
       // Re-populate with the complete record once both fetches are done.
       if (fullRes.status === 'fulfilled') {
@@ -757,21 +774,15 @@ function onOpenChange(value: boolean) {
           <!-- Agent -->
           <Field>
             <FieldLabel for="agent">Agent</FieldLabel>
-            <Select :model-value="agentValue ?? ''" :disabled="loadingData"
-              @update:model-value="agentValue = $event as string">
-              <SelectTrigger id="agent"
-                :class="agentError ? 'border-destructive focus-visible:ring-destructive/30' : ''">
-                <SelectValue placeholder="Select an agent…" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem v-for="agent in agents" :key="agent.id" :value="agent.id">
-                  {{ agent.name }}
-                </SelectItem>
-                <div v-if="agents.length === 0" class="px-3 py-4 text-sm text-muted-foreground text-center">
-                  No agents available
-                </div>
-              </SelectContent>
-            </Select>
+            <AsyncCombobox
+              endpoint="/api/v1/agents"
+              :model-value="agentValue ?? ''"
+              :initial-label="props.policy?.agent_name"
+              placeholder="Select an agent…"
+              :class="agentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
+              @update:model-value="agentValue = $event"
+              @update:item="onAgentSelected"
+            />
             <FieldError v-if="agentError">{{ agentError }}</FieldError>
           </Field>
 
@@ -1028,9 +1039,15 @@ function onOpenChange(value: boolean) {
             Select where to store backups. Use ↑↓ to set the priority order.
           </p>
 
-          <div v-if="availableDestinations.length === 0"
+          <!-- Destination search -->
+          <div class="relative">
+            <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+            <Input v-model="destSearch" class="pl-8 h-8 text-sm" placeholder="Search destinations…" />
+          </div>
+
+          <div v-if="availableDestinations.length === 0 && !loadingData"
             class="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-            No destinations available. Create one first.
+            {{ destSearch ? 'No destinations match your search.' : 'No destinations available. Create one first.' }}
           </div>
 
           <div v-else class="flex flex-col gap-1">

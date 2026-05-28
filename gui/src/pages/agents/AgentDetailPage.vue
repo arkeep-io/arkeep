@@ -525,6 +525,14 @@ onUnmounted(() => {
                         </template>
                     </TableBody>
                 </Table>
+                <div class="flex justify-end px-4 py-2 border-t">
+                    <RouterLink
+                        :to="{ name: 'jobs', query: { agent_id: agentId } }"
+                        class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        View all jobs →
+                    </RouterLink>
+                </div>
             </div>
         </div>
 

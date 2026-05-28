@@ -116,6 +116,39 @@ func (r *gormAgentRepository) TotalCount(ctx context.Context) int {
 	return int(count)
 }
 
+// ListFiltered returns a paginated list of agents matching the given filter.
+// If filter.Search is non-empty, only agents whose name contains the search
+// string (case-insensitive) are returned.
+func (r *gormAgentRepository) ListFiltered(ctx context.Context, filter AgentFilter, opts ListOptions) ([]db.Agent, int64, error) {
+	countQ := r.db.WithContext(ctx).Model(&db.Agent{})
+	if filter.Search != "" {
+		countQ = countQ.Where("name LIKE ?", "%"+filter.Search+"%")
+	}
+	if filter.Status != "" {
+		countQ = countQ.Where("status = ?", filter.Status)
+	}
+	var total int64
+	if err := countQ.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("agents: list filtered count: %w", err)
+	}
+
+	listQ := r.db.WithContext(ctx).
+		Limit(opts.Limit).
+		Offset(opts.Offset).
+		Order("created_at ASC")
+	if filter.Search != "" {
+		listQ = listQ.Where("name LIKE ?", "%"+filter.Search+"%")
+	}
+	if filter.Status != "" {
+		listQ = listQ.Where("status = ?", filter.Status)
+	}
+	var agents []db.Agent
+	if err := listQ.Find(&agents).Error; err != nil {
+		return nil, 0, fmt.Errorf("agents: list filtered: %w", err)
+	}
+	return agents, total, nil
+}
+
 // GetByHostname retrieves a non-deleted agent by its hostname.
 // Used during agent registration to detect reconnections and avoid creating
 // duplicate records when an agent reconnects without its stored ID.

@@ -70,6 +70,13 @@ type OIDCProviderRepository interface {
 // AgentRepository
 // -----------------------------------------------------------------------------
 
+// AgentFilter restricts results returned by AgentRepository.ListFiltered.
+// Zero values mean "no filter" for that field.
+type AgentFilter struct {
+	Search string // case-insensitive substring match on name
+	Status string // exact match on status (e.g. "online", "offline")
+}
+
 type AgentRepository interface {
 	Create(ctx context.Context, agent *db.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Agent, error)
@@ -78,6 +85,7 @@ type AgentRepository interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Agent, int64, error)
+	ListFiltered(ctx context.Context, filter AgentFilter, opts ListOptions) ([]db.Agent, int64, error)
 
 	// TotalCount returns the count of all non-deleted agents in the database.
 	// Used by telemetry to report the registered agent count regardless of
@@ -89,12 +97,19 @@ type AgentRepository interface {
 // DestinationRepository
 // -----------------------------------------------------------------------------
 
+// DestinationFilter restricts results returned by DestinationRepository.ListFiltered.
+// Zero values mean "no filter" for that field.
+type DestinationFilter struct {
+	Search string // case-insensitive substring match on name
+}
+
 type DestinationRepository interface {
 	Create(ctx context.Context, destination *db.Destination) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Destination, error)
 	Update(ctx context.Context, destination *db.Destination) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error)
+	ListFiltered(ctx context.Context, filter DestinationFilter, opts ListOptions) ([]db.Destination, int64, error)
 }
 
 // -----------------------------------------------------------------------------

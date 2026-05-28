@@ -72,6 +72,33 @@ func (r *gormDestinationRepository) Delete(ctx context.Context, id uuid.UUID) er
 	return nil
 }
 
+// ListFiltered returns a paginated list of destinations matching the given filter.
+// If filter.Search is non-empty, only destinations whose name contains the search
+// string (case-insensitive) are returned.
+func (r *gormDestinationRepository) ListFiltered(ctx context.Context, filter DestinationFilter, opts ListOptions) ([]db.Destination, int64, error) {
+	countQ := r.db.WithContext(ctx).Model(&db.Destination{})
+	if filter.Search != "" {
+		countQ = countQ.Where("name LIKE ?", "%"+filter.Search+"%")
+	}
+	var total int64
+	if err := countQ.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("destinations: list filtered count: %w", err)
+	}
+
+	listQ := r.db.WithContext(ctx).
+		Limit(opts.Limit).
+		Offset(opts.Offset).
+		Order("created_at ASC")
+	if filter.Search != "" {
+		listQ = listQ.Where("name LIKE ?", "%"+filter.Search+"%")
+	}
+	var destinations []db.Destination
+	if err := listQ.Find(&destinations).Error; err != nil {
+		return nil, 0, fmt.Errorf("destinations: list filtered: %w", err)
+	}
+	return destinations, total, nil
+}
+
 // List returns a paginated list of destinations and the total count.
 func (r *gormDestinationRepository) List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error) {
 	var destinations []db.Destination
