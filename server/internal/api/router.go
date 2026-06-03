@@ -66,7 +66,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(RequestLogger(cfg.Logger))
 	r.Use(middleware.Recoverer)
 	r.Use(SecurityHeaders)
