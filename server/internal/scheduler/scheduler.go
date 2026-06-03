@@ -453,6 +453,24 @@ func (s *Scheduler) createAndDispatch(policy *db.Policy, destinations []reposito
 		return nil, ErrPolicyDisabled
 	}
 
+	// If a pending job already exists for this policy, skip creating another one.
+	// The existing pending job will be dispatched when the agent reconnects.
+	hasPending, err := s.jobs.HasPendingJob(ctx, policy.ID)
+	if err != nil {
+		s.logger.Error("failed to check pending jobs for policy",
+			zap.String("policy_id", policy.ID.String()),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("failed to check pending jobs for policy %s: %w", policy.ID, err)
+	}
+	if hasPending {
+		s.logger.Debug("skipping scheduled backup: pending job already exists for policy",
+			zap.String("policy_id", policy.ID.String()),
+			zap.String("policy_name", policy.Name),
+		)
+		return nil, nil
+	}
+
 	// --- Create Job record ---
 	job := &db.Job{
 		PolicyID: &policy.ID,

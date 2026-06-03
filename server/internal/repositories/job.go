@@ -559,6 +559,22 @@ func (r *gormJobRepository) BulkCreateLogs(ctx context.Context, logs []db.JobLog
 	return nil
 }
 
+// HasPendingJob reports whether any job with status "pending" exists for the
+// given policy. Used by the scheduler to avoid creating duplicate pending jobs
+// when the agent is offline: at most one pending job per policy is queued.
+func (r *gormJobRepository) HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Where("policy_id = ? AND status = ?", policyID, "pending").
+		Limit(1).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("jobs: has pending job: %w", err)
+	}
+	return count > 0, nil
+}
+
 // GetLogs returns all log lines for a job ordered by timestamp ascending.
 // Used to replay the full execution log in the job detail view.
 func (r *gormJobRepository) GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error) {

@@ -450,15 +450,22 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.agentMgr.Dispatch(agentID.String(), assignment); err != nil {
-		// Job is persisted as pending — it will remain in the DB but won't
-		// be retried automatically (restore jobs are user-initiated, not
-		// scheduled). Log the error and return 503 so the GUI can retry.
-		h.logger.Warn("failed to dispatch restore job, agent may be offline",
+		if errors.Is(err, agentmanager.ErrAgentNotConnected) {
+			// Agent is offline — job stays pending in DB and will be dispatched
+			// automatically by DispatchPending when the agent reconnects.
+			h.logger.Info("restore job queued: agent offline",
+				zap.String("job_id", job.ID.String()),
+				zap.String("agent_id", agentID.String()),
+			)
+			JSON(w, http.StatusAccepted, envelope{"data": restoreResponse{JobID: job.ID.String()}})
+			return
+		}
+		h.logger.Error("failed to dispatch restore job",
 			zap.String("job_id", job.ID.String()),
 			zap.String("agent_id", agentID.String()),
 			zap.Error(err),
 		)
-		ErrServiceUnavailable(w, "agent is not connected — ensure the agent is online and try again")
+		ErrInternal(w)
 		return
 	}
 
