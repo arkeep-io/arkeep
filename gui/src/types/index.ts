@@ -163,6 +163,8 @@ export interface Policy {
   agent_name: string
   sources: string           // JSON string — parse client-side when needed
   schedule: string
+  retention_last: number
+  retention_hourly: number
   retention_daily: number
   retention_weekly: number
   retention_monthly: number
