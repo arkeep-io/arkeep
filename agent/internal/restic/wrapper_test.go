@@ -2,6 +2,7 @@ package restic
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -38,6 +39,30 @@ func TestBuildCmd_S3Repository(t *testing.T) {
 	}
 	if !strings.HasPrefix(repoURL, "s3:") {
 		t.Errorf("RESTIC_REPOSITORY=%q, want prefix 's3:'", repoURL)
+	}
+}
+
+func TestBuildBackupArgs_Windows(t *testing.T) {
+	opts := BackupOptions{
+		Tags:    []string{"weekly"},
+		Sources: []string{`C:\Users`},
+	}
+	args := buildBackupArgs(opts, "windows")
+
+	if !slices.Contains(args, "--use-fs-snapshot") {
+		t.Errorf("expected --use-fs-snapshot in args on windows, got %v", args)
+	}
+}
+
+func TestBuildBackupArgs_Linux(t *testing.T) {
+	opts := BackupOptions{
+		Tags:    []string{"weekly"},
+		Sources: []string{"/home"},
+	}
+	args := buildBackupArgs(opts, "linux")
+
+	if slices.Contains(args, "--use-fs-snapshot") {
+		t.Errorf("unexpected --use-fs-snapshot in args on linux, got %v", args)
 	}
 }
 
