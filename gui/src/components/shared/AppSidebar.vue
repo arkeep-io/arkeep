@@ -139,7 +139,7 @@ const userInitials = computed(() =>
                                 {{ updateStore.serverVersion ? `v${updateStore.serverVersion}` : 'Version not available'
                                 }}
                                 <UpgradeIndicator :show="updateStore.updateAvailable"
-                                    :version="updateStore.latestVersion" tooltip-side="right" />
+                                    :version="updateStore.latestVersion" tooltip-side="top" />
                             </div>
                         </div>
                     </CardContent>
@@ -150,7 +150,7 @@ const userInitials = computed(() =>
             <div v-if="updateStore.updateAvailable" class="flex justify-center overflow-hidden transition-[max-height,opacity] duration-200 ease-linear
                         max-h-0 opacity-0
                         group-data-[collapsible=icon]:max-h-8 group-data-[collapsible=icon]:opacity-100">
-                <UpgradeIndicator :show="true" :version="updateStore.latestVersion" tooltip-side="right" />
+                <UpgradeIndicator :show="true" :version="updateStore.latestVersion" tooltip-side="top" />
             </div>
         </SidebarFooter>
     </Sidebar>

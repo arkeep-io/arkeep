@@ -85,6 +85,8 @@ type SnapshotInfo struct {
 
 // RetentionPolicy mirrors the keep_* fields from db.Policy.
 type RetentionPolicy struct {
+	Last    int
+	Hourly  int
 	Daily   int
 	Weekly  int
 	Monthly int
@@ -233,12 +235,24 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 // Forget runs restic forget --prune to apply the retention policy.
 // It removes snapshot metadata and frees storage in a single pass.
 func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy RetentionPolicy) error {
-	args := []string{
-		"forget", "--prune", "--json",
-		"--keep-daily", fmt.Sprintf("%d", policy.Daily),
-		"--keep-weekly", fmt.Sprintf("%d", policy.Weekly),
-		"--keep-monthly", fmt.Sprintf("%d", policy.Monthly),
-		"--keep-yearly", fmt.Sprintf("%d", policy.Yearly),
+	args := []string{"forget", "--prune", "--json"}
+	if policy.Last > 0 {
+		args = append(args, "--keep-last", fmt.Sprintf("%d", policy.Last))
+	}
+	if policy.Hourly > 0 {
+		args = append(args, "--keep-hourly", fmt.Sprintf("%d", policy.Hourly))
+	}
+	if policy.Daily > 0 {
+		args = append(args, "--keep-daily", fmt.Sprintf("%d", policy.Daily))
+	}
+	if policy.Weekly > 0 {
+		args = append(args, "--keep-weekly", fmt.Sprintf("%d", policy.Weekly))
+	}
+	if policy.Monthly > 0 {
+		args = append(args, "--keep-monthly", fmt.Sprintf("%d", policy.Monthly))
+	}
+	if policy.Yearly > 0 {
+		args = append(args, "--keep-yearly", fmt.Sprintf("%d", policy.Yearly))
 	}
 	return w.run(ctx, dest, args)
 }

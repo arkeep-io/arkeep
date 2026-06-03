@@ -56,6 +56,8 @@ type policyResponse struct {
 	Schedule         string                      `json:"schedule"`
 	Enabled          bool                        `json:"enabled"`
 	Sources          string                      `json:"sources"`
+	RetentionLast    int                         `json:"retention_last"`
+	RetentionHourly  int                         `json:"retention_hourly"`
 	RetentionDaily   int                         `json:"retention_daily"`
 	RetentionWeekly  int                         `json:"retention_weekly"`
 	RetentionMonthly int                         `json:"retention_monthly"`
@@ -82,6 +84,8 @@ func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinatio
 		Schedule:         p.Schedule,
 		Enabled:          p.Enabled,
 		Sources:          p.Sources,
+		RetentionLast:    p.RetentionLast,
+		RetentionHourly:  p.RetentionHourly,
 		RetentionDaily:   p.RetentionDaily,
 		RetentionWeekly:  p.RetentionWeekly,
 		RetentionMonthly: p.RetentionMonthly,
@@ -168,6 +172,8 @@ type createPolicyRequest struct {
 	Schedule         string                    `json:"schedule"`
 	Sources          string                    `json:"sources"` // JSON array
 	RepoPassword     string                    `json:"repo_password"`
+	RetentionLast    int                       `json:"retention_last"`
+	RetentionHourly  int                       `json:"retention_hourly"`
 	RetentionDaily   int                       `json:"retention_daily"`
 	RetentionWeekly  int                       `json:"retention_weekly"`
 	RetentionMonthly int                       `json:"retention_monthly"`
@@ -231,6 +237,8 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Enabled:          true,
 		Sources:          req.Sources,
 		RepoPassword:     db.EncryptedString(req.RepoPassword),
+		RetentionLast:    req.RetentionLast,
+		RetentionHourly:  req.RetentionHourly,
 		RetentionDaily:   req.RetentionDaily,
 		RetentionWeekly:  req.RetentionWeekly,
 		RetentionMonthly: req.RetentionMonthly,
@@ -332,6 +340,8 @@ type updatePolicyRequest struct {
 	Enabled          *bool                      `json:"enabled"`
 	Sources          *string                    `json:"sources"`
 	RepoPassword     *string                    `json:"repo_password"`
+	RetentionLast    *int                       `json:"retention_last"`
+	RetentionHourly  *int                       `json:"retention_hourly"`
 	RetentionDaily   *int                       `json:"retention_daily"`
 	RetentionWeekly  *int                       `json:"retention_weekly"`
 	RetentionMonthly *int                       `json:"retention_monthly"`
@@ -394,6 +404,12 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RepoPassword != nil {
 		policy.RepoPassword = db.EncryptedString(*req.RepoPassword)
+	}
+	if req.RetentionLast != nil {
+		policy.RetentionLast = *req.RetentionLast
+	}
+	if req.RetentionHourly != nil {
+		policy.RetentionHourly = *req.RetentionHourly
 	}
 	if req.RetentionDaily != nil {
 		policy.RetentionDaily = *req.RetentionDaily
