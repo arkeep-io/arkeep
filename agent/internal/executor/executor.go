@@ -93,6 +93,8 @@ type destinationPayload struct {
 }
 
 type retentionPayload struct {
+	Last    int `json:"last"`
+	Hourly  int `json:"hourly"`
 	Daily   int `json:"daily"`
 	Weekly  int `json:"weekly"`
 	Monthly int `json:"monthly"`
@@ -424,6 +426,8 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 
 		// Apply retention policy — non-fatal if it fails (backup data is safe).
 		retention := restic.RetentionPolicy{
+			Last:    payload.Retention.Last,
+			Hourly:  payload.Retention.Hourly,
 			Daily:   payload.Retention.Daily,
 			Weekly:  payload.Retention.Weekly,
 			Monthly: payload.Retention.Monthly,

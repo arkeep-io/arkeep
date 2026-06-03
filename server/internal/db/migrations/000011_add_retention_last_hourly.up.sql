@@ -1,0 +1,2 @@
+ALTER TABLE policies ADD COLUMN retention_last    INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE policies ADD COLUMN retention_hourly  INTEGER NOT NULL DEFAULT 0;

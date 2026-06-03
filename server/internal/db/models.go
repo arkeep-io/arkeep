@@ -148,6 +148,8 @@ type Policy struct {
 	Schedule         string          `gorm:"not null"` // cron expression
 	Enabled          bool            `gorm:"not null;default:true"`
 	Sources          string          `gorm:"type:text;not null"` // JSON array of source paths
+	RetentionLast    int             `gorm:"not null;default:0"`
+	RetentionHourly  int             `gorm:"not null;default:0"`
 	RetentionDaily   int             `gorm:"not null;default:7"`
 	RetentionWeekly  int             `gorm:"not null;default:4"`
 	RetentionMonthly int             `gorm:"not null;default:6"`
