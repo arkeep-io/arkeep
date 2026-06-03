@@ -171,6 +171,7 @@ type JobRepository interface {
     ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
     ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
     ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+    HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
 
     // JobDestination
     CreateDestination(ctx context.Context, jd *db.JobDestination) error
