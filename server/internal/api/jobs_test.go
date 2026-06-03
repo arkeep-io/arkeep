@@ -10,19 +10,25 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
-// createDBJob inserts a job record directly using random policy/agent UUIDs.
-// SQLite does not enforce foreign keys by default, so the UUIDs do not need
-// to reference real records.
+// createDBJob inserts a job record with a real agent and policy to satisfy FK constraints.
 func createDBJob(t *testing.T, deps *testDeps) *db.Job {
 	t.Helper()
+	return createDBJobWith(t, deps, "backup", "succeeded")
+}
+
+// createDBJobWith inserts a job with the given type and status.
+func createDBJobWith(t *testing.T, deps *testDeps, jobType, status string) *db.Job {
+	t.Helper()
+	agent := createDBAgent(t, deps, "test-agent-"+uuid.NewString())
+	policy := createDBPolicy(t, deps, "test-policy-"+uuid.NewString(), agent.ID)
 	job := &db.Job{
-		PolicyID: uuid.New(),
-		AgentID:  uuid.New(),
-		Type:     "backup",
-		Status:   "succeeded",
+		PolicyID: policy.ID,
+		AgentID:  agent.ID,
+		Type:     jobType,
+		Status:   status,
 	}
 	if err := deps.jobs.Create(context.Background(), job); err != nil {
-		t.Fatalf("createDBJob: %v", err)
+		t.Fatalf("createDBJobWith: %v", err)
 	}
 	return job
 }
@@ -100,6 +106,75 @@ func TestJobHandler_List(t *testing.T) {
 		decodeData(t, resp, &data)
 		if data.Total != 1 {
 			t.Errorf("total = %d, want 1 (filtered by policy)", data.Total)
+		}
+	})
+
+	t.Run("returns 400 for invalid status filter", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/jobs?status=invalid", e.adminToken(t))
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 for invalid type filter", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/jobs?type=invalid", e.adminToken(t))
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("filters by status", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBJobWith(t, e.deps, "backup", "succeeded")
+		createDBJobWith(t, e.deps, "backup", "failed")
+		createDBJobWith(t, e.deps, "backup", "failed")
+
+		resp := e.get(t, "/api/v1/jobs?status=failed", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			Items []any `json:"items"`
+			Total int64 `json:"total"`
+		}
+		decodeData(t, resp, &data)
+		if data.Total != 2 {
+			t.Errorf("total = %d, want 2 (filtered by status=failed)", data.Total)
+		}
+	})
+
+	t.Run("filters by type", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBJobWith(t, e.deps, "backup", "succeeded")
+		createDBJobWith(t, e.deps, "backup", "succeeded")
+		createDBJobWith(t, e.deps, "restore", "succeeded")
+
+		resp := e.get(t, "/api/v1/jobs?type=restore", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			Items []any `json:"items"`
+			Total int64 `json:"total"`
+		}
+		decodeData(t, resp, &data)
+		if data.Total != 1 {
+			t.Errorf("total = %d, want 1 (filtered by type=restore)", data.Total)
+		}
+	})
+
+	t.Run("filters by status and type combined", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBJobWith(t, e.deps, "backup", "failed")
+		createDBJobWith(t, e.deps, "restore", "failed")
+		createDBJobWith(t, e.deps, "backup", "succeeded")
+
+		resp := e.get(t, "/api/v1/jobs?status=failed&type=backup", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			Items []any `json:"items"`
+			Total int64 `json:"total"`
+		}
+		decodeData(t, resp, &data)
+		if data.Total != 1 {
+			t.Errorf("total = %d, want 1 (filtered by status=failed&type=backup)", data.Total)
 		}
 	})
 }
@@ -180,7 +255,7 @@ func TestJobHandler_ListByPolicy(t *testing.T) {
 		// Insert a second job with the same policy ID.
 		job2 := &db.Job{
 			PolicyID: j.PolicyID,
-			AgentID:  uuid.New(),
+			AgentID:  j.AgentID,
 			Type:     "backup",
 			Status:   "pending",
 		}

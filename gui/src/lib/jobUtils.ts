@@ -9,7 +9,7 @@ import {
     Clock,
     Loader,
     XCircle,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 

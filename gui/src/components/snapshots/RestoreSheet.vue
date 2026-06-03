@@ -12,13 +12,7 @@ import {
     SheetHeader,
     SheetTitle,
 } from '@/components/ui/sheet'
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select'
+import { AsyncCombobox } from '@/components/ui/async-combobox'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,7 +22,7 @@ import {
     FieldGroup,
     FieldLabel,
 } from '@/components/ui/field'
-import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, Loader2 } from '@lucide/vue'
 import { Separator } from '@/components/ui/separator'
 import { api } from '@/services/api'
 import type { Agent, ApiResponse, RestoreResponse, Snapshot, SnapshotFileEntry } from '@/types'
@@ -86,10 +80,13 @@ const resolvedTargetPath = computed(() =>
     restoreMode.value === 'inplace' ? '/' : targetPath.value?.trim() ?? ''
 )
 
-// selectedAgent is the full Agent object for the currently selected agent_id.
-const selectedAgent = computed(() =>
-    agents.value.find((a) => a.id === agentId.value) ?? null
-)
+// selectedAgent holds the full Agent object for the currently selected agent_id.
+// Updated via the AsyncCombobox update:item emit.
+const selectedAgent = ref<Agent | null>(null)
+
+function onAgentSelected(item: Record<string, unknown> | null) {
+    selectedAgent.value = item as Agent | null
+}
 
 // In-place restore is not supported on Windows — restic reconstructs paths
 // from root which produces invalid paths (e.g. \C\Users\...) on Windows.
@@ -111,7 +108,6 @@ const defaultTargetPath = computed(() =>
 // ---------------------------------------------------------------------------
 
 const router = useRouter()
-const agents = ref<Agent[]>([])
 const submitError = ref<string | null>(null)
 const isBrowsing = ref(false)
 const browseError = ref<string | null>(null)
@@ -122,14 +118,17 @@ const selectedPaths = ref<string[]>([])
 // Watchers
 // ---------------------------------------------------------------------------
 
-// Reset form and fetch agents when the sheet opens.
+// Reset form when the sheet opens; pre-select the snapshot's original agent.
 watch(
     () => props.open,
-    async (isOpen) => {
-        if (!isOpen) return
+    (isOpen) => {
+        if (!isOpen) {
+            selectedAgent.value = null
+            return
+        }
         resetForm()
         setValues({
-            agent_id: '',
+            agent_id: props.snapshot?.agent_id ?? '',
             restore_mode: 'custom',
             target_path: '/tmp/arkeep-restore',
         })
@@ -137,11 +136,6 @@ watch(
         browseEntries.value = []
         selectedPaths.value = []
         browseError.value = null
-        await fetchAgents()
-        // Pre-select the snapshot's original agent if it's online.
-        if (props.snapshot?.agent_id && agents.value.some((a) => a.id === props.snapshot?.agent_id)) {
-            agentId.value = props.snapshot.agent_id
-        }
     },
 )
 
@@ -186,16 +180,6 @@ async function browseSnapshot() {
         browseError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to browse snapshot.'
     } finally {
         isBrowsing.value = false
-    }
-}
-
-async function fetchAgents() {
-    try {
-        const res = await api<ApiResponse<{ items: Agent[]; total: number }>>('/api/v1/agents?limit=100')
-        // Only show online agents — offline agents cannot receive a restore job.
-        agents.value = res.data.items.filter((a) => a.status === 'online')
-    } catch {
-        agents.value = []
     }
 }
 
@@ -262,25 +246,19 @@ function onOpenChange(value: boolean) {
                         </Alert>
                     </Transition>
 
-                    <!-- Agent selector -->
+                    <!-- Agent selector — only online agents can receive a restore job -->
                     <Field>
                         <FieldLabel for="agent">Target agent</FieldLabel>
-                        <Select :model-value="agentId ?? ''" :disabled="isSubmitting"
-                            @update:model-value="agentId = $event as string">
-                            <SelectTrigger id="agent"
-                                :class="agentError ? 'border-destructive focus-visible:ring-destructive/30' : ''">
-                                <SelectValue placeholder="Select an agent…" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem v-for="agent in agents" :key="agent.id" :value="agent.id">
-                                    {{ agent.name }}
-                                </SelectItem>
-                                <div v-if="agents.length === 0"
-                                    class="px-3 py-4 text-sm text-muted-foreground text-center">
-                                    No online agents available.
-                                </div>
-                            </SelectContent>
-                        </Select>
+                        <AsyncCombobox
+                            endpoint="/api/v1/agents?status=online"
+                            :model-value="agentId ?? ''"
+                            :initial-label="props.snapshot?.agent_name"
+                            placeholder="Select an agent…"
+                            :disabled="isSubmitting"
+                            :class="agentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
+                            @update:model-value="agentId = $event"
+                            @update:item="onAgentSelected"
+                        />
                         <FieldError v-if="agentError">{{ agentError }}</FieldError>
                     </Field>
 
@@ -360,7 +338,7 @@ function onOpenChange(value: boolean) {
                         <Button type="button" variant="outline" :disabled="isSubmitting" @click="onOpenChange(false)">
                             Cancel
                         </Button>
-                        <Button type="submit" :disabled="isSubmitting || agents.length === 0">
+                        <Button type="submit" :disabled="isSubmitting">
                             <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
                             {{ isSubmitting ? 'Starting…' : 'Start restore' }}
                         </Button>

@@ -79,10 +79,21 @@ type listAgentsResponse struct {
 
 // List handles GET /api/v1/agents.
 // Returns a paginated list of agents. Soft-deleted agents are excluded.
+// Supports an optional ?search= query parameter for substring name filtering.
 func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
 
-	agents, total, err := h.repo.List(r.Context(), opts)
+	var agents []db.Agent
+	var total int64
+	var err error
+
+	search := r.URL.Query().Get("search")
+	status := r.URL.Query().Get("status")
+	if search != "" || status != "" {
+		agents, total, err = h.repo.ListFiltered(r.Context(), repositories.AgentFilter{Search: search, Status: status}, opts)
+	} else {
+		agents, total, err = h.repo.List(r.Context(), opts)
+	}
 	if err != nil {
 		h.logger.Error("failed to list agents", zap.Error(err))
 		ErrInternal(w)

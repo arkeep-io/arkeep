@@ -160,7 +160,7 @@ type Manager struct {
 	cfg     Config
 	exec    *executor.Executor
 	docker  *docker.Client  // may be nil if Docker is unavailable on this host
-	wrapper *restic.Wrapper // used to run restic ls for snapshot browse requests
+	wrapper *restic.Wrapper // may be nil if restic is unavailable on this host
 	logger  *zap.Logger
 
 	// mu protects client and logStreams — both are replaced on every reconnect.
@@ -176,6 +176,8 @@ type Manager struct {
 // New creates a Manager. Call Run to start the connection loop.
 // dockerClient may be nil — if it is, LIST_VOLUMES requests are answered
 // with an error instead of crashing.
+// wrapper may be nil — if it is, LIST_SNAPSHOT_FILES and IMPORT_SNAPSHOTS
+// requests are answered with an error instead of crashing.
 func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapper *restic.Wrapper, logger *zap.Logger) *Manager {
 	return &Manager{
 		cfg:        cfg,
@@ -545,6 +547,13 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			continue
 		}
 
+		// IMPORT_SNAPSHOTS is a synthetic request that runs restic snapshots and
+		// returns all snapshot metadata via ReportSnapshotImport, without creating a job.
+		if assignment.Type == proto.JobType_JOB_TYPE_IMPORT_SNAPSHOTS {
+			go m.handleSnapshotImportRequest(assignment.JobId, agentID, assignment.Payload)
+			continue
+		}
+
 		job, err := m.protoToJob(assignment)
 		if err != nil {
 			m.logger.Error("failed to parse job assignment",
@@ -683,6 +692,81 @@ func (m *Manager) handleSnapshotBrowseRequest(correlationID, agentID string, pay
 
 	if _, err := client.ReportSnapshotBrowse(ctx, report); err != nil {
 		m.logger.Warn("handleSnapshotBrowseRequest: ReportSnapshotBrowse RPC failed",
+			zap.String("correlation_id", correlationID),
+			zap.Error(err),
+		)
+	}
+}
+
+// snapshotImportPayload is the JSON body sent by the server inside a
+// JOB_TYPE_IMPORT_SNAPSHOTS JobAssignment.
+type snapshotImportPayload struct {
+	Type    string            `json:"type"`
+	RepoURL string            `json:"repo_url"`
+	Env     map[string]string `json:"env"`
+}
+
+// handleSnapshotImportRequest runs restic snapshots for the given destination
+// and reports all snapshot metadata back to the server via ReportSnapshotImport.
+// Runs in its own goroutine so it does not block the job stream loop.
+func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, payload []byte) {
+	m.mu.RLock()
+	client := m.client
+	ctx := m.sessionCtx
+	m.mu.RUnlock()
+
+	report := &proto.SnapshotImportReport{
+		AgentId:       agentID,
+		CorrelationId: correlationID,
+	}
+
+	if client == nil {
+		report.Error = "no active gRPC client"
+		return
+	}
+
+	if m.wrapper == nil {
+		report.Error = "restic is unavailable on this agent"
+		if _, err := client.ReportSnapshotImport(ctx, report); err != nil {
+			m.logger.Warn("handleSnapshotImportRequest: ReportSnapshotImport RPC failed",
+				zap.String("correlation_id", correlationID),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+
+	var p snapshotImportPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		report.Error = fmt.Sprintf("failed to parse import payload: %v", err)
+		_, _ = client.ReportSnapshotImport(ctx, report)
+		return
+	}
+
+	dest := restic.Destination{
+		Type:    restic.DestinationType(p.Type),
+		RepoURL: p.RepoURL,
+		Env:     p.Env,
+	}
+
+	snapshots, err := m.wrapper.Snapshots(ctx, dest)
+	if err != nil {
+		report.Error = err.Error()
+	} else {
+		report.Snapshots = make([]*proto.ImportedSnapshotInfo, len(snapshots))
+		for i, s := range snapshots {
+			report.Snapshots[i] = &proto.ImportedSnapshotInfo{
+				ResticSnapshotId: s.ID,
+				SnapshotTime:     s.Time,
+				Paths:            s.Paths,
+				Tags:             s.Tags,
+				Hostname:         s.Hostname,
+			}
+		}
+	}
+
+	if _, err := client.ReportSnapshotImport(ctx, report); err != nil {
+		m.logger.Warn("handleSnapshotImportRequest: ReportSnapshotImport RPC failed",
 			zap.String("correlation_id", correlationID),
 			zap.Error(err),
 		)

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-vue-next'
+import { AlertCircle, Loader2, RefreshCw } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { ApiResponse, NotificationSettings } from '@/types'
 

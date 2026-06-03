@@ -5,7 +5,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -35,10 +34,16 @@ func newTestDB(t *testing.T) *gorm.DB {
 }
 
 func TestActivePoliciesCount(t *testing.T) {
-	repo := NewPolicyRepository(newTestDB(t))
+	gdb := newTestDB(t)
+	repo := NewPolicyRepository(gdb)
+	agentRepo := NewAgentRepository(gdb)
 	ctx := context.Background()
 
-	agentID := uuid.New()
+	agent := &db.Agent{Name: "test-agent", Status: "offline", Labels: "{}"}
+	if err := agentRepo.Create(ctx, agent); err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+	agentID := agent.ID
 	newPolicy := func() *db.Policy {
 		return &db.Policy{
 			Name:     "test-policy",

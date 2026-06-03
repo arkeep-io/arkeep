@@ -55,7 +55,7 @@ func TestPolicyHandler_List(t *testing.T) {
 
 	t.Run("returns created policies", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		createDBPolicy(t, e.deps, "backup-home", agentID)
 		createDBPolicy(t, e.deps, "backup-db", agentID)
 
@@ -76,7 +76,7 @@ func TestPolicyHandler_List(t *testing.T) {
 func TestPolicyHandler_GetByID(t *testing.T) {
 	t.Run("returns policy by UUID", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "my-policy", agentID)
 
 		resp := e.get(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t))
@@ -122,7 +122,7 @@ func TestPolicyHandler_Create(t *testing.T) {
 
 	t.Run("creates policy and returns 201", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New().String()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
 
 		resp := e.post(t, "/api/v1/policies", e.adminToken(t), validPolicy(agentID))
 		assertStatus(t, resp, http.StatusCreated)
@@ -219,7 +219,7 @@ func TestPolicyHandler_Create(t *testing.T) {
 func TestPolicyHandler_Update(t *testing.T) {
 	t.Run("updates policy name", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "original", agentID)
 
 		name := "updated"
@@ -237,7 +237,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 
 	t.Run("returns 400 when setting empty name", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "policy", agentID)
 
 		empty := ""
@@ -249,7 +249,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 
 	t.Run("returns 400 when schedule is invalid", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "policy", agentID)
 
 		bad := "not-cron"
@@ -270,7 +270,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 
 	t.Run("returns 400 when hook contains path traversal", func(t *testing.T) {
 		e := newTestEnv(t)
-		agentID := uuid.New()
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "policy", agentID)
 
 		hook := "cat ../../etc/passwd"
@@ -284,7 +284,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 func TestPolicyHandler_Delete(t *testing.T) {
 	t.Run("admin can delete policy", func(t *testing.T) {
 		e := newTestEnv(t)
-		policy := createDBPolicy(t, e.deps, "to-delete", uuid.New())
+		policy := createDBPolicy(t, e.deps, "to-delete", createDBAgent(t, e.deps, "test-agent").ID)
 
 		resp := e.del(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t))
 		assertStatus(t, resp, http.StatusNoContent)
@@ -292,7 +292,7 @@ func TestPolicyHandler_Delete(t *testing.T) {
 
 	t.Run("returns 403 for non-admin user", func(t *testing.T) {
 		e := newTestEnv(t)
-		policy := createDBPolicy(t, e.deps, "protected", uuid.New())
+		policy := createDBPolicy(t, e.deps, "protected", createDBAgent(t, e.deps, "test-agent").ID)
 
 		resp := e.del(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t))
 		assertStatus(t, resp, http.StatusForbidden)

@@ -213,7 +213,8 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	// Pass dockerClient and wrapper so the connection manager can handle
-	// JOB_TYPE_LIST_VOLUMES and JOB_TYPE_LIST_SNAPSHOT_FILES requests inline.
+	// JOB_TYPE_LIST_VOLUMES, JOB_TYPE_LIST_SNAPSHOT_FILES, and
+	// JOB_TYPE_IMPORT_SNAPSHOTS requests from the server. Either may be nil.
 	mgr := connection.New(connCfg, exec, dockerClient, wrapper, logger)
 
 	// --- Start ---

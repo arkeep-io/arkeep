@@ -17,7 +17,7 @@ import {
     FieldGroup,
     FieldLabel,
 } from '@/components/ui/field'
-import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, Loader2 } from '@lucide/vue'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'

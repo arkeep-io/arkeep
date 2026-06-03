@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { Bell, CheckCheck, AlertTriangle, WifiOff } from 'lucide-vue-next'
+import { Bell, CheckCheck, AlertTriangle, WifiOff } from '@lucide/vue'
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -65,7 +65,7 @@ function formatRelative(dateStr: string): string {
                 <!-- Unread badge -->
                 <span
                     v-if="notifStore.unreadCount > 0"
-                    class="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[1rem] h-4 px-1 text-[10px] font-bold leading-none rounded-full bg-destructive text-destructive-foreground">
+                    class="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-4 h-4 px-1 text-[10px] font-bold leading-none rounded-full bg-destructive text-destructive-foreground">
                     {{ notifStore.unreadCount > 99 ? '99+' : notifStore.unreadCount }}
                 </span>
             </Button>
@@ -98,7 +98,7 @@ function formatRelative(dateStr: string): string {
             </div>
 
             <!-- Notification list -->
-            <div v-else class="overflow-y-auto max-h-[20rem]">
+            <div v-else class="overflow-y-auto max-h-80">
                 <div
                     v-for="n in notifStore.items"
                     :key="n.id"

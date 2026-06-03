@@ -18,6 +18,14 @@ type ListOptions struct {
 	Offset int
 }
 
+// PolicyDestinationWithName extends db.PolicyDestination with the denormalised
+// destination name resolved via JOIN. Deleted destinations are excluded from
+// all queries that return this type.
+type PolicyDestinationWithName struct {
+	db.PolicyDestination
+	DestinationName string
+}
+
 // -----------------------------------------------------------------------------
 // UserRepository
 // -----------------------------------------------------------------------------
@@ -62,6 +70,13 @@ type OIDCProviderRepository interface {
 // AgentRepository
 // -----------------------------------------------------------------------------
 
+// AgentFilter restricts results returned by AgentRepository.ListFiltered.
+// Zero values mean "no filter" for that field.
+type AgentFilter struct {
+	Search string // case-insensitive substring match on name
+	Status string // exact match on status (e.g. "online", "offline")
+}
+
 type AgentRepository interface {
 	Create(ctx context.Context, agent *db.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Agent, error)
@@ -70,6 +85,7 @@ type AgentRepository interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Agent, int64, error)
+	ListFiltered(ctx context.Context, filter AgentFilter, opts ListOptions) ([]db.Agent, int64, error)
 
 	// TotalCount returns the count of all non-deleted agents in the database.
 	// Used by telemetry to report the registered agent count regardless of
@@ -81,12 +97,19 @@ type AgentRepository interface {
 // DestinationRepository
 // -----------------------------------------------------------------------------
 
+// DestinationFilter restricts results returned by DestinationRepository.ListFiltered.
+// Zero values mean "no filter" for that field.
+type DestinationFilter struct {
+	Search string // case-insensitive substring match on name
+}
+
 type DestinationRepository interface {
 	Create(ctx context.Context, destination *db.Destination) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Destination, error)
 	Update(ctx context.Context, destination *db.Destination) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error)
+	ListFiltered(ctx context.Context, filter DestinationFilter, opts ListOptions) ([]db.Destination, int64, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -101,7 +124,8 @@ type PolicyRepository interface {
 	// PolicyDestination records. The destinations are returned as a separate
 	// slice rather than embedded in the Policy struct, because GORM cannot
 	// auto-resolve UUID-typed foreign keys. Callers iterate the slice directly.
-	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []db.PolicyDestination, error)
+	// Destinations that have been deleted are excluded automatically.
+	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*db.Policy, []PolicyDestinationWithName, error)
 
 	Update(ctx context.Context, policy *db.Policy) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -119,12 +143,21 @@ type PolicyRepository interface {
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error
 	UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error
 	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
-	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]db.PolicyDestination, error)
+	// GetDestinations returns active (non-deleted) destination associations for a
+	// policy ordered by priority. Deleted destinations are excluded automatically.
+	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]PolicyDestinationWithName, error)
 }
 
 // -----------------------------------------------------------------------------
 // JobRepository
 // -----------------------------------------------------------------------------
+
+// JobFilter restricts the result set returned by JobRepository.ListFiltered.
+// Zero values mean "no filter" for that field.
+type JobFilter struct {
+	Status string // e.g. "pending", "running", "succeeded", "failed", "cancelled"
+	Type   string // e.g. "backup", "restore"
+}
 
 type JobRepository interface {
     Create(ctx context.Context, job *db.Job) error
@@ -134,6 +167,7 @@ type JobRepository interface {
     UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
     FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
     List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
+    ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
     ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
     ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
     ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
@@ -141,7 +175,7 @@ type JobRepository interface {
     // JobDestination
     CreateDestination(ctx context.Context, jd *db.JobDestination) error
     ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
-    UpdateDestinationStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+    UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
     // JobLog
     BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
@@ -157,6 +191,7 @@ type SnapshotRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Snapshot, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteBySnapshotID(ctx context.Context, snapshotID string) error
+	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)
 	List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)

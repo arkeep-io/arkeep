@@ -2,7 +2,8 @@
 import { ref, watch, computed } from 'vue'
 import { z } from 'zod'
 import { api } from '@/services/api'
-import type { Destination } from '@/types'
+import type { ApiResponse, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
+import { AsyncCombobox } from '@/components/ui/async-combobox'
 import {
     Sheet,
     SheetContent,
@@ -29,7 +30,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2 } from 'lucide-vue-next'
+import { AlertCircle, Archive, CheckCircle2, Loader2 } from '@lucide/vue'
 
 // ---------------------------------------------------------------------------
 // Props / emits
@@ -117,11 +118,20 @@ const selectedType = ref<DestType>('local')
 const submitError = ref<string | null>(null)
 const submitting = ref(false)
 
+// Import state — only used during creation, not edit
+const importEnabled = ref(false)
+const importAgentId = ref('')
+const importAgentError = ref('')
+const importRepoPassword = ref('')
+const importPasswordError = ref('')
+const importError = ref<string | null>(null)
+const importResult = ref<ImportDestinationResponse | null>(null)
+const creationDone = ref(false)
+
 // Base fields
 const name = ref('')
 const nameError = ref('')
 const enabled = ref(true)
-const skipInit = ref(false)
 
 // Config fields — one ref per possible field
 const localPath = ref('')
@@ -154,7 +164,6 @@ function resetFields() {
     name.value = ''
     nameError.value = ''
     enabled.value = true
-    skipInit.value = false
     submitError.value = null
     fieldErrors.value = {}
     localPath.value = ''
@@ -164,13 +173,20 @@ function resetFields() {
     sftpPassword.value = sftpPrivateKey.value = ''
     restUrl.value = restUser.value = restPassword.value = ''
     rcloneRemote.value = rclonePath.value = ''
+    importEnabled.value = false
+    importAgentId.value = ''
+    importAgentError.value = ''
+    importRepoPassword.value = ''
+    importPasswordError.value = ''
+    importError.value = null
+    importResult.value = null
+    creationDone.value = false
 }
 
 function populateFromDestination(dest: Destination) {
     selectedType.value = dest.type as DestType
     name.value = dest.name
     enabled.value = dest.enabled
-    skipInit.value = dest.skip_init
 
     // Parse config JSON — credentials are write-only and never populated
     let config: Record<string, string> = {}
@@ -202,10 +218,10 @@ function populateFromDestination(dest: Destination) {
     }
 }
 
-// Prefill or reset when the sheet opens
+// Prefill or reset when the sheet opens; also load agent list for import section.
 watch(
     () => props.open,
-    (open) => {
+    async (open) => {
         if (open) {
             resetFields()
             if (props.destination) {
@@ -222,6 +238,11 @@ watch(
 watch(selectedType, () => {
     fieldErrors.value = {}
     submitError.value = null
+})
+
+// Clear import error when toggle is turned off
+watch(importEnabled, () => {
+    importError.value = null
 })
 
 // ---------------------------------------------------------------------------
@@ -298,8 +319,16 @@ function validate(): boolean {
 async function onSubmit() {
     if (!validate()) return
 
+    // If import is enabled, both agent and password are required.
+    if (importEnabled.value) {
+        importAgentError.value = importAgentId.value ? '' : 'Please select an agent.'
+        importPasswordError.value = importRepoPassword.value ? '' : 'Repository password is required.'
+        if (importAgentError.value || importPasswordError.value) return
+    }
+
     submitting.value = true
     submitError.value = null
+    importError.value = null
 
     const { config, creds } = buildConfigAndCreds()
 
@@ -313,28 +342,48 @@ async function onSubmit() {
                     config: JSON.stringify(config),
                     credentials: JSON.stringify(creds),
                     enabled: enabled.value,
-                    skip_init: skipInit.value,
                 },
             })
         } else {
-            await api('/api/v1/destinations', {
+            // Build the POST body; include import fields if provided so the
+            // backend tests connectivity before persisting anything.
+            const body: Record<string, unknown> = {
+                name: name.value,
+                type: selectedType.value,
+                config: JSON.stringify(config),
+                credentials: JSON.stringify(creds),
+            }
+            if (importEnabled.value && importAgentId.value && importRepoPassword.value) {
+                body.import_agent_id = importAgentId.value
+                body.import_repo_password = importRepoPassword.value
+            }
+            const res = await api<ApiResponse<CreateDestinationResponse>>('/api/v1/destinations', {
                 method: 'POST',
-                body: {
-                    name: name.value,
-                    type: selectedType.value,
-                    config: JSON.stringify(config),
-                    credentials: JSON.stringify(creds),
-                    skip_init: skipInit.value,
-                },
+                body,
             })
+            if (res.data.import) {
+                importResult.value = res.data.import
+                creationDone.value = true
+                emit('saved')
+                return
+            }
         }
         emit('update:open', false)
         emit('saved')
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save destination'
+        const msg = e?.data?.error?.message ?? e?.message ?? 'An error occurred'
+        if (importEnabled.value && !isEdit.value) {
+            importError.value = msg
+        } else {
+            submitError.value = msg
+        }
     } finally {
         submitting.value = false
     }
+}
+
+function onDone() {
+    emit('update:open', false)
 }
 
 function onOpenChange(value: boolean) {
@@ -349,13 +398,38 @@ function onOpenChange(value: boolean) {
     <Sheet :open="props.open" @update:open="onOpenChange">
         <SheetContent class="sm:max-w-lg overflow-y-auto">
             <SheetHeader>
-                <SheetTitle>{{ isEdit ? 'Edit Destination' : 'New Destination' }}</SheetTitle>
+                <SheetTitle>{{ creationDone ? 'Destination Created' : (isEdit ? 'Edit Destination' : 'New Destination') }}</SheetTitle>
                 <SheetDescription>
-                    {{ isEdit ? 'Update the destination settings.' : 'Configure a new backup storage target.' }}
+                    {{ creationDone ? 'The destination has been saved and snapshots imported.' : (isEdit ? 'Update the destination settings.' : 'Configure a new backup storage target.') }}
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="py-6 px-4" novalidate @submit.prevent="onSubmit">
+            <!-- Success state shown after creation with import -->
+            <div v-if="creationDone && importResult" class="py-8 px-4 flex flex-col gap-6">
+                <div class="space-y-3">
+                    <div class="flex items-center gap-3">
+                        <CheckCircle2 class="size-5 text-green-500 shrink-0" />
+                        <div>
+                            <p class="text-sm font-medium">Destination saved</p>
+                            <p class="text-xs text-muted-foreground">{{ name }}</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <CheckCircle2 class="size-5 shrink-0" :class="importResult.found > 0 ? 'text-green-500' : 'text-muted-foreground'" />
+                        <div>
+                            <p class="text-sm font-medium">
+                                {{ importResult.found > 0 ? `${importResult.imported} snapshot${importResult.imported !== 1 ? 's' : ''} imported` : 'Repository is empty' }}
+                            </p>
+                            <p class="text-xs text-muted-foreground">
+                                {{ importResult.found > 0 ? `${importResult.found} found, ${importResult.imported} new` : 'No existing snapshots were found in this repository.' }}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <Button class="self-start" @click="onDone">Done</Button>
+            </div>
+
+            <form v-else class="py-6 px-4" novalidate @submit.prevent="onSubmit">
                 <FieldGroup>
 
                     <!-- Error banner -->
@@ -401,7 +475,7 @@ function onOpenChange(value: boolean) {
                     <template v-if="selectedType === 'local'">
                         <Field>
                             <FieldLabel for="local-path">Path</FieldLabel>
-                            <Input id="local-path" v-model="localPath" placeholder="/mnt/backups"
+                            <Input id="local-path" v-model="localPath" placeholder="/mnt/backups" autocomplete="off"
                                 :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
                         </Field>
@@ -411,7 +485,7 @@ function onOpenChange(value: boolean) {
                     <template v-if="selectedType === 's3'">
                         <Field>
                             <FieldLabel for="s3-bucket">Bucket</FieldLabel>
-                            <Input id="s3-bucket" v-model="s3Bucket" placeholder="my-backup-bucket"
+                            <Input id="s3-bucket" v-model="s3Bucket" placeholder="my-backup-bucket" autocomplete="off"
                                 :class="fieldErrors.bucket ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.bucket">{{ fieldErrors.bucket }}</FieldError>
                         </Field>
@@ -419,7 +493,7 @@ function onOpenChange(value: boolean) {
                             <FieldLabel for="s3-endpoint">
                                 Endpoint <span class="text-muted-foreground font-normal">(optional)</span>
                             </FieldLabel>
-                            <Input id="s3-endpoint" v-model="s3Endpoint"
+                            <Input id="s3-endpoint" v-model="s3Endpoint" autocomplete="off"
                                 placeholder="https://s3.us-east-1.amazonaws.com" />
                         </Field>
                         <div class="grid grid-cols-2 gap-3">
@@ -427,13 +501,13 @@ function onOpenChange(value: boolean) {
                                 <FieldLabel for="s3-region">
                                     Region <span class="text-muted-foreground font-normal">(optional)</span>
                                 </FieldLabel>
-                                <Input id="s3-region" v-model="s3Region" placeholder="us-east-1" />
+                                <Input id="s3-region" v-model="s3Region" placeholder="us-east-1" autocomplete="off" />
                             </Field>
                             <Field>
                                 <FieldLabel for="s3-prefix">
                                     Prefix <span class="text-muted-foreground font-normal">(optional)</span>
                                 </FieldLabel>
-                                <Input id="s3-prefix" v-model="s3Prefix" placeholder="backups/" />
+                                <Input id="s3-prefix" v-model="s3Prefix" placeholder="backups/" autocomplete="off" />
                             </Field>
                         </div>
 
@@ -461,7 +535,7 @@ function onOpenChange(value: boolean) {
                         <div class="grid grid-cols-3 gap-3">
                             <Field class="col-span-2">
                                 <FieldLabel for="sftp-host">Host</FieldLabel>
-                                <Input id="sftp-host" v-model="sftpHost" placeholder="backup.example.com"
+                                <Input id="sftp-host" v-model="sftpHost" placeholder="backup.example.com" autocomplete="off"
                                     :class="fieldErrors.host ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                 <FieldError v-if="fieldErrors.host">{{ fieldErrors.host }}</FieldError>
                             </Field>
@@ -469,18 +543,18 @@ function onOpenChange(value: boolean) {
                                 <FieldLabel for="sftp-port">
                                     Port <span class="text-muted-foreground font-normal">(opt.)</span>
                                 </FieldLabel>
-                                <Input id="sftp-port" v-model="sftpPort" placeholder="22" />
+                                <Input id="sftp-port" v-model="sftpPort" placeholder="22" autocomplete="off" />
                             </Field>
                         </div>
                         <Field>
                             <FieldLabel for="sftp-user">Username</FieldLabel>
-                            <Input id="sftp-user" v-model="sftpUser" placeholder="backup-user"
+                            <Input id="sftp-user" v-model="sftpUser" placeholder="backup-user" autocomplete="off"
                                 :class="fieldErrors.user ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.user">{{ fieldErrors.user }}</FieldError>
                         </Field>
                         <Field>
                             <FieldLabel for="sftp-path">Remote Path</FieldLabel>
-                            <Input id="sftp-path" v-model="sftpPath" placeholder="/home/backup-user/restic"
+                            <Input id="sftp-path" v-model="sftpPath" placeholder="/home/backup-user/restic" autocomplete="off"
                                 :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
                         </Field>
@@ -511,7 +585,7 @@ function onOpenChange(value: boolean) {
                     <template v-if="selectedType === 'rest'">
                         <Field>
                             <FieldLabel for="rest-url">REST Server URL</FieldLabel>
-                            <Input id="rest-url" v-model="restUrl" placeholder="https://rest.example.com/repo"
+                            <Input id="rest-url" v-model="restUrl" placeholder="https://rest.example.com/repo" autocomplete="off"
                                 :class="fieldErrors.url ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.url">{{ fieldErrors.url }}</FieldError>
                         </Field>
@@ -536,7 +610,7 @@ function onOpenChange(value: boolean) {
                     <template v-if="selectedType === 'rclone'">
                         <Field>
                             <FieldLabel for="rclone-remote">Remote Name</FieldLabel>
-                            <Input id="rclone-remote" v-model="rcloneRemote" placeholder="myremote"
+                            <Input id="rclone-remote" v-model="rcloneRemote" placeholder="myremote" autocomplete="off"
                                 :class="fieldErrors.remote ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <p class="text-muted-foreground text-xs">
                                 Must match a remote configured in rclone.conf on the agent.
@@ -545,7 +619,7 @@ function onOpenChange(value: boolean) {
                         </Field>
                         <Field>
                             <FieldLabel for="rclone-path">Path</FieldLabel>
-                            <Input id="rclone-path" v-model="rclonePath" placeholder="bucket/backups"
+                            <Input id="rclone-path" v-model="rclonePath" placeholder="bucket/backups" autocomplete="off"
                                 :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
                         </Field>
@@ -565,18 +639,67 @@ function onOpenChange(value: boolean) {
                         </div>
                     </template>
 
-                    <!-- Use existing repository toggle -->
-                    <Separator />
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium">Use existing repository</p>
-                            <p class="text-muted-foreground text-xs">
-                                Skip initialization. Enable if this destination already contains a
-                                Restic repository created outside of Arkeep.
-                            </p>
+                    <!-- Import existing repository — create mode only -->
+                    <template v-if="!isEdit">
+                        <Separator />
+                        <div class="rounded-lg border p-4 space-y-3" :class="importEnabled ? 'bg-muted/30' : ''">
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="flex items-start gap-2.5">
+                                    <Archive class="size-4 mt-0.5 shrink-0 text-muted-foreground" />
+                                    <div>
+                                        <p class="text-sm font-medium leading-none">Import existing repository</p>
+                                        <p class="text-muted-foreground text-xs mt-1.5">
+                                            Enable this if the destination already contains a Restic repository
+                                            whose snapshots you want to import.
+                                        </p>
+                                    </div>
+                                </div>
+                                <Switch :model-value="importEnabled" @update:model-value="importEnabled = $event" />
+                            </div>
+
+                            <Transition
+                                enter-active-class="transition-all duration-200 overflow-hidden"
+                                enter-from-class="opacity-0 max-h-0"
+                                enter-to-class="opacity-100 max-h-96"
+                                leave-active-class="transition-all duration-150 overflow-hidden"
+                                leave-from-class="opacity-100 max-h-96"
+                                leave-to-class="opacity-0 max-h-0"
+                            >
+                                <div v-if="importEnabled" class="space-y-3 pt-1">
+                                    <Field>
+                                        <FieldLabel for="import-agent">Agent</FieldLabel>
+                                        <AsyncCombobox
+                                            endpoint="/api/v1/agents"
+                                            :model-value="importAgentId"
+                                            placeholder="Select an agent"
+                                            :class="importAgentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
+                                            @update:model-value="importAgentId = $event; importAgentError = ''"
+                                        />
+                                        <FieldError v-if="importAgentError">{{ importAgentError }}</FieldError>
+                                    </Field>
+                                    <Field>
+                                        <FieldLabel for="import-password">Repository Password</FieldLabel>
+                                        <Input id="import-password" v-model="importRepoPassword" type="password"
+                                            autocomplete="off" placeholder="Restic repository password"
+                                            :class="importPasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''"
+                                            @input="importPasswordError = ''" />
+                                        <FieldError v-if="importPasswordError">{{ importPasswordError }}</FieldError>
+                                    </Field>
+                                    <Transition enter-active-class="transition-all duration-200"
+                                        enter-from-class="-translate-y-1 opacity-0" leave-active-class="transition-all duration-150"
+                                        leave-to-class="-translate-y-1 opacity-0">
+                                        <p v-if="importError" class="text-xs text-destructive flex items-start gap-1.5">
+                                            <AlertCircle class="size-3.5 mt-0.5 shrink-0" />
+                                            {{ importError }}
+                                        </p>
+                                    </Transition>
+                                    <p class="text-xs text-muted-foreground">
+                                        The connection will be tested on submit. If it fails, the destination will not be created.
+                                    </p>
+                                </div>
+                            </Transition>
                         </div>
-                        <Switch :model-value="skipInit" @update:model-value="skipInit = $event" />
-                    </div>
+                    </template>
 
                     <SheetFooter class="mt-2 px-0">
                         <Button type="button" variant="outline" :disabled="submitting" @click="onOpenChange(false)">
@@ -584,7 +707,7 @@ function onOpenChange(value: boolean) {
                         </Button>
                         <Button type="submit" :disabled="submitting">
                             <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                            {{ submitting ? 'Saving…' : (isEdit ? 'Save Changes' : 'Create Destination') }}
+                            {{ submitting ? (importEnabled ? 'Importing…' : 'Saving…') : (isEdit ? 'Save Changes' : (importEnabled ? 'Create & Import' : 'Create Destination')) }}
                         </Button>
                     </SheetFooter>
 

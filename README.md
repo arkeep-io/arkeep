@@ -2,15 +2,13 @@
 
 > Your infra's Ark — back up everything, keep it yours.
 
-Arkeep is an open-source backup management tool with a server/agent architecture.
-Deploy the server once, install lightweight agents on every machine you want to back up,
-and manage everything from a single web interface — built on top of
-[Restic](https://restic.net/) and [Rclone](https://rclone.org/).
-
-> 🚧 Arkeep is in early access — core features are working and ready for testing.
-> Not yet recommended for production use. Star the repository to follow progress.
+Arkeep is an open-source infrastructure management platform with a server/agent architecture.
+Deploy the server once, install lightweight agents on every machine you want to manage,
+and handle backups, inventory, updates and recovery from a single web interface —
+built on top of [Restic](https://restic.net/) and [Rclone](https://rclone.org/).
 
 ![Arkeep dashboard](docs/images/1.jpg)
+
 ---
 
 ## Table of Contents
@@ -57,12 +55,18 @@ and manage everything from a single web interface — built on top of
 
 ## Why Arkeep?
 
-Managing backups across multiple machines means juggling separate Restic configs, cron jobs,
-and shell scripts on every host. There is no central view, no unified alerting, and no easy
-way to verify everything ran successfully. Arkeep fixes this.
+Running infrastructure across multiple machines — containers, VMs, bare metal — means
+juggling separate tools for backups, inventory, and updates. There is no central view,
+no unified alerting, and no easy way to answer the question that matters most before
+touching anything in production: *do I have a verified backup I can recover from?*
 
-- **Centralized management** — one dashboard for all your servers, no more managing backup configs machine by machine
+Arkeep is built around that question. The backup layer is the foundation everything
+else sits on — inventory tells you what you have, update orchestration makes sure you
+can recover if something goes wrong, and every operation leaves an audit trail.
+
+- **Centralized management** — one dashboard for all your servers, containers, VMs and bare metal machines
 - **Docker-aware** — automatically discovers containers and volumes, adapts when you add or remove services without restarts
+- **Backup-first operations** — before anything changes, Arkeep knows whether a verified backup exists and blocks or warns accordingly
 - **OIDC ready** — integrates with Zitadel, Keycloak, Authentik, or any standard identity provider
 - **Multi-destination** — apply the 3-2-1 rule with multiple backup destinations per policy
 - **End-to-end encryption** — all backups are encrypted client-side; credentials are never stored in plain text
@@ -119,7 +123,12 @@ way to verify everything ran successfully. Arkeep fixes this.
 | Email + webhook notifications | ✓ |
 | Restore & restore test | ✓ |
 | Helm chart | ✓ |
-| Proxmox / VMware integration | 🗓 planned |
+| Host + container inventory | 🗓 planned |
+| Docker update detection & orchestration | 🗓 planned |
+| OS package updates | 🗓 planned |
+| Proxmox VM / LXC integration | 🗓 planned |
+| CVE correlation | 🗓 planned |
+| AI advisor & reports | 🗓 planned |
 | Bandwidth throttling | 🗓 planned |
 | BYOK encryption key management | 🗓 planned |
 
@@ -898,11 +907,27 @@ you configured — they are not affected by an Arkeep server failure.
 - [ ] Comprehensive test coverage (server + agent + GUI)
 - [ ] Full documentation site
 
-### v1.x — Integrations
-- [ ] Proxmox backup (VM and LXC)
-- [ ] VMware vSphere integration
+### v1.x — Inventory
+Central visibility across your entire infrastructure — containers, VMs, bare metal — from a single dashboard.
 
-### v2.0 — Advanced features
+- [ ] Host inventory: OS, kernel version, uptime, reboot-pending status
+- [ ] Docker inventory: running containers, images, tags, digests, exposed ports, volume coverage
+- [ ] VM inventory: Proxmox VM and LXC status, resource usage
+- [ ] Backup coverage map: which hosts and volumes have an active, recently verified policy
+
+### v2.0 — Update orchestration
+Safe, recoverable updates for containers and hosts — with backup verification built into every step.
+
+- [ ] Docker update detection: current vs latest digest, outdated tag warnings (`latest`, unversioned)
+- [ ] OS package update detection: pending updates per host, reboot-required flags
+- [ ] Pre-update backup gate: updates blocked or warned if no recent verified backup exists
+- [ ] One-click Docker updates with automatic rollback on failed health check
+- [ ] Proxmox VM and LXC updates
+- [ ] Audit log for every update operation
+
+### v2.x — Intelligence
+- [ ] CVE correlation: known vulnerabilities mapped to your running containers and packages
+- [ ] AI advisor: weekly infrastructure reports, CVE triage, update risk summaries, runbook generation
 - [ ] Bandwidth throttling
 - [ ] BYOK encryption key management
 

@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/arkeep-io/arkeep/server/internal/db"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -67,15 +66,7 @@ func TestOrphanRecovery(t *testing.T) {
 
 	// Create and dispatch a job.
 	agentUUID := mustParseUUID(t, agentID)
-	job := &db.Job{
-		PolicyID: uuid.New(),
-		AgentID:  agentUUID,
-		Type:     "backup",
-		Status:   "pending",
-	}
-	if err := ts.jobRepo.Create(context.Background(), job); err != nil {
-		t.Fatalf("create job: %v", err)
-	}
+	job := createIntegrationJob(t, ts, agentUUID)
 
 	if err := ts.agentMgr.Dispatch(agentID, &proto.JobAssignment{
 		JobId:       job.ID.String(),

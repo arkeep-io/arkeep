@@ -60,15 +60,12 @@ type BackupOptions struct {
 	Tags     []string
 	// ExcludePatterns are passed to restic as --exclude flags.
 	ExcludePatterns []string
-	// SkipInit skips repository initialization. Use when the destination
-	// already contains a Restic repository created outside of Arkeep.
-	SkipInit bool
 }
 
 // LsEntry represents a single file or directory returned by `restic ls --json`.
 type LsEntry struct {
 	Path  string `json:"path"`
-	Type  string `json:"type"`  // "file" or "dir"
+	Type  string `json:"type"` // "file" or "dir"
 	Size  int64  `json:"size"`
 	Mtime string `json:"mtime"`
 }
@@ -183,10 +180,8 @@ func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
 // summary event, and an error if the backup fails. A non-zero restic exit
 // code is always wrapped in the returned error with stderr included.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
-	if !opts.SkipInit {
-		if err := w.Init(ctx, dest); err != nil {
-			return nil, fmt.Errorf("restic: failed to init repository: %w", err)
-		}
+	if err := w.Init(ctx, dest); err != nil {
+		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
 	}
 
 	args := []string{"backup", "--json"}
@@ -298,8 +293,6 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID string) (
 
 	var entries []LsEntry
 	scanner := bufio.NewScanner(stdout)
-	// restic ls --json uses a 16 MB buffer limit internally; set a generous
-	// scanner buffer so very long path lines don't cause a token-too-long error.
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 4*1024*1024)
 
@@ -308,7 +301,6 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID string) (
 		if len(line) == 0 {
 			continue
 		}
-		// The first object has struct_type "snapshot" — skip it.
 		if strings.Contains(string(line), `"struct_type":"snapshot"`) {
 			continue
 		}

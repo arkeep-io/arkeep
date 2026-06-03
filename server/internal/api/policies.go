@@ -40,9 +40,10 @@ func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories
 
 // policyDestinationResponse represents a single destination entry in a policy.
 type policyDestinationResponse struct {
-	ID            string `json:"id"`
-	DestinationID string `json:"destination_id"`
-	Priority      int    `json:"priority"`
+	ID              string `json:"id"`
+	DestinationID   string `json:"destination_id"`
+	DestinationName string `json:"destination_name"`
+	Priority        int    `json:"priority"`
 }
 
 // policyResponse is the JSON representation of a policy.
@@ -72,7 +73,7 @@ type policyResponse struct {
 // slice to a policyResponse. The destinations are passed separately because
 // they are no longer embedded in the Policy struct (see db/models.go).
 // agentName is passed in from the caller to avoid an extra DB lookup per policy.
-func policyToResponse(p *db.Policy, destinations []db.PolicyDestination, agentName string) policyResponse {
+func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinationWithName, agentName string) policyResponse {
 	resp := policyResponse{
 		ID:               p.ID.String(),
 		Name:             p.Name,
@@ -94,9 +95,10 @@ func policyToResponse(p *db.Policy, destinations []db.PolicyDestination, agentNa
 
 	for i, pd := range destinations {
 		resp.Destinations[i] = policyDestinationResponse{
-			ID:            pd.ID.String(),
-			DestinationID: pd.DestinationID.String(),
-			Priority:      pd.Priority,
+			ID:              pd.ID.String(),
+			DestinationID:   pd.DestinationID.String(),
+			DestinationName: pd.DestinationName,
+			Priority:        pd.Priority,
 		}
 	}
 

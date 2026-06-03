@@ -5,7 +5,7 @@ import {
     LogOut,
     Moon,
     Sun,
-} from "lucide-vue-next"
+} from "@lucide/vue"
 
 import {
     Avatar,

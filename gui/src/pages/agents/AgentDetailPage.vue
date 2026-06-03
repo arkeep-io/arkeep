@@ -35,7 +35,7 @@ import {
     MemoryStick,
     HardDrive,
     ClipboardList,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
@@ -525,6 +525,14 @@ onUnmounted(() => {
                         </template>
                     </TableBody>
                 </Table>
+                <div class="flex justify-end px-4 py-2 border-t">
+                    <RouterLink
+                        :to="{ name: 'jobs', query: { agent_id: agentId } }"
+                        class="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        View all jobs →
+                    </RouterLink>
+                </div>
             </div>
         </div>
 

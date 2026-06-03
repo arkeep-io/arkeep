@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import {
     Table,
@@ -9,13 +9,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table'
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/components/ui/select'
+import { AsyncCombobox } from '@/components/ui/async-combobox'
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -36,9 +30,9 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from 'lucide-vue-next'
+import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
 import { api } from '@/services/api'
-import type { ApiResponse, Snapshot, Policy, Destination } from '@/types'
+import type { ApiResponse, Snapshot } from '@/types'
 import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'
 
 // ---------------------------------------------------------------------------
@@ -50,16 +44,6 @@ interface SnapshotListResponse {
     total: number
 }
 
-interface PolicyListResponse {
-    items: Policy[]
-    total: number
-}
-
-interface DestinationListResponse {
-    items: Destination[]
-    total: number
-}
-
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -67,15 +51,19 @@ interface DestinationListResponse {
 const authStore = useAuthStore()
 
 const snapshots = ref<Snapshot[]>([])
-const policies = ref<Policy[]>([])
-const destinations = ref<Destination[]>([])
-
+const total = ref(0)
 const loading = ref(true)
 const error = ref<string | null>(null)
 
-// Filter sentinels: shadcn-vue SelectItem does not accept empty string as value.
-const policyFilter = ref<string>('all')
-const destinationFilter = ref<string>('all')
+// Pagination
+const page = ref(1)
+const pageSize = 50
+const offset = computed(() => (page.value - 1) * pageSize)
+const totalPages = computed(() => Math.ceil(total.value / pageSize))
+
+// Filters — empty string means "no filter"
+const policyFilter = ref('')
+const destinationFilter = ref('')
 
 // Restore sheet
 const restoreSheetOpen = ref(false)
@@ -119,12 +107,13 @@ async function fetchSnapshots() {
     loading.value = true
     error.value = null
     try {
-        const params = new URLSearchParams({ limit: '50' })
-        if (policyFilter.value !== 'all') params.set('policy_id', policyFilter.value)
-        if (destinationFilter.value !== 'all') params.set('destination_id', destinationFilter.value)
+        const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset.value) })
+        if (policyFilter.value) params.set('policy_id', policyFilter.value)
+        if (destinationFilter.value) params.set('destination_id', destinationFilter.value)
 
         const res = await api<ApiResponse<SnapshotListResponse>>(`/api/v1/snapshots?${params}`)
         snapshots.value = res.data.items
+        total.value = res.data.total
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to load snapshots.'
     } finally {
@@ -132,18 +121,18 @@ async function fetchSnapshots() {
     }
 }
 
-async function fetchFilterOptions() {
-    try {
-        const [pRes, dRes] = await Promise.all([
-            api<ApiResponse<PolicyListResponse>>('/api/v1/policies?limit=100'),
-            api<ApiResponse<DestinationListResponse>>('/api/v1/destinations?limit=100'),
-        ])
-        policies.value = pRes.data.items
-        destinations.value = dRes.data.items
-    } catch {
-        // Non-critical — filter options degrade gracefully to "All".
-    }
+async function goToPage(p: number) {
+    if (p < 1 || p > totalPages.value) return
+    page.value = p
+    await fetchSnapshots()
 }
+
+async function applyFilters() {
+    page.value = 1
+    await fetchSnapshots()
+}
+
+watch([policyFilter, destinationFilter], applyFilters)
 
 // ---------------------------------------------------------------------------
 // Restore
@@ -166,11 +155,14 @@ function openDeleteDialog(snapshot: Snapshot) {
 async function confirmDelete() {
     if (!snapshotToDelete.value) return
     deleteLoading.value = true
+    const deletedId = snapshotToDelete.value.id
     try {
-        await api(`/api/v1/snapshots/${snapshotToDelete.value.id}`, { method: 'DELETE' })
+        await api(`/api/v1/snapshots/${deletedId}`, { method: 'DELETE' })
         deleteDialogOpen.value = false
         snapshotToDelete.value = null
-        snapshots.value = snapshots.value.filter((s) => s.id !== snapshotToDelete.value?.id)
+        if (snapshots.value.length === 1 && page.value > 1) {
+            page.value--
+        }
         await fetchSnapshots()
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to delete snapshot.'
@@ -179,13 +171,7 @@ async function confirmDelete() {
     }
 }
 
-async function applyFilters() {
-    await fetchSnapshots()
-}
-
-onMounted(async () => {
-    await Promise.all([fetchFilterOptions(), fetchSnapshots()])
-})
+onMounted(fetchSnapshots)
 </script>
 
 <template>
@@ -213,35 +199,25 @@ onMounted(async () => {
 
         <!-- Filter bar -->
         <div class="flex items-center gap-3">
-
-            <Select v-model="policyFilter" @update:model-value="applyFilters">
-                <SelectTrigger class="w-44">
-                    <SelectValue placeholder="All policies" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">All policies</SelectItem>
-                    <SelectItem v-for="p in policies" :key="p.id" :value="p.id">
-                        {{ p.name }}
-                    </SelectItem>
-                </SelectContent>
-            </Select>
-
-            <Select v-model="destinationFilter" @update:model-value="applyFilters">
-                <SelectTrigger class="w-48">
-                    <SelectValue placeholder="All destinations" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">All destinations</SelectItem>
-                    <SelectItem v-for="d in destinations" :key="d.id" :value="d.id">
-                        {{ d.name }}
-                    </SelectItem>
-                </SelectContent>
-            </Select>
-
+            <AsyncCombobox
+                endpoint="/api/v1/policies"
+                :model-value="policyFilter"
+                placeholder="All policies"
+                allow-clear
+                class="w-44"
+                @update:model-value="policyFilter = $event"
+            />
+            <AsyncCombobox
+                endpoint="/api/v1/destinations"
+                :model-value="destinationFilter"
+                placeholder="All destinations"
+                allow-clear
+                class="w-48"
+                @update:model-value="destinationFilter = $event"
+            />
             <span v-if="!loading" class="text-sm text-muted-foreground">
-                {{ snapshots.length }} snapshot{{ snapshots.length !== 1 ? 's' : '' }}
+                {{ total }} snapshot{{ total !== 1 ? 's' : '' }}
             </span>
-
         </div>
 
         <!-- Table -->
@@ -331,6 +307,22 @@ onMounted(async () => {
 
                 </TableBody>
             </Table>
+        </div>
+
+        <!-- Pagination -->
+        <div v-if="!loading && totalPages > 1" class="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+                Showing {{ offset + 1 }}–{{ Math.min(offset + pageSize, total) }} of {{ total }} snapshots
+            </span>
+            <div class="flex items-center gap-2">
+                <Button variant="outline" size="sm" :disabled="page === 1" @click="goToPage(page - 1)">
+                    Previous
+                </Button>
+                <span class="px-2">{{ page }} / {{ totalPages }}</span>
+                <Button variant="outline" size="sm" :disabled="page === totalPages" @click="goToPage(page + 1)">
+                    Next
+                </Button>
+            </div>
         </div>
 
     </div>

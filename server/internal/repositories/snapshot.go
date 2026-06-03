@@ -146,6 +146,20 @@ func (r *gormSnapshotRepository) ListByDestination(ctx context.Context, destinat
 	return rows, total, nil
 }
 
+// ExistsBySnapshotIDAndDestination returns true if a snapshot with the given
+// opaque snapshot ID already exists for the specified destination.
+// Used to avoid creating duplicate records during bulk import.
+func (r *gormSnapshotRepository) ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&db.Snapshot{}).
+		Where("snapshot_id = ? AND destination_id = ?", snapshotID, destinationID).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("snapshots: exists by snapshot id: %w", err)
+	}
+	return count > 0, nil
+}
+
 // DeleteBySnapshotID removes a snapshot record by the opaque engine snapshot ID.
 // Used during retention policy enforcement when the backup engine prunes old
 // snapshots — the cached records in the database must be kept in sync.

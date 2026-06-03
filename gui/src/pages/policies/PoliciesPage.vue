@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -39,7 +39,7 @@ import {
     Play,
     ShieldCheck,
     RefreshCw,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import type { Policy, ApiResponse, TriggerResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
@@ -60,6 +60,11 @@ const policies = ref<Policy[]>([])
 const total = ref(0)
 const loading = ref(true)
 const error = ref<string | null>(null)
+
+const page = ref(1)
+const pageSize = 50
+const offset = computed(() => (page.value - 1) * pageSize)
+const totalPages = computed(() => Math.ceil(total.value / pageSize))
 
 // Sheet
 const sheetOpen = ref(false)
@@ -105,7 +110,7 @@ async function fetchPolicies() {
     loading.value = true
     error.value = null
     try {
-        const res = await api<ApiResponse<PolicyListResponse>>('/api/v1/policies')
+        const res = await api<ApiResponse<PolicyListResponse>>(`/api/v1/policies?limit=${pageSize}&offset=${offset.value}`)
         policies.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
@@ -131,6 +136,12 @@ function openEditSheet(policy: Policy) {
 
 function onSaved() {
     fetchPolicies()
+}
+
+async function goToPage(p: number) {
+    if (p < 1 || p > totalPages.value) return
+    page.value = p
+    await fetchPolicies()
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +176,9 @@ async function confirmDelete() {
         await api(`/api/v1/policies/${policyToDelete.value.id}`, { method: 'DELETE' })
         deleteDialogOpen.value = false
         policyToDelete.value = null
+        if (policies.value.length === 1 && page.value > 1) {
+            page.value--
+        }
         await fetchPolicies()
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to delete policy'
@@ -312,6 +326,22 @@ onMounted(fetchPolicies)
                     </template>
                 </TableBody>
             </Table>
+        </div>
+
+        <!-- Pagination -->
+        <div v-if="!loading && totalPages > 1" class="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+                Showing {{ offset + 1 }}–{{ Math.min(offset + pageSize, total) }} of {{ total }} policies
+            </span>
+            <div class="flex items-center gap-2">
+                <Button variant="outline" size="sm" :disabled="page === 1" @click="goToPage(page - 1)">
+                    Previous
+                </Button>
+                <span class="px-2">{{ page }} / {{ totalPages }}</span>
+                <Button variant="outline" size="sm" :disabled="page === totalPages" @click="goToPage(page + 1)">
+                    Next
+                </Button>
+            </div>
         </div>
 
     </div>

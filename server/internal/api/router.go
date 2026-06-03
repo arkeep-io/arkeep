@@ -66,7 +66,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(RequestLogger(cfg.Logger))
 	r.Use(middleware.Recoverer)
 	r.Use(SecurityHeaders)
@@ -82,7 +81,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
 	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Audit, cfg.Logger)
+	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Audit, cfg.Logger)
 	jobHandler          := NewJobHandler(cfg.Jobs, cfg.Logger)
 	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
@@ -158,6 +157,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/destinations/{id}", destinationHandler.GetByID)
 			r.Patch("/destinations/{id}", destinationHandler.Update)
 			r.Delete("/destinations/{id}", destinationHandler.Delete)
+			r.Post("/destinations/{id}/import", destinationHandler.Import)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)

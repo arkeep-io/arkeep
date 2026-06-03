@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Check, ClipboardCopy, Loader2, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-vue-next'
+import { AlertCircle, Check, ClipboardCopy, Loader2, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import { api } from '@/services/api'
 import type { ApiResponse, OIDCProvider } from '@/types'
 

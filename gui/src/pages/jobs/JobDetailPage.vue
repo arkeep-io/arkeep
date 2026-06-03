@@ -20,7 +20,7 @@ import {
     Server,
     CalendarClock,
     HardDrive,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { api } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import type { ApiResponse, Job, JobLog, JobStatus, JobStatusPayload, JobLogPayload } from '@/types'

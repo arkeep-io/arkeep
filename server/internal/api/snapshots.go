@@ -70,6 +70,8 @@ type snapshotResponse struct {
 	ResticSnapshotID string `json:"restic_snapshot_id"`
 	SizeBytes        int64  `json:"size_bytes"`
 	Tags             string `json:"tags"`
+	Hostname         string `json:"hostname"`
+	IsImported       bool   `json:"is_imported"`
 	CreatedAt        string `json:"created_at"`
 }
 
@@ -133,18 +135,28 @@ type destinationFields struct {
 
 // snapshotWithNamesToResponse converts a SnapshotWithNames to a snapshotResponse.
 func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotResponse {
+	policyID := s.PolicyID.String()
+	policyName := s.PolicyName
+	jobID := s.JobID.String()
+	if s.IsImported {
+		policyID = ""
+		policyName = "(imported)"
+		jobID = ""
+	}
 	return snapshotResponse{
 		ID:               s.ID.String(),
-		PolicyID:         s.PolicyID.String(),
-		PolicyName:       s.PolicyName,
+		PolicyID:         policyID,
+		PolicyName:       policyName,
 		DestinationID:    s.DestinationID.String(),
 		DestinationName:  s.DestinationName,
 		AgentID:          s.AgentID,
 		AgentName:        s.AgentName,
-		JobID:            s.JobID.String(),
+		JobID:            jobID,
 		ResticSnapshotID: s.SnapshotID,
 		SizeBytes:        s.SizeBytes,
 		Tags:             s.Tags,
+		Hostname:         s.Hostname,
+		IsImported:       s.IsImported,
 		CreatedAt:        s.SnapshotAt.UTC().Format(time.RFC3339),
 	}
 }
@@ -216,14 +228,25 @@ func (h *SnapshotHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	policyID := snapshot.PolicyID.String()
+	jobID := snapshot.JobID.String()
+	policyName := ""
+	if snapshot.IsImported {
+		policyID = ""
+		jobID = ""
+		policyName = "(imported)"
+	}
 	Ok(w, snapshotResponse{
 		ID:               snapshot.ID.String(),
-		PolicyID:         snapshot.PolicyID.String(),
+		PolicyID:         policyID,
+		PolicyName:       policyName,
 		DestinationID:    snapshot.DestinationID.String(),
-		JobID:            snapshot.JobID.String(),
+		JobID:            jobID,
 		ResticSnapshotID: snapshot.SnapshotID,
 		SizeBytes:        snapshot.SizeBytes,
 		Tags:             snapshot.Tags,
+		Hostname:         snapshot.Hostname,
+		IsImported:       snapshot.IsImported,
 		CreatedAt:        snapshot.SnapshotAt.UTC().Format(time.RFC3339),
 	})
 }

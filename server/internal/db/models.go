@@ -127,7 +127,6 @@ type Destination struct {
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
 	Config      string          `gorm:"type:text;default:'{}'"` // JSON, not sensitive
 	Enabled     bool            `gorm:"not null;default:true"`
-	SkipInit    bool            `gorm:"not null;default:false"`
 }
 
 // -----------------------------------------------------------------------------
@@ -241,8 +240,10 @@ type Snapshot struct {
 	SnapshotID    string    `gorm:"not null;index"` // opaque ID from the backup engine
 	SizeBytes     int64     `gorm:"default:0"`
 	FileCount     int64     `gorm:"default:0"`
-	Tags          string    `gorm:"type:text;default:'[]'"` // JSON array
-	Sources       string    `gorm:"type:text;default:'[]'"` // JSON array of paths backed up
+	Tags          string    `gorm:"type:text;default:'[]'"`  // JSON array
+	Sources       string    `gorm:"type:text;default:'[]'"`  // JSON array of paths backed up
+	Hostname      string    `gorm:"not null;default:''"`
+	IsImported    bool      `gorm:"not null;default:false"`
 	SnapshotAt    time.Time `gorm:"not null;index"`
 }
 

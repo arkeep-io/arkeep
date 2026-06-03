@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, useTemplateRef, nextTick } from 'vue'
+import { ref, computed, onMounted, useTemplateRef, nextTick } from 'vue'
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -16,7 +16,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { MoreHorizontal, PencilLine, Plus, RefreshCw, Trash2, Users } from 'lucide-vue-next'
+import { MoreHorizontal, PencilLine, Plus, RefreshCw, Trash2, Users } from '@lucide/vue'
 import UserSheet from '@/components/users/UserSheet.vue'
 import { api } from '@/services/api'
 import type { ApiResponse, User } from '@/types'
@@ -32,8 +32,14 @@ interface UserListResponse { items: User[]; total: number }
 // ---------------------------------------------------------------------------
 
 const users = ref<User[]>([])
+const total = ref(0)
 const loading = ref(true)
 const error = ref<string | null>(null)
+
+const page = ref(1)
+const pageSize = 50
+const offset = computed(() => (page.value - 1) * pageSize)
+const totalPages = computed(() => Math.ceil(total.value / pageSize))
 
 // ---------------------------------------------------------------------------
 // State — sheet
@@ -76,13 +82,20 @@ async function fetchUsers() {
     loading.value = true
     error.value = null
     try {
-        const res = await api<ApiResponse<UserListResponse>>('/api/v1/users?limit=100')
+        const res = await api<ApiResponse<UserListResponse>>(`/api/v1/users?limit=${pageSize}&offset=${offset.value}`)
         users.value = res.data.items
+        total.value = res.data.total
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to load users.'
     } finally {
         loading.value = false
     }
+}
+
+async function goToPage(p: number) {
+    if (p < 1 || p > totalPages.value) return
+    page.value = p
+    await fetchUsers()
 }
 
 onMounted(fetchUsers)
@@ -119,6 +132,9 @@ async function confirmDelete() {
         await api(`/api/v1/users/${userToDelete.value.id}`, { method: 'DELETE' })
         deleteDialogOpen.value = false
         userToDelete.value = null
+        if (users.value.length === 1 && page.value > 1) {
+            page.value--
+        }
         await fetchUsers()
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to delete user.'
@@ -251,6 +267,22 @@ async function confirmDelete() {
 
                 </TableBody>
             </Table>
+        </div>
+
+        <!-- Pagination -->
+        <div v-if="!loading && totalPages > 1" class="flex items-center justify-between text-sm text-muted-foreground">
+            <span>
+                Showing {{ offset + 1 }}–{{ Math.min(offset + pageSize, total) }} of {{ total }} users
+            </span>
+            <div class="flex items-center gap-2">
+                <Button variant="outline" size="sm" :disabled="page === 1" @click="goToPage(page - 1)">
+                    Previous
+                </Button>
+                <span class="px-2">{{ page }} / {{ totalPages }}</span>
+                <Button variant="outline" size="sm" :disabled="page === totalPages" @click="goToPage(page + 1)">
+                    Next
+                </Button>
+            </div>
         </div>
 
     </div>
