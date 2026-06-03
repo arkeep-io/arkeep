@@ -19,6 +19,8 @@ import (
 func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 	gormDB := newTestDB(t)
 	repo := NewJobRepository(gormDB)
+	agentRepo := NewAgentRepository(gormDB)
+	policyRepo := NewPolicyRepository(gormDB)
 	ctx := context.Background()
 
 	destID := uuid.New()
@@ -27,8 +29,26 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	// Insert job_destination records for both jobs. FK constraints are off in
-	// SQLite test DBs, so parent jobs/destinations rows are not required.
+	// Insert the parent rows required by FK constraints.
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	if err := agentRepo.Create(ctx, agent); err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+	dest := &db.Destination{Base: db.Base{ID: destID}, Name: "dest", Type: "local"}
+	if err := gormDB.WithContext(ctx).Create(dest).Error; err != nil {
+		t.Fatalf("Create destination: %v", err)
+	}
+	policy := &db.Policy{AgentID: agent.ID, Name: "p", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := policyRepo.Create(ctx, policy); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+	for _, jobID := range []uuid.UUID{jobAID, jobBID} {
+		job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "pending"}
+		if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
+			t.Fatalf("Create job %s: %v", jobID, err)
+		}
+	}
+
 	for _, jd := range []*db.JobDestination{
 		{JobID: jobAID, DestinationID: destID, Status: "pending"},
 		{JobID: jobBID, DestinationID: destID, Status: "pending"},

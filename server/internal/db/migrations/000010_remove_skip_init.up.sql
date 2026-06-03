@@ -1,1 +1,1 @@
-ALTER TABLE destinations DROP COLUMN IF EXISTS skip_init;
+ALTER TABLE destinations DROP COLUMN skip_init;
