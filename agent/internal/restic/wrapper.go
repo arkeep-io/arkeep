@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -179,13 +180,16 @@ func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
 // Returns a BackupResult with snapshot metadata extracted from the restic
 // summary event, and an error if the backup fails. A non-zero restic exit
 // code is always wrapped in the returned error with stderr included.
-func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
-	if err := w.Init(ctx, dest); err != nil {
-		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
-	}
-
+// buildBackupArgs constructs the restic backup argument slice for the given
+// options. goos mirrors runtime.GOOS and is a parameter so the function can
+// be tested without cross-compiling.
+func buildBackupArgs(opts BackupOptions, goos string) []string {
 	args := []string{"backup", "--json"}
-
+	if goos == "windows" {
+		// VSS creates a consistent snapshot of locked/in-use files.
+		// Requires the agent to run with Administrator privileges.
+		args = append(args, "--use-fs-snapshot")
+	}
 	for _, tag := range opts.Tags {
 		args = append(args, "--tag", tag)
 	}
@@ -193,6 +197,15 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 		args = append(args, "--exclude", ex)
 	}
 	args = append(args, opts.Sources...)
+	return args
+}
+
+func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
+	if err := w.Init(ctx, dest); err != nil {
+		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
+	}
+
+	args := buildBackupArgs(opts, runtime.GOOS)
 
 	var result BackupResult
 
@@ -360,6 +373,9 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 	for scanner.Scan() {
 		// discard
 	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("restic: failed to read stdout: %w", err)
+	}
 
 	if err := cmd.Wait(); err != nil {
 		stderr := strings.TrimSpace(stderrBuf.String())
@@ -513,6 +529,9 @@ func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []
 				return fmt.Errorf("restic: progress callback cancelled: %w", err)
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("restic: failed to read stdout: %w", err)
 	}
 
 	if err := cmd.Wait(); err != nil {
