@@ -10,11 +10,11 @@ defineProps<{
 </script>
 
 <template>
-    <HoverCard v-if="show">
+    <HoverCard v-if="show" :open-delay="100">
         <HoverCardTrigger as-child>
-            <CircleArrowUp class="size-4 text-primary shrink-0 cursor-pointer" aria-label="Update available" />
+            <CircleArrowUp class="size-4 text-primary shrink-0 cursor-pointer outline-none" aria-label="Update available" />
         </HoverCardTrigger>
-        <HoverCardContent :side="tooltipSide ?? 'top'" class="w-72">
+        <HoverCardContent :side="tooltipSide ?? 'top'" class="w-72 animate-none">
             <div class="flex flex-col space-y-3">
                 <div class="flex items-center space-x-3">
                     <img src="/arkeep-icon.png" class="size-8 rounded-lg shrink-0" alt="Arkeep" />
