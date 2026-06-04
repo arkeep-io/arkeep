@@ -445,6 +445,21 @@ export interface VersionInfo {
   update_available: boolean
 }
 
+// ResticProgressEvent is emitted by restic --json during backup/restore and
+// arrives on the WebSocket as a log message whose message field is JSON.
+export interface ResticProgressEvent {
+  message_type: 'status' | 'summary' | 'error'
+  percent_done: number
+  files_new: number
+  files_done: number
+  bytes_done: number
+  total_files: number
+  total_bytes: number
+  snapshot_id?: string
+  total_bytes_processed?: number
+  data_added?: number
+}
+
 // ─── WebSocket message payloads ───────────────────────────────────────────────
 // These types describe the `payload` field of WSMessage for each topic type.
 // They are used in conjunction with services/websocket.ts.
