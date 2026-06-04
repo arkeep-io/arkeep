@@ -203,6 +203,32 @@ func (m *Manager) Dispatch(agentID string, job *proto.JobAssignment) error {
 	return nil
 }
 
+// SendCancel sends a JOB_TYPE_CANCEL message to the agent, instructing it to
+// abort the job identified by jobID. Returns ErrAgentNotConnected if the agent
+// is offline — in that case the caller should only update the DB status.
+func (m *Manager) SendCancel(agentID, jobID string) error {
+	m.mu.RLock()
+	agent, exists := m.agents[agentID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return ErrAgentNotConnected
+	}
+
+	if err := agent.stream.Send(&proto.JobAssignment{
+		JobId: jobID,
+		Type:  proto.JobType_JOB_TYPE_CANCEL,
+	}); err != nil {
+		return fmt.Errorf("failed to send cancel signal for job %s to agent %s: %w", jobID, agentID, err)
+	}
+
+	m.logger.Info("cancel signal sent to agent",
+		zap.String("job_id", jobID),
+		zap.String("agent_id", agentID),
+	)
+	return nil
+}
+
 // IsConnected reports whether an agent with the given ID currently has
 // an active connection.
 func (m *Manager) IsConnected(agentID string) bool {

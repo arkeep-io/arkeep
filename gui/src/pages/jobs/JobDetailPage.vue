@@ -47,6 +47,7 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 
 const progressData = ref<ResticProgressEvent | null>(null)
+const cancelling = ref(false)
 const PROGRESS_KEY = `arkeep:job-progress:${jobId}`
 
 // ---------------------------------------------------------------------------
@@ -148,6 +149,18 @@ function tryParseProgress(msg: string): ResticProgressEvent | null {
     return null
 }
 
+async function cancelJob() {
+    cancelling.value = true
+    try {
+        await api(`/api/v1/jobs/${jobId}/cancel`, { method: 'POST' })
+        // Optimistic UI: status will be updated via WebSocket event
+    } catch (e: any) {
+        error.value = e?.message ?? 'Failed to cancel job.'
+    } finally {
+        cancelling.value = false
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Live updates via WebSocket
 // ---------------------------------------------------------------------------
@@ -221,6 +234,17 @@ onMounted(fetchJob)
                 </div>
             </div>
             <div class="flex items-center gap-2">
+                <Button
+                    v-if="!loading && isRunning"
+                    variant="outline"
+                    size="sm"
+                    :disabled="cancelling"
+                    class="gap-1.5 text-destructive border-destructive/40 hover:bg-destructive/10"
+                    @click="cancelJob"
+                >
+                    <XCircle class="w-3.5 h-3.5" />
+                    {{ cancelling ? 'Cancelling…' : 'Cancel Job' }}
+                </Button>
                 <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJob">
                     <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
                 </Button>

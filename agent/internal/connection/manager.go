@@ -554,6 +554,12 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			continue
 		}
 
+		// CANCEL tells the executor to abort the running or queued job.
+		if assignment.Type == proto.JobType_JOB_TYPE_CANCEL {
+			m.exec.Cancel(assignment.JobId)
+			continue
+		}
+
 		job, err := m.protoToJob(assignment)
 		if err != nil {
 			m.logger.Error("failed to parse job assignment",

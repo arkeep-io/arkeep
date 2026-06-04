@@ -9,22 +9,26 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
 // JobHandler groups all job-related HTTP handlers.
-// Jobs are read-only from the API perspective — they are created exclusively
-// by the scheduler (scheduled or manual trigger) and updated by agents via gRPC.
 type JobHandler struct {
 	repo   repositories.JobRepository
+	agents *agentmanager.Manager
+	hub    *websocket.Hub
 	logger *zap.Logger
 }
 
 // NewJobHandler creates a new JobHandler.
-func NewJobHandler(repo repositories.JobRepository, logger *zap.Logger) *JobHandler {
+func NewJobHandler(repo repositories.JobRepository, agents *agentmanager.Manager, hub *websocket.Hub, logger *zap.Logger) *JobHandler {
 	return &JobHandler{
 		repo:   repo,
+		agents: agents,
+		hub:    hub,
 		logger: logger.Named("job_handler"),
 	}
 }
@@ -303,6 +307,66 @@ func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.Job
 		items[i] = jobToResponse(&jobs[i], nil, nil)
 	}
 	Ok(w, listJobsResponse{Items: items, Total: total})
+}
+
+// Cancel handles POST /api/v1/jobs/{id}/cancel.
+// Marks the job as cancelled in the database and, if the job is running,
+// sends a cancel signal to the agent. Pending jobs are cancelled immediately
+// without agent involvement.
+func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	job, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get job for cancellation", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if job.Status != "pending" && job.Status != "running" {
+		ErrConflict(w, "job is already in a terminal state")
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := h.repo.UpdateStatus(r.Context(), id, "cancelled", job.StartedAt, &now, ""); err != nil {
+		h.logger.Error("failed to cancel job", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	// For running jobs, notify the agent to abort. The agent will report
+	// JOB_STATUS_CANCELLED which is idempotent against the already-cancelled DB row.
+	if job.Status == "running" {
+		if err := h.agents.SendCancel(job.AgentID.String(), id.String()); err != nil {
+			// Non-fatal: the DB is already updated; the agent will detect shutdown
+			// or orphan recovery will handle it.
+			h.logger.Warn("could not send cancel signal to agent",
+				zap.String("job_id", id.String()),
+				zap.String("agent_id", job.AgentID.String()),
+				zap.Error(err),
+			)
+		}
+	}
+
+	// Publish a WebSocket event so all open job-detail pages update immediately.
+	h.hub.Publish("job:"+id.String(), websocket.Message{
+		Type: websocket.MsgJobStatus,
+		Payload: map[string]any{
+			"job_id":      id.String(),
+			"status":      "cancelled",
+			"finished_at": now.Format(time.RFC3339),
+		},
+	})
+
+	Ok(w, map[string]string{"status": "cancelled"})
 }
 
 // parseUUIDString parses a raw UUID string, returning an error if invalid.
