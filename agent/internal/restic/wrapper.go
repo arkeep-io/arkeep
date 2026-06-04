@@ -93,6 +93,13 @@ type RetentionPolicy struct {
 	Yearly  int
 }
 
+// IsEnabled reports whether the policy has at least one non-zero keep rule.
+// A zero policy means retention is disabled; Forget should be skipped entirely.
+func (p RetentionPolicy) IsEnabled() bool {
+	return p.Last > 0 || p.Hourly > 0 || p.Daily > 0 ||
+		p.Weekly > 0 || p.Monthly > 0 || p.Yearly > 0
+}
+
 // ProgressEvent represents a single JSON event emitted by restic --json.
 // Only the fields relevant to progress reporting are decoded; the rest are
 // ignored. The raw JSON line is also preserved so callers can forward it
@@ -235,6 +242,9 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 // Forget runs restic forget --prune to apply the retention policy.
 // It removes snapshot metadata and frees storage in a single pass.
 func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy RetentionPolicy) error {
+	if !policy.IsEnabled() {
+		return nil
+	}
 	args := []string{"forget", "--prune", "--json"}
 	if policy.Last > 0 {
 		args = append(args, "--keep-last", fmt.Sprintf("%d", policy.Last))
