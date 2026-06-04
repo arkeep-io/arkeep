@@ -47,6 +47,7 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 
 const progressData = ref<ResticProgressEvent | null>(null)
+const PROGRESS_KEY = `arkeep:job-progress:${jobId}`
 
 // ---------------------------------------------------------------------------
 // Helpers — statusVariant/statusClass/statusLabel/statusIcon/formatDate/
@@ -85,6 +86,14 @@ async function fetchJob() {
     try {
         const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
         job.value = res.data
+
+        // Restore cached progress so the bar is visible immediately on reload.
+        if (isRunning.value) {
+            try {
+                const cached = sessionStorage.getItem(PROGRESS_KEY)
+                if (cached) progressData.value = JSON.parse(cached)
+            } catch { /* ignore */ }
+        }
 
         // Fetch logs separately. For finished jobs this is the only source of
         // truth; for running jobs we load historic DB logs and then append live ones.
@@ -154,6 +163,7 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
             const progress = tryParseProgress(p.message)
             if (progress && progress.percent_done >= (progressData.value?.percent_done ?? 0)) {
                 progressData.value = progress
+                sessionStorage.setItem(PROGRESS_KEY, JSON.stringify(progress))
             }
         } else {
             logs.value.push({
@@ -175,7 +185,8 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
         // (status, destinations, timestamps) without touching the logs array.
         // The bulk DB log insert may not have completed yet, so calling
         // fetchLogs() here would wipe live WS log entries with an empty result.
-        if (p.status === 'succeeded' || p.status === 'failed') {
+        if (p.status === 'succeeded' || p.status === 'failed' || p.status === 'cancelled') {
+            sessionStorage.removeItem(PROGRESS_KEY)
             refreshJobMeta()
         }
     }
