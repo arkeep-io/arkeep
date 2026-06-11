@@ -50,5 +50,8 @@ DROP TABLE job_destinations;
 ALTER TABLE job_destinations_new RENAME TO job_destinations;
 CREATE INDEX IF NOT EXISTS idx_job_destinations_job_id         ON job_destinations (job_id);
 CREATE INDEX IF NOT EXISTS idx_job_destinations_destination_id ON job_destinations (destination_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_job_destinations_job_dest ON job_destinations (job_id, destination_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_policy_destinations_policy_dest ON policy_destinations (policy_id, destination_id);
 
 PRAGMA foreign_keys = ON;
