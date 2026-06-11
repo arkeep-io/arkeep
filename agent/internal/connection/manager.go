@@ -862,7 +862,7 @@ func (m *Manager) closeLogStream(jobID string) {
 // ReportStatus implements executor.StatusReporter. It calls ReportJobStatus
 // via gRPC and manages the log stream lifecycle:
 //   - "running"          → opens the log stream before reporting
-//   - "success"/"failed" → reports status then closes the log stream
+//   - "succeeded"/"failed" → reports status then closes the log stream
 func (m *Manager) ReportStatus(jobID, status, message string) {
 	if status == "running" {
 		m.openLogStream(jobID)
@@ -895,7 +895,7 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 		)
 	}
 
-	if status == "success" || status == "failed" || status == "cancelled" {
+	if status == "succeeded" || status == "failed" || status == "cancelled" {
 		m.closeLogStream(jobID)
 	}
 }
@@ -981,10 +981,12 @@ func statusToProto(status string) proto.JobStatus {
 	switch status {
 	case "running":
 		return proto.JobStatus_JOB_STATUS_RUNNING
-	case "success":
+	case "succeeded":
 		return proto.JobStatus_JOB_STATUS_COMPLETED
 	case "failed":
 		return proto.JobStatus_JOB_STATUS_FAILED
+	case "cancelled":
+		return proto.JobStatus_JOB_STATUS_CANCELLED
 	default:
 		return proto.JobStatus_JOB_STATUS_UNSPECIFIED
 	}
