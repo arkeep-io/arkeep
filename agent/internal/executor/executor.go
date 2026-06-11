@@ -528,7 +528,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	}
 
 	log("info", "backup completed successfully")
-	reporter.ReportStatus(job.JobID, "success", "backup completed")
+	reporter.ReportStatus(job.JobID, "succeeded", "backup completed")
 }
 
 // executeRestore runs a single restore job to completion.
@@ -635,7 +635,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 
 	// --- 5. Final status ---
 	log("info", fmt.Sprintf("restore completed successfully: files written to %s", targetPath))
-	reporter.ReportStatus(job.JobID, "success", "restore completed")
+	reporter.ReportStatus(job.JobID, "succeeded", "restore completed")
 }
 
 // buildInPlaceExcludes returns the --exclude paths for an in-place restore.
