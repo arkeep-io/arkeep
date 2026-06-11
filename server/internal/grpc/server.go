@@ -14,6 +14,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -784,11 +785,18 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	}
 
 	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobID, destID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
-		s.logger.Error("ReportDestinationStatus: failed to update destination status",
-			zap.String("job_id", req.JobId),
-			zap.String("destination_id", req.DestinationId),
-			zap.Error(err),
-		)
+		if errors.Is(err, repositories.ErrNotFound) {
+			s.logger.Error("ReportDestinationStatus: job_destinations row not found — was CreateDestination skipped?",
+				zap.String("job_id", req.JobId),
+				zap.String("destination_id", req.DestinationId),
+			)
+		} else {
+			s.logger.Error("ReportDestinationStatus: db error updating destination status",
+				zap.String("job_id", req.JobId),
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
 		return nil, status.Error(codes.Internal, "failed to update destination status")
 	}
 
