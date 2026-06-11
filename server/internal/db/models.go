@@ -150,10 +150,10 @@ type Policy struct {
 	Sources          string          `gorm:"type:text;not null"` // JSON array of source paths
 	RetentionLast    int             `gorm:"not null;default:0"`
 	RetentionHourly  int             `gorm:"not null;default:0"`
-	RetentionDaily   int             `gorm:"not null;default:7"`
-	RetentionWeekly  int             `gorm:"not null;default:4"`
-	RetentionMonthly int             `gorm:"not null;default:6"`
-	RetentionYearly  int             `gorm:"not null;default:1"`
+	RetentionDaily   int             `gorm:"not null;default:0"`
+	RetentionWeekly  int             `gorm:"not null;default:0"`
+	RetentionMonthly int             `gorm:"not null;default:0"`
+	RetentionYearly  int             `gorm:"not null;default:0"`
 	RepoPassword     EncryptedString `gorm:"type:text;not null"` // Restic repository password
 	HookPreBackup    string          `gorm:"type:text;default:''"` // shell command, optional
 	HookPostBackup   string          `gorm:"type:text;default:''"` // shell command, optional
