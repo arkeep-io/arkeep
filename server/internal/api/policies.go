@@ -216,20 +216,6 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply retention defaults for zero values.
-	if req.RetentionDaily == 0 {
-		req.RetentionDaily = 7
-	}
-	if req.RetentionWeekly == 0 {
-		req.RetentionWeekly = 4
-	}
-	if req.RetentionMonthly == 0 {
-		req.RetentionMonthly = 6
-	}
-	if req.RetentionYearly == 0 {
-		req.RetentionYearly = 1
-	}
-
 	policy := &db.Policy{
 		Name:             req.Name,
 		AgentID:          agentID,

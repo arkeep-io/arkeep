@@ -214,6 +214,44 @@ func TestPolicyHandler_Create(t *testing.T) {
 		resp := e.post(t, "/api/v1/policies", "", validPolicy(uuid.New().String()))
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
+
+	t.Run("preserves zero retention values", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		body := validPolicy(agentID)
+		body["retention_daily"] = 0
+		body["retention_yearly"] = 0
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var created struct {
+			ID             string `json:"id"`
+			RetentionDaily int    `json:"retention_daily"`
+			RetentionYearly int   `json:"retention_yearly"`
+		}
+		decodeData(t, resp, &created)
+		if created.RetentionDaily != 0 {
+			t.Errorf("create: retention_daily = %d, want 0", created.RetentionDaily)
+		}
+		if created.RetentionYearly != 0 {
+			t.Errorf("create: retention_yearly = %d, want 0", created.RetentionYearly)
+		}
+
+		resp2 := e.get(t, "/api/v1/policies/"+created.ID, e.adminToken(t))
+		assertStatus(t, resp2, http.StatusOK)
+		var fetched struct {
+			RetentionDaily  int `json:"retention_daily"`
+			RetentionYearly int `json:"retention_yearly"`
+		}
+		decodeData(t, resp2, &fetched)
+		if fetched.RetentionDaily != 0 {
+			t.Errorf("fetch: retention_daily = %d, want 0", fetched.RetentionDaily)
+		}
+		if fetched.RetentionYearly != 0 {
+			t.Errorf("fetch: retention_yearly = %d, want 0", fetched.RetentionYearly)
+		}
+	})
 }
 
 func TestPolicyHandler_Update(t *testing.T) {
