@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
     Table,
@@ -13,6 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Progress } from '@/components/ui/progress'
 import {
     ArrowLeft,
     RefreshCw,
@@ -20,10 +21,12 @@ import {
     Server,
     CalendarClock,
     HardDrive,
+    XCircle,
+    Ban,
 } from '@lucide/vue'
 import { api } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
-import type { ApiResponse, Job, JobLog, JobStatus, JobStatusPayload, JobLogPayload } from '@/types'
+import type { ApiResponse, Job, JobLog, JobStatus, JobStatusPayload, JobLogPayload, ResticProgressEvent } from '@/types'
 import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration, formatBytes } from '@/lib/jobUtils'
 
 // ---------------------------------------------------------------------------
@@ -43,9 +46,9 @@ const logs = ref<JobLog[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 
-// Log scroll state
-const logsContainer = ref<HTMLElement | null>(null)
-const userScrolledUp = ref(false)
+const progressData = ref<ResticProgressEvent | null>(null)
+const cancelling = ref(false)
+const PROGRESS_KEY = `arkeep:job-progress:${jobId}`
 
 // ---------------------------------------------------------------------------
 // Helpers — statusVariant/statusClass/statusLabel/statusIcon/formatDate/
@@ -80,9 +83,18 @@ const isRunning = computed(() =>
 async function fetchJob() {
     loading.value = true
     error.value = null
+    progressData.value = null
     try {
         const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
         job.value = res.data
+
+        // Restore cached progress so the bar is visible immediately on reload.
+        if (isRunning.value) {
+            try {
+                const cached = sessionStorage.getItem(PROGRESS_KEY)
+                if (cached) progressData.value = JSON.parse(cached)
+            } catch { /* ignore */ }
+        }
 
         // Fetch logs separately. For finished jobs this is the only source of
         // truth; for running jobs we load historic DB logs and then append live ones.
@@ -110,32 +122,44 @@ async function refreshJobMeta() {
 async function fetchLogs() {
     try {
         const res = await api<ApiResponse<JobLog[]>>(`/api/v1/jobs/${jobId}/logs`)
-        logs.value = res.data
+        logs.value = res.data.filter(l => !isResticJson(l.message))
     } catch {
         // Non-fatal — the job detail is still usable without logs.
     }
 }
 
-// ---------------------------------------------------------------------------
-// Log auto-scroll
-// ---------------------------------------------------------------------------
-
-function scrollLogsToBottom() {
-    if (!logsContainer.value || userScrolledUp.value) return
-    logsContainer.value.scrollTop = logsContainer.value.scrollHeight
+// isResticJson returns true for any restic JSON message (status/summary/error/exit_error).
+// Used to filter these out of the displayed log list.
+function isResticJson(msg: string): boolean {
+    if (!msg || msg[0] !== '{') return false
+    try { return !!JSON.parse(msg)?.message_type } catch { return false }
 }
 
-function onLogsScroll() {
-    if (!logsContainer.value) return
-    const { scrollTop, scrollHeight, clientHeight } = logsContainer.value
-    // Treat as "scrolled up" when more than 60px from the bottom.
-    userScrolledUp.value = scrollHeight - scrollTop - clientHeight > 60
+// tryParseProgress returns a ResticProgressEvent only for status/summary types,
+// which carry meaningful percent_done/bytes data for the progress bar.
+function tryParseProgress(msg: string): ResticProgressEvent | null {
+    try {
+        const parsed = JSON.parse(msg)
+        if (parsed.message_type === 'status' || parsed.message_type === 'summary') {
+            return parsed as ResticProgressEvent
+        }
+    } catch {
+        // not a progress event
+    }
+    return null
 }
 
-// Scroll to bottom whenever new log entries arrive.
-watch(() => logs.value.length, () => {
-    nextTick(scrollLogsToBottom)
-})
+async function cancelJob() {
+    cancelling.value = true
+    try {
+        await api(`/api/v1/jobs/${jobId}/cancel`, { method: 'POST' })
+        // Optimistic UI: status will be updated via WebSocket event
+    } catch (e: any) {
+        error.value = e?.message ?? 'Failed to cancel job.'
+    } finally {
+        cancelling.value = false
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Live updates via WebSocket
@@ -148,12 +172,20 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
     // Append incoming log lines (live WS stream from agent via gRPC).
     if (msg.type === 'job.log' && msg.payload) {
         const p = msg.payload
-        logs.value.push({
-            id: crypto.randomUUID(),
-            level: p.level,
-            message: p.message,
-            timestamp: p.timestamp,
-        })
+        if (isResticJson(p.message)) {
+            const progress = tryParseProgress(p.message)
+            if (progress && progress.percent_done >= (progressData.value?.percent_done ?? 0)) {
+                progressData.value = progress
+                sessionStorage.setItem(PROGRESS_KEY, JSON.stringify(progress))
+            }
+        } else {
+            logs.value.push({
+                id: crypto.randomUUID(),
+                level: p.level,
+                message: p.message,
+                timestamp: p.timestamp,
+            })
+        }
     }
 
     // Update job status when the server signals a state transition.
@@ -166,8 +198,8 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
         // (status, destinations, timestamps) without touching the logs array.
         // The bulk DB log insert may not have completed yet, so calling
         // fetchLogs() here would wipe live WS log entries with an empty result.
-        if (p.status === 'succeeded' || p.status === 'failed') {
-            userScrolledUp.value = false // let the view scroll to the final log
+        if (p.status === 'succeeded' || p.status === 'failed' || p.status === 'cancelled') {
+            sessionStorage.removeItem(PROGRESS_KEY)
             refreshJobMeta()
         }
     }
@@ -202,6 +234,17 @@ onMounted(fetchJob)
                 </div>
             </div>
             <div class="flex items-center gap-2">
+                <Button
+                    v-if="!loading && isRunning"
+                    variant="outline"
+                    size="sm"
+                    :disabled="cancelling"
+                    class="gap-1.5 text-destructive border-destructive/40 hover:bg-destructive/10"
+                    @click="cancelJob"
+                >
+                    <XCircle class="w-3.5 h-3.5" />
+                    {{ cancelling ? 'Cancelling…' : 'Cancel Job' }}
+                </Button>
                 <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJob">
                     <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
                 </Button>
@@ -265,7 +308,7 @@ onMounted(fetchJob)
         </Alert>
 
         <!-- ── Destinations ────────────────────────────────────────────────── -->
-        <div class="flex flex-col gap-3">
+        <div v-if="job?.type !== 'restore'" class="flex flex-col gap-3">
             <p class="text-sm font-medium">Destinations</p>
             <div class="border rounded-md overflow-x-auto">
                 <Table>
@@ -330,53 +373,59 @@ onMounted(fetchJob)
             </div>
         </div>
 
-        <!-- ── Logs ───────────────────────────────────────────────────────── -->
-        <div class="flex flex-col gap-3">
+        <!-- ── Progress (shown during execution) ─────────────────────────── -->
+        <div v-if="!loading && isRunning" class="flex flex-col gap-3">
             <div class="flex items-center justify-between">
-                <p class="text-sm font-medium">Logs</p>
-                <div class="flex items-center gap-3">
-                    <!-- Live indicator shown while the job is still running -->
-                    <div v-if="isRunning" class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <span class="relative flex h-2 w-2">
-                            <span
-                                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                            <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
-                        </span>
-                        Live
-                    </div>
-                    <!-- Jump-to-bottom button — visible when user has scrolled up -->
-                    <Button v-if="userScrolledUp && logs.length > 0"
-                        variant="outline" size="sm"
-                        class="h-6 text-xs gap-1 px-2"
-                        @click="userScrolledUp = false; $nextTick(scrollLogsToBottom)">
-                        ↓ Jump to bottom
-                    </Button>
+                <p class="text-sm font-medium">Progress</p>
+                <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                    </span>
+                    Live
                 </div>
             </div>
+            <template v-if="progressData">
+                <div class="flex items-center justify-between text-sm">
+                    <span class="font-medium tabular-nums">{{ Math.round(progressData.percent_done * 100) }}%</span>
+                    <span class="text-muted-foreground text-xs tabular-nums">
+                        {{ formatBytes(progressData.bytes_done) }} / {{ formatBytes(progressData.total_bytes) }}
+                        &mdash; {{ progressData.files_done }} / {{ progressData.total_files }} files
+                    </span>
+                </div>
+                <Progress :model-value="progressData.percent_done * 100" />
+            </template>
+            <p v-else class="text-sm text-muted-foreground">Preparing...</p>
+        </div>
 
-            <!-- Loading skeleton for logs -->
+        <!-- ── Logs ───────────────────────────────────────────────────────── -->
+        <div class="flex flex-col gap-3">
+            <p class="text-sm font-medium">Logs</p>
+
+            <!-- Loading skeleton -->
             <template v-if="loading">
                 <div class="flex flex-col gap-2">
                     <Skeleton v-for="n in 4" :key="n" class="h-5 w-full" />
                 </div>
             </template>
 
-            <!-- Log list — tall, scrollable -->
+            <!-- Placeholder while job is running -->
+            <div v-else-if="isRunning"
+                class="border rounded-md p-8 text-center text-sm text-muted-foreground">
+                Logs will be available after job completion.
+            </div>
+
+            <!-- Log list after completion -->
             <template v-else>
                 <div v-if="logs.length > 0"
-                    ref="logsContainer"
-                    class="border rounded-md bg-muted/30 font-mono text-xs overflow-y-auto max-h-[50vh] min-h-32 p-3 flex flex-col gap-1"
-                    @scroll="onLogsScroll">
+                    class="border rounded-md bg-muted/30 font-mono text-xs overflow-y-auto max-h-[50vh] min-h-32 p-3 flex flex-col gap-1">
                     <div v-for="log in logs" :key="log.id" class="flex items-start gap-2">
-                        <!-- Timestamp -->
                         <span class="text-muted-foreground shrink-0 pt-px">
                             {{ formatTime(log.timestamp) }}
                         </span>
-                        <!-- Level badge -->
                         <Badge :variant="logLevelVariant(log.level)" class="text-[10px] px-1 py-0 h-4 shrink-0">
                             {{ log.level.toUpperCase() }}
                         </Badge>
-                        <!-- Message — preserves whitespace and allows wrapping -->
                         <span class="break-all leading-relaxed" :class="{
                             'text-destructive': log.level === 'error',
                             'text-yellow-600 dark:text-yellow-400': log.level === 'warn',
@@ -385,13 +434,10 @@ onMounted(fetchJob)
                         </span>
                     </div>
                 </div>
-
-                <!-- Empty log state -->
                 <div v-else class="border rounded-md p-8 text-center text-sm text-muted-foreground">
                     No log entries recorded for this job.
                 </div>
             </template>
-
         </div>
 
     </div>

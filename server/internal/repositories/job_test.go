@@ -84,6 +84,54 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 	}
 }
 
+// TestUpdateDestinationStatus_Idempotent verifies that calling
+// UpdateDestinationStatus twice for the same (job_id, destination_id) pair
+// returns nil on the second call instead of ErrNotFound. This matters when an
+// agent retries the RPC or when the destination appears twice in the job
+// payload due to a duplicate policy_destination entry.
+func TestUpdateDestinationStatus_Idempotent(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	agentRepo := NewAgentRepository(gormDB)
+	policyRepo := NewPolicyRepository(gormDB)
+	ctx := context.Background()
+
+	destID := uuid.New()
+	jobID := uuid.New()
+	now := time.Now().UTC()
+
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	if err := agentRepo.Create(ctx, agent); err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+	dest := &db.Destination{Base: db.Base{ID: destID}, Name: "dest", Type: "local"}
+	if err := gormDB.WithContext(ctx).Create(dest).Error; err != nil {
+		t.Fatalf("Create destination: %v", err)
+	}
+	policy := &db.Policy{AgentID: agent.ID, Name: "p", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := policyRepo.Create(ctx, policy); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "pending"}
+	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	jd := &db.JobDestination{JobID: jobID, DestinationID: destID, Status: "pending"}
+	if err := repo.CreateDestination(ctx, jd); err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	// First call succeeds normally (pending → succeeded).
+	if err := repo.UpdateDestinationStatus(ctx, jobID, destID, "succeeded", &now, &now, "snap-aaa", 1000, ""); err != nil {
+		t.Fatalf("first UpdateDestinationStatus: %v", err)
+	}
+
+	// Second call with same parameters must also return nil (idempotent).
+	if err := repo.UpdateDestinationStatus(ctx, jobID, destID, "succeeded", &now, &now, "snap-aaa", 1000, ""); err != nil {
+		t.Errorf("second UpdateDestinationStatus (idempotent): got %v, want nil", err)
+	}
+}
+
 // TestUpdateDestinationStatus_NotFound verifies that updating a non-existent
 // job_destination row returns ErrNotFound.
 func TestUpdateDestinationStatus_NotFound(t *testing.T) {

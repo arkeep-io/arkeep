@@ -163,6 +163,8 @@ export interface Policy {
   agent_name: string
   sources: string           // JSON string — parse client-side when needed
   schedule: string
+  retention_last: number
+  retention_hourly: number
   retention_daily: number
   retention_weekly: number
   retention_monthly: number
@@ -441,6 +443,21 @@ export interface VersionInfo {
   server_version: string
   latest_version: string
   update_available: boolean
+}
+
+// ResticProgressEvent is emitted by restic --json during backup/restore and
+// arrives on the WebSocket as a log message whose message field is JSON.
+export interface ResticProgressEvent {
+  message_type: 'status' | 'summary' | 'error'
+  percent_done: number
+  files_new: number
+  files_done: number
+  bytes_done: number
+  total_files: number
+  total_bytes: number
+  snapshot_id?: string
+  total_bytes_processed?: number
+  data_added?: number
 }
 
 // ─── WebSocket message payloads ───────────────────────────────────────────────

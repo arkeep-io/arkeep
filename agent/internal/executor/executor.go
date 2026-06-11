@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -93,6 +94,8 @@ type destinationPayload struct {
 }
 
 type retentionPayload struct {
+	Last    int `json:"last"`
+	Hourly  int `json:"hourly"`
 	Daily   int `json:"daily"`
 	Weekly  int `json:"weekly"`
 	Monthly int `json:"monthly"`
@@ -120,6 +123,16 @@ type Executor struct {
 	queue          chan JobAssignment
 	logger         *zap.Logger
 	dockerHostRoot string // resolved by main.go: /hostfs when inside Docker, empty for native deployments, or user-supplied override
+
+	// cancelledMu protects cancelled — jobs marked for cancellation before
+	// they are dequeued. Populated by Cancel() when a job is still queued.
+	cancelledMu sync.Mutex
+	cancelled   map[string]bool
+
+	// runningMu protects runningCancel — the cancel func for the job currently
+	// being executed. Cancel() calls it directly when a job is in flight.
+	runningMu     sync.Mutex
+	runningCancel map[string]context.CancelFunc
 }
 
 // New creates a new Executor. dockerClient may be nil — if it is, any job
@@ -142,6 +155,8 @@ func New(
 		queue:          make(chan JobAssignment, queueSize),
 		logger:         logger.Named("executor"),
 		dockerHostRoot: dockerHostRoot,
+		cancelled:      make(map[string]bool),
+		runningCancel:  make(map[string]context.CancelFunc),
 	}
 }
 
@@ -219,6 +234,17 @@ func (e *Executor) Run(ctx context.Context, sink LogSink, reporter StatusReporte
 			e.logger.Info("executor stopped")
 			return
 		case job := <-e.queue:
+			// If Cancel() was called while this job was still queued, skip execution
+			// and immediately report cancelled.
+			e.cancelledMu.Lock()
+			if e.cancelled[job.JobID] {
+				delete(e.cancelled, job.JobID)
+				e.cancelledMu.Unlock()
+				e.logger.Info("job cancelled before execution", zap.String("job_id", job.JobID))
+				reporter.ReportStatus(job.JobID, "cancelled", "job cancelled before execution started")
+				continue
+			}
+			e.cancelledMu.Unlock()
 			e.execute(ctx, job, sink, reporter)
 		}
 	}
@@ -242,14 +268,48 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 }
 
 // execute routes a job to the appropriate handler based on its type.
+// It creates a per-job context so the job can be cancelled independently
+// of the executor's lifetime context.
 func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	jobCtx, cancel := context.WithCancel(ctx)
+	e.runningMu.Lock()
+	e.runningCancel[job.JobID] = cancel
+	e.runningMu.Unlock()
+	defer func() {
+		cancel()
+		e.runningMu.Lock()
+		delete(e.runningCancel, job.JobID)
+		e.runningMu.Unlock()
+	}()
+
 	switch job.Type {
 	case proto.JobType_JOB_TYPE_RESTORE:
-		e.executeRestore(ctx, job, sink, reporter)
+		e.executeRestore(jobCtx, job, sink, reporter)
 	default:
 		// JOB_TYPE_BACKUP and unspecified types all run the backup handler.
-		e.executeBackup(ctx, job, sink, reporter)
+		e.executeBackup(jobCtx, job, sink, reporter)
 	}
+}
+
+// Cancel aborts the job with the given ID. If the job is currently executing,
+// its context is cancelled immediately. If the job is still queued, it is
+// marked so the worker loop skips it and reports cancelled status.
+func (e *Executor) Cancel(jobID string) {
+	// Check if it is currently executing.
+	e.runningMu.Lock()
+	if cancel, ok := e.runningCancel[jobID]; ok {
+		cancel()
+		e.runningMu.Unlock()
+		e.logger.Info("cancel signal sent to running job", zap.String("job_id", jobID))
+		return
+	}
+	e.runningMu.Unlock()
+
+	// Otherwise mark it for pre-execution cancellation.
+	e.cancelledMu.Lock()
+	e.cancelled[jobID] = true
+	e.cancelledMu.Unlock()
+	e.logger.Info("job marked for cancellation (queued)", zap.String("job_id", jobID))
 }
 
 // executeBackup runs a single backup job to completion.
@@ -424,6 +484,8 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 
 		// Apply retention policy — non-fatal if it fails (backup data is safe).
 		retention := restic.RetentionPolicy{
+			Last:    payload.Retention.Last,
+			Hourly:  payload.Retention.Hourly,
 			Daily:   payload.Retention.Daily,
 			Weekly:  payload.Retention.Weekly,
 			Monthly: payload.Retention.Monthly,

@@ -2,6 +2,7 @@ package restic
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -41,6 +42,30 @@ func TestBuildCmd_S3Repository(t *testing.T) {
 	}
 }
 
+func TestBuildBackupArgs_Windows(t *testing.T) {
+	opts := BackupOptions{
+		Tags:    []string{"weekly"},
+		Sources: []string{`C:\Users`},
+	}
+	args := buildBackupArgs(opts, "windows")
+
+	if !slices.Contains(args, "--use-fs-snapshot") {
+		t.Errorf("expected --use-fs-snapshot in args on windows, got %v", args)
+	}
+}
+
+func TestBuildBackupArgs_Linux(t *testing.T) {
+	opts := BackupOptions{
+		Tags:    []string{"weekly"},
+		Sources: []string{"/home"},
+	}
+	args := buildBackupArgs(opts, "linux")
+
+	if slices.Contains(args, "--use-fs-snapshot") {
+		t.Errorf("unexpected --use-fs-snapshot in args on linux, got %v", args)
+	}
+}
+
 func TestBuildCmd_SFTPRepository(t *testing.T) {
 	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone"}
 	dest := Destination{
@@ -57,5 +82,39 @@ func TestBuildCmd_SFTPRepository(t *testing.T) {
 	}
 	if !strings.HasPrefix(repoURL, "sftp:") {
 		t.Errorf("RESTIC_REPOSITORY=%q, want prefix 'sftp:'", repoURL)
+	}
+}
+
+func TestRetentionPolicy_IsEnabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy RetentionPolicy
+		want   bool
+	}{
+		{"all zero", RetentionPolicy{}, false},
+		{"last only", RetentionPolicy{Last: 5}, true},
+		{"hourly only", RetentionPolicy{Hourly: 24}, true},
+		{"daily only", RetentionPolicy{Daily: 7}, true},
+		{"weekly only", RetentionPolicy{Weekly: 4}, true},
+		{"monthly only", RetentionPolicy{Monthly: 6}, true},
+		{"yearly only", RetentionPolicy{Yearly: 1}, true},
+		{"all non-zero", RetentionPolicy{Last: 1, Hourly: 2, Daily: 3, Weekly: 4, Monthly: 5, Yearly: 6}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.policy.IsEnabled(); got != tt.want {
+				t.Errorf("IsEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestForget_ZeroPolicy_Skips(t *testing.T) {
+	// A non-existent binary ensures run() would fail if called.
+	w := &Wrapper{resticBin: "/nonexistent/restic", rcloneBin: "/nonexistent/rclone"}
+	dest := Destination{Type: DestLocal, RepoURL: "/tmp/repo", Password: "pw"}
+
+	if err := w.Forget(context.Background(), dest, RetentionPolicy{}); err != nil {
+		t.Errorf("Forget with zero policy should be a no-op, got error: %v", err)
 	}
 }

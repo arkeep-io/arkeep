@@ -70,6 +70,8 @@ type destinationPayload struct {
 
 // retentionPayload mirrors the keep_* fields from db.Policy.
 type retentionPayload struct {
+	Last    int `json:"last"`
+	Hourly  int `json:"hourly"`
 	Daily   int `json:"daily"`
 	Weekly  int `json:"weekly"`
 	Monthly int `json:"monthly"`
@@ -431,6 +433,8 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		RepoPassword: string(policy.RepoPassword), // decrypted
 		Destinations: destPayloads,
 		Retention: retentionPayload{
+			Last:    policy.RetentionLast,
+			Hourly:  policy.RetentionHourly,
 			Daily:   policy.RetentionDaily,
 			Weekly:  policy.RetentionWeekly,
 			Monthly: policy.RetentionMonthly,

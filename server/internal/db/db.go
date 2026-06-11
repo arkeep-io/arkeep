@@ -9,6 +9,8 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"io/fs"
+	"strings"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -26,8 +28,52 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//go:embed migrations/*.sql
+//go:embed migrations
 var migrationsFS embed.FS
+
+// overlayFS presents a flat migrations/ directory to golang-migrate, overlaying
+// driver-specific files from migrations/{driver}/ over the shared ones.
+// Files present only in migrations/{driver}/ are also exposed.
+type overlayFS struct {
+	base   embed.FS
+	driver string
+}
+
+func (o overlayFS) Open(name string) (fs.File, error) {
+	const prefix = "migrations/"
+	if strings.HasPrefix(name, prefix) && !strings.Contains(name[len(prefix):], "/") {
+		driverPath := "migrations/" + o.driver + "/" + name[len(prefix):]
+		if f, err := o.base.Open(driverPath); err == nil {
+			return f, nil
+		}
+	}
+	return o.base.Open(name)
+}
+
+func (o overlayFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	shared, err := o.base.ReadDir(name)
+	if err != nil {
+		return nil, err
+	}
+	driverEntries, _ := o.base.ReadDir(name + "/" + o.driver)
+
+	seen := make(map[string]struct{}, len(shared))
+	result := make([]fs.DirEntry, 0, len(shared)+len(driverEntries))
+	for _, e := range shared {
+		if !e.IsDir() {
+			seen[e.Name()] = struct{}{}
+			result = append(result, e)
+		}
+	}
+	for _, e := range driverEntries {
+		if !e.IsDir() {
+			if _, ok := seen[e.Name()]; !ok {
+				result = append(result, e)
+			}
+		}
+	}
+	return result, nil
+}
 
 // Config holds the configuration required to open a database connection.
 // Driver defaults to "sqlite" if left empty.
@@ -116,7 +162,7 @@ func Ping(ctx context.Context, database *gorm.DB) error {
 // runMigrations applies all pending up-migrations from the embedded SQL files.
 // ErrNoChange is treated as success.
 func runMigrations(sqlDB *sql.DB, driver string, log *zap.Logger) error {
-	src, err := iofs.New(migrationsFS, "migrations")
+	src, err := iofs.New(overlayFS{migrationsFS, driver}, "migrations")
 	if err != nil {
 		return fmt.Errorf("failed to create migration source: %w", err)
 	}
@@ -125,7 +171,10 @@ func runMigrations(sqlDB *sql.DB, driver string, log *zap.Logger) error {
 
 	switch driver {
 	case "sqlite":
-		drv, err := migratesqlite.WithInstance(sqlDB, &migratesqlite.Config{})
+		// NoLock: true runs each migration without a wrapping transaction, which
+		// allows PRAGMA foreign_keys = OFF to take effect when a migration needs
+		// to recreate tables (the only way to change CHECK constraints in SQLite).
+		drv, err := migratesqlite.WithInstance(sqlDB, &migratesqlite.Config{NoTxWrap: true})
 		if err != nil {
 			return fmt.Errorf("failed to create sqlite migrate driver: %w", err)
 		}

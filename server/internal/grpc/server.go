@@ -14,9 +14,11 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -639,6 +641,13 @@ func (s *Server) recordJobMetrics(jobID uuid.UUID, dbStatus string) {
 // See server/internal/repository/job.go for the BulkCreateLogs implementation.
 const logFlushBatchSize = 50
 
+// isResticEvent reports whether a log message is a restic JSON telemetry event
+// (message_type: status/summary/error). These are broadcast live for the GUI
+// progress bar but never persisted to the DB.
+func isResticEvent(msg string) bool {
+	return len(msg) > 0 && msg[0] == '{' && strings.Contains(msg, `"message_type"`)
+}
+
 func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	var (
 		entries  []*proto.LogEntry
@@ -702,8 +711,6 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 			jobIDSet = true
 		}
 
-		entries = append(entries, entry)
-
 		// Publish each log line to WebSocket in real-time so the GUI can
 		// display a live log tail without waiting for the job to complete.
 		// timestamp is included so the frontend can display the correct time
@@ -721,6 +728,15 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 				"timestamp": ts.Format(time.RFC3339),
 			},
 		})
+
+		// Restic telemetry (progress/summary/error JSON) is broadcast live for
+		// the GUI progress bar but never persisted — it is transient data already
+		// captured structurally via ReportJobStatus and ReportDestinationStatus.
+		if isResticEvent(entry.Message) {
+			continue
+		}
+
+		entries = append(entries, entry)
 
 		// Flush to DB every logFlushBatchSize entries so the GUI can show
 		// partial logs on page reload without waiting for stream completion.
@@ -769,11 +785,18 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	}
 
 	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobID, destID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
-		s.logger.Error("ReportDestinationStatus: failed to update destination status",
-			zap.String("job_id", req.JobId),
-			zap.String("destination_id", req.DestinationId),
-			zap.Error(err),
-		)
+		if errors.Is(err, repositories.ErrNotFound) {
+			s.logger.Error("ReportDestinationStatus: job_destinations row not found — was CreateDestination skipped?",
+				zap.String("job_id", req.JobId),
+				zap.String("destination_id", req.DestinationId),
+			)
+		} else {
+			s.logger.Error("ReportDestinationStatus: db error updating destination status",
+				zap.String("job_id", req.JobId),
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
 		return nil, status.Error(codes.Internal, "failed to update destination status")
 	}
 
