@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -639,6 +640,13 @@ func (s *Server) recordJobMetrics(jobID uuid.UUID, dbStatus string) {
 // See server/internal/repository/job.go for the BulkCreateLogs implementation.
 const logFlushBatchSize = 50
 
+// isResticEvent reports whether a log message is a restic JSON telemetry event
+// (message_type: status/summary/error). These are broadcast live for the GUI
+// progress bar but never persisted to the DB.
+func isResticEvent(msg string) bool {
+	return len(msg) > 0 && msg[0] == '{' && strings.Contains(msg, `"message_type"`)
+}
+
 func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	var (
 		entries  []*proto.LogEntry
@@ -702,8 +710,6 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 			jobIDSet = true
 		}
 
-		entries = append(entries, entry)
-
 		// Publish each log line to WebSocket in real-time so the GUI can
 		// display a live log tail without waiting for the job to complete.
 		// timestamp is included so the frontend can display the correct time
@@ -721,6 +727,15 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 				"timestamp": ts.Format(time.RFC3339),
 			},
 		})
+
+		// Restic telemetry (progress/summary/error JSON) is broadcast live for
+		// the GUI progress bar but never persisted — it is transient data already
+		// captured structurally via ReportJobStatus and ReportDestinationStatus.
+		if isResticEvent(entry.Message) {
+			continue
+		}
+
+		entries = append(entries, entry)
 
 		// Flush to DB every logFlushBatchSize entries so the GUI can show
 		// partial logs on page reload without waiting for stream completion.

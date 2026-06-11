@@ -49,6 +49,11 @@ const (
 	// enumerate all snapshots in an existing Restic repository on a destination.
 	// The agent responds via ReportSnapshotImport.
 	JobType_JOB_TYPE_IMPORT_SNAPSHOTS JobType = 7
+	// JOB_TYPE_CANCEL instructs the agent to abort the job identified by job_id.
+	// If the job is currently executing, its context is cancelled. If it is still
+	// queued but not yet started, it is marked for cancellation before execution.
+	// The agent reports JOB_STATUS_CANCELLED via ReportJobStatus after aborting.
+	JobType_JOB_TYPE_CANCEL JobType = 8
 )
 
 // Enum value maps for JobType.
@@ -62,6 +67,7 @@ var (
 		5: "JOB_TYPE_LIST_VOLUMES",
 		6: "JOB_TYPE_LIST_SNAPSHOT_FILES",
 		7: "JOB_TYPE_IMPORT_SNAPSHOTS",
+		8: "JOB_TYPE_CANCEL",
 	}
 	JobType_value = map[string]int32{
 		"JOB_TYPE_UNSPECIFIED":         0,
@@ -72,6 +78,7 @@ var (
 		"JOB_TYPE_LIST_VOLUMES":        5,
 		"JOB_TYPE_LIST_SNAPSHOT_FILES": 6,
 		"JOB_TYPE_IMPORT_SNAPSHOTS":    7,
+		"JOB_TYPE_CANCEL":              8,
 	}
 )
 
@@ -1864,7 +1871,7 @@ const file_agent_proto_rawDesc = "" +
 	"\tsnapshots\x18\x03 \x03(\v2\x1b.agent.ImportedSnapshotInfoR\tsnapshots\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\"(\n" +
 	"\x16SnapshotImportResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok*\xd4\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok*\xe9\x01\n" +
 	"\aJobType\x12\x18\n" +
 	"\x14JOB_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fJOB_TYPE_BACKUP\x10\x01\x12\x13\n" +
@@ -1873,7 +1880,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x0fJOB_TYPE_FORGET\x10\x04\x12\x19\n" +
 	"\x15JOB_TYPE_LIST_VOLUMES\x10\x05\x12 \n" +
 	"\x1cJOB_TYPE_LIST_SNAPSHOT_FILES\x10\x06\x12\x1d\n" +
-	"\x19JOB_TYPE_IMPORT_SNAPSHOTS\x10\a*\x8a\x01\n" +
+	"\x19JOB_TYPE_IMPORT_SNAPSHOTS\x10\a\x12\x13\n" +
+	"\x0fJOB_TYPE_CANCEL\x10\b*\x8a\x01\n" +
 	"\tJobStatus\x12\x1a\n" +
 	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12JOB_STATUS_RUNNING\x10\x01\x12\x18\n" +

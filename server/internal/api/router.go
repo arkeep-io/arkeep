@@ -83,7 +83,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Audit, cfg.Logger)
-	jobHandler          := NewJobHandler(cfg.Jobs, cfg.Logger)
+	jobHandler          := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Logger)
 	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler         := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
@@ -172,6 +172,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/jobs", jobHandler.List)
 			r.Get("/jobs/{id}", jobHandler.GetByID)
 			r.Get("/jobs/{id}/logs", jobHandler.GetLogs)
+			r.Post("/jobs/{id}/cancel", jobHandler.Cancel)
 
 			// Snapshots
 			r.Get("/snapshots", snapshotHandler.List)

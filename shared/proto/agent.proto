@@ -217,6 +217,11 @@ enum JobType {
   // enumerate all snapshots in an existing Restic repository on a destination.
   // The agent responds via ReportSnapshotImport.
   JOB_TYPE_IMPORT_SNAPSHOTS = 7;
+  // JOB_TYPE_CANCEL instructs the agent to abort the job identified by job_id.
+  // If the job is currently executing, its context is cancelled. If it is still
+  // queued but not yet started, it is marked for cancellation before execution.
+  // The agent reports JOB_STATUS_CANCELLED via ReportJobStatus after aborting.
+  JOB_TYPE_CANCEL = 8;
 }
 
 // ─── ReportJobStatus ─────────────────────────────────────────────────────────
