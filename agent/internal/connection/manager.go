@@ -133,7 +133,7 @@ type Config struct {
 	// StateDir is the directory where agent-state.json is persisted.
 	StateDir string
 	// Version is the agent binary version, sent during registration.
-	Version string
+	Version         string
 	DockerAvailable bool
 	// TLSCAFile is the path to a PEM-encoded CA certificate used to verify the
 	// server's TLS certificate. Required when the server uses a self-signed cert.
@@ -166,7 +166,7 @@ type Manager struct {
 	// mu protects client and logStreams — both are replaced on every reconnect.
 	mu         sync.RWMutex
 	client     proto.AgentServiceClient
-	logStreams  map[string]proto.AgentService_StreamLogsClient
+	logStreams map[string]proto.AgentService_StreamLogsClient
 	// agentID is the stable ID returned by the server after registration.
 	// Stored here so SendLog and ReportStatus can include it in RPCs.
 	agentID    string
@@ -185,7 +185,7 @@ func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapp
 		docker:     dockerClient,
 		wrapper:    wrapper,
 		logger:     logger.Named("connection"),
-		logStreams:  make(map[string]proto.AgentService_StreamLogsClient),
+		logStreams: make(map[string]proto.AgentService_StreamLogsClient),
 	}
 }
 
