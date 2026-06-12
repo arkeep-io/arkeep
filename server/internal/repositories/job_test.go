@@ -34,7 +34,7 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}
-	dest := &db.Destination{Base: db.Base{ID: destID}, Name: "dest", Type: "local"}
+	dest := &db.Destination{SoftDelete: db.SoftDelete{Base: db.Base{ID: destID}}, Name: "dest", Type: "local"}
 	if err := gormDB.WithContext(ctx).Create(dest).Error; err != nil {
 		t.Fatalf("Create destination: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestUpdateDestinationStatus_Idempotent(t *testing.T) {
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}
-	dest := &db.Destination{Base: db.Base{ID: destID}, Name: "dest", Type: "local"}
+	dest := &db.Destination{SoftDelete: db.SoftDelete{Base: db.Base{ID: destID}}, Name: "dest", Type: "local"}
 	if err := gormDB.WithContext(ctx).Create(dest).Error; err != nil {
 		t.Fatalf("Create destination: %v", err)
 	}

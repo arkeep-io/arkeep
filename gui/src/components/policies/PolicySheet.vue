@@ -230,7 +230,7 @@ const schema = z.object({
   retention_keep_yearly: z.coerce.number().int().min(0),
 
   // Destination IDs in priority order (index 0 = priority 1).
-  ordered_destination_ids: z.array(z.string()),
+  ordered_destination_ids: z.array(z.string()).min(1, 'At least one destination is required'),
 
   hook_pre: hookFieldSchema,
   hook_post: hookFieldSchema,
@@ -374,7 +374,7 @@ const { value: retMonthlyValue, errorMessage: retMonthlyError } = useField<numbe
 const { value: retYearlyValue, errorMessage: retYearlyError } = useField<number>('retention_keep_yearly')
 
 // Destinations
-const { value: orderedDestIds } = useField<string[]>('ordered_destination_ids')
+const { value: orderedDestIds, errorMessage: orderedDestIdsError } = useField<string[]>('ordered_destination_ids')
 
 function toggleDest(id: string) {
   const arr = [...(orderedDestIds.value ?? [])]
@@ -607,7 +607,7 @@ function populateForm(p: Policy) {
 
   setValues({
     name: p.name,
-    agent_id: p.agent_id,
+    agent_id: p.agent_name ? p.agent_id : '',
     enabled: p.enabled,
     repo_password: '',
     repo_password_confirm: '',
@@ -713,8 +713,9 @@ const onSubmit = handleSubmit(async (values) => {
     }
 
     if (isEdit.value) {
-      // PATCH-only: enabled, optional new password, destinations
+      // PATCH: enabled, optional new password, destinations, and agent (to allow reassignment)
       body.enabled = values.enabled
+      body.agent_id = values.agent_id
       if (values.repo_password) body.repo_password = values.repo_password
       body.destinations = destinationsPayload
     } else {
@@ -1170,6 +1171,7 @@ function onOpenChange(value: boolean) {
               </div>
             </div>
           </div>
+          <p v-if="orderedDestIdsError" class="text-sm text-destructive">{{ orderedDestIdsError }}</p>
 
           <Separator />
 
