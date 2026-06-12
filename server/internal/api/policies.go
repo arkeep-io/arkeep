@@ -322,6 +322,7 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 // Destinations replaces the full set when non-empty; omitting it leaves destinations unchanged.
 type updatePolicyRequest struct {
 	Name             *string                    `json:"name"`
+	AgentID          *string                    `json:"agent_id"`
 	Schedule         *string                    `json:"schedule"`
 	Enabled          *bool                      `json:"enabled"`
 	Sources          *string                    `json:"sources"`
@@ -370,6 +371,23 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		policy.Name = *req.Name
+	}
+	if req.AgentID != nil {
+		agentID, err := uuid.Parse(*req.AgentID)
+		if err != nil {
+			ErrBadRequest(w, "agent_id must be a valid UUID")
+			return
+		}
+		if _, err := h.agentRepo.GetByID(r.Context(), agentID); err != nil {
+			if errors.Is(err, repositories.ErrNotFound) {
+				ErrBadRequest(w, "agent not found")
+				return
+			}
+			h.logger.Error("failed to look up agent on policy update", zap.String("agent_id", agentID.String()), zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		policy.AgentID = agentID
 	}
 	if req.Schedule != nil {
 		if *req.Schedule == "" {

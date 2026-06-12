@@ -121,7 +121,7 @@ type Agent struct {
 // rest via EncryptedString. The Config field holds provider-specific settings
 // serialized as JSON (e.g. bucket name, endpoint, region for S3).
 type Destination struct {
-	Base
+	SoftDelete
 	Name        string          `gorm:"not null"`
 	Type        string          `gorm:"not null"` // "local", "s3", "sftp", "rest", "rclone"
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
