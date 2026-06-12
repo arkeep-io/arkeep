@@ -21,6 +21,7 @@ import (
 type DestinationHandler struct {
 	repo         repositories.DestinationRepository
 	snapshotRepo repositories.SnapshotRepository
+	policyRepo   repositories.PolicyRepository
 	agentMgr     *agentmanager.Manager
 	auditRepo    repositories.AuditRepository
 	logger       *zap.Logger
@@ -30,6 +31,7 @@ type DestinationHandler struct {
 func NewDestinationHandler(
 	repo repositories.DestinationRepository,
 	snapshotRepo repositories.SnapshotRepository,
+	policyRepo repositories.PolicyRepository,
 	agentMgr *agentmanager.Manager,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
@@ -37,6 +39,7 @@ func NewDestinationHandler(
 	return &DestinationHandler{
 		repo:         repo,
 		snapshotRepo: snapshotRepo,
+		policyRepo:   policyRepo,
 		agentMgr:     agentMgr,
 		auditRepo:    auditRepo,
 		logger:       logger.Named("destination_handler"),
@@ -450,7 +453,6 @@ func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest 
 }
 
 // Delete handles DELETE /api/v1/destinations/{id}.
-// Returns 409 if the destination is still referenced by an active policy.
 func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -462,11 +464,13 @@ func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			ErrNotFound(w)
 			return
 		}
-		// A foreign key constraint violation means the destination is still
-		// referenced by one or more policies. Surface this as a 409.
 		h.logger.Warn("failed to delete destination", zap.String("id", id.String()), zap.Error(err))
-		ErrConflict(w, "destination is still referenced by one or more policies")
+		ErrInternal(w)
 		return
+	}
+
+	if err := h.policyRepo.DeleteDestinationAssociations(r.Context(), id); err != nil {
+		h.logger.Warn("failed to clean up policy associations after destination delete", zap.String("id", id.String()), zap.Error(err))
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "destination.delete", "destination", id.String(), map[string]any{})

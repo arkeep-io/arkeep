@@ -607,7 +607,7 @@ function populateForm(p: Policy) {
 
   setValues({
     name: p.name,
-    agent_id: p.agent_id,
+    agent_id: p.agent_name ? p.agent_id : '',
     enabled: p.enabled,
     repo_password: '',
     repo_password_confirm: '',
@@ -713,8 +713,9 @@ const onSubmit = handleSubmit(async (values) => {
     }
 
     if (isEdit.value) {
-      // PATCH-only: enabled, optional new password, destinations
+      // PATCH: enabled, optional new password, destinations, and agent (to allow reassignment)
       body.enabled = values.enabled
+      body.agent_id = values.agent_id
       if (values.repo_password) body.repo_password = values.repo_password
       body.destinations = destinationsPayload
     } else {

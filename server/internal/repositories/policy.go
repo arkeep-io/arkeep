@@ -207,6 +207,14 @@ func (r *gormPolicyRepository) RemoveDestination(ctx context.Context, policyID, 
 	return nil
 }
 
+// DeleteDestinationAssociations removes all policy_destinations rows for a given
+// destination. Called when a destination is deleted to prevent orphaned associations.
+func (r *gormPolicyRepository) DeleteDestinationAssociations(ctx context.Context, destinationID uuid.UUID) error {
+	return r.db.WithContext(ctx).
+		Where("destination_id = ?", destinationID).
+		Delete(&db.PolicyDestination{}).Error
+}
+
 // DeleteAllDestinations removes all destination associations for a policy.
 // Used during policy update to replace the full set of destinations.
 func (r *gormPolicyRepository) DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error {
