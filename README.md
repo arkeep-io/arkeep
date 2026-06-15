@@ -49,7 +49,7 @@ built on top of [Restic](https://restic.net/) and [Rclone](https://rclone.org/).
 - [Roadmap](#roadmap)
 - [Telemetry](#telemetry)
 - [Contributing](#contributing)
-- [Support](#support)
+- [Support Arkeep](#support-arkeep)
 - [License](#license)
 
 ---
@@ -953,11 +953,13 @@ To opt out: set `ARKEEP_TELEMETRY=false` or pass `--telemetry=false`.
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
-## Support
+## Support Arkeep
 
-Arkeep is currently maintained independently by [@filippocrotti12](https://github.com/filippocrotti12).
+Hey 👋 I’m Filippo, the independent maintainer of Arkeep.
 
-If Arkeep is useful to you or your team, you can support its development through GitHub Sponsors:
+If Arkeep saves you time, helps your workflow, or you simply like where the project is going, you can support the work behind it through GitHub Sponsors.
+
+Sponsoring is a bit like buying me a coffee for open source: it helps me spend more time on new features, bug fixes, documentation, releases, and all the small maintenance work that keeps the project moving.
 
 [Become a sponsor](https://github.com/sponsors/filippocrotti12)
 
