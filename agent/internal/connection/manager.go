@@ -60,6 +60,11 @@ const (
 	heartbeatInterval = 30 * time.Second
 )
 
+// ErrEnrollmentNotSupported is returned by Enroll when the server responds with
+// 405 Method Not Allowed, indicating that mTLS auto-enrollment is disabled
+// server-side (e.g. ARKEEP_GRPC_INSECURE=true on the server).
+var ErrEnrollmentNotSupported = errors.New("enrollment not supported by server")
+
 // agentState is persisted to disk after the first successful registration.
 // It allows the agent to present its stable ID on reconnect so the server
 // matches it to the existing record rather than creating a duplicate.
@@ -218,6 +223,9 @@ func (m *Manager) Enroll(ctx context.Context) error {
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		return ErrEnrollmentNotSupported
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("enroll: server returned %s", resp.Status)
 	}
@@ -272,9 +280,18 @@ func (m *Manager) Run(ctx context.Context) {
 			zap.String("http_addr", m.cfg.ServerHTTPAddr),
 		)
 		if err := m.Enroll(ctx); err != nil {
-			m.logger.Error("enrollment failed — check --server-http-addr and --agent-secret",
-				zap.Error(err),
-			)
+			if errors.Is(err, ErrEnrollmentNotSupported) {
+				// 405 means the server has mTLS enrollment disabled (e.g.
+				// ARKEEP_GRPC_INSECURE=true server-side). This is expected when
+				// TLS is terminated by a reverse proxy — not a configuration error.
+				m.logger.Info("server does not support mTLS enrollment — connecting without client certificate",
+					zap.String("hint", "set ARKEEP_GRPC_INSECURE=true on the agent to suppress this message"),
+				)
+			} else {
+				m.logger.Error("enrollment failed — check --server-http-addr and --agent-secret",
+					zap.Error(err),
+				)
+			}
 			// Continue without mTLS; the server may still accept the connection
 			// in dev mode (agentSecret == ""). If mTLS is enforced the gRPC
 			// handshake will fail and the retry loop will handle it.
