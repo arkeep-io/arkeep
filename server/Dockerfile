@@ -47,7 +47,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
     ./cmd/server
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM alpine:3.23
+FROM alpine:3.24
 
 RUN apk upgrade --no-cache && \
     apk add --no-cache ca-certificates tzdata && \

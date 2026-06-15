@@ -149,20 +149,27 @@ const triggerLabel = computed(() => props.modelValue ? (displayLabel.value || pr
         'flex w-full items-center justify-between gap-2 rounded-md border bg-transparent px-3 py-2 text-sm',
         'shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]',
         'disabled:cursor-not-allowed disabled:opacity-50 h-9',
-        open && 'border-ring ring-ring/50 ring-[3px]',
       )"
       @click="toggle"
     >
       <span :class="triggerLabel ? 'text-foreground' : 'text-muted-foreground'">
         {{ triggerLabel || placeholder }}
       </span>
-      <ChevronDown class="size-4 shrink-0 opacity-50" :class="open && 'rotate-180'" />
+      <ChevronDown class="size-4 shrink-0 opacity-50" />
     </button>
 
     <!-- Dropdown panel -->
+    <Transition
+      enter-active-class="transition-[opacity,transform] duration-100 ease-out"
+      enter-from-class="opacity-0 scale-95"
+      enter-to-class="opacity-100 scale-100"
+      leave-active-class="transition-[opacity,transform] duration-75 ease-in"
+      leave-from-class="opacity-100 scale-100"
+      leave-to-class="opacity-0 scale-95"
+    >
     <div
       v-if="open"
-      class="absolute z-50 mt-1 w-full min-w-50 rounded-md border bg-popover shadow-md"
+      class="absolute z-50 mt-1 w-full min-w-50 rounded-md border bg-popover shadow-md origin-top"
     >
       <!-- Search input -->
       <div class="p-2 border-b">
@@ -226,5 +233,6 @@ const triggerLabel = computed(() => props.modelValue ? (displayLabel.value || pr
         </template>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
