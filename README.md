@@ -957,9 +957,11 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 Hey 👋 I’m Filippo, the independent maintainer of Arkeep.
 
-If Arkeep saves you time, helps your workflow, or you simply like where the project is going, you can support the work behind it through GitHub Sponsors.
+Arkeep is built around a simple idea: before touching production, you should know you have a backup you can actually recover from.
 
-Sponsoring is a bit like buying me a coffee for open source: it helps me spend more time on new features, bug fixes, documentation, releases, and all the small maintenance work that keeps the project moving.
+If Arkeep saves you time, helps your workflow, or gives you more confidence managing your infrastructure, you can support the work behind it through GitHub Sponsors.
+
+Sponsoring is a bit like buying me a coffee for open source: it helps me spend more time on bug fixes, documentation, releases, restore testing, and the next pieces of the roadmap, from inventory to safer update orchestration.
 
 [Become a sponsor](https://github.com/sponsors/filippocrotti12)
 
