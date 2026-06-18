@@ -73,6 +73,7 @@ type testDeps struct {
 	settings repositories.SettingsRepository
 	audit    repositories.AuditRepository
 	dash     repositories.DashboardRepository
+	resets   repositories.PasswordResetTokenRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -93,7 +94,31 @@ func newTestDeps(t *testing.T) *testDeps {
 		settings: repositories.NewSettingsRepository(gdb),
 		audit:    repositories.NewAuditRepository(gdb),
 		dash:     repositories.NewDashboardRepository(gdb),
+		resets:   repositories.NewPasswordResetTokenRepository(gdb),
 	}
+}
+
+// ─── Fake mailer ────────────────────────────────────────────────────────────
+
+// sentEmail records a single SendEmail call for assertions.
+type sentEmail struct {
+	to      []string
+	subject string
+	body    string
+}
+
+// fakeMailer is a test double for the Mailer interface. configured controls the
+// SMTPConfigured response; sent captures every delivered email.
+type fakeMailer struct {
+	configured bool
+	sent       []sentEmail
+}
+
+func (m *fakeMailer) SMTPConfigured(context.Context) bool { return m.configured }
+
+func (m *fakeMailer) SendEmail(_ context.Context, to []string, subject, body string) error {
+	m.sent = append(m.sent, sentEmail{to: to, subject: subject, body: body})
+	return nil
 }
 
 // ─── Auth service ─────────────────────────────────────────────────────────────
@@ -138,9 +163,17 @@ type testEnv struct {
 	authSvc *auth.AuthService
 	sched   *scheduler.Scheduler
 	mgr     *agentmanager.Manager
+	mailer  *fakeMailer
 }
 
 func newTestEnv(t *testing.T) *testEnv {
+	return newTestEnvWithBaseURL(t, "")
+}
+
+// newTestEnvWithBaseURL is like newTestEnv but sets RouterConfig.PublicBaseURL,
+// used to verify outbound links use the configured base URL rather than the
+// request host.
+func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 	t.Helper()
 
 	deps := newTestDeps(t)
@@ -148,6 +181,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	mgr := agentmanager.New(zap.NewNop())
 	sched := newTestScheduler(t, deps, mgr)
 	hub := websocket.NewHub()
+	mailer := &fakeMailer{configured: true}
 
 	cfg := RouterConfig{
 		AuthService:   authSvc,
@@ -166,6 +200,10 @@ func newTestEnv(t *testing.T) *testEnv {
 		Settings:      deps.settings,
 		Dashboard:     deps.dash,
 		Audit:         deps.audit,
+		ResetTokens:   deps.resets,
+		RefreshTokens: deps.tokens,
+		Mailer:        mailer,
+		PublicBaseURL: baseURL,
 		Secure:        false,
 		AutoCerts:     nil,
 		ServerVersion: "0.0.0-test",
@@ -181,6 +219,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		authSvc: authSvc,
 		sched:   sched,
 		mgr:     mgr,
+		mailer:  mailer,
 	}
 }
 

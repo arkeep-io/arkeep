@@ -48,6 +48,7 @@ type config struct {
 	logLevel      string
 	dataDir       string
 	agentSecret   string
+	baseURL       string
 	secureCookies bool
 	telemetry     bool
 	grpcInsecure  bool
@@ -86,6 +87,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
 	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
+	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Recommended in production to prevent Host header injection")
 root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
@@ -177,6 +179,7 @@ func run(ctx context.Context, cfg *config) error {
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
 	auditRepo := repositories.NewAuditRepository(gormDB)
+	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
@@ -301,6 +304,10 @@ func run(ctx context.Context, cfg *config) error {
 		Secure:        cfg.secureCookies,
 		Dashboard:     dashboardRepo,
 		Audit:         auditRepo,
+		ResetTokens:   resetTokenRepo,
+		RefreshTokens: refreshTokenRepo,
+		Mailer:        notifService,
+		PublicBaseURL: cfg.baseURL,
 		AutoCerts:     autoCerts,
 		AgentSecret:   cfg.agentSecret,
 		ServerVersion: version,
