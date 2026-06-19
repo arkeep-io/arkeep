@@ -206,6 +206,19 @@ func HashPassword(password string) (string, error) {
 	return hex.EncodeToString(salt) + ":" + hex.EncodeToString(hash), nil
 }
 
+// GenerateResetToken returns a cryptographically random hex-encoded token
+// suitable for single-use links such as password reset. It uses the same
+// entropy source and length as refresh tokens.
+func GenerateResetToken() (string, error) {
+	return generateRefreshToken()
+}
+
+// HashToken returns the SHA-256 hex digest of an opaque token. Only the hash is
+// persisted; the raw token is delivered to the user (cookie or email link).
+func HashToken(raw string) string {
+	return hashRefreshToken(raw)
+}
+
 // verifyPassword checks a plaintext password against a stored Argon2id hash.
 // Returns false if the hash format is invalid rather than propagating an error,
 // since an invalid hash means authentication must fail.

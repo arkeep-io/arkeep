@@ -70,6 +70,19 @@ type RefreshToken struct {
 	IPAddress string
 }
 
+// PasswordResetToken stores a hashed, single-use token for the self-service
+// password reset flow. Only local accounts can reset their password — OIDC
+// users are managed by their identity provider. The raw token is never stored:
+// only its SHA-256 hash. Tokens expire after a short window and are consumed
+// (UsedAt set) on the first successful reset.
+type PasswordResetToken struct {
+	Base
+	UserID    uuid.UUID  `gorm:"type:text;not null;index"`
+	TokenHash string     `gorm:"not null;index"` // SHA-256 hex of the raw token
+	ExpiresAt time.Time  `gorm:"not null"`
+	UsedAt    *time.Time // nil = not yet used
+}
+
 // OIDCProvider stores the configuration for an external OIDC identity provider.
 // ClientSecret is encrypted at rest. Multiple providers are supported.
 // The callback URL is computed server-side as {base_url}/api/v1/auth/oidc/callback

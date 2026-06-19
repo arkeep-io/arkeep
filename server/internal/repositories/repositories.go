@@ -54,6 +54,22 @@ type RefreshTokenRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// PasswordResetTokenRepository
+// -----------------------------------------------------------------------------
+
+type PasswordResetTokenRepository interface {
+	Create(ctx context.Context, token *db.PasswordResetToken) error
+	// GetUnusedByHash returns an unused token matching the hash. Expiry is
+	// checked by the caller in Go (timezone-safe), mirroring refresh tokens.
+	// Returns ErrNotFound if no unused token matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.PasswordResetToken, error)
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all reset tokens for a user, invalidating any
+	// outstanding links when a new reset is requested.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
 // OIDCProviderRepository
 // -----------------------------------------------------------------------------
 

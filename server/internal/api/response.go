@@ -112,6 +112,16 @@ func ErrServiceUnavailable(w http.ResponseWriter, message string) {
 // reverse proxy must strip these headers from untrusted client requests so that
 // only the proxy's own values reach this function.
 func requestCallbackURL(r *http.Request) string {
+	return requestBaseURL(r) + "/auth/oidc/callback"
+}
+
+// requestBaseURL derives the external scheme://host of the incoming request,
+// respecting X-Forwarded-Proto and X-Forwarded-Host so deployments behind a
+// TLS-terminating reverse proxy produce correct absolute URLs (e.g. password
+// reset links) without a separate --base-url flag. The same security note as
+// requestCallbackURL applies: the proxy must strip these headers from
+// untrusted client requests.
+func requestBaseURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
@@ -124,7 +134,7 @@ func requestCallbackURL(r *http.Request) string {
 	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
 		host = h
 	}
-	return scheme + "://" + host + "/auth/oidc/callback"
+	return scheme + "://" + host
 }
 
 // decodeJSON decodes the request body into dst. Returns false and writes an
