@@ -33,6 +33,9 @@ services:
       ARKEEP_HTTP_ADDR: ":8080"
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
+      # External base URL for links in outbound email (e.g. password reset).
+      # Set in production behind a reverse proxy; empty = derive from request host.
+      ARKEEP_BASE_URL: "${ARKEEP_BASE_URL:-}"
       TZ: "${TZ:-UTC}"
     volumes:
       - arkeep-data:/var/lib/arkeep

@@ -321,6 +321,7 @@ precedence over environment variables when both are provided.
 | `--secret-key` | `ARKEEP_SECRET_KEY` | — | **Required.** Master key for AES-256-GCM credential encryption |
 | `--agent-secret` | `ARKEEP_AGENT_SECRET` | — | Shared secret for gRPC agent authentication |
 | `--data-dir` | `ARKEEP_DATA_DIR` | `./data` | Directory for RSA JWT keys and server state |
+| `--base-url` | `ARKEEP_BASE_URL` | — | External URL of the server (e.g. `https://arkeep.example.com`). Used to build links in outbound email (password reset). When unset, links are derived from the request `Host` header. **Set this in production** behind a reverse proxy to prevent Host-header injection into reset links. |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `--secure-cookies` | `ARKEEP_SECURE_COOKIES` | `false` | Set `Secure` flag on auth cookies (enable in production over HTTPS) |
 | `--telemetry` | `ARKEEP_TELEMETRY` | `true` | Send anonymous usage stats (opt-out) |
