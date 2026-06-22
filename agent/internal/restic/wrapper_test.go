@@ -66,22 +66,39 @@ func TestBuildBackupArgs_Linux(t *testing.T) {
 	}
 }
 
+// SFTP destinations are routed through rclone (repo URL "rclone:..."), so
+// buildCmd must point restic at the embedded rclone binary even though the
+// destination type is sftp, not rclone.
 func TestBuildCmd_SFTPRepository(t *testing.T) {
 	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone"}
 	dest := Destination{
-		Type:     DestSFTP,
-		RepoURL:  "sftp:user@backup.example.com:/srv/restic",
-		Password: "test-password",
+		Type:    DestSFTP,
+		RepoURL: "rclone:arkeepsftp:/srv/restic",
+		Env: map[string]string{
+			"RCLONE_CONFIG_ARKEEPSFTP_TYPE": "sftp",
+			"RCLONE_CONFIG_ARKEEPSFTP_HOST": "backup.example.com",
+		},
 	}
 
 	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
 
-	repoURL := envVar(cmd.Env, "RESTIC_REPOSITORY")
-	if repoURL == "" {
-		t.Fatal("RESTIC_REPOSITORY not found in cmd.Env")
+	if got := envVar(cmd.Env, "RCLONE_BINARY"); got != "/fake/rclone" {
+		t.Errorf("RCLONE_BINARY=%q, want /fake/rclone", got)
 	}
-	if !strings.HasPrefix(repoURL, "sftp:") {
-		t.Errorf("RESTIC_REPOSITORY=%q, want prefix 'sftp:'", repoURL)
+	if got := envVar(cmd.Env, "RCLONE_CONFIG_ARKEEPSFTP_HOST"); got != "backup.example.com" {
+		t.Errorf("rclone remote host env not propagated, got %q", got)
+	}
+}
+
+// Pure local/s3 destinations must NOT get RCLONE_BINARY set.
+func TestBuildCmd_NonRcloneNoRcloneBinary(t *testing.T) {
+	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone"}
+	dest := Destination{Type: DestLocal, RepoURL: "/mnt/backups"}
+
+	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+
+	if got := envVar(cmd.Env, "RCLONE_BINARY"); got != "" {
+		t.Errorf("RCLONE_BINARY should be unset for local dest, got %q", got)
 	}
 }
 
