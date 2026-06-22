@@ -17,7 +17,7 @@ jobs:
       matrix:
         module: [shared, server, agent]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -37,7 +37,7 @@ jobs:
     name: Container Vulnerability Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download agent deps (restic + rclone)
         run: cd agent && go run ./scripts/download_deps.go
