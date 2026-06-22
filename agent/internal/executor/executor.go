@@ -395,7 +395,10 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		if dest.RepoURL == "" {
-			log("warn", fmt.Sprintf("destination %s has empty repo_url, skipping", dest.DestinationID))
+			errMsg := fmt.Sprintf("destination %s has empty repo_url; check its configuration", dest.DestinationID)
+			log("error", errMsg)
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", time.Now().UTC(), 0, errMsg)
+			backupFailed = true
 			continue
 		}
 

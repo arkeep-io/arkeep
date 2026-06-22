@@ -40,11 +40,14 @@ func BuildRepoURL(dest *db.Destination) string {
 			return fmt.Sprintf("s3:%s/%s%s", endpoint, cfg.Bucket, path)
 		}
 	case "sftp":
+		// Port is parsed as a string because the GUI stores it as one in the
+		// config JSON; unmarshalling into an int would fail and yield an empty
+		// repo URL, silently skipping every SFTP backup.
 		var cfg struct {
 			Host string `json:"host"`
 			User string `json:"user"`
 			Path string `json:"path"`
-			Port int    `json:"port"`
+			Port string `json:"port"`
 		}
 		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil && cfg.Host != "" {
 			user := ""
@@ -52,8 +55,8 @@ func BuildRepoURL(dest *db.Destination) string {
 				user = cfg.User + "@"
 			}
 			port := ""
-			if cfg.Port != 0 && cfg.Port != 22 {
-				port = fmt.Sprintf(":%d", cfg.Port)
+			if cfg.Port != "" && cfg.Port != "22" {
+				port = ":" + cfg.Port
 			}
 			return fmt.Sprintf("sftp:%s%s%s:%s", user, cfg.Host, port, cfg.Path)
 		}
