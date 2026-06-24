@@ -173,21 +173,31 @@ watch(selectedAgent, (agent) => {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// browseSnapshot loads the snapshot's top-level directories. Deeper levels are
+// fetched lazily by the file tree via loadChildren as the user expands them.
 async function browseSnapshot() {
     if (!props.snapshot) return
     isBrowsing.value = true
     browseError.value = null
     try {
-        const res = await api<{ data: { entries: SnapshotFileEntry[] } }>(
-            `/api/v1/snapshots/${props.snapshot.id}/browse`,
-        )
-        browseEntries.value = res.data.entries ?? []
+        browseEntries.value = await loadChildren('')
         selectedPaths.value = []
     } catch (e: any) {
         browseError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to browse snapshot.'
     } finally {
         isBrowsing.value = false
     }
+}
+
+// loadChildren fetches the direct children of one directory within the snapshot.
+// An empty path lists the snapshot root.
+async function loadChildren(path: string): Promise<SnapshotFileEntry[]> {
+    if (!props.snapshot) return []
+    const query = path ? `?path=${encodeURIComponent(path)}` : ''
+    const res = await api<{ data: { entries: SnapshotFileEntry[] } }>(
+        `/api/v1/snapshots/${props.snapshot.id}/browse${query}`,
+    )
+    return res.data.entries ?? []
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +346,7 @@ function onOpenChange(value: boolean) {
                             <SnapshotFileTree
                                 v-model="selectedPaths"
                                 :entries="browseEntries"
+                                :load-children="loadChildren"
                                 class="max-h-64 overflow-y-auto rounded border"
                             />
                         </div>

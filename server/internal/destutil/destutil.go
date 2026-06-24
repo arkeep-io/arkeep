@@ -7,6 +7,7 @@ package destutil
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
@@ -70,8 +71,18 @@ func BuildRepoURL(dest *db.Destination) string {
 	case "rclone":
 		var cfg struct {
 			Remote string `json:"remote"`
+			Path   string `json:"path"`
 		}
 		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil && cfg.Remote != "" {
+			if cfg.Path != "" {
+				// rclone addresses a remote as "remote:path"; ensure exactly one
+				// colon separates them regardless of whether the user typed it.
+				remote := cfg.Remote
+				if !strings.HasSuffix(remote, ":") {
+					remote += ":"
+				}
+				return fmt.Sprintf("rclone:%s%s", remote, cfg.Path)
+			}
 			return fmt.Sprintf("rclone:%s", cfg.Remote)
 		}
 	}
