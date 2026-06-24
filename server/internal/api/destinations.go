@@ -181,6 +181,11 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			ErrInternal(w)
 			return
 		}
+		// Listing snapshots on a cold remote repository can exceed the server's
+		// default 30s write timeout; extend it so the response isn't severed.
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute)); err != nil {
+			h.logger.Debug("import: could not extend write deadline", zap.Error(err))
+		}
 		correlationID := uuid.New().String()
 		res, err := h.agentMgr.RequestSnapshotImport(ctx, req.ImportAgentID, correlationID, payloadBytes)
 		if err != nil {
@@ -379,6 +384,11 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Listing snapshots on a cold remote repository can exceed the server's
+	// default 30s write timeout; extend it so the response isn't severed.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute)); err != nil {
+		h.logger.Debug("import: could not extend write deadline", zap.Error(err))
+	}
 	correlationID := uuid.New().String()
 	result, err := h.agentMgr.RequestSnapshotImport(ctx, req.AgentID, correlationID, payloadBytes)
 	if err != nil {

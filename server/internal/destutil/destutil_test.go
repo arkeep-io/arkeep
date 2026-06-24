@@ -67,6 +67,18 @@ func TestBuildRepoURL(t *testing.T) {
 			config: `{"remote":"myremote:bucket"}`,
 			want:   "rclone:myremote:bucket",
 		},
+		{
+			name:   "rclone with path, remote has trailing colon",
+			dType:  "rclone",
+			config: `{"remote":"pCloudDrive:","path":"Arkeep"}`,
+			want:   "rclone:pCloudDrive:Arkeep",
+		},
+		{
+			name:   "rclone with path, remote without colon",
+			dType:  "rclone",
+			config: `{"remote":"pCloudDrive","path":"Arkeep"}`,
+			want:   "rclone:pCloudDrive:Arkeep",
+		},
 	}
 
 	for _, tt := range tests {

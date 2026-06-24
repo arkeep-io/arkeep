@@ -312,11 +312,18 @@ func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, tar
 	return w.runRestoreJSON(ctx, dest, args, hostRoot)
 }
 
-// Ls returns the list of files and directories stored in snapshotID.
-// It runs `restic ls --json <snapshotID>` and parses the newline-delimited
-// JSON output. The first line is the snapshot header and is skipped.
-func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID string) ([]LsEntry, error) {
-	cmd := w.buildCmd(ctx, dest, []string{"ls", "--json", snapshotID})
+// Ls returns the direct children of dir within snapshotID (non-recursive).
+// It runs `restic ls --json <snapshotID> <dir>` and parses the newline-delimited
+// JSON output. Without --recursive, restic lists only the immediate entries of
+// dir, which keeps the response small and fast even on huge snapshots (the GUI
+// expands one directory level at a time). The snapshot header line and the dir
+// entry itself are skipped, so the result is exactly the directory's children.
+// dir defaults to "/" (the snapshot root) when empty.
+func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir string) ([]LsEntry, error) {
+	if dir == "" {
+		dir = "/"
+	}
+	cmd := w.buildCmd(ctx, dest, []string{"ls", "--json", snapshotID, dir})
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("restic: failed to open stdout pipe: %w", err)
@@ -348,6 +355,11 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID string) (
 			Mtime string `json:"mtime"`
 		}
 		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		if raw.Path == dir {
+			// restic emits the queried directory itself; skip it so the result
+			// contains only its direct children.
 			continue
 		}
 		entries = append(entries, LsEntry{
