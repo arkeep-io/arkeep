@@ -319,11 +319,15 @@ func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, tar
 // expands one directory level at a time). The snapshot header line and the dir
 // entry itself are skipped, so the result is exactly the directory's children.
 // dir defaults to "/" (the snapshot root) when empty.
+//
+// The "--" end-of-options marker separates flags from the positional snapshotID
+// and dir, so a dir that begins with "-" (it originates from a user-supplied
+// ?path= query) can never be interpreted by restic as a flag.
 func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir string) ([]LsEntry, error) {
 	if dir == "" {
 		dir = "/"
 	}
-	cmd := w.buildCmd(ctx, dest, []string{"ls", "--json", snapshotID, dir})
+	cmd := w.buildCmd(ctx, dest, []string{"ls", "--json", "--", snapshotID, dir})
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("restic: failed to open stdout pipe: %w", err)
