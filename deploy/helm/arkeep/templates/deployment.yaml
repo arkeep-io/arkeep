@@ -52,6 +52,10 @@ spec:
               value: {{ .Values.config.grpcAddr | quote }}
             - name: ARKEEP_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
+            {{- if .Values.config.baseURL }}
+            - name: ARKEEP_BASE_URL
+              value: {{ .Values.config.baseURL | quote }}
+            {{- end }}
             - name: ARKEEP_SECURE_COOKIES
               value: {{ .Values.config.secureCookies | quote }}
             - name: ARKEEP_DATA_DIR

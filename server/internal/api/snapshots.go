@@ -108,6 +108,7 @@ type restorePayload struct {
 type snapshotBrowsePayload struct {
 	ResticSnapshotID string            `json:"restic_snapshot_id"`
 	RepoPassword     string            `json:"repo_password"`
+	Path             string            `json:"path"` // directory to list; empty means the snapshot root
 	Destination      destinationFields `json:"destination"`
 }
 
@@ -424,17 +425,21 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	Ok(w, restoreResponse{JobID: job.ID.String()})
 }
 
-// Browse handles GET /api/v1/snapshots/{id}/browse.
-// Returns the full file/directory tree of the snapshot by dispatching a
-// JOB_TYPE_LIST_SNAPSHOT_FILES request to the policy's agent via the existing
-// StreamJobs stream (same pattern as JOB_TYPE_LIST_VOLUMES).
+// Browse handles GET /api/v1/snapshots/{id}/browse[?path=<dir>].
+// Returns the direct children of one directory within the snapshot by
+// dispatching a JOB_TYPE_LIST_SNAPSHOT_FILES request to the policy's agent via
+// the existing StreamJobs stream (same pattern as JOB_TYPE_LIST_VOLUMES).
+//
+// The listing is non-recursive: the GUI expands one directory level at a time
+// (lazy loading), so each response stays small and fast even on snapshots with
+// millions of files. An empty path lists the snapshot root.
 //
 // Flow:
 //  1. Load snapshot → restic_snapshot_id, destination_id, policy_id
 //  2. Load policy → agent_id, repo_password
 //  3. Load destination → repo URL and env
-//  4. Dispatch browse request to agent; block until result or timeout (60 s)
-//  5. Return flat list of SnapshotFileEntry — the frontend builds the tree
+//  4. Dispatch browse request to agent; block until result or timeout
+//  5. Return the directory's direct children as a flat list of SnapshotFileEntry
 func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 	snapshotID, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -442,6 +447,7 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	path := r.URL.Query().Get("path")
 
 	// --- 1. Load snapshot ---
 	snapshot, err := h.repo.GetByID(ctx, snapshotID)
@@ -489,6 +495,7 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 	browsePayload := snapshotBrowsePayload{
 		ResticSnapshotID: snapshot.SnapshotID,
 		RepoPassword:     string(policy.RepoPassword),
+		Path:             path,
 		Destination: destinationFields{
 			DestinationID: dest.ID.String(),
 			Type:          dest.Type,
@@ -502,6 +509,14 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to marshal browse payload", zap.Error(err))
 		ErrInternal(w)
 		return
+	}
+
+	// Running restic ls against a cold remote repository (the first expansion
+	// loads the index) can exceed the server's default 30s write timeout. Extend
+	// the write deadline past the agent wait (snapshotBrowseTimeout, 5m) so the
+	// response — success or the 504 — can always be written.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(6 * time.Minute)); err != nil {
+		h.logger.Debug("browse: could not extend write deadline", zap.Error(err))
 	}
 
 	correlationID := uuid.NewString()

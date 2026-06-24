@@ -37,9 +37,21 @@ type RouterConfig struct {
 	Settings      repositories.SettingsRepository
 	Dashboard     repositories.DashboardRepository
 	Audit         repositories.AuditRepository
+	ResetTokens   repositories.PasswordResetTokenRepository
+	RefreshTokens repositories.RefreshTokenRepository
+
+	// Mailer sends transactional emails (e.g. password reset links) and reports
+	// whether SMTP is configured. Satisfied by *notification.NotificationService.
+	Mailer Mailer
 
 	// Secure controls whether auth cookies are set with the Secure flag.
 	Secure bool
+
+	// PublicBaseURL is the trusted external URL of the server (scheme://host),
+	// used to build absolute links in outbound email (e.g. password reset).
+	// When empty, links fall back to the request-derived host. Set this in
+	// production to prevent Host header injection into reset links.
+	PublicBaseURL string
 
 	// AutoCerts is the auto-generated PKI used for gRPC mTLS enrollment.
 	AutoCerts *grpccerts.AutoCerts
@@ -76,6 +88,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
 	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Audit, cfg.Logger, cfg.Secure)
+	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	var enrollHandler *EnrollHandler
 	if cfg.AutoCerts != nil {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
@@ -120,6 +133,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// /login?provider_id={id} initiates the flow for a specific provider.
 			r.Get("/auth/oidc/providers", authHandler.ListOIDCProviders)
 			r.Get("/auth/oidc/login", authHandler.OIDCLogin)
+
+			// Self-service password reset (local accounts only). status is a
+			// cheap unauthenticated check used to gate the UI; request and
+			// confirm are rate-limited like login to deter abuse.
+			r.Get("/auth/password-reset/status", passwordResetHandler.Status)
+			r.With(RateLimit(loginLimiter)).Post("/auth/password-reset/request", passwordResetHandler.Request)
+			r.With(RateLimit(loginLimiter)).Post("/auth/password-reset/confirm", passwordResetHandler.Confirm)
 
 			r.Get("/setup/status", setupHandler.GetStatus)
 			r.Post("/setup/complete", setupHandler.Complete)

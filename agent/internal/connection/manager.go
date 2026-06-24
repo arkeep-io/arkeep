@@ -647,7 +647,10 @@ func (m *Manager) handleVolumeListRequest(correlationID, agentID string) {
 type snapshotBrowsePayload struct {
 	ResticSnapshotID string `json:"restic_snapshot_id"`
 	RepoPassword     string `json:"repo_password"`
-	Destination      struct {
+	// Path is the directory whose direct children should be listed. Empty means
+	// the snapshot root. The GUI sends one path per directory it expands.
+	Path        string `json:"path"`
+	Destination struct {
 		Type    string            `json:"type"`
 		RepoURL string            `json:"repo_url"`
 		Env     map[string]string `json:"env"`
@@ -698,7 +701,7 @@ func (m *Manager) handleSnapshotBrowseRequest(correlationID, agentID string, pay
 		Env:      p.Destination.Env,
 	}
 
-	entries, err := m.wrapper.Ls(ctx, dest, p.ResticSnapshotID)
+	entries, err := m.wrapper.Ls(ctx, dest, p.ResticSnapshotID, p.Path)
 	if err != nil {
 		report.Error = err.Error()
 	} else {

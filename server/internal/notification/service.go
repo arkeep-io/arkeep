@@ -88,6 +88,23 @@ func NewService(cfg Config) *NotificationService {
 	return svc
 }
 
+// SMTPConfigured reports whether a usable SMTP configuration exists. The
+// password reset flow uses this to decide between offering the email-based
+// reset and instructing the user to contact an administrator. A configuration
+// that exists but is incomplete (ErrInvalidConfig) counts as not configured.
+func (s *NotificationService) SMTPConfigured(ctx context.Context) bool {
+	_, err := loadSMTPConfig(ctx, s.settingsRepo)
+	return err == nil
+}
+
+// SendEmail delivers a one-off email through the configured SMTP server. Unlike
+// the notification fan-out, this is a direct send for transactional flows such
+// as password reset. If SMTP is not configured the send is skipped silently
+// (see emailSender.Send) — callers should gate on SMTPConfigured first.
+func (s *NotificationService) SendEmail(ctx context.Context, to []string, subject, body string) error {
+	return s.email.Send(ctx, to, subject, body)
+}
+
 // Start launches the background delivery retrier. It runs until ctx is
 // cancelled (i.e. server shutdown). Call it as a goroutine:
 //

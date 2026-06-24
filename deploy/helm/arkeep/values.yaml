@@ -28,6 +28,12 @@ config:
   # Log level: debug, info, warn, error
   logLevel: info
 
+  # External base URL of the server (e.g. https://arkeep.example.com), used to
+  # build links in outbound email such as the password reset link. Leave empty
+  # to derive it from the request host. Recommended in production (behind an
+  # Ingress) to prevent Host-header injection into reset links.
+  baseURL: ""
+
   # Database driver: sqlite or postgres.
   # Use "postgres" with postgresql.enabled=true or externalPostgresql configured.
   dbDriver: sqlite

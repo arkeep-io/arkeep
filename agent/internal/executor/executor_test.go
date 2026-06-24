@@ -1,10 +1,75 @@
 package executor
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
+
+	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
+
+type fakeSink struct{}
+
+func (fakeSink) SendLog(jobID, level, message string) {}
+
+type destResult struct {
+	status string
+	errMsg string
+}
+
+type fakeReporter struct {
+	statuses    []string
+	destResults map[string]destResult
+}
+
+func (r *fakeReporter) ReportStatus(jobID, status, message string) {
+	r.statuses = append(r.statuses, status)
+}
+
+func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+	if r.destResults == nil {
+		r.destResults = make(map[string]destResult)
+	}
+	r.destResults[destinationID] = destResult{status: status, errMsg: errMsg}
+}
+
+// TestExecuteBackupEmptyRepoURL verifies that a destination with an empty
+// repo_url is reported as failed and causes the whole job to fail, rather than
+// being silently skipped while the job is reported as succeeded.
+func TestExecuteBackupEmptyRepoURL(t *testing.T) {
+	payload := backupPayload{
+		Sources:      `["/tmp"]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{
+			{DestinationID: "dest-1", Type: "sftp", RepoURL: ""},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+	e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+	if got := reporter.destResults["dest-1"].status; got != "failed" {
+		t.Errorf("destination status = %q, want %q", got, "failed")
+	}
+	if len(reporter.statuses) == 0 {
+		t.Fatal("no job status reported")
+	}
+	if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
+		t.Errorf("final job status = %q, want %q (all statuses: %v)", final, "failed", reporter.statuses)
+	}
+}
 
 func TestTranslateLocalPath(t *testing.T) {
 	tests := []struct {

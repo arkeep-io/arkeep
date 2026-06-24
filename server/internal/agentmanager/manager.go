@@ -42,8 +42,9 @@ var ErrSnapshotImportTimeout = errors.New("snapshot import request timed out")
 const volumeListTimeout = 10 * time.Second
 
 // snapshotBrowseTimeout is how long RequestSnapshotBrowse waits for the agent.
-// Generous because restic ls on a remote repository can take tens of seconds.
-const snapshotBrowseTimeout = 60 * time.Second
+// Generous because the first directory expansion loads the repository index,
+// which can take minutes on a large remote (e.g. rclone/pCloud) repository.
+const snapshotBrowseTimeout = 5 * time.Minute
 
 // snapshotImportTimeout is how long RequestSnapshotImport waits for the agent.
 // Generous because restic snapshots on a large remote repository can be slow.

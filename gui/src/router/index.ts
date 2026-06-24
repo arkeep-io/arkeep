@@ -40,6 +40,20 @@ const routes: RouteRecordRaw[] = [
     meta: { public: true },
   },
 
+  // Self-service password reset (local accounts only).
+  {
+    path: '/auth/forgot-password',
+    name: 'forgot-password',
+    component: () => import('@/pages/auth/ForgotPasswordPage.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/auth/reset-password',
+    name: 'reset-password',
+    component: () => import('@/pages/auth/ResetPasswordPage.vue'),
+    meta: { public: true },
+  },
+
   // OIDC callback — the server handles the actual OAuth exchange and redirects
   // here with the access token. This page reads the token from the URL, stores
   // it, and navigates to the dashboard.

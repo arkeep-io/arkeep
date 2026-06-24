@@ -153,9 +153,10 @@ onMounted(fetchOIDCProviders)
                                 <Field>
                                     <div class="flex items-center">
                                         <FieldLabel for="password">Password</FieldLabel>
-                                        <span class="ml-auto text-xs text-muted-foreground" title="Ask your administrator to reset your password">
+                                        <RouterLink to="/auth/forgot-password"
+                                            class="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline">
                                             Forgot password?
-                                        </span>
+                                        </RouterLink>
                                     </div>
                                     <div class="relative">
                                         <Input id="password" v-model="passwordValue"
