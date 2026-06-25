@@ -50,6 +50,11 @@ const progressData = ref<ResticProgressEvent | null>(null)
 const cancelling = ref(false)
 const PROGRESS_KEY = `arkeep:job-progress:${jobId}`
 
+// Terminal job states. Once the job reaches one of these, an in-flight fetch
+// started while it was still running must not revert it back to a live state.
+const TERMINAL: JobStatus[] = ['succeeded', 'failed', 'cancelled']
+const terminalSeen = ref(false)
+
 // ---------------------------------------------------------------------------
 // Helpers — statusVariant/statusClass/statusLabel/statusIcon/formatDate/
 //            formatDuration/formatBytes imported from @/lib/jobUtils
@@ -86,6 +91,11 @@ async function fetchJob() {
     progressData.value = null
     try {
         const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
+        // Guard against a stale response: if a terminal WS status already
+        // arrived, this GET may have been issued before the job finished and
+        // would otherwise revert the badge to "running".
+        if (terminalSeen.value && !TERMINAL.includes(res.data.status)) return
+        if (TERMINAL.includes(res.data.status)) terminalSeen.value = true
         job.value = res.data
 
         // Restore cached progress so the bar is visible immediately on reload.
@@ -113,6 +123,8 @@ async function fetchJob() {
 async function refreshJobMeta() {
     try {
         const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
+        if (terminalSeen.value && !TERMINAL.includes(res.data.status)) return
+        if (TERMINAL.includes(res.data.status)) terminalSeen.value = true
         job.value = res.data
     } catch {
         // Non-fatal — the current status is already updated optimistically.
@@ -189,16 +201,24 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
     }
 
     // Update job status when the server signals a state transition.
-    if (msg.type === 'job.status' && msg.payload && job.value) {
+    // NOTE: do not guard the whole block on job.value — a fast-failing job can
+    // emit its terminal status before the initial fetchJob() has resolved.
+    // Dropping it there would leave the badge stuck on "running" until a manual
+    // refresh. The optimistic in-memory update still requires job.value, but the
+    // terminal refresh must run regardless.
+    if (msg.type === 'job.status' && msg.payload) {
         const p = msg.payload as unknown as JobStatusPayload
-        job.value.status = p.status as JobStatus
-        job.value.ended_at = p.finished_at ?? job.value.ended_at
+        if (job.value) {
+            job.value.status = p.status as JobStatus
+            job.value.ended_at = p.finished_at ?? job.value.ended_at
+        }
 
         // Once the job reaches a terminal state, refresh only the job metadata
         // (status, destinations, timestamps) without touching the logs array.
         // The bulk DB log insert may not have completed yet, so calling
         // fetchLogs() here would wipe live WS log entries with an empty result.
-        if (p.status === 'succeeded' || p.status === 'failed' || p.status === 'cancelled') {
+        if (TERMINAL.includes(p.status as JobStatus)) {
+            terminalSeen.value = true
             sessionStorage.removeItem(PROGRESS_KEY)
             refreshJobMeta()
         }

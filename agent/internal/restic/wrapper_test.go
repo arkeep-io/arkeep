@@ -82,24 +82,35 @@ func TestBuildCmd_SFTPRepository(t *testing.T) {
 
 	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
 
-	if got := envVar(cmd.Env, "RCLONE_BINARY"); got != "/fake/rclone" {
-		t.Errorf("RCLONE_BINARY=%q, want /fake/rclone", got)
+	if !hasRcloneProgramOpt(cmd.Args, "/fake/rclone") {
+		t.Errorf("expected -o rclone.program=/fake/rclone in args, got %v", cmd.Args)
 	}
 	if got := envVar(cmd.Env, "RCLONE_CONFIG_ARKEEPSFTP_HOST"); got != "backup.example.com" {
 		t.Errorf("rclone remote host env not propagated, got %q", got)
 	}
 }
 
-// Pure local/s3 destinations must NOT get RCLONE_BINARY set.
-func TestBuildCmd_NonRcloneNoRcloneBinary(t *testing.T) {
+// Pure local/s3 destinations must NOT get the rclone.program option.
+func TestBuildCmd_NonRcloneNoRcloneProgram(t *testing.T) {
 	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone"}
 	dest := Destination{Type: DestLocal, RepoURL: "/mnt/backups"}
 
 	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
 
-	if got := envVar(cmd.Env, "RCLONE_BINARY"); got != "" {
-		t.Errorf("RCLONE_BINARY should be unset for local dest, got %q", got)
+	if hasRcloneProgramOpt(cmd.Args, "/fake/rclone") {
+		t.Errorf("rclone.program option should be unset for local dest, got %v", cmd.Args)
 	}
+}
+
+// hasRcloneProgramOpt reports whether args contains the consecutive pair
+// "-o" "rclone.program=<bin>".
+func hasRcloneProgramOpt(args []string, bin string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-o" && args[i+1] == "rclone.program="+bin {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRetentionPolicy_IsEnabled(t *testing.T) {

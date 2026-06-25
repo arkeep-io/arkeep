@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
@@ -193,6 +195,67 @@ func TestDestinationHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusNotFound)
 	})
+
+	t.Run("preserves credentials when PATCH omits them", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "keep-creds", "sftp")
+		orig := storedCredentials(t, e, dest.ID.String())
+
+		newName := "renamed"
+		resp := e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"name": &newName,
+		})
+		assertStatus(t, resp, http.StatusOK)
+
+		if got := storedCredentials(t, e, dest.ID.String()); got != orig {
+			t.Errorf("credentials = %q, want preserved %q", got, orig)
+		}
+	})
+
+	t.Run("preserves credentials when PATCH sends a blank payload", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "blank-creds", "sftp")
+		orig := storedCredentials(t, e, dest.ID.String())
+
+		blank := `{"password":"","private_key":""}`
+		resp := e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"credentials": &blank,
+		})
+		assertStatus(t, resp, http.StatusOK)
+
+		if got := storedCredentials(t, e, dest.ID.String()); got != orig {
+			t.Errorf("credentials = %q, want preserved %q", got, orig)
+		}
+	})
+
+	t.Run("updates credentials when PATCH sends new ones", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "update-creds", "sftp")
+
+		newCreds := `{"password":"s3cret"}`
+		resp := e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"credentials": &newCreds,
+		})
+		assertStatus(t, resp, http.StatusOK)
+
+		if got := storedCredentials(t, e, dest.ID.String()); got != newCreds {
+			t.Errorf("credentials = %q, want %q", got, newCreds)
+		}
+	})
+}
+
+// storedCredentials reads back the decrypted credentials of a destination.
+func storedCredentials(t *testing.T, e *testEnv, id string) string {
+	t.Helper()
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		t.Fatalf("storedCredentials: bad id %q: %v", id, err)
+	}
+	d, err := e.deps.dests.GetByID(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("storedCredentials: %v", err)
+	}
+	return string(d.Credentials)
 }
 
 func TestDestinationHandler_Delete(t *testing.T) {

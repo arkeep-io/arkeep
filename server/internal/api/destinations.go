@@ -289,7 +289,7 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		dest.Name = *req.Name
 	}
-	if req.Credentials != nil {
+	if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
 		dest.Credentials = db.EncryptedString(*req.Credentials)
 	}
 	if req.Config != nil {
@@ -306,6 +306,26 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name})
 	Ok(w, destinationToResponse(dest))
+}
+
+// hasNonEmptyCredential reports whether the credentials JSON carries at least
+// one non-empty value. Prevents an edit form that never echoes secrets back
+// from wiping stored credentials with a blank payload (e.g. {"password":""}).
+func hasNonEmptyCredential(creds string) bool {
+	s := strings.TrimSpace(creds)
+	if s == "" || s == "{}" {
+		return false
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return true // not a flat string map — treat as a real update
+	}
+	for _, v := range m {
+		if strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // importDestinationRequest is the body for POST /api/v1/destinations/{id}/import.
