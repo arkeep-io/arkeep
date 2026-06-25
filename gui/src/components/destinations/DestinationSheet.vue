@@ -282,6 +282,13 @@ function buildConfigAndCreds(): { config: Record<string, string>; creds: Record<
 // Validate
 // ---------------------------------------------------------------------------
 
+// hasEnteredCredentials reports whether the user typed any credential value.
+// Empty in edit mode means "keep the existing credentials" — they are
+// write-only and never echoed back into the form.
+function hasEnteredCredentials(creds: Record<string, string>): boolean {
+    return Object.values(creds).some(v => v != null && String(v).trim() !== '')
+}
+
 function validate(): boolean {
     fieldErrors.value = {}
     nameError.value = ''
@@ -294,7 +301,6 @@ function validate(): boolean {
 
     const { config, creds } = buildConfigAndCreds()
     const configResult = configSchemas[selectedType.value].safeParse(config)
-    const credsResult = credSchemas[selectedType.value].safeParse(creds)
 
     if (!configResult.success) {
         for (const issue of configResult.error.issues) {
@@ -302,11 +308,17 @@ function validate(): boolean {
         }
         valid = false
     }
-    if (!credsResult.success) {
-        for (const issue of credsResult.error.issues) {
-            fieldErrors.value[`cred_${String(issue.path[0])}`] = issue.message
+
+    // In edit mode, blank credentials are valid and mean "keep current", so
+    // skip credential validation unless the user actually entered something.
+    if (!isEdit.value || hasEnteredCredentials(creds)) {
+        const credsResult = credSchemas[selectedType.value].safeParse(creds)
+        if (!credsResult.success) {
+            for (const issue of credsResult.error.issues) {
+                fieldErrors.value[`cred_${String(issue.path[0])}`] = issue.message
+            }
+            valid = false
         }
-        valid = false
     }
 
     return valid
@@ -334,15 +346,20 @@ async function onSubmit() {
 
     try {
         if (isEdit.value && props.destination) {
-            // PATCH — credentials always sent because they are write-only
+            // PATCH — only send credentials when the user entered new ones.
+            // Omitting the field tells the backend to keep the stored
+            // credentials, since the form never echoes secrets back.
+            const body: Record<string, unknown> = {
+                name: name.value,
+                config: JSON.stringify(config),
+                enabled: enabled.value,
+            }
+            if (hasEnteredCredentials(creds)) {
+                body.credentials = JSON.stringify(creds)
+            }
             await api(`/api/v1/destinations/${props.destination.id}`, {
                 method: 'PATCH',
-                body: {
-                    name: name.value,
-                    config: JSON.stringify(config),
-                    credentials: JSON.stringify(creds),
-                    enabled: enabled.value,
-                },
+                body,
             })
         } else {
             // Build the POST body; include import fields if provided so the
@@ -513,6 +530,9 @@ function onOpenChange(value: boolean) {
 
                         <Separator />
                         <p class="text-sm font-medium">Credentials</p>
+                        <p v-if="isEdit" class="text-muted-foreground text-xs -mt-2">
+                            Leave blank to keep the current credentials.
+                        </p>
 
                         <Field>
                             <FieldLabel for="s3-access-key">Access Key ID</FieldLabel>
@@ -564,6 +584,9 @@ function onOpenChange(value: boolean) {
                             Authentication
                             <span class="text-muted-foreground font-normal"> (password or private key)</span>
                         </p>
+                        <p v-if="isEdit" class="text-muted-foreground text-xs -mt-2">
+                            Leave blank to keep the current credentials.
+                        </p>
 
                         <Field>
                             <FieldLabel for="sftp-password">
@@ -594,6 +617,9 @@ function onOpenChange(value: boolean) {
                         <p class="text-sm font-medium">
                             Credentials
                             <span class="text-muted-foreground font-normal"> (optional)</span>
+                        </p>
+                        <p v-if="isEdit" class="text-muted-foreground text-xs -mt-2">
+                            Leave blank to keep the current credentials.
                         </p>
 
                         <Field>

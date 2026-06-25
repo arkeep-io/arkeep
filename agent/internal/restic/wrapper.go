@@ -584,8 +584,19 @@ func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []
 // buildCmd constructs the exec.Cmd for a restic invocation.
 // It sets RESTIC_REPOSITORY, RESTIC_PASSWORD, and any backend-specific
 // environment variables from dest.Env. For rclone destinations it also
-// passes the rclone binary path via RCLONE_BINARY so restic can find it.
+// points restic at the embedded rclone binary via the "rclone.program" option.
 func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string) *exec.Cmd {
+	// For rclone-backed destinations, tell restic where the embedded rclone
+	// binary lives. restic does NOT read any RCLONE_BINARY env var: the only
+	// way to override the rclone path is the rclone backend's "program" option,
+	// passed as a global "-o" flag before the subcommand. Without this, restic
+	// looks for "rclone" on $PATH and fails on hosts that have no system rclone.
+	// SFTP destinations are also routed through rclone, so key off the repo URL
+	// prefix rather than the destination type.
+	if strings.HasPrefix(dest.RepoURL, "rclone:") {
+		args = append([]string{"-o", "rclone.program=" + w.rcloneBin}, args...)
+	}
+
 	cmd := exec.CommandContext(ctx, w.resticBin, args...)
 
 	// Build environment: start from the current process env so that PATH,
@@ -595,14 +606,6 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 		"RESTIC_REPOSITORY="+dest.RepoURL,
 		"RESTIC_PASSWORD="+dest.Password,
 	)
-
-	// For rclone-backed destinations, tell restic where the rclone binary is.
-	// restic uses the rclone backend transparently when the repo URL starts
-	// with "rclone:". SFTP destinations are also routed through rclone, so key
-	// off the repo URL prefix rather than the destination type.
-	if strings.HasPrefix(dest.RepoURL, "rclone:") {
-		env = append(env, "RCLONE_BINARY="+w.rcloneBin)
-	}
 
 	for k, v := range dest.Env {
 		env = append(env, k+"="+v)
