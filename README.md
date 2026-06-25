@@ -141,9 +141,14 @@ can recover if something goes wrong, and every operation leaves an audit trail.
 |---|---|
 | Local filesystem | Direct path on the agent's host |
 | S3-compatible | AWS S3, MinIO, Backblaze B2, Cloudflare R2, and more |
-| SFTP | Any SSH server |
+| SFTP | Any SSH server — password or SSH private key (PEM) auth |
 | Restic REST Server | Self-hosted [rest-server](https://github.com/restic/rest-server) |
 | Rclone | 40+ backends including Google Drive, OneDrive, Azure Blob, and more |
+
+SFTP connections are handled by the agent's bundled client, so no SSH client or
+`~/.ssh` setup is required on the agent host. The credentials you enter (password
+or private key) are used directly. Note that the server's host key is not
+currently verified.
 
 ---
 
