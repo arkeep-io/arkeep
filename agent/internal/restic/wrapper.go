@@ -598,8 +598,9 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 
 	// For rclone-backed destinations, tell restic where the rclone binary is.
 	// restic uses the rclone backend transparently when the repo URL starts
-	// with "rclone:".
-	if dest.Type == DestRclone {
+	// with "rclone:". SFTP destinations are also routed through rclone, so key
+	// off the repo URL prefix rather than the destination type.
+	if strings.HasPrefix(dest.RepoURL, "rclone:") {
 		env = append(env, "RCLONE_BINARY="+w.rcloneBin)
 	}
 
