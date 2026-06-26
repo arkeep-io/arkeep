@@ -469,7 +469,7 @@ func (s *NotificationService) configuredRecipients(ctx context.Context) []string
 		return nil
 	}
 	var out []string
-	for _, r := range strings.Split(raw, ",") {
+	for r := range strings.SplitSeq(raw, ",") {
 		if r = strings.TrimSpace(r); r != "" {
 			out = append(out, r)
 		}
