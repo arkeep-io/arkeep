@@ -131,6 +131,7 @@ func (s *NotificationService) Start(ctx context.Context) {
 // -----------------------------------------------------------------------------
 
 func (s *NotificationService) NotifyJobSucceeded(ctx context.Context, jobID, policyID uuid.UUID, policyName string) error {
+	policyName = sanitizeHeader(policyName)
 	payload := map[string]any{
 		"job_id":      jobID.String(),
 		"policy_id":   policyID.String(),
@@ -145,6 +146,8 @@ func (s *NotificationService) NotifyJobSucceeded(ctx context.Context, jobID, pol
 }
 
 func (s *NotificationService) NotifyJobFailed(ctx context.Context, jobID, policyID uuid.UUID, policyName, errMsg string) error {
+	policyName = sanitizeHeader(policyName)
+	errMsg = sanitizeHeader(errMsg)
 	payload := map[string]any{
 		"job_id":      jobID.String(),
 		"policy_id":   policyID.String(),
@@ -160,6 +163,7 @@ func (s *NotificationService) NotifyJobFailed(ctx context.Context, jobID, policy
 }
 
 func (s *NotificationService) NotifyAgentOffline(ctx context.Context, agentID uuid.UUID, agentName string) error {
+	agentName = sanitizeHeader(agentName)
 	payload := map[string]any{
 		"agent_id":   agentID.String(),
 		"agent_name": agentName,
@@ -173,6 +177,7 @@ func (s *NotificationService) NotifyAgentOffline(ctx context.Context, agentID uu
 }
 
 func (s *NotificationService) NotifyAgentOnline(ctx context.Context, agentID uuid.UUID, agentName string) error {
+	agentName = sanitizeHeader(agentName)
 	payload := map[string]any{
 		"agent_id":   agentID.String(),
 		"agent_name": agentName,
@@ -464,7 +469,7 @@ func (s *NotificationService) configuredRecipients(ctx context.Context) []string
 		return nil
 	}
 	var out []string
-	for _, r := range strings.Split(raw, ",") {
+	for r := range strings.SplitSeq(raw, ",") {
 		if r = strings.TrimSpace(r); r != "" {
 			out = append(out, r)
 		}

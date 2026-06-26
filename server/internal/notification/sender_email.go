@@ -167,13 +167,24 @@ func (s *emailSender) sendTLS(addr string, cfg *SMTPConfig, to []string, msg []b
 	return client.Quit()
 }
 
+// sanitizeHeader removes CR and LF to prevent email header injection (CWE-93).
+// Every value interpolated into a header field must pass through this.
+func sanitizeHeader(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 // buildEmail composes a minimal RFC 5322 email message.
 func buildEmail(from string, to []string, subject, body string) []byte {
+	recipients := make([]string, len(to))
+	for i, r := range to {
+		recipients[i] = sanitizeHeader(r)
+	}
+
 	var sb strings.Builder
-	sb.WriteString("From: " + from + "\r\n")
-	sb.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
-	sb.WriteString("Subject: " + subject + "\r\n")
-	sb.WriteString("Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n")
+	sb.WriteString("From: ");sb.WriteString(sanitizeHeader(from));sb.WriteString("\r\n")
+	sb.WriteString("To: ");sb.WriteString(strings.Join(recipients, ", "));sb.WriteString("\r\n")
+	sb.WriteString("Subject: ");sb.WriteString(sanitizeHeader(subject));sb.WriteString("\r\n")
+	sb.WriteString("Date: ");sb.WriteString(time.Now().UTC().Format(time.RFC1123Z));sb.WriteString("\r\n")
 	sb.WriteString("MIME-Version: 1.0\r\n")
 	sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 	sb.WriteString("\r\n")
