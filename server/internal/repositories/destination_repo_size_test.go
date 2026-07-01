@@ -54,3 +54,61 @@ func TestUpdateRepoSizeAndDashboardTotal(t *testing.T) {
 		t.Errorf("SnapshotsTotalSize = %d, want 910000000000", stats.SnapshotsTotalSize)
 	}
 }
+
+// TestListSortByUsage verifies server-side sorting of destinations by usage
+// (repo_size_bytes) in both directions, and that an unknown SortBy falls back
+// to the default order.
+func TestListSortByUsage(t *testing.T) {
+	gdb := newTestDB(t)
+	repo := NewDestinationRepository(gdb)
+	ctx := context.Background()
+
+	// Three destinations with distinct sizes.
+	specs := []struct {
+		name string
+		size int64
+	}{
+		{"small", 100},
+		{"large", 300},
+		{"medium", 200},
+	}
+	now := time.Now().UTC()
+	for _, s := range specs {
+		d := &db.Destination{Name: s.name, Type: "s3", Config: "{}", Enabled: true}
+		if err := repo.Create(ctx, d); err != nil {
+			t.Fatalf("Create %s: %v", s.name, err)
+		}
+		if err := repo.UpdateRepoSize(ctx, d.ID, s.size, now); err != nil {
+			t.Fatalf("UpdateRepoSize %s: %v", s.name, err)
+		}
+	}
+
+	names := func(ds []db.Destination) []string {
+		out := make([]string, len(ds))
+		for i, d := range ds {
+			out[i] = d.Name
+		}
+		return out
+	}
+
+	desc, _, err := repo.List(ctx, ListOptions{Limit: 10, SortBy: "usage", SortDesc: true})
+	if err != nil {
+		t.Fatalf("List desc: %v", err)
+	}
+	if got := names(desc); got[0] != "large" || got[2] != "small" {
+		t.Errorf("usage desc order = %v, want [large medium small]", got)
+	}
+
+	asc, _, err := repo.List(ctx, ListOptions{Limit: 10, SortBy: "usage", SortDesc: false})
+	if err != nil {
+		t.Fatalf("List asc: %v", err)
+	}
+	if got := names(asc); got[0] != "small" || got[2] != "large" {
+		t.Errorf("usage asc order = %v, want [small medium large]", got)
+	}
+
+	// Unknown SortBy must not error and falls back to the default order.
+	if _, _, err := repo.List(ctx, ListOptions{Limit: 10, SortBy: "bogus; DROP TABLE"}); err != nil {
+		t.Fatalf("List with unknown SortBy errored: %v", err)
+	}
+}

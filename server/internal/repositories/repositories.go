@@ -13,9 +13,14 @@ import (
 // -----------------------------------------------------------------------------
 
 // ListOptions contains common pagination and filtering options for list queries.
+// SortBy/SortDesc are optional; repositories that support sorting map SortBy to
+// a whitelisted column (unknown/empty values fall back to the default order).
+// Repositories that don't support sorting simply ignore these fields.
 type ListOptions struct {
-	Limit  int
-	Offset int
+	Limit    int
+	Offset   int
+	SortBy   string
+	SortDesc bool
 }
 
 // PolicyDestinationWithName extends db.PolicyDestination with the denormalised

@@ -37,6 +37,9 @@ import {
   Copy,
   Trash2,
   HardDrive,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
   Server,
   Globe,
   Network,
@@ -64,6 +67,10 @@ const page = ref(1)
 const pageSize = 50
 const offset = computed(() => (page.value - 1) * pageSize)
 const totalPages = computed(() => Math.ceil(total.value / pageSize))
+
+// Usage-column sort, applied server-side so ordering is global across pages.
+// Cycles: none → desc → asc → none.
+const usageSort = ref<'none' | 'desc' | 'asc'>('none')
 
 // Sheet
 const sheetOpen = ref(false)
@@ -102,6 +109,21 @@ function typeLabel(type: string): string {
   }
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '—'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
+}
+
+// Cycle the Usage sort (none → desc → asc → none), reset to page 1, and refetch.
+function toggleUsageSort() {
+  usageSort.value = usageSort.value === 'none' ? 'desc' : usageSort.value === 'desc' ? 'asc' : 'none'
+  page.value = 1
+  fetchDestinations()
+}
+
 // ---------------------------------------------------------------------------
 // Data fetching
 // ---------------------------------------------------------------------------
@@ -110,7 +132,8 @@ async function fetchDestinations() {
   loading.value = true
   error.value = null
   try {
-    const res = await api<ApiResponse<DestinationListResponse>>(`/api/v1/destinations?limit=${pageSize}&offset=${offset.value}`)
+    const sortParam = usageSort.value !== 'none' ? `&sort=usage&order=${usageSort.value}` : ''
+    const res = await api<ApiResponse<DestinationListResponse>>(`/api/v1/destinations?limit=${pageSize}&offset=${offset.value}${sortParam}`)
     destinations.value = res.data.items
     total.value = res.data.total
   } catch (e: any) {
@@ -221,6 +244,16 @@ onMounted(fetchDestinations)
             <TableHead>Name</TableHead>
             <TableHead>Type</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>
+              <button type="button"
+                class="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                @click="toggleUsageSort">
+                Usage
+                <ChevronDown v-if="usageSort === 'desc'" class="w-3.5 h-3.5" />
+                <ChevronUp v-else-if="usageSort === 'asc'" class="w-3.5 h-3.5" />
+                <ChevronsUpDown v-else class="w-3.5 h-3.5 opacity-40" />
+              </button>
+            </TableHead>
             <TableHead>Created</TableHead>
             <TableHead class="w-13" />
           </TableRow>
@@ -230,7 +263,7 @@ onMounted(fetchDestinations)
           <!-- Loading skeletons -->
           <template v-if="loading">
             <TableRow v-for="n in 5" :key="n">
-              <TableCell v-for="col in 5" :key="col">
+              <TableCell v-for="col in 6" :key="col">
                 <Skeleton class="w-full h-4" />
               </TableCell>
             </TableRow>
@@ -239,7 +272,7 @@ onMounted(fetchDestinations)
           <!-- Empty state -->
           <template v-else-if="destinations.length === 0">
             <TableRow>
-              <TableCell colspan="5">
+              <TableCell colspan="6">
                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                   <div class="p-4 rounded-full bg-muted">
                     <HardDrive class="w-8 h-8 text-muted-foreground" />
@@ -273,6 +306,9 @@ onMounted(fetchDestinations)
                 <Badge :variant="dest.enabled ? 'default' : 'secondary'">
                   {{ dest.enabled ? 'Enabled' : 'Disabled' }}
                 </Badge>
+              </TableCell>
+              <TableCell class="text-sm tabular-nums" :class="dest.repo_size_bytes > 0 ? '' : 'text-muted-foreground'">
+                {{ formatBytes(dest.repo_size_bytes) }}
               </TableCell>
               <TableCell class="text-sm text-muted-foreground">
                 {{ new Date(dest.created_at).toLocaleDateString() }}

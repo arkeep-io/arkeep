@@ -103,6 +103,11 @@ var validDestinationTypes = map[string]bool{
 // Supports an optional ?search= query parameter for substring name filtering.
 func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
+	// Optional server-side sort (e.g. ?sort=usage&order=desc). The column is
+	// validated against a whitelist in the repository layer; unknown values
+	// fall back to the default order.
+	opts.SortBy = r.URL.Query().Get("sort")
+	opts.SortDesc = r.URL.Query().Get("order") == "desc"
 
 	var destinations []db.Destination
 	var total int64

@@ -15,9 +15,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle, HardDrive } from '@lucide/vue'
+import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
 import { api } from '@/services/api'
-import type { ApiResponse, Destination, Job } from '@/types'
+import type { ApiResponse, Job } from '@/types'
 import {
     ChartContainer,
     ChartCrosshair,
@@ -66,16 +66,6 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 const data = ref<DashboardData | null>(null)
 const recentJobs = ref<Job[]>([])
-const destinations = ref<Destination[]>([])
-
-// Per-destination real repository usage, largest first. maxDestSize drives the
-// relative bar widths in the widget.
-const destinationUsage = computed(() =>
-    [...destinations.value].sort((a, b) => b.repo_size_bytes - a.repo_size_bytes)
-)
-const maxDestSize = computed(() =>
-    destinationUsage.value.reduce((m, d) => Math.max(m, d.repo_size_bytes), 0)
-)
 
 // ---------------------------------------------------------------------------
 // Chart configuration — colours come from the design-system CSS variables.
@@ -87,7 +77,7 @@ const jobsChartConfig = {
 } satisfies ChartConfig
 
 const sizeChartConfig = {
-    size: { label: 'Backed up (GB)', color: 'var(--chart-1)' }, // brand primary
+    size: { label: 'Backed up', color: 'var(--chart-1)' }, // brand primary; unit shown in the card title
 } satisfies ChartConfig
 
 // ---------------------------------------------------------------------------
@@ -108,10 +98,20 @@ const jobsData = computed(() =>
     })) ?? []
 )
 
+// Pick a single unit for the whole size chart based on the largest day, so small
+// backups (e.g. a few MB) are still visible instead of rounding to 0.00 GB.
+const sizeUnit = computed(() => {
+    const max = Math.max(0, ...(data.value?.size_activity.map(d => d.size_bytes) ?? [0]))
+    const k = 1024
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const i = max > 0 ? Math.min(units.length - 1, Math.floor(Math.log(max) / Math.log(k))) : 0
+    return { divisor: Math.pow(k, i), label: units[i] }
+})
+
 const sizeData = computed(() =>
     data.value?.size_activity.map(d => ({
         date: shortLabel(d.date),
-        size: parseFloat((d.size_bytes / 1073741824).toFixed(2)),
+        size: parseFloat((d.size_bytes / sizeUnit.value.divisor).toFixed(2)),
     })) ?? []
 )
 
@@ -125,9 +125,8 @@ const jobsChartAriaLabel = computed(() => {
 
 const sizeChartAriaLabel = computed(() => {
     if (!data.value) return 'Backup size chart — loading'
-    const totalGb = data.value.size_activity
-        .reduce((s, d) => s + d.size_bytes, 0) / 1073741824
-    return `Size backed up last 7 days: ${totalGb.toFixed(1)} GB total`
+    const totalBytes = data.value.size_activity.reduce((s, d) => s + d.size_bytes, 0)
+    return `Size backed up last 7 days: ${formatBytes(totalBytes)} total`
 })
 
 // componentToString must be called during setup (it calls useId internally).
@@ -161,14 +160,12 @@ async function fetchAll() {
     loading.value = true
     error.value = null
     try {
-        const [dashRes, jobsRes, destRes] = await Promise.all([
+        const [dashRes, jobsRes] = await Promise.all([
             api<ApiResponse<DashboardData>>('/api/v1/dashboard'),
             api<ApiResponse<{ items: Job[]; total: number }>>('/api/v1/jobs?limit=5'),
-            api<ApiResponse<{ items: Destination[]; total: number }>>('/api/v1/destinations?limit=100'),
         ])
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
-        destinations.value = destRes.data.items ?? []
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to load dashboard data.'
     } finally {
@@ -326,7 +323,7 @@ onMounted(fetchAll)
             <!-- Size backed up -->
             <Card>
                 <CardHeader>
-                    <CardTitle class="text-sm font-medium">Size backed up — last 7 days (GB)</CardTitle>
+                    <CardTitle class="text-sm font-medium">Size backed up — last 7 days ({{ sizeUnit.label }})</CardTitle>
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />
@@ -348,41 +345,6 @@ onMounted(fetchAll)
             </Card>
 
         </div>
-
-        <!-- ── Usage per destination ──────────────────────────────────────────── -->
-        <Card>
-            <CardHeader class="flex flex-row items-center justify-between pb-2">
-                <CardTitle class="text-sm font-medium">Usage per destination</CardTitle>
-                <HardDrive class="w-4 h-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-                <template v-if="loading">
-                    <Skeleton v-for="n in 3" :key="n" class="h-8 w-full mb-2" />
-                </template>
-                <template v-else-if="destinationUsage.length === 0">
-                    <p class="text-sm text-muted-foreground py-4 text-center">No destinations configured.</p>
-                </template>
-                <template v-else>
-                    <ul class="flex flex-col gap-3">
-                        <li v-for="dest in destinationUsage" :key="dest.id" class="flex flex-col gap-1">
-                            <div class="flex items-center justify-between text-sm">
-                                <span class="font-medium truncate">{{ dest.name }}</span>
-                                <span class="text-muted-foreground tabular-nums shrink-0 ml-2">
-                                    {{ dest.repo_size_bytes > 0 ? formatBytes(dest.repo_size_bytes) : '—' }}
-                                </span>
-                            </div>
-                            <div class="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                                <div class="h-full rounded-full bg-primary transition-all"
-                                    :style="{ width: maxDestSize > 0 ? `${Math.max(2, (dest.repo_size_bytes / maxDestSize) * 100)}%` : '0%' }" />
-                            </div>
-                        </li>
-                    </ul>
-                    <p class="mt-3 text-xs text-muted-foreground">
-                        Real deduplicated size of each destination's repository, refreshed after each backup. A dash means it hasn't been measured yet.
-                    </p>
-                </template>
-            </CardContent>
-        </Card>
 
         <!-- ── Recent jobs ────────────────────────────────────────────────────── -->
         <Card>

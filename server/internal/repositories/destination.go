@@ -93,6 +93,25 @@ func (r *gormDestinationRepository) Delete(ctx context.Context, id uuid.UUID) er
 	return nil
 }
 
+// destinationOrderClause maps ListOptions.SortBy to a safe ORDER BY clause via a
+// fixed whitelist, so the sort column can never be attacker-controlled SQL.
+// Unknown or empty SortBy falls back to the historical default (created_at ASC).
+func destinationOrderClause(opts ListOptions) string {
+	col, ok := map[string]string{
+		"usage":   "repo_size_bytes",
+		"name":    "name",
+		"created": "created_at",
+		"type":    "type",
+	}[opts.SortBy]
+	if !ok {
+		return "created_at ASC"
+	}
+	if opts.SortDesc {
+		return col + " DESC"
+	}
+	return col + " ASC"
+}
+
 // ListFiltered returns a paginated list of destinations matching the given filter.
 // If filter.Search is non-empty, only destinations whose name contains the search
 // string (case-insensitive) are returned.
@@ -109,7 +128,7 @@ func (r *gormDestinationRepository) ListFiltered(ctx context.Context, filter Des
 	listQ := r.db.WithContext(ctx).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at ASC")
+		Order(destinationOrderClause(opts))
 	if filter.Search != "" {
 		listQ = listQ.Where("name LIKE ?", "%"+filter.Search+"%")
 	}
@@ -132,7 +151,7 @@ func (r *gormDestinationRepository) List(ctx context.Context, opts ListOptions) 
 	if err := r.db.WithContext(ctx).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at ASC").
+		Order(destinationOrderClause(opts)).
 		Find(&destinations).Error; err != nil {
 		return nil, 0, fmt.Errorf("destinations: list: %w", err)
 	}
