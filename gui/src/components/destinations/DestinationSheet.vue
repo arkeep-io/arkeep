@@ -39,6 +39,9 @@ import { AlertCircle, Archive, CheckCircle2, Loader2 } from '@lucide/vue'
 const props = defineProps<{
     open: boolean
     destination: Destination | null
+    // cloneFrom pre-fills the form from an existing destination but submits as
+    // a create (POST). Credentials are never copied.
+    cloneFrom?: Destination | null
 }>()
 
 const emit = defineEmits<{
@@ -47,6 +50,9 @@ const emit = defineEmits<{
 }>()
 
 const isEdit = computed(() => !!props.destination)
+// Clone mode: pre-filled from an existing destination but created anew. isEdit
+// stays false so the form validates and submits exactly like a create.
+const isClone = computed(() => !props.destination && !!props.cloneFrom)
 
 // ---------------------------------------------------------------------------
 // Destination types
@@ -183,9 +189,11 @@ function resetFields() {
     creationDone.value = false
 }
 
-function populateFromDestination(dest: Destination) {
+function populateFromDestination(dest: Destination, asClone = false) {
     selectedType.value = dest.type as DestType
-    name.value = dest.name
+    // Clone starts from a suggested "Copy of …" name; credentials are never
+    // copied (the form never echoes secrets), so the user must re-enter them.
+    name.value = asClone ? `Copy of ${dest.name}` : dest.name
     enabled.value = dest.enabled
 
     // Parse config JSON — credentials are write-only and never populated
@@ -226,6 +234,8 @@ watch(
             resetFields()
             if (props.destination) {
                 populateFromDestination(props.destination)
+            } else if (props.cloneFrom) {
+                populateFromDestination(props.cloneFrom, true)
             } else {
                 selectedType.value = 'local'
             }
@@ -384,6 +394,12 @@ async function onSubmit() {
                 emit('saved')
                 return
             }
+            // Create always enables the destination. A clone preserves the
+            // original's enabled state, so disable it explicitly when cloning
+            // a disabled one.
+            if (isClone.value && !enabled.value && res.data.id) {
+                await api(`/api/v1/destinations/${res.data.id}`, { method: 'PATCH', body: { enabled: false } })
+            }
         }
         emit('update:open', false)
         emit('saved')
@@ -415,9 +431,9 @@ function onOpenChange(value: boolean) {
     <Sheet :open="props.open" @update:open="onOpenChange">
         <SheetContent class="sm:max-w-lg overflow-y-auto">
             <SheetHeader>
-                <SheetTitle>{{ creationDone ? 'Destination Created' : (isEdit ? 'Edit Destination' : 'New Destination') }}</SheetTitle>
+                <SheetTitle>{{ creationDone ? 'Destination Created' : (isEdit ? 'Edit Destination' : isClone ? 'Clone Destination' : 'New Destination') }}</SheetTitle>
                 <SheetDescription>
-                    {{ creationDone ? 'The destination has been saved and snapshots imported.' : (isEdit ? 'Update the destination settings.' : 'Configure a new backup storage target.') }}
+                    {{ creationDone ? 'The destination has been saved and snapshots imported.' : (isEdit ? 'Update the destination settings.' : isClone ? 'Review the copied settings and re-enter the credentials.' : 'Configure a new backup storage target.') }}
                 </SheetDescription>
             </SheetHeader>
 
@@ -651,8 +667,8 @@ function onOpenChange(value: boolean) {
                         </Field>
                     </template>
 
-                    <!-- Enabled toggle — edit mode only -->
-                    <template v-if="isEdit">
+                    <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->
+                    <template v-if="isEdit || isClone">
                         <Separator />
                         <div class="flex items-center justify-between">
                             <div>
@@ -665,8 +681,8 @@ function onOpenChange(value: boolean) {
                         </div>
                     </template>
 
-                    <!-- Import existing repository — create mode only -->
-                    <template v-if="!isEdit">
+                    <!-- Import existing repository — plain create mode only (not clone) -->
+                    <template v-if="!isEdit && !isClone">
                         <Separator />
                         <div class="rounded-lg border p-4 space-y-3" :class="importEnabled ? 'bg-muted/30' : ''">
                             <div class="flex items-start justify-between gap-3">

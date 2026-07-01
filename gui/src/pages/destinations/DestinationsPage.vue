@@ -34,6 +34,7 @@ import {
   RefreshCw,
   MoreHorizontal,
   PencilLine,
+  Copy,
   Trash2,
   HardDrive,
   Server,
@@ -67,6 +68,8 @@ const totalPages = computed(() => Math.ceil(total.value / pageSize))
 // Sheet
 const sheetOpen = ref(false)
 const editingDestination = ref<Destination | null>(null)
+// Source destination when duplicating; mutually exclusive with editingDestination.
+const cloningDestination = ref<Destination | null>(null)
 
 // Delete dialog
 const deleteDialogOpen = ref(false)
@@ -123,11 +126,19 @@ async function fetchDestinations() {
 
 function openCreate() {
   editingDestination.value = null
+  cloningDestination.value = null
   sheetOpen.value = true
 }
 
 function openEditSheet(dest: Destination) {
+  cloningDestination.value = null
   editingDestination.value = dest
+  sheetOpen.value = true
+}
+
+function openCloneSheet(dest: Destination) {
+  editingDestination.value = null
+  cloningDestination.value = dest
   sheetOpen.value = true
 }
 
@@ -281,6 +292,10 @@ onMounted(fetchDestinations)
                       <PencilLine class="w-4 h-4 mr-2" />
                       Edit
                     </DropdownMenuItem>
+                    <DropdownMenuItem @click="openCloneSheet(dest)">
+                      <Copy class="w-4 h-4 mr-2" />
+                      Duplicate
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem class="text-destructive focus:text-destructive" @click="openDeleteDialog(dest)">
                       <Trash2 class="w-4 h-4 mr-2" />
@@ -314,8 +329,8 @@ onMounted(fetchDestinations)
   </div>
 
   <!-- Edit / create sheet -->
-  <DestinationSheet :destination="editingDestination" :open="sheetOpen" @update:open="sheetOpen = $event"
-    @saved="onSaved" />
+  <DestinationSheet :destination="editingDestination" :clone-from="cloningDestination" :open="sheetOpen"
+    @update:open="sheetOpen = $event" @saved="onSaved" />
 
   <!-- Delete confirmation dialog -->
   <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
