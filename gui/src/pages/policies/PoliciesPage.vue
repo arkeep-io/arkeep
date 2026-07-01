@@ -35,6 +35,7 @@ import {
     Plus,
     MoreHorizontal,
     PencilLine,
+    Copy,
     Trash2,
     Play,
     ShieldCheck,
@@ -69,6 +70,8 @@ const totalPages = computed(() => Math.ceil(total.value / pageSize))
 // Sheet
 const sheetOpen = ref(false)
 const editingPolicy = ref<Policy | null>(null)
+// Source policy when duplicating; mutually exclusive with editingPolicy.
+const cloningPolicy = ref<Policy | null>(null)
 
 // Delete dialog
 const deleteDialogOpen = ref(false)
@@ -126,11 +129,19 @@ async function fetchPolicies() {
 
 function openCreate() {
     editingPolicy.value = null
+    cloningPolicy.value = null
     sheetOpen.value = true
 }
 
 function openEditSheet(policy: Policy) {
+    cloningPolicy.value = null
     editingPolicy.value = policy
+    sheetOpen.value = true
+}
+
+function openCloneSheet(policy: Policy) {
+    editingPolicy.value = null
+    cloningPolicy.value = policy
     sheetOpen.value = true
 }
 
@@ -312,6 +323,10 @@ onMounted(fetchPolicies)
                                             <PencilLine class="w-4 h-4 mr-2" />
                                             Edit
                                         </DropdownMenuItem>
+                                        <DropdownMenuItem @click="openCloneSheet(policy)">
+                                            <Copy class="w-4 h-4 mr-2" />
+                                            Duplicate
+                                        </DropdownMenuItem>
                                         <DropdownMenuSeparator v-if="authStore.isAdmin" />
                                         <DropdownMenuItem v-if="authStore.isAdmin"
                                             class="text-destructive focus:text-destructive"
@@ -347,7 +362,7 @@ onMounted(fetchPolicies)
     </div>
 
     <!-- Edit / create sheet -->
-    <PolicySheet :policy="editingPolicy" :open="sheetOpen" @update:open="sheetOpen = $event" @saved="onSaved" />
+    <PolicySheet :policy="editingPolicy" :clone-from="cloningPolicy" :open="sheetOpen" @update:open="sheetOpen = $event" @saved="onSaved" />
 
     <!-- Delete confirmation dialog -->
     <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">

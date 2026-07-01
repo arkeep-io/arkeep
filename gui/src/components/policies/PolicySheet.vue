@@ -66,6 +66,9 @@ const authStore = useAuthStore()
 const props = defineProps<{
   open: boolean
   policy: Policy | null
+  // cloneFrom pre-fills the form from an existing policy but submits as a
+  // create (POST). Sensitive fields (repo password) are never copied.
+  cloneFrom?: Policy | null
 }>()
 
 const emit = defineEmits<{
@@ -74,6 +77,9 @@ const emit = defineEmits<{
 }>()
 
 const isEdit = computed(() => !!props.policy)
+// Clone mode: pre-filled from an existing policy but created anew. isEdit stays
+// false so the form validates and submits exactly like a create.
+const isClone = computed(() => !props.policy && !!props.cloneFrom)
 
 // ---------------------------------------------------------------------------
 // Remote data
@@ -493,24 +499,26 @@ watch(
 
     // Reset the form immediately with whatever data is already available so
     // the sheet never shows stale values from a previous session while the
-    // async fetches are in flight.
-    if (props.policy) {
-      populateForm(props.policy)
+    // async fetches are in flight. Edit and clone both pre-fill from a source
+    // policy; clone additionally blanks the name/password (see populateForm).
+    const source = props.policy ?? props.cloneFrom ?? null
+    if (source) {
+      populateForm(source, isClone.value)
     } else {
       resetForm({ values: defaultValues() })
       selectedPreset.value = '0 2 * * *'
     }
 
-    // Load destinations and — for edit mode — the full policy record and
+    // Load destinations and — when pre-filling — the full policy record and
     // selected agent details concurrently.
     const remoteDataPromise = loadRemoteData()
 
-    if (props.policy) {
+    if (source) {
       const [, fullRes, agentRes] = await Promise.allSettled([
         remoteDataPromise,
-        api<ApiResponse<Policy>>(`/api/v1/policies/${props.policy.id}`),
-        props.policy.agent_id
-          ? api<ApiResponse<Agent>>(`/api/v1/agents/${props.policy.agent_id}`)
+        api<ApiResponse<Policy>>(`/api/v1/policies/${source.id}`),
+        source.agent_id
+          ? api<ApiResponse<Agent>>(`/api/v1/agents/${source.agent_id}`)
           : Promise.resolve(null),
       ])
 
@@ -521,7 +529,7 @@ watch(
 
       // Re-populate with the complete record once both fetches are done.
       if (fullRes.status === 'fulfilled') {
-        populateForm(fullRes.value.data)
+        populateForm(fullRes.value.data, isClone.value)
       }
     } else {
       await remoteDataPromise
@@ -536,7 +544,7 @@ watch(
 // then again once the full record arrives (adds destinations + volumes).
 // ---------------------------------------------------------------------------
 
-function populateForm(p: Policy) {
+function populateForm(p: Policy, asClone = false) {
   let parsedSources: RawSource[] = []
   let parsedPreHook: RawHook | null = null
   let parsedPostHook: RawHook | null = null
@@ -606,7 +614,9 @@ function populateForm(p: Policy) {
     .map(d => d.destination_id)
 
   setValues({
-    name: p.name,
+    // Clone starts from a suggested "Copy of …" name; the repo password is
+    // never copied (blanked below) so the user must re-enter it.
+    name: asClone ? `Copy of ${p.name}` : p.name,
     agent_id: p.agent_name ? p.agent_id : '',
     enabled: p.enabled,
     repo_password: '',
@@ -728,7 +738,12 @@ const onSubmit = handleSubmit(async (values) => {
     if (isEdit.value && props.policy) {
       await api(`/api/v1/policies/${props.policy.id}`, { method: 'PATCH', body })
     } else {
-      await api('/api/v1/policies', { method: 'POST', body })
+      const created = await api<ApiResponse<Policy>>('/api/v1/policies', { method: 'POST', body })
+      // Create always enables the policy. A clone preserves the original's
+      // enabled state, so disable it explicitly when cloning a disabled one.
+      if (isClone.value && !values.enabled && created?.data?.id) {
+        await api(`/api/v1/policies/${created.data.id}`, { method: 'PATCH', body: { enabled: false } })
+      }
     }
 
     emit('update:open', false)
@@ -752,9 +767,9 @@ function onOpenChange(value: boolean) {
   <Sheet :open="props.open" @update:open="onOpenChange">
     <SheetContent class="sm:max-w-2xl overflow-y-auto">
       <SheetHeader>
-        <SheetTitle>{{ isEdit ? 'Edit Policy' : 'New Policy' }}</SheetTitle>
+        <SheetTitle>{{ isEdit ? 'Edit Policy' : isClone ? 'Clone Policy' : 'New Policy' }}</SheetTitle>
         <SheetDescription>
-          {{ isEdit ? 'Update the policy settings.' : 'Configure a new backup policy.' }}
+          {{ isEdit ? 'Update the policy settings.' : isClone ? 'Review the copied settings and set a repository password.' : 'Configure a new backup policy.' }}
         </SheetDescription>
       </SheetHeader>
 
@@ -789,7 +804,7 @@ function onOpenChange(value: boolean) {
             <AsyncCombobox
               endpoint="/api/v1/agents"
               :model-value="agentValue ?? ''"
-              :initial-label="props.policy?.agent_name"
+              :initial-label="props.policy?.agent_name ?? props.cloneFrom?.agent_name"
               placeholder="Select an agent…"
               :class="agentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
               @update:model-value="agentValue = $event"
@@ -1328,8 +1343,8 @@ function onOpenChange(value: boolean) {
             />
           </div>
 
-          <!-- Enabled toggle — edit mode only -->
-          <template v-if="isEdit">
+          <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->
+          <template v-if="isEdit || isClone">
             <Separator />
             <div class="flex items-center justify-between">
               <div>
