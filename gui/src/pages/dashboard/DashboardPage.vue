@@ -15,9 +15,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
+import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle, HardDrive } from '@lucide/vue'
 import { api } from '@/services/api'
-import type { ApiResponse, Job } from '@/types'
+import type { ApiResponse, Destination, Job } from '@/types'
 import {
     ChartContainer,
     ChartCrosshair,
@@ -66,6 +66,16 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 const data = ref<DashboardData | null>(null)
 const recentJobs = ref<Job[]>([])
+const destinations = ref<Destination[]>([])
+
+// Per-destination real repository usage, largest first. maxDestSize drives the
+// relative bar widths in the widget.
+const destinationUsage = computed(() =>
+    [...destinations.value].sort((a, b) => b.repo_size_bytes - a.repo_size_bytes)
+)
+const maxDestSize = computed(() =>
+    destinationUsage.value.reduce((m, d) => Math.max(m, d.repo_size_bytes), 0)
+)
 
 // ---------------------------------------------------------------------------
 // Chart configuration — colours come from the design-system CSS variables.
@@ -151,12 +161,14 @@ async function fetchAll() {
     loading.value = true
     error.value = null
     try {
-        const [dashRes, jobsRes] = await Promise.all([
+        const [dashRes, jobsRes, destRes] = await Promise.all([
             api<ApiResponse<DashboardData>>('/api/v1/dashboard'),
             api<ApiResponse<{ items: Job[]; total: number }>>('/api/v1/jobs?limit=5'),
+            api<ApiResponse<{ items: Destination[]; total: number }>>('/api/v1/destinations?limit=100'),
         ])
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
+        destinations.value = destRes.data.items ?? []
     } catch (e: any) {
         error.value = e?.message ?? 'Failed to load dashboard data.'
     } finally {
@@ -336,6 +348,41 @@ onMounted(fetchAll)
             </Card>
 
         </div>
+
+        <!-- ── Usage per destination ──────────────────────────────────────────── -->
+        <Card>
+            <CardHeader class="flex flex-row items-center justify-between pb-2">
+                <CardTitle class="text-sm font-medium">Usage per destination</CardTitle>
+                <HardDrive class="w-4 h-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+                <template v-if="loading">
+                    <Skeleton v-for="n in 3" :key="n" class="h-8 w-full mb-2" />
+                </template>
+                <template v-else-if="destinationUsage.length === 0">
+                    <p class="text-sm text-muted-foreground py-4 text-center">No destinations configured.</p>
+                </template>
+                <template v-else>
+                    <ul class="flex flex-col gap-3">
+                        <li v-for="dest in destinationUsage" :key="dest.id" class="flex flex-col gap-1">
+                            <div class="flex items-center justify-between text-sm">
+                                <span class="font-medium truncate">{{ dest.name }}</span>
+                                <span class="text-muted-foreground tabular-nums shrink-0 ml-2">
+                                    {{ dest.repo_size_bytes > 0 ? formatBytes(dest.repo_size_bytes) : '—' }}
+                                </span>
+                            </div>
+                            <div class="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                                <div class="h-full rounded-full bg-primary transition-all"
+                                    :style="{ width: maxDestSize > 0 ? `${Math.max(2, (dest.repo_size_bytes / maxDestSize) * 100)}%` : '0%' }" />
+                            </div>
+                        </li>
+                    </ul>
+                    <p class="mt-3 text-xs text-muted-foreground">
+                        Real deduplicated size of each destination's repository, refreshed after each backup. A dash means it hasn't been measured yet.
+                    </p>
+                </template>
+            </CardContent>
+        </Card>
 
         <!-- ── Recent jobs ────────────────────────────────────────────────────── -->
         <Card>

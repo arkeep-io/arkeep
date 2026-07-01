@@ -140,6 +140,11 @@ type Destination struct {
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
 	Config      string          `gorm:"type:text;default:'{}'"` // JSON, not sensitive
 	Enabled     bool            `gorm:"not null;default:true"`
+	// RepoSizeBytes is the real deduplicated on-disk size of this destination's
+	// restic repository (from `restic stats --mode raw-data`), refreshed after
+	// each backup. Zero until the first backup or import completes.
+	RepoSizeBytes     int64      `gorm:"not null;default:0"`
+	RepoSizeUpdatedAt *time.Time `gorm:""`
 }
 
 // -----------------------------------------------------------------------------

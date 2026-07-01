@@ -138,9 +138,13 @@ func (r *gormDashboardRepository) GetStats(ctx context.Context) (*DashboardStats
 		return nil, fmt.Errorf("dashboard: snapshots total: %w", err)
 	}
 
-	if err := d.Raw(`SELECT COALESCE(SUM(size_bytes), 0) FROM snapshots`).
+	// Total backup size is the sum of each destination's REAL deduplicated
+	// repository size (from `restic stats`), not the sum of per-snapshot
+	// logical sizes — the latter double-counts every unchanged file across
+	// snapshots and across replicated destinations, massively overstating usage.
+	if err := d.Raw(`SELECT COALESCE(SUM(repo_size_bytes), 0) FROM destinations WHERE deleted_at IS NULL`).
 		Scan(&stats.SnapshotsTotalSize).Error; err != nil {
-		return nil, fmt.Errorf("dashboard: snapshots size: %w", err)
+		return nil, fmt.Errorf("dashboard: destinations repo size: %w", err)
 	}
 
 	// ── Job activity — last 7 days ────────────────────────────────────────────

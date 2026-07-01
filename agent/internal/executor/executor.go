@@ -46,7 +46,9 @@ type StatusReporter interface {
 	// ReportDestinationResult reports the outcome of a backup to a single
 	// destination. Called once per destination after it completes or fails.
 	// sizeBytes is TotalBytesProcessed from the restic summary event.
-	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string)
+	// repoSizeBytes is the real deduplicated repo size from `restic stats`
+	// (0 when unavailable or on failure).
+	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string)
 }
 
 // JobAssignment is the internal representation of a job received from the server.
@@ -397,7 +399,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		if dest.RepoURL == "" {
 			errMsg := fmt.Sprintf("destination %s has empty repo_url; check its configuration", dest.DestinationID)
 			log("error", errMsg)
-			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", time.Now().UTC(), 0, errMsg)
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", time.Now().UTC(), 0, 0, errMsg)
 			backupFailed = true
 			continue
 		}
@@ -439,7 +441,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 					)
 				}
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
-				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, errMsg)
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, errMsg)
 				backupFailed = true
 				continue
 			}
@@ -467,13 +469,23 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		if err != nil {
 			errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
 			log("error", errMsg)
-			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, err.Error())
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, err.Error())
 			backupFailed = true
 			continue
 		}
 
 		log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, size: %d bytes)",
 			dest.DestinationID, result.SnapshotID, result.TotalBytesProcessed))
+
+		// Capture the repository's real deduplicated size for per-destination
+		// usage reporting. Non-fatal: the backup already succeeded, so a stats
+		// failure just leaves the size unreported (0).
+		var repoSizeBytes int64
+		if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
+			log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", dest.DestinationID, statsErr))
+		} else {
+			repoSizeBytes = int64(stats.TotalSize)
+		}
 
 		reporter.ReportDestinationResult(
 			job.JobID,
@@ -482,6 +494,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			result.SnapshotID,
 			destStartedAt,
 			int64(result.TotalBytesProcessed),
+			repoSizeBytes,
 			"",
 		)
 

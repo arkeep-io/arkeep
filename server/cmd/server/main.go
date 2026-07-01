@@ -272,6 +272,7 @@ func run(ctx context.Context, cfg *config) error {
 		jobRepo,
 		snapshotRepo,
 		policyRepo,
+		destinationRepo,
 		wsHub,
 		logger,
 	)

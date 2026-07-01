@@ -72,6 +72,7 @@ func newTestServer(t *testing.T) *testServer {
 	jobRepo := repositories.NewJobRepository(gdb)
 	snapshotRepo := repositories.NewSnapshotRepository(gdb)
 	policyRepo := repositories.NewPolicyRepository(gdb)
+	destinationRepo := repositories.NewDestinationRepository(gdb)
 	agentMgr := agentmanager.New(zap.NewNop())
 	hub := websocket.NewHub()
 
@@ -82,6 +83,7 @@ func newTestServer(t *testing.T) *testServer {
 		jobRepo,
 		snapshotRepo,
 		policyRepo,
+		destinationRepo,
 		hub,
 		zap.NewNop(),
 	)

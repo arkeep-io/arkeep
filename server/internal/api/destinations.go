@@ -57,6 +57,11 @@ type destinationResponse struct {
 	Enabled   bool   `json:"enabled"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	// RepoSizeBytes is the real deduplicated on-disk size of this destination's
+	// restic repository, refreshed after each backup/import. RepoSizeUpdatedAt
+	// is empty until the first measurement.
+	RepoSizeBytes     int64  `json:"repo_size_bytes"`
+	RepoSizeUpdatedAt string `json:"repo_size_updated_at"`
 }
 
 // destinationToResponse converts a db.Destination to a destinationResponse.
@@ -69,6 +74,13 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 		Enabled:   d.Enabled,
 		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt: d.UpdatedAt.UTC().Format(time.RFC3339),
+		RepoSizeBytes: d.RepoSizeBytes,
+		RepoSizeUpdatedAt: func() string {
+			if d.RepoSizeUpdatedAt == nil {
+				return ""
+			}
+			return d.RepoSizeUpdatedAt.UTC().Format(time.RFC3339)
+		}(),
 	}
 }
 
@@ -479,6 +491,15 @@ func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest 
 		}
 		imported++
 	}
+
+	// Cache the repo's real size so an imported destination reports accurate
+	// usage without waiting for its first scheduled backup. Non-fatal.
+	if result.RepoSizeBytes > 0 {
+		if err := h.repo.UpdateRepoSize(ctx, dest.ID, result.RepoSizeBytes, time.Now().UTC()); err != nil {
+			h.logger.Warn("failed to update destination repo size after import", zap.Error(err))
+		}
+	}
+
 	return imported
 }
 

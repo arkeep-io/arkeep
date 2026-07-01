@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/google/uuid"
@@ -49,6 +50,26 @@ func (r *gormDestinationRepository) Update(ctx context.Context, destination *db.
 	result := r.db.WithContext(ctx).Save(destination)
 	if result.Error != nil {
 		return fmt.Errorf("destinations: update: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateRepoSize updates only the cached restic repository size and its
+// timestamp for a destination, without touching other fields (credentials,
+// config, etc.). Used to refresh per-destination usage after a backup.
+func (r *gormDestinationRepository) UpdateRepoSize(ctx context.Context, id uuid.UUID, sizeBytes int64, at time.Time) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"repo_size_bytes":      sizeBytes,
+			"repo_size_updated_at": at,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("destinations: update repo size: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
 		return ErrNotFound

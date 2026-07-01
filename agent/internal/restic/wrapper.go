@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -383,6 +384,75 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir stri
 		return nil, fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
 	}
 	return entries, nil
+}
+
+// StatsResult holds the real on-disk footprint of a restic repository.
+type StatsResult struct {
+	// TotalSize is the deduplicated, compressed size of all data stored in the
+	// repository (total_size from `restic stats --mode raw-data`), i.e. the
+	// actual disk usage — not the logical size of the backed-up files.
+	TotalSize uint64
+}
+
+// Stats returns the repository's real on-disk size via
+// `restic stats --mode raw-data --json`. Used to report per-destination usage.
+// restic prints a progress line alongside the JSON on stdout, so the output is
+// scanned for the JSON object line rather than unmarshalled wholesale.
+func (w *Wrapper) Stats(ctx context.Context, dest Destination) (StatsResult, error) {
+	cmd := w.buildCmd(ctx, dest, []string{"stats", "--mode", "raw-data", "--json"})
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return StatsResult{}, fmt.Errorf("restic: failed to open stdout pipe: %w", err)
+	}
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Start(); err != nil {
+		return StatsResult{}, fmt.Errorf("restic: failed to start: %w", err)
+	}
+
+	res, found, parseErr := parseResticStats(stdout)
+	if parseErr != nil {
+		_ = cmd.Process.Kill()
+		return StatsResult{}, fmt.Errorf("restic: error reading stats output: %w", parseErr)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		stderr := strings.TrimSpace(stderrBuf.String())
+		return StatsResult{}, fmt.Errorf("restic: stats failed: %w\n%s", err, stderr)
+	}
+	if !found {
+		return StatsResult{}, fmt.Errorf("restic: stats returned no parsable JSON output")
+	}
+	return res, nil
+}
+
+// parseResticStats extracts the repository size from `restic stats --json`
+// output. restic interleaves a human-readable progress line with the JSON
+// object on stdout, so only lines that parse as a JSON object are considered;
+// the last such object wins. found is false when no JSON object was present.
+func parseResticStats(r io.Reader) (StatsResult, bool, error) {
+	var raw struct {
+		TotalSize uint64 `json:"total_size"`
+	}
+	found := false
+	scanner := bufio.NewScanner(r)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
+		found = true
+	}
+	if err := scanner.Err(); err != nil {
+		return StatsResult{}, false, err
+	}
+	return StatsResult{TotalSize: raw.TotalSize}, found, nil
 }
 
 // runRestoreJSON runs restic restore --json, consuming stdout as a JSON event

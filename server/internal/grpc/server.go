@@ -57,6 +57,7 @@ type Server struct {
 	jobRepo          repositories.JobRepository
 	snapshotRepo     repositories.SnapshotRepository
 	policyRepo       repositories.PolicyRepository
+	destRepo         repositories.DestinationRepository
 	hub              *websocket.Hub
 	pendingDispatch  PendingDispatcher // may be nil in tests that don't need it
 	notifSvc         notification.Service
@@ -111,6 +112,7 @@ func New(
 	jobRepo repositories.JobRepository,
 	snapshotRepo repositories.SnapshotRepository,
 	policyRepo repositories.PolicyRepository,
+	destRepo repositories.DestinationRepository,
 	hub *websocket.Hub,
 	logger *zap.Logger,
 ) *Server {
@@ -120,6 +122,7 @@ func New(
 		jobRepo:           jobRepo,
 		snapshotRepo:      snapshotRepo,
 		policyRepo:        policyRepo,
+		destRepo:          destRepo,
 		hub:               hub,
 		pendingDispatch:   cfg.PendingDispatch,
 		notifSvc:          cfg.NotifService,
@@ -850,12 +853,24 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		}
 	}
 
+	// Refresh the destination's cached real repository size (from restic stats)
+	// so the dashboard can report accurate per-destination usage. Non-fatal.
+	if req.RepoSizeBytes > 0 && s.destRepo != nil {
+		if err := s.destRepo.UpdateRepoSize(ctx, destID, req.RepoSizeBytes, now); err != nil {
+			s.logger.Warn("ReportDestinationStatus: failed to update destination repo size",
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
+	}
+
 	s.logger.Info("destination status updated",
 		zap.String("job_id", req.JobId),
 		zap.String("destination_id", req.DestinationId),
 		zap.String("status", req.Status),
 		zap.String("snapshot_id", req.SnapshotId),
 		zap.Int64("size_bytes", req.SizeBytes),
+		zap.Int64("repo_size_bytes", req.RepoSizeBytes),
 	)
 
 	return &proto.DestinationStatusResponse{Ok: true}, nil
