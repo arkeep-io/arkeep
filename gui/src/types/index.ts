@@ -126,6 +126,10 @@ export interface Destination {
   enabled: boolean
   created_at: string
   updated_at: string
+  // repo_size_bytes is the real deduplicated on-disk size of this destination's
+  // restic repository, refreshed after each backup/import. 0 until first measured.
+  repo_size_bytes: number
+  repo_size_updated_at: string // RFC3339, empty until first measured
 }
 
 // ─── Policy ───────────────────────────────────────────────────────────────────

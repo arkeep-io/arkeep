@@ -789,6 +789,16 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 				Hostname:         s.Hostname,
 			}
 		}
+		// Capture the repo's real size so imported destinations show accurate
+		// usage immediately. Non-fatal — a stats failure just leaves it at 0.
+		if stats, statsErr := m.wrapper.Stats(ctx, dest); statsErr != nil {
+			m.logger.Warn("handleSnapshotImportRequest: could not read repository size",
+				zap.String("correlation_id", correlationID),
+				zap.Error(statsErr),
+			)
+		} else {
+			report.RepoSizeBytes = int64(stats.TotalSize)
+		}
 	}
 
 	if _, err := client.ReportSnapshotImport(ctx, report); err != nil {
@@ -923,7 +933,7 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 // ReportDestinationResult implements executor.StatusReporter. It calls
 // ReportDestinationStatus via gRPC to persist the per-destination outcome
 // (snapshot ID, size, status, started_at) after each destination backup completes or fails.
-func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string) {
 	m.mu.RLock()
 	client := m.client
 	agentID := m.agentID
@@ -945,6 +955,7 @@ func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshot
 		Status:        status,
 		SnapshotId:    snapshotID,
 		SizeBytes:     sizeBytes,
+		RepoSizeBytes: repoSizeBytes,
 		Error:         errMsg,
 		StartedAt:     timestamppb.New(startedAt),
 	})

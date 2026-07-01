@@ -100,6 +100,7 @@ func TestEnrollment(t *testing.T) {
 		repositories.NewJobRepository(gdb),
 		repositories.NewSnapshotRepository(gdb),
 		repositories.NewPolicyRepository(gdb),
+		repositories.NewDestinationRepository(gdb),
 		hub,
 		zap.NewNop(),
 	)

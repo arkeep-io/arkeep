@@ -336,7 +336,7 @@ onMounted(fetchJob)
                         <TableRow>
                             <TableHead>Destination</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead>Total Size</TableHead>
+                            <TableHead>Added</TableHead>
                             <TableHead>Duration</TableHead>
                         </TableRow>
                     </TableHeader>

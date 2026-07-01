@@ -7,6 +7,52 @@ import (
 	"testing"
 )
 
+// TestParseResticStats verifies the repository size is extracted from
+// `restic stats --json` output, tolerating the progress line restic prints
+// alongside the JSON object on stdout.
+func TestParseResticStats(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantSize  uint64
+		wantFound bool
+	}{
+		{
+			name:      "json only",
+			input:     `{"total_size":3334,"total_uncompressed_size":6067,"total_blob_count":13,"snapshots_count":1}`,
+			wantSize:  3334,
+			wantFound: true,
+		},
+		{
+			name: "progress line before json",
+			input: "[0:00] 100.00%  1 / 1 snapshots, 13 blobs, 3.256 KiB\n" +
+				`{"total_size":987654,"snapshots_count":2}`,
+			wantSize:  987654,
+			wantFound: true,
+		},
+		{
+			name:      "no json object",
+			input:     "[0:00] 100.00%  0 snapshots\n",
+			wantSize:  0,
+			wantFound: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found, err := parseResticStats(strings.NewReader(tt.input))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if found != tt.wantFound {
+				t.Errorf("found = %v, want %v", found, tt.wantFound)
+			}
+			if got.TotalSize != tt.wantSize {
+				t.Errorf("TotalSize = %d, want %d", got.TotalSize, tt.wantSize)
+			}
+		})
+	}
+}
+
 // envVar extracts the value of a "KEY=value" entry from an environment slice.
 // Returns empty string if the key is not present.
 func envVar(env []string, key string) string {

@@ -280,8 +280,10 @@ message DestinationStatusReport {
   // snapshot_id is the full restic snapshot ID created by this backup run.
   // Empty when status is "failed".
   string snapshot_id     = 5;
-  // size_bytes is the total bytes processed (TotalBytesProcessed from restic
-  // summary). Zero when status is "failed".
+  // size_bytes is the real footprint this backup added to the repository
+  // (data_added_packed from the restic summary, falling back to data_added) —
+  // NOT the logical source size. Zero when status is "failed" or when nothing
+  // new was added (e.g. re-backup of unchanged data).
   int64 size_bytes       = 6;
   // error is the error message when status is "failed". Empty on success.
   string error           = 7;
@@ -289,6 +291,10 @@ message DestinationStatusReport {
   // Recorded immediately before invoking restic so the server can persist
   // an accurate started_at on the JobDestination row.
   google.protobuf.Timestamp started_at = 8;
+  // repo_size_bytes is the real deduplicated on-disk size of the destination's
+  // restic repository after this backup (total_size from `restic stats
+  // --mode raw-data`). Zero when unavailable (stats failed or backup failed).
+  int64 repo_size_bytes = 9;
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.
@@ -429,6 +435,11 @@ message SnapshotImportReport {
   // error is set when the listing failed (e.g. wrong password, repo not found).
   // An empty string means success.
   string error                           = 4;
+  // repo_size_bytes is the real deduplicated on-disk size of the repository
+  // (total_size from `restic stats --mode raw-data`), so imported destinations
+  // get an accurate usage figure without waiting for the first backup. Zero
+  // when unavailable.
+  int64 repo_size_bytes                  = 5;
 }
 
 // SnapshotImportResponse acknowledges receipt of the snapshot import report.
