@@ -13,9 +13,14 @@ import (
 // -----------------------------------------------------------------------------
 
 // ListOptions contains common pagination and filtering options for list queries.
+// SortBy/SortDesc are optional; repositories that support sorting map SortBy to
+// a whitelisted column (unknown/empty values fall back to the default order).
+// Repositories that don't support sorting simply ignore these fields.
 type ListOptions struct {
-	Limit  int
-	Offset int
+	Limit    int
+	Offset   int
+	SortBy   string
+	SortDesc bool
 }
 
 // PolicyDestinationWithName extends db.PolicyDestination with the denormalised
@@ -123,6 +128,9 @@ type DestinationRepository interface {
 	Create(ctx context.Context, destination *db.Destination) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Destination, error)
 	Update(ctx context.Context, destination *db.Destination) error
+	// UpdateRepoSize refreshes only the cached restic repository size and its
+	// timestamp, leaving all other destination fields untouched.
+	UpdateRepoSize(ctx context.Context, id uuid.UUID, sizeBytes int64, at time.Time) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error)
 	ListFiltered(ctx context.Context, filter DestinationFilter, opts ListOptions) ([]db.Destination, int64, error)

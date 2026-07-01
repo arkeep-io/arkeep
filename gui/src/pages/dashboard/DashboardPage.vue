@@ -77,7 +77,7 @@ const jobsChartConfig = {
 } satisfies ChartConfig
 
 const sizeChartConfig = {
-    size: { label: 'Backed up (GB)', color: 'var(--chart-1)' }, // brand primary
+    size: { label: 'Backed up', color: 'var(--chart-1)' }, // brand primary; unit shown in the card title
 } satisfies ChartConfig
 
 // ---------------------------------------------------------------------------
@@ -98,10 +98,20 @@ const jobsData = computed(() =>
     })) ?? []
 )
 
+// Pick a single unit for the whole size chart based on the largest day, so small
+// backups (e.g. a few MB) are still visible instead of rounding to 0.00 GB.
+const sizeUnit = computed(() => {
+    const max = Math.max(0, ...(data.value?.size_activity.map(d => d.size_bytes) ?? [0]))
+    const k = 1024
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const i = max > 0 ? Math.min(units.length - 1, Math.floor(Math.log(max) / Math.log(k))) : 0
+    return { divisor: Math.pow(k, i), label: units[i] }
+})
+
 const sizeData = computed(() =>
     data.value?.size_activity.map(d => ({
         date: shortLabel(d.date),
-        size: parseFloat((d.size_bytes / 1073741824).toFixed(2)),
+        size: parseFloat((d.size_bytes / sizeUnit.value.divisor).toFixed(2)),
     })) ?? []
 )
 
@@ -115,9 +125,8 @@ const jobsChartAriaLabel = computed(() => {
 
 const sizeChartAriaLabel = computed(() => {
     if (!data.value) return 'Backup size chart — loading'
-    const totalGb = data.value.size_activity
-        .reduce((s, d) => s + d.size_bytes, 0) / 1073741824
-    return `Size backed up last 7 days: ${totalGb.toFixed(1)} GB total`
+    const totalBytes = data.value.size_activity.reduce((s, d) => s + d.size_bytes, 0)
+    return `Size backed up last 7 days: ${formatBytes(totalBytes)} total`
 })
 
 // componentToString must be called during setup (it calls useId internally).
@@ -314,7 +323,7 @@ onMounted(fetchAll)
             <!-- Size backed up -->
             <Card>
                 <CardHeader>
-                    <CardTitle class="text-sm font-medium">Size backed up — last 7 days (GB)</CardTitle>
+                    <CardTitle class="text-sm font-medium">Size backed up — last 7 days ({{ sizeUnit.label }})</CardTitle>
                 </CardHeader>
                 <CardContent>
                     <Skeleton v-if="loading" class="h-44 w-full" />

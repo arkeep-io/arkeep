@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/google/uuid"
@@ -56,6 +57,26 @@ func (r *gormDestinationRepository) Update(ctx context.Context, destination *db.
 	return nil
 }
 
+// UpdateRepoSize updates only the cached restic repository size and its
+// timestamp for a destination, without touching other fields (credentials,
+// config, etc.). Used to refresh per-destination usage after a backup.
+func (r *gormDestinationRepository) UpdateRepoSize(ctx context.Context, id uuid.UUID, sizeBytes int64, at time.Time) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"repo_size_bytes":      sizeBytes,
+			"repo_size_updated_at": at,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("destinations: update repo size: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete permanently removes a destination record by ID.
 // Returns ErrNotFound if no record exists.
 // Note: deletion will fail if the destination is still referenced by an active
@@ -70,6 +91,25 @@ func (r *gormDestinationRepository) Delete(ctx context.Context, id uuid.UUID) er
 		return ErrNotFound
 	}
 	return nil
+}
+
+// destinationOrderClause maps ListOptions.SortBy to a safe ORDER BY clause via a
+// fixed whitelist, so the sort column can never be attacker-controlled SQL.
+// Unknown or empty SortBy falls back to the historical default (created_at ASC).
+func destinationOrderClause(opts ListOptions) string {
+	col, ok := map[string]string{
+		"usage":   "repo_size_bytes",
+		"name":    "name",
+		"created": "created_at",
+		"type":    "type",
+	}[opts.SortBy]
+	if !ok {
+		return "created_at ASC"
+	}
+	if opts.SortDesc {
+		return col + " DESC"
+	}
+	return col + " ASC"
 }
 
 // ListFiltered returns a paginated list of destinations matching the given filter.
@@ -88,7 +128,7 @@ func (r *gormDestinationRepository) ListFiltered(ctx context.Context, filter Des
 	listQ := r.db.WithContext(ctx).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at ASC")
+		Order(destinationOrderClause(opts))
 	if filter.Search != "" {
 		listQ = listQ.Where("name LIKE ?", "%"+filter.Search+"%")
 	}
@@ -111,7 +151,7 @@ func (r *gormDestinationRepository) List(ctx context.Context, opts ListOptions) 
 	if err := r.db.WithContext(ctx).
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("created_at ASC").
+		Order(destinationOrderClause(opts)).
 		Find(&destinations).Error; err != nil {
 		return nil, 0, fmt.Errorf("destinations: list: %w", err)
 	}

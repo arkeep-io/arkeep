@@ -31,7 +31,7 @@ func (r *fakeReporter) ReportStatus(jobID, status, message string) {
 	r.statuses = append(r.statuses, status)
 }
 
-func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string) {
 	if r.destResults == nil {
 		r.destResults = make(map[string]destResult)
 	}

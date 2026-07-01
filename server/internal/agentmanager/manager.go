@@ -90,7 +90,10 @@ type SnapshotBrowseResult struct {
 // SnapshotImportResult carries the outcome of a JOB_TYPE_IMPORT_SNAPSHOTS request.
 type SnapshotImportResult struct {
 	Snapshots []*proto.ImportedSnapshotInfo
-	Err       string // non-empty when the agent reported an error
+	// RepoSizeBytes is the real deduplicated repo size reported by the agent
+	// (from `restic stats`). Zero when unavailable.
+	RepoSizeBytes int64
+	Err           string // non-empty when the agent reported an error
 }
 
 // Manager is the in-memory registry of currently connected agents.
@@ -522,7 +525,8 @@ func (m *Manager) DeliverSnapshotImport(report *proto.SnapshotImportReport) {
 	}
 
 	ch <- SnapshotImportResult{
-		Snapshots: report.Snapshots,
-		Err:       report.Error,
+		Snapshots:     report.Snapshots,
+		RepoSizeBytes: report.RepoSizeBytes,
+		Err:           report.Error,
 	}
 }

@@ -228,7 +228,7 @@ onMounted(fetchSnapshots)
                         <TableHead>Policy</TableHead>
                         <TableHead>Destination</TableHead>
                         <TableHead>Snapshot ID</TableHead>
-                        <TableHead>Size</TableHead>
+                        <TableHead>Added</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead class="w-13" />
                     </TableRow>

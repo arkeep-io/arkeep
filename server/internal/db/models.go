@@ -140,6 +140,11 @@ type Destination struct {
 	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
 	Config      string          `gorm:"type:text;default:'{}'"` // JSON, not sensitive
 	Enabled     bool            `gorm:"not null;default:true"`
+	// RepoSizeBytes is the real deduplicated on-disk size of this destination's
+	// restic repository (from `restic stats --mode raw-data`), refreshed after
+	// each backup. Zero until the first backup or import completes.
+	RepoSizeBytes     int64      `gorm:"not null;default:0"`
+	RepoSizeUpdatedAt *time.Time `gorm:""`
 }
 
 // -----------------------------------------------------------------------------
@@ -253,6 +258,10 @@ type Snapshot struct {
 	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
 	JobID         uuid.UUID `gorm:"type:text;not null;index"`
 	SnapshotID    string    `gorm:"not null;index"` // opaque ID from the backup engine
+	// SizeBytes is the real footprint this backup added to the repository
+	// (restic data_added_packed), not the logical source size — so it reconciles
+	// with the destination's real repo size and never double-counts. Zero when
+	// the backup added nothing new (e.g. re-backup of unchanged data).
 	SizeBytes     int64     `gorm:"default:0"`
 	FileCount     int64     `gorm:"default:0"`
 	Tags          string    `gorm:"type:text;default:'[]'"`  // JSON array

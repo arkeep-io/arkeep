@@ -912,7 +912,11 @@ type DestinationStatusReport struct {
 	// started_at is when the agent began the backup to this destination.
 	// Recorded immediately before invoking restic so the server can persist
 	// an accurate started_at on the JobDestination row.
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	StartedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	// repo_size_bytes is the real deduplicated on-disk size of the destination's
+	// restic repository after this backup (total_size from `restic stats
+	// --mode raw-data`). Zero when unavailable (stats failed or backup failed).
+	RepoSizeBytes int64 `protobuf:"varint,9,opt,name=repo_size_bytes,json=repoSizeBytes,proto3" json:"repo_size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1001,6 +1005,13 @@ func (x *DestinationStatusReport) GetStartedAt() *timestamppb.Timestamp {
 		return x.StartedAt
 	}
 	return nil
+}
+
+func (x *DestinationStatusReport) GetRepoSizeBytes() int64 {
+	if x != nil {
+		return x.RepoSizeBytes
+	}
+	return 0
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.
@@ -1656,7 +1667,12 @@ type SnapshotImportReport struct {
 	Snapshots []*ImportedSnapshotInfo `protobuf:"bytes,3,rep,name=snapshots,proto3" json:"snapshots,omitempty"`
 	// error is set when the listing failed (e.g. wrong password, repo not found).
 	// An empty string means success.
-	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// repo_size_bytes is the real deduplicated on-disk size of the repository
+	// (total_size from `restic stats --mode raw-data`), so imported destinations
+	// get an accurate usage figure without waiting for the first backup. Zero
+	// when unavailable.
+	RepoSizeBytes int64 `protobuf:"varint,5,opt,name=repo_size_bytes,json=repoSizeBytes,proto3" json:"repo_size_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1717,6 +1733,13 @@ func (x *SnapshotImportReport) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *SnapshotImportReport) GetRepoSizeBytes() int64 {
+	if x != nil {
+		return x.RepoSizeBytes
+	}
+	return 0
 }
 
 // SnapshotImportResponse acknowledges receipt of the snapshot import report.
@@ -1810,7 +1833,7 @@ const file_agent_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x128\n" +
 	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"#\n" +
 	"\x11JobStatusResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x9b\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xc3\x02\n" +
 	"\x17DestinationStatusReport\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12%\n" +
@@ -1822,7 +1845,8 @@ const file_agent_proto_rawDesc = "" +
 	"size_bytes\x18\x06 \x01(\x03R\tsizeBytes\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x129\n" +
 	"\n" +
-	"started_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"+\n" +
+	"started_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12&\n" +
+	"\x0frepo_size_bytes\x18\t \x01(\x03R\rrepoSizeBytes\"+\n" +
 	"\x19DestinationStatusResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xb7\x01\n" +
 	"\bLogEntry\x12\x15\n" +
@@ -1864,12 +1888,13 @@ const file_agent_proto_rawDesc = "" +
 	"\rsnapshot_time\x18\x02 \x01(\tR\fsnapshotTime\x12\x14\n" +
 	"\x05paths\x18\x03 \x03(\tR\x05paths\x12\x12\n" +
 	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x1a\n" +
-	"\bhostname\x18\x05 \x01(\tR\bhostname\"\xa9\x01\n" +
+	"\bhostname\x18\x05 \x01(\tR\bhostname\"\xd1\x01\n" +
 	"\x14SnapshotImportReport\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12%\n" +
 	"\x0ecorrelation_id\x18\x02 \x01(\tR\rcorrelationId\x129\n" +
 	"\tsnapshots\x18\x03 \x03(\v2\x1b.agent.ImportedSnapshotInfoR\tsnapshots\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"(\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12&\n" +
+	"\x0frepo_size_bytes\x18\x05 \x01(\x03R\rrepoSizeBytes\"(\n" +
 	"\x16SnapshotImportResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok*\xe9\x01\n" +
 	"\aJobType\x12\x18\n" +
