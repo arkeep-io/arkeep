@@ -474,8 +474,18 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			continue
 		}
 
-		log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, size: %d bytes)",
-			dest.DestinationID, result.SnapshotID, result.TotalBytesProcessed))
+		// addedBytes is the real deduplicated/compressed footprint this backup added
+		// to the repo (data_added_packed, falling back to data_added on older restic).
+		// Stored as the snapshot's size so per-snapshot and per-day figures reconcile
+		// with the destination's real repo size — total_bytes_processed is the logical
+		// source size and would inflate/double-count across snapshots.
+		addedBytes := int64(result.DataAddedPacked)
+		if addedBytes == 0 {
+			addedBytes = int64(result.DataAdded)
+		}
+
+		log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
+			dest.DestinationID, result.SnapshotID, addedBytes))
 
 		// Capture the repository's real deduplicated size for per-destination
 		// usage reporting. Non-fatal: the backup already succeeded, so a stats
@@ -493,7 +503,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			"succeeded",
 			result.SnapshotID,
 			destStartedAt,
-			int64(result.TotalBytesProcessed),
+			addedBytes,
 			repoSizeBytes,
 			"",
 		)

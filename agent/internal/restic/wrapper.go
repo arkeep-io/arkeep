@@ -121,8 +121,12 @@ type ProgressEvent struct {
 	SnapshotID          string `json:"snapshot_id"`
 	// TotalBytesProcessed is the total size of all source files examined.
 	TotalBytesProcessed uint64 `json:"total_bytes_processed"`
-	// DataAdded is the number of new bytes added to the repository (deduplicated).
+	// DataAdded is the number of new bytes added to the repository (deduplicated,
+	// before compression).
 	DataAdded           uint64 `json:"data_added"`
+	// DataAddedPacked is the compressed bytes actually written to the repository
+	// by this backup (deduplicated + compressed) — the real incremental footprint.
+	DataAddedPacked     uint64 `json:"data_added_packed"`
 
 	// Raw is the original JSON line, forwarded as-is to the log stream.
 	Raw string `json:"-"`
@@ -139,6 +143,9 @@ type BackupResult struct {
 	TotalBytesProcessed uint64
 	// DataAdded is the net bytes added to the repository after deduplication.
 	DataAdded uint64
+	// DataAddedPacked is the compressed bytes actually written to the repository
+	// by this run — the real incremental footprint on disk.
+	DataAddedPacked uint64
 }
 
 // ProgressFunc is called for each progress event emitted during a long-running
@@ -227,6 +234,7 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 			result.SnapshotID = ev.SnapshotID
 			result.TotalBytesProcessed = ev.TotalBytesProcessed
 			result.DataAdded = ev.DataAdded
+			result.DataAddedPacked = ev.DataAddedPacked
 		}
 		if onProgress != nil {
 			return onProgress(ev)

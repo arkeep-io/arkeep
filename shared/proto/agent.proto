@@ -280,8 +280,10 @@ message DestinationStatusReport {
   // snapshot_id is the full restic snapshot ID created by this backup run.
   // Empty when status is "failed".
   string snapshot_id     = 5;
-  // size_bytes is the total bytes processed (TotalBytesProcessed from restic
-  // summary). Zero when status is "failed".
+  // size_bytes is the real footprint this backup added to the repository
+  // (data_added_packed from the restic summary, falling back to data_added) —
+  // NOT the logical source size. Zero when status is "failed" or when nothing
+  // new was added (e.g. re-backup of unchanged data).
   int64 size_bytes       = 6;
   // error is the error message when status is "failed". Empty on success.
   string error           = 7;

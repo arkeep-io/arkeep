@@ -258,6 +258,10 @@ type Snapshot struct {
 	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
 	JobID         uuid.UUID `gorm:"type:text;not null;index"`
 	SnapshotID    string    `gorm:"not null;index"` // opaque ID from the backup engine
+	// SizeBytes is the real footprint this backup added to the repository
+	// (restic data_added_packed), not the logical source size — so it reconciles
+	// with the destination's real repo size and never double-counts. Zero when
+	// the backup added nothing new (e.g. re-backup of unchanged data).
 	SizeBytes     int64     `gorm:"default:0"`
 	FileCount     int64     `gorm:"default:0"`
 	Tags          string    `gorm:"type:text;default:'[]'"`  // JSON array
