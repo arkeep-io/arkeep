@@ -279,6 +279,7 @@ export interface SMTPSettings {
   username: string
   password: string // write-only — always returned masked from the API
   from: string
+  from_name: string // optional sender display name; defaults to "Arkeep" when empty
   tls: boolean
   recipients: string[] // explicit email recipient list; empty = all active admins
 }

@@ -39,6 +39,7 @@ const smtpPassword = ref('')
 
 // From / recipients
 const smtpFrom = ref('')
+const smtpFromName = ref('')
 const smtpRecipients = ref<string[]>([])
 const recipientInput = ref('')
 const recipientError = ref('')
@@ -119,6 +120,7 @@ async function fetchSMTP() {
         smtpPassword.value = ''
         smtpAuthEnabled.value = !!s.username
         smtpFrom.value = s.from ?? ''
+        smtpFromName.value = s.from_name ?? ''
         smtpRecipients.value = s.recipients ?? []
     } catch (e: any) {
         if (e?.status === 404 || e?.response?.status === 404) {
@@ -152,6 +154,7 @@ async function submit() {
                 username: smtpAuthEnabled.value ? smtpUsername.value : '',
                 password: smtpAuthEnabled.value ? smtpPassword.value : '',
                 from: smtpFrom.value,
+                from_name: smtpFromName.value,
                 recipients: smtpRecipients.value,
             },
         })
@@ -288,6 +291,15 @@ async function submit() {
                     :class="errors.from ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                 <p class="text-xs text-muted-foreground">The sender address shown in notification emails.</p>
                 <FieldError v-if="errors.from">{{ errors.from }}</FieldError>
+            </Field>
+
+            <!-- ── From name ───────────────────────────────────────────────── -->
+            <Field>
+                <FieldLabel for="smtp-from-name">From Name</FieldLabel>
+                <Input id="smtp-from-name" v-model="smtpFromName" placeholder="Arkeep" autocomplete="off" />
+                <p class="text-xs text-muted-foreground">
+                    Display name shown next to the sender address. Defaults to "Arkeep" if left empty.
+                </p>
             </Field>
 
             <Separator />
