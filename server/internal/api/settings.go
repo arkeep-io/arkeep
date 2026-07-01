@@ -285,6 +285,7 @@ type smtpResponse struct {
 	Username   string   `json:"username"`
 	Password   string   `json:"password"` // always "***" on read
 	From       string   `json:"from"`
+	FromName   string   `json:"from_name"` // optional sender display name
 	TLS        bool     `json:"tls"`
 	Recipients []string `json:"recipients"`
 }
@@ -320,6 +321,7 @@ func (h *SettingsHandler) GetSMTP(w http.ResponseWriter, r *http.Request) {
 		Username:   idx[notification.KeySMTPUsername],
 		Password:   "***",
 		From:       idx[notification.KeySMTPFrom],
+		FromName:   idx[notification.KeySMTPFromName],
 		TLS:        idx[notification.KeySMTPTLS] == "true",
 		Recipients: splitRecipients(notifIdx[notification.KeyNotificationRecipients]),
 	})
@@ -331,6 +333,7 @@ type upsertSMTPRequest struct {
 	Username   string   `json:"username"`
 	Password   string   `json:"password"`
 	From       string   `json:"from"`
+	FromName   string   `json:"from_name"`
 	TLS        bool     `json:"tls"`
 	Recipients []string `json:"recipients"`
 }
@@ -357,6 +360,7 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 		{notification.KeySMTPPort, strconv.Itoa(req.Port)},
 		{notification.KeySMTPUsername, req.Username},
 		{notification.KeySMTPFrom, req.From},
+		{notification.KeySMTPFromName, req.FromName},
 		{notification.KeySMTPTLS, strconv.FormatBool(req.TLS)},
 		{notification.KeyNotificationRecipients, strings.Join(req.Recipients, ",")},
 	}
@@ -390,6 +394,7 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 		Username:   req.Username,
 		Password:   "***",
 		From:       req.From,
+		FromName:   req.FromName,
 		TLS:        req.TLS,
 		Recipients: req.Recipients,
 	})

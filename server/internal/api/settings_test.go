@@ -254,6 +254,7 @@ func TestSettingsHandler_UpsertSMTP(t *testing.T) {
 		"username":   "user@example.com",
 		"password":   "pass",
 		"from":       "noreply@example.com",
+		"from_name":  "My Backups",
 		"tls":        true,
 		"recipients": []string{"admin@example.com"},
 	}
@@ -278,6 +279,22 @@ func TestSettingsHandler_UpsertSMTP(t *testing.T) {
 		// Password must be masked.
 		if data.Password != "***" {
 			t.Errorf("password = %q, want ***", data.Password)
+		}
+	})
+
+	t.Run("persists from_name and returns it via GET", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/smtp", e.adminToken(t), validSMTP)
+		assertStatus(t, resp, http.StatusOK)
+
+		resp = e.get(t, "/api/v1/settings/smtp", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data struct {
+			FromName string `json:"from_name"`
+		}
+		decodeData(t, resp, &data)
+		if data.FromName != "My Backups" {
+			t.Errorf("from_name = %q, want %q", data.FromName, "My Backups")
 		}
 	})
 

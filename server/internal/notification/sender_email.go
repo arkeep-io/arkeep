@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ func (s *emailSender) Send(ctx context.Context, to []string, subject, body strin
 		return fmt.Errorf("%w: failed to load smtp config: %s", ErrSendFailed, err)
 	}
 
-	msg := buildEmail(cfg.From, to, subject, body)
+	msg := buildEmail(cfg.From, cfg.FromName, to, subject, body)
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 
 	if cfg.TLS {
@@ -173,15 +174,24 @@ func sanitizeHeader(s string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
-// buildEmail composes a minimal RFC 5322 email message.
-func buildEmail(from string, to []string, subject, body string) []byte {
+// buildEmail composes a minimal RFC 5322 email message. When fromName is set
+// the From header uses the "Name <address>" form (encoded/quoted via net/mail);
+// otherwise it falls back to the bare address.
+func buildEmail(from, fromName string, to []string, subject, body string) []byte {
 	recipients := make([]string, len(to))
 	for i, r := range to {
 		recipients[i] = sanitizeHeader(r)
 	}
 
+	fromHeader := sanitizeHeader(from)
+	if fromName != "" {
+		// mail.Address.String() handles quoting and RFC 2047 encoding; the
+		// final sanitizeHeader keeps the CRLF-injection guard from a hostile name.
+		fromHeader = sanitizeHeader((&mail.Address{Name: fromName, Address: from}).String())
+	}
+
 	var sb strings.Builder
-	sb.WriteString("From: ");sb.WriteString(sanitizeHeader(from));sb.WriteString("\r\n")
+	sb.WriteString("From: ");sb.WriteString(fromHeader);sb.WriteString("\r\n")
 	sb.WriteString("To: ");sb.WriteString(strings.Join(recipients, ", "));sb.WriteString("\r\n")
 	sb.WriteString("Subject: ");sb.WriteString(sanitizeHeader(subject));sb.WriteString("\r\n")
 	sb.WriteString("Date: ");sb.WriteString(time.Now().UTC().Format(time.RFC1123Z));sb.WriteString("\r\n")
