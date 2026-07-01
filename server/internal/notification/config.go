@@ -22,7 +22,8 @@ const (
 	KeySMTPUsername = "smtp.username"
 	KeySMTPPassword = "smtp.password" // stored encrypted via EncryptedString
 	KeySMTPFrom     = "smtp.from"
-	KeySMTPTLS      = "smtp.tls" // "true" or "false"
+	KeySMTPFromName = "smtp.from_name" // optional display name for the From header
+	KeySMTPTLS      = "smtp.tls"       // "true" or "false"
 
 	KeyWebhookURL     = "webhook.url"
 	KeyWebhookSecret  = "webhook.secret"  // HMAC secret, stored encrypted
@@ -40,6 +41,10 @@ const (
 	KeyEventAgentOnline  = "notification.events.agent_online"
 )
 
+// DefaultFromName is used as the email sender display name when smtp.from_name
+// is not configured, so notifications read as "Arkeep <address>" out of the box.
+const DefaultFromName = "Arkeep"
+
 // SMTPConfig holds the configuration needed to send emails via SMTP.
 type SMTPConfig struct {
 	Host     string
@@ -47,7 +52,8 @@ type SMTPConfig struct {
 	Username string
 	Password string // decrypted at load time by EncryptedString.Scan
 	From     string
-	TLS      bool // true = STARTTLS / implicit TLS
+	FromName string // display name for the From header; defaults to DefaultFromName
+	TLS      bool   // true = STARTTLS / implicit TLS
 }
 
 // WebhookConfig holds the configuration for the outbound HTTP webhook channel.
@@ -91,6 +97,13 @@ func loadSMTPConfig(ctx context.Context, repo repositories.SettingsRepository) (
 		return nil, fmt.Errorf("%w: smtp.from is required", ErrInvalidConfig)
 	}
 
+	// Optional display name; fall back to the default so the sender always has
+	// a friendly name even on installs that never configured one.
+	fromName := idx[KeySMTPFromName]
+	if fromName == "" {
+		fromName = DefaultFromName
+	}
+
 	tls := idx[KeySMTPTLS] == "true"
 
 	return &SMTPConfig{
@@ -99,6 +112,7 @@ func loadSMTPConfig(ctx context.Context, repo repositories.SettingsRepository) (
 		Username: idx[KeySMTPUsername],
 		Password: idx[KeySMTPPassword],
 		From:     from,
+		FromName: fromName,
 		TLS:      tls,
 	}, nil
 }

@@ -9,6 +9,7 @@ func TestBuildEmail(t *testing.T) {
 	tests := []struct {
 		name        string
 		from        string
+		fromName    string
 		to          []string
 		subject     string
 		body        string
@@ -24,6 +25,26 @@ func TestBuildEmail(t *testing.T) {
 			body:        "All good.",
 			wantHeaders: []string{"From: noreply@arkeep.io", "To: admin@example.com", "Subject: Backup completed"},
 			wantBody:    "All good.",
+		},
+		{
+			name:        "display name in From header",
+			from:        "noreply@arkeep.io",
+			fromName:    "Arkeep",
+			to:          []string{"admin@example.com"},
+			subject:     "Backup completed",
+			body:        "All good.",
+			wantHeaders: []string{`From: "Arkeep" <noreply@arkeep.io>`},
+			wantBody:    "All good.",
+		},
+		{
+			name:       "CRLF stripped from display name",
+			from:       "noreply@arkeep.io",
+			fromName:   "Evil\r\nBcc: attacker@evil.com",
+			to:         []string{"admin@example.com"},
+			subject:    "hi",
+			body:       "b",
+			wantNoLine: []string{"\r\nBcc: attacker@evil.com"},
+			wantBody:   "b",
 		},
 		{
 			name:        "CRLF stripped from subject",
@@ -68,7 +89,7 @@ func TestBuildEmail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := string(buildEmail(tt.from, tt.to, tt.subject, tt.body))
+			msg := string(buildEmail(tt.from, tt.fromName, tt.to, tt.subject, tt.body))
 
 			parts := strings.SplitN(msg, "\r\n\r\n", 2)
 			if len(parts) != 2 {
