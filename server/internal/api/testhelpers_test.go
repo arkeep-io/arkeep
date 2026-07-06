@@ -20,6 +20,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -198,6 +199,7 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		Notifications: deps.notifs,
 		OIDCProviders: deps.oidc,
 		Settings:      deps.settings,
+		LogRetention:  logretention.NewService(deps.jobs, deps.settings, zap.NewNop()),
 		Dashboard:     deps.dash,
 		Audit:         deps.audit,
 		ResetTokens:   deps.resets,

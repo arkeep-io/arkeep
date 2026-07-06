@@ -338,3 +338,67 @@ func TestSettingsHandler_UpsertSMTP(t *testing.T) {
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
 }
+
+func TestSettingsHandler_LogRetention(t *testing.T) {
+	t.Run("defaults to zero (disabled)", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/logs", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			InfoDays      int `json:"info_days"`
+			WarnErrorDays int `json:"warn_error_days"`
+		}
+		decodeData(t, resp, &data)
+		if data.InfoDays != 0 || data.WarnErrorDays != 0 {
+			t.Errorf("got %+v, want both 0", data)
+		}
+	})
+
+	t.Run("persists and returns via GET", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/logs", e.adminToken(t), map[string]any{
+			"info_days":       30,
+			"warn_error_days": 365,
+		})
+		assertStatus(t, resp, http.StatusOK)
+
+		resp = e.get(t, "/api/v1/settings/logs", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data struct {
+			InfoDays      int `json:"info_days"`
+			WarnErrorDays int `json:"warn_error_days"`
+		}
+		decodeData(t, resp, &data)
+		if data.InfoDays != 30 || data.WarnErrorDays != 365 {
+			t.Errorf("got %+v, want {30 365}", data)
+		}
+	})
+
+	t.Run("returns 400 for negative days", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/logs", e.adminToken(t), map[string]any{
+			"info_days": -1,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 403 for non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/logs", e.userToken(t))
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("manual prune returns deleted count", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/settings/logs/prune", e.adminToken(t), nil)
+		assertStatus(t, resp, http.StatusOK)
+		var data struct {
+			Deleted int64 `json:"deleted"`
+		}
+		decodeData(t, resp, &data)
+		if data.Deleted != 0 {
+			t.Errorf("deleted = %d, want 0 (no logs, retention disabled)", data.Deleted)
+		}
+	})
+}

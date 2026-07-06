@@ -401,3 +401,61 @@ func (r *gormJobRepository) GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.
 	return logs, nil
 }
 
+// PruneLogsByLevel deletes job_logs rows matching the given levels and older
+// than before, in batches of batchSize, and returns the total number of rows
+// deleted. Deleting in batches keeps each statement short so the SQLite single
+// writer is not blocked for the whole (potentially very large) first cleanup.
+// The delete targets the indexed timestamp column (idx_job_logs_timestamp).
+//
+// The associated jobs are never touched — only their verbose log lines — so the
+// job history in the jobs table is preserved.
+func (r *gormJobRepository) PruneLogsByLevel(ctx context.Context, levels []string, before time.Time, batchSize int) (int64, error) {
+	if len(levels) == 0 || batchSize <= 0 {
+		return 0, nil
+	}
+
+	var total int64
+	for {
+		res := r.db.WithContext(ctx).Exec(
+			`DELETE FROM job_logs WHERE id IN (
+				SELECT id FROM job_logs WHERE level IN ? AND timestamp < ? LIMIT ?
+			)`,
+			levels, before, batchSize,
+		)
+		if res.Error != nil {
+			return total, fmt.Errorf("jobs: prune logs: %w", res.Error)
+		}
+		total += res.RowsAffected
+		// A short (or empty) batch means there is nothing left to delete.
+		if res.RowsAffected < int64(batchSize) {
+			break
+		}
+	}
+	return total, nil
+}
+
+// ReclaimLogSpace returns disk space freed by pruning back to the filesystem.
+// It is driver-aware because the two engines reclaim space differently:
+//   - sqlite:   VACUUM rewrites the whole database file; it is the only way in
+//     SQLite to actually shrink the .db file on disk.
+//   - postgres: VACUUM (ANALYZE) job_logs marks the dead tuples reusable and
+//     refreshes planner stats without taking an exclusive lock. VACUUM FULL is
+//     deliberately avoided so it stays safe to run on a live production server.
+//
+// VACUUM cannot run inside a transaction, so the statement is executed with the
+// default transaction wrapping disabled.
+func (r *gormJobRepository) ReclaimLogSpace(ctx context.Context) error {
+	tx := r.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true})
+	switch r.db.Name() {
+	case "sqlite":
+		if err := tx.Exec("VACUUM").Error; err != nil {
+			return fmt.Errorf("jobs: vacuum sqlite: %w", err)
+		}
+	case "postgres":
+		if err := tx.Exec("VACUUM (ANALYZE) job_logs").Error; err != nil {
+			return fmt.Errorf("jobs: vacuum postgres: %w", err)
+		}
+	}
+	return nil
+}
+

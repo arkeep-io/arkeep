@@ -304,6 +304,13 @@ export interface NotificationSettings {
   agent_online: boolean
 }
 
+// LogRetentionSettings controls automatic pruning of job_logs rows. Days are
+// counted from each log line's timestamp; 0 means "keep forever" (disabled).
+export interface LogRetentionSettings {
+  info_days: number
+  warn_error_days: number
+}
+
 // OIDCProvider maps to the oidc_providers table (admin settings view).
 // callback_url is computed server-side and returned read-only — copy it into
 // the identity provider's allowed redirect URIs.

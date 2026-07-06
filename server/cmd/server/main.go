@@ -23,6 +23,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -256,6 +257,13 @@ func run(ctx context.Context, cfg *config) error {
 	// (max 3 attempts: +5 min → +30 min → exhausted).
 	go notifService.Start(ctx)
 
+	// --- Log retention ---
+	// Periodically prunes old job_logs rows so the database does not grow
+	// without bound. Disabled by default (see Settings → Log Retention); it only
+	// deletes rows once an administrator configures a retention window.
+	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
+	go logRetentionSvc.Start(ctx)
+
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
 		grpcserver.Config{
@@ -302,6 +310,7 @@ func run(ctx context.Context, cfg *config) error {
 		Notifications: notificationRepo,
 		OIDCProviders: oidcProviderRepo,
 		Settings:      settingsRepo,
+		LogRetention:  logRetentionSvc,
 		Secure:        cfg.secureCookies,
 		Dashboard:     dashboardRepo,
 		Audit:         auditRepo,
