@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
@@ -142,5 +143,117 @@ func TestUpdateDestinationStatus_NotFound(t *testing.T) {
 	err := repo.UpdateDestinationStatus(ctx, uuid.New(), uuid.New(), "succeeded", &now, &now, "x", 0, "")
 	if err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// seedJobWithLogs creates the parent rows (agent, policy, job) and inserts the
+// given log lines for that job. Returns the job ID.
+func seedJobWithLogs(t *testing.T, gormDB *gorm.DB, repo JobRepository, logs []db.JobLog) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	agentRepo := NewAgentRepository(gormDB)
+	if err := agentRepo.Create(ctx, agent); err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+	policy := &db.Policy{AgentID: agent.ID, Name: "p", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := NewPolicyRepository(gormDB).Create(ctx, policy); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+	jobID := uuid.New()
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "succeeded"}
+	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+	for i := range logs {
+		logs[i].JobID = jobID
+	}
+	if err := repo.BulkCreateLogs(ctx, logs); err != nil {
+		t.Fatalf("BulkCreateLogs: %v", err)
+	}
+	return jobID
+}
+
+// TestPruneLogsByLevel verifies that pruning removes only rows matching the
+// requested levels older than the cutoff, leaving recent rows and other levels
+// intact — the core of the log-retention feature.
+func TestPruneLogsByLevel(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	old := now.Add(-60 * 24 * time.Hour)    // 60 days ago
+	recent := now.Add(-1 * 24 * time.Hour)  // yesterday
+	cutoff := now.Add(-30 * 24 * time.Hour) // 30 days retention
+
+	jobID := seedJobWithLogs(t, gormDB, repo, []db.JobLog{
+		{Level: "info", Message: "old info", Timestamp: old},
+		{Level: "info", Message: "recent info", Timestamp: recent},
+		{Level: "warn", Message: "old warn", Timestamp: old},
+		{Level: "error", Message: "old error", Timestamp: old},
+	})
+
+	deleted, err := repo.PruneLogsByLevel(ctx, []string{"info"}, cutoff, 5000)
+	if err != nil {
+		t.Fatalf("PruneLogsByLevel: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (only the old info line)", deleted)
+	}
+
+	remaining, err := repo.GetLogs(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(remaining) != 3 {
+		t.Fatalf("remaining logs = %d, want 3", len(remaining))
+	}
+	for _, l := range remaining {
+		if l.Level == "info" && l.Message == "old info" {
+			t.Errorf("old info line was not pruned")
+		}
+	}
+}
+
+// TestPruneLogsByLevel_Batching verifies the batch loop deletes everything when
+// the number of matching rows exceeds a single batch.
+func TestPruneLogsByLevel_Batching(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	old := now.Add(-60 * 24 * time.Hour)
+
+	logs := make([]db.JobLog, 0, 25)
+	for range 25 {
+		logs = append(logs, db.JobLog{Level: "info", Message: "old", Timestamp: old})
+	}
+	jobID := seedJobWithLogs(t, gormDB, repo, logs)
+
+	// batchSize smaller than the dataset forces multiple loop iterations.
+	deleted, err := repo.PruneLogsByLevel(ctx, []string{"info"}, now, 10)
+	if err != nil {
+		t.Fatalf("PruneLogsByLevel: %v", err)
+	}
+	if deleted != 25 {
+		t.Errorf("deleted = %d, want 25", deleted)
+	}
+	remaining, err := repo.GetLogs(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("remaining logs = %d, want 0", len(remaining))
+	}
+}
+
+// TestReclaimLogSpace verifies VACUUM runs without error on SQLite.
+func TestReclaimLogSpace(t *testing.T) {
+	repo := NewJobRepository(newTestDB(t))
+	if err := repo.ReclaimLogSpace(context.Background()); err != nil {
+		t.Fatalf("ReclaimLogSpace: %v", err)
 	}
 }

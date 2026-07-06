@@ -193,6 +193,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/pages/settings/NotificationsPage.vue'),
             meta: { breadcrumb: 'Notifications', requiresRole: 'admin' },
           },
+          {
+            path: 'logs',
+            name: 'settings-logs',
+            component: () => import('@/pages/settings/LogRetentionPage.vue'),
+            meta: { breadcrumb: 'Log Retention', requiresRole: 'admin' },
+          },
         ],
       },
 

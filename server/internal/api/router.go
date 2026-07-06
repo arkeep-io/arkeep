@@ -40,6 +40,11 @@ type RouterConfig struct {
 	ResetTokens   repositories.PasswordResetTokenRepository
 	RefreshTokens repositories.RefreshTokenRepository
 
+	// LogRetention triggers an on-demand job_logs prune (Settings → Log
+	// Retention "run now"). Satisfied by *logretention.Service. Optional — if
+	// nil, the manual-prune endpoint responds 503.
+	LogRetention LogPruner
+
 	// Mailer sends transactional emails (e.g. password reset links) and reports
 	// whether SMTP is configured. Satisfied by *notification.NotificationService.
 	Mailer Mailer
@@ -100,7 +105,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler         := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.Logger)
+	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
 	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler      := newVersionHandler(cfg.ServerVersion)
@@ -231,6 +236,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
 				r.Put("/settings/notifications", settingsHandler.UpsertNotificationSettings)
+
+				// Job-log retention
+				r.Get("/settings/logs", settingsHandler.GetLogRetention)
+				r.Put("/settings/logs", settingsHandler.UpsertLogRetention)
+				r.Post("/settings/logs/prune", settingsHandler.PruneLogsNow)
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)

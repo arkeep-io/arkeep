@@ -205,6 +205,13 @@ type JobRepository interface {
     // JobLog
     BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
     GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)
+
+    // Log retention. PruneLogsByLevel deletes job_logs rows whose level is in
+    // levels and whose timestamp is before the cutoff, in batches of batchSize
+    // so a large first cleanup does not hold a long write lock. ReclaimLogSpace
+    // returns freed disk space to the filesystem (driver-aware).
+    PruneLogsByLevel(ctx context.Context, levels []string, before time.Time, batchSize int) (int64, error)
+    ReclaimLogSpace(ctx context.Context) error
 }
 
 // -----------------------------------------------------------------------------
