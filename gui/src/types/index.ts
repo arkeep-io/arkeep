@@ -358,9 +358,13 @@ export interface ImportDestinationRequest {
 }
 
 // ImportDestinationResponse is returned by the import endpoint.
+// found is what the repository holds, imported were newly recorded, skipped
+// were already known for this destination, and failed could not be recorded.
 export interface ImportDestinationResponse {
   found: number
   imported: number
+  skipped: number
+  failed: number
 }
 
 // CreateDestinationResponse is returned by POST /api/v1/destinations.

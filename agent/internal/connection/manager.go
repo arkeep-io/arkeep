@@ -790,6 +790,8 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 				Paths:            s.Paths,
 				Tags:             s.Tags,
 				Hostname:         s.Hostname,
+				SizeBytes:        s.Summary.DataAddedPacked,
+				FileCount:        s.Summary.TotalFilesProcessed,
 			}
 		}
 		// Capture the repo's real size so imported destinations show accurate

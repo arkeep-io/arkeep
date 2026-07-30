@@ -37,7 +37,7 @@ func newSnapshotFixture(t *testing.T, destCount int) (*snapshotFixture, []uuid.U
 	if err := NewPolicyRepository(gormDB).Create(ctx, policy); err != nil {
 		t.Fatalf("Create policy: %v", err)
 	}
-	job := &db.Job{PolicyID: policy.ID, AgentID: agent.ID, Status: "succeeded"}
+	job := &db.Job{PolicyID: &policy.ID, AgentID: agent.ID, Status: "succeeded"}
 	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 		t.Fatalf("Create job: %v", err)
 	}
@@ -208,5 +208,121 @@ func TestDeleteStaleByDestination_NoStaleRecords(t *testing.T) {
 	}
 	if got := f.remainingSnapshotIDs(t, destID); len(got) != 2 {
 		t.Errorf("remaining = %v, want both records kept", got)
+	}
+}
+
+// TestCreateImportedSnapshot covers snapshots imported from a pre-existing
+// Restic repository. Such snapshots belong to a destination but to no policy
+// and no job — they were not produced by a backup run — so policy_id and
+// job_id must be storable as NULL.
+func TestCreateImportedSnapshot(t *testing.T) {
+	gdb := newTestDB(t)
+	repo := NewSnapshotRepository(gdb)
+	destRepo := NewDestinationRepository(gdb)
+	ctx := context.Background()
+
+	dest := &db.Destination{
+		Name:        "imported-repo",
+		Type:        "rclone",
+		Credentials: db.EncryptedString(`{"config":"x"}`),
+		Config:      `{}`,
+		Enabled:     true,
+	}
+	if err := destRepo.Create(ctx, dest); err != nil {
+		t.Fatalf("Create destination: %v", err)
+	}
+
+	snap := &db.Snapshot{
+		PolicyID:      nil,
+		JobID:         nil,
+		DestinationID: dest.ID,
+		IsImported:    true,
+		SnapshotID:    "1a2b3c4d5e6f",
+		Hostname:      "nas",
+		Sources:       `["/data"]`,
+		Tags:          `[]`,
+		SnapshotAt:    time.Now().UTC(),
+	}
+	if err := repo.Create(ctx, snap); err != nil {
+		t.Fatalf("Create imported snapshot: %v", err)
+	}
+
+	// The snapshot must be listable for its destination, with an empty policy
+	// name (the LEFT JOIN finds no policy row).
+	rows, total, err := repo.ListByDestination(ctx, dest.ID, ListOptions{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("ListByDestination: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("ListByDestination total = %d, want 1", total)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ListByDestination returned %d rows, want 1", len(rows))
+	}
+	if rows[0].SnapshotID != "1a2b3c4d5e6f" {
+		t.Errorf("SnapshotID = %q, want %q", rows[0].SnapshotID, "1a2b3c4d5e6f")
+	}
+	if !rows[0].IsImported {
+		t.Error("IsImported = false, want true")
+	}
+	if rows[0].PolicyName != "" {
+		t.Errorf("PolicyName = %q, want empty", rows[0].PolicyName)
+	}
+}
+
+// TestExistsBySnapshotIDAndDestination verifies that the import dedup check is
+// scoped per destination: the same Restic snapshot ID copied into a second
+// destination (e.g. after migrating a repository to another provider) must not
+// be reported as already present.
+func TestExistsBySnapshotIDAndDestination(t *testing.T) {
+	gdb := newTestDB(t)
+	repo := NewSnapshotRepository(gdb)
+	destRepo := NewDestinationRepository(gdb)
+	ctx := context.Background()
+
+	newDest := func(name string) *db.Destination {
+		d := &db.Destination{
+			Name:        name,
+			Type:        "rclone",
+			Credentials: db.EncryptedString(`{"config":"x"}`),
+			Config:      `{}`,
+			Enabled:     true,
+		}
+		if err := destRepo.Create(ctx, d); err != nil {
+			t.Fatalf("Create destination %s: %v", name, err)
+		}
+		return d
+	}
+	oldDest, newProvider := newDest("provider1"), newDest("provider2")
+
+	const resticID = "deadbeefcafe"
+	snap := &db.Snapshot{
+		PolicyID:      nil,
+		JobID:         nil,
+		DestinationID: oldDest.ID,
+		IsImported:    true,
+		SnapshotID:    resticID,
+		Sources:       `["/data"]`,
+		Tags:          `[]`,
+		SnapshotAt:    time.Now().UTC(),
+	}
+	if err := repo.Create(ctx, snap); err != nil {
+		t.Fatalf("Create imported snapshot: %v", err)
+	}
+
+	exists, err := repo.ExistsBySnapshotIDAndDestination(ctx, resticID, oldDest.ID)
+	if err != nil {
+		t.Fatalf("ExistsBySnapshotIDAndDestination(oldDest): %v", err)
+	}
+	if !exists {
+		t.Error("exists on original destination = false, want true")
+	}
+
+	exists, err = repo.ExistsBySnapshotIDAndDestination(ctx, resticID, newProvider.ID)
+	if err != nil {
+		t.Fatalf("ExistsBySnapshotIDAndDestination(newProvider): %v", err)
+	}
+	if exists {
+		t.Error("exists on the new provider's destination = true, want false: the same repository copied to another provider must still be importable")
 	}
 }

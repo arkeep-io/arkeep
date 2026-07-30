@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +21,7 @@ func createDBSnapshot(t *testing.T, deps *testDeps) *db.Snapshot {
 	s := &db.Snapshot{
 		PolicyID:      job.PolicyID,
 		DestinationID: dest.ID,
-		JobID:         job.ID,
+		JobID:         &job.ID,
 		SnapshotID:    uuid.NewString(),
 		SizeBytes:     1024,
 		SnapshotAt:    time.Now(),
@@ -229,5 +231,114 @@ func TestSnapshotHandler_Restore(t *testing.T) {
 				"target_path": "/restore/path",
 			})
 		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+// createDBImportedSnapshot inserts a snapshot as the import flow does: attached
+// to a destination, with no policy and no job. repoPassword is stored on the
+// destination when non-empty, which is what makes browse and restore possible.
+func createDBImportedSnapshot(t *testing.T, deps *testDeps, repoPassword string) (*db.Snapshot, *db.Destination) {
+	t.Helper()
+	dest := createDBDestination(t, deps, "imported-dest-"+uuid.NewString(), "rclone")
+	if repoPassword != "" {
+		dest.RepoPassword = db.EncryptedString(repoPassword)
+		if err := deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("createDBImportedSnapshot: store repo password: %v", err)
+		}
+	}
+	s := &db.Snapshot{
+		DestinationID: dest.ID,
+		IsImported:    true,
+		SnapshotID:    uuid.NewString(),
+		Sources:       `["/data"]`,
+		Tags:          `[]`,
+		SnapshotAt:    time.Now(),
+	}
+	if err := deps.snaps.Create(context.Background(), s); err != nil {
+		t.Fatalf("createDBImportedSnapshot: %v", err)
+	}
+	return s, dest
+}
+
+func TestSnapshotHandler_RestoreImported(t *testing.T) {
+	t.Run("returns 422 when the destination has no stored repository password", func(t *testing.T) {
+		e := newTestEnv(t)
+		s, _ := createDBImportedSnapshot(t, e.deps, "")
+		agent := createDBAgent(t, e.deps, "restore-agent")
+
+		resp := e.post(t, "/api/v1/snapshots/"+s.ID.String()+"/restore",
+			e.adminToken(t), map[string]string{
+				"agent_id":    agent.ID.String(),
+				"target_path": "/restore/path",
+			})
+
+		assertStatus(t, resp, http.StatusUnprocessableEntity)
+		// Guard against the status matching for an unrelated reason.
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if !strings.Contains(string(body), "repository password") {
+			t.Errorf("body = %s, want it to mention the missing repository password", strings.TrimSpace(string(body)))
+		}
+	})
+
+	t.Run("creates a restore job with no policy", func(t *testing.T) {
+		e := newTestEnv(t)
+		s, _ := createDBImportedSnapshot(t, e.deps, "repo-secret")
+		agent := createDBAgent(t, e.deps, "restore-agent")
+
+		// The agent is not connected, so the dispatch fails with 503 — but the
+		// job must already have been persisted by then, which is what proves
+		// a policy-less restore job is storable.
+		resp := e.post(t, "/api/v1/snapshots/"+s.ID.String()+"/restore",
+			e.adminToken(t), map[string]string{
+				"agent_id":    agent.ID.String(),
+				"target_path": "/restore/path",
+			})
+		assertStatus(t, resp, http.StatusServiceUnavailable)
+
+		var jobs []db.Job
+		if err := e.deps.gdb.Where("agent_id = ?", agent.ID).Find(&jobs).Error; err != nil {
+			t.Fatalf("load jobs: %v", err)
+		}
+		if len(jobs) != 1 {
+			t.Fatalf("stored %d jobs, want 1", len(jobs))
+		}
+		if jobs[0].PolicyID != nil {
+			t.Errorf("job PolicyID = %v, want nil", jobs[0].PolicyID)
+		}
+		if jobs[0].Type != "restore" {
+			t.Errorf("job Type = %q, want %q", jobs[0].Type, "restore")
+		}
+	})
+}
+
+func TestSnapshotHandler_BrowseImported(t *testing.T) {
+	t.Run("returns 400 when agent_id is not supplied", func(t *testing.T) {
+		e := newTestEnv(t)
+		s, _ := createDBImportedSnapshot(t, e.deps, "repo-secret")
+
+		resp := e.get(t, "/api/v1/snapshots/"+s.ID.String()+"/browse", e.adminToken(t))
+
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 422 when the destination has no stored repository password", func(t *testing.T) {
+		e := newTestEnv(t)
+		s, _ := createDBImportedSnapshot(t, e.deps, "")
+		agent := createDBAgent(t, e.deps, "browse-agent")
+
+		resp := e.get(t, "/api/v1/snapshots/"+s.ID.String()+"/browse?agent_id="+agent.ID.String(), e.adminToken(t))
+
+		assertStatus(t, resp, http.StatusUnprocessableEntity)
+	})
+
+	t.Run("returns 503 when the chosen agent is offline", func(t *testing.T) {
+		e := newTestEnv(t)
+		s, _ := createDBImportedSnapshot(t, e.deps, "repo-secret")
+		agent := createDBAgent(t, e.deps, "browse-agent")
+
+		resp := e.get(t, "/api/v1/snapshots/"+s.ID.String()+"/browse?agent_id="+agent.ID.String(), e.adminToken(t))
+
+		assertStatus(t, resp, http.StatusServiceUnavailable)
 	})
 }

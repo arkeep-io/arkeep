@@ -44,7 +44,7 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 		t.Fatalf("Create policy: %v", err)
 	}
 	for _, jobID := range []uuid.UUID{jobAID, jobBID} {
-		job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "pending"}
+		job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "pending"}
 		if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 			t.Fatalf("Create job %s: %v", jobID, err)
 		}
@@ -113,7 +113,7 @@ func TestUpdateDestinationStatus_Idempotent(t *testing.T) {
 	if err := policyRepo.Create(ctx, policy); err != nil {
 		t.Fatalf("Create policy: %v", err)
 	}
-	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "pending"}
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "pending"}
 	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 		t.Fatalf("Create job: %v", err)
 	}
@@ -162,7 +162,7 @@ func seedJobWithLogs(t *testing.T, gormDB *gorm.DB, repo JobRepository, logs []d
 		t.Fatalf("Create policy: %v", err)
 	}
 	jobID := uuid.New()
-	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "succeeded"}
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "succeeded"}
 	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 		t.Fatalf("Create job: %v", err)
 	}
