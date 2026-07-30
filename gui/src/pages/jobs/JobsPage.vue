@@ -156,6 +156,7 @@ onMounted(fetchJobs)
                     <SelectItem value="succeeded">Succeeded</SelectItem>
                     <SelectItem value="failed">Failed</SelectItem>
                     <SelectItem value="cancelled">Cancelled</SelectItem>
+                    <SelectItem value="interrupted">Interrupted</SelectItem>
                 </SelectContent>
             </Select>
 

@@ -39,11 +39,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// PendingDispatcher is implemented by the scheduler to flush pending jobs when
-// an agent reconnects. Defined as an interface to avoid importing the scheduler
-// package from the grpc package.
+// PendingDispatcher is implemented by the scheduler to catch an agent up when it
+// reconnects: flushing jobs queued while it was offline, and queueing a fresh run
+// for backups its previous session left interrupted. Defined as an interface to
+// avoid importing the scheduler package from the grpc package.
 type PendingDispatcher interface {
 	DispatchPending(ctx context.Context, agentID uuid.UUID)
+	ResumeInterrupted(ctx context.Context, agentID uuid.UUID)
 }
 
 // Server is the gRPC server that handles agent connections.
@@ -443,7 +445,7 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 	// dispatch jobs to it by calling manager.Dispatch(agentID, job).
 	// Docker availability is read from the capabilities cached during the
 	// Register RPC — StreamJobsRequest does not carry capability fields.
-	s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
+	session := s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
 
 	if s.notifSvc != nil {
 		go func() {
@@ -455,16 +457,35 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		}()
 	}
 
-	// Flush any jobs that were created while the agent was offline.
+	// Flush any jobs that were created while the agent was offline, then queue a
+	// fresh run for anything that was interrupted mid-backup last time the agent
+	// disappeared. Sequential in one goroutine so the ordering is deterministic:
+	// pending work already queued goes out before new resume jobs are created.
 	if s.pendingDispatch != nil {
-		go s.pendingDispatch.DispatchPending(context.Background(), agentID)
+		go func() {
+			bgCtx := context.Background()
+			s.pendingDispatch.DispatchPending(bgCtx, agentID)
+			s.pendingDispatch.ResumeInterrupted(bgCtx, agentID)
+		}()
 	}
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
 
 	// Cleanup: remove from in-memory registry and mark offline in the DB.
-	s.agentManager.Deregister(req.AgentId)
+	//
+	// Deregister reports false when this stream was already superseded by a newer
+	// connection from the same agent, which is the normal case after a laptop
+	// wakes up: the agent reconnects within a second, and this context only
+	// completes minutes later when TCP dead-peer detection fires. Touching the
+	// agent or its jobs at that point would deregister a live agent and interrupt
+	// the job it has just started, so the whole cleanup is skipped.
+	if !s.agentManager.Deregister(req.AgentId, session) {
+		s.logger.Info("StreamJobs stream closed for a superseded session, skipping cleanup",
+			zap.String("agent_id", req.AgentId),
+		)
+		return nil
+	}
 
 	// Use a fresh context for cleanup since the stream context is already done.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -478,11 +499,11 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 	}
 
 	// Orphan recovery: any job still "running" when the agent disconnects will
-	// never receive a terminal status report. Mark them as failed so they don't
-	// appear stuck in the UI indefinitely. The agent may have already reported
-	// "cancelled" for a job it was gracefully shutting down; UpdateStatus is
-	// idempotent for terminal states (RowsAffected == 0 if already terminal).
-	if n, err := s.jobRepo.FailRunningJobsForAgent(cleanupCtx, agentID, "agent disconnected"); err != nil {
+	// never receive a terminal status report. Mark them "interrupted" — not
+	// "failed" — so they are distinguishable from a genuine backup error and can
+	// be resumed when the agent comes back. A job the user cancelled is already
+	// out of "running" and is left alone.
+	if n, err := s.jobRepo.MarkRunningJobsInterruptedForAgent(cleanupCtx, agentID, "agent disconnected"); err != nil {
 		s.logger.Warn("failed to recover orphaned jobs",
 			zap.String("agent_id", req.AgentId),
 			zap.Error(err),
@@ -540,6 +561,17 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 		return nil, status.Error(codes.InvalidArgument, "unknown job status")
 	}
 
+	if errors.Is(err, repositories.ErrTerminalState) {
+		// Expected: the connection dropped mid-job, the server recorded the job
+		// as interrupted, and restic kept running on the agent — this is its
+		// outcome arriving late. The recorded outcome wins, and the resume that
+		// was already queued stands.
+		s.logger.Info("ignoring status report for a job already in a terminal state",
+			zap.String("job_id", req.JobId),
+			zap.String("reported_status", dbStatus),
+		)
+		return &proto.JobStatusResponse{Ok: true}, nil
+	}
 	if err != nil {
 		s.logger.Error("failed to update job status",
 			zap.String("job_id", req.JobId),

@@ -182,10 +182,10 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if status := r.URL.Query().Get("status"); status != "" {
 		switch status {
-		case "pending", "running", "succeeded", "failed", "cancelled":
+		case "pending", "running", "succeeded", "failed", "cancelled", "interrupted":
 			filter.Status = status
 		default:
-			ErrBadRequest(w, "invalid status: must be one of pending, running, succeeded, failed, cancelled")
+			ErrBadRequest(w, "invalid status: must be one of pending, running, succeeded, failed, cancelled, interrupted")
 			return
 		}
 	}
@@ -337,13 +337,18 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	if err := h.repo.UpdateStatus(r.Context(), id, "cancelled", job.StartedAt, &now, ""); err != nil {
+		// The job reached a terminal state between the read above and this write.
+		if errors.Is(err, repositories.ErrTerminalState) {
+			ErrConflict(w, "job is already in a terminal state")
+			return
+		}
 		h.logger.Error("failed to cancel job", zap.String("id", id.String()), zap.Error(err))
 		ErrInternal(w)
 		return
 	}
 
-	// For running jobs, notify the agent to abort. The agent will report
-	// JOB_STATUS_CANCELLED which is idempotent against the already-cancelled DB row.
+	// For running jobs, notify the agent to abort. The agent reports
+	// JOB_STATUS_CANCELLED, which the already-cancelled DB row now refuses.
 	if job.Status == "running" {
 		if err := h.agents.SendCancel(job.AgentID.String(), id.String()); err != nil {
 			// Non-fatal: the DB is already updated; the agent will detect shutdown

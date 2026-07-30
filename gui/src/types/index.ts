@@ -30,6 +30,9 @@ export const JobStatus = {
   Succeeded: 'succeeded',
   Failed: 'failed',
   Cancelled: 'cancelled',
+  // Interrupted: the agent vanished mid-run (host shut down, sleep, network
+  // loss) rather than the backup failing. Eligible for automatic resume.
+  Interrupted: 'interrupted',
 } as const
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus]
 export const JobType = {
@@ -177,6 +180,9 @@ export interface Policy {
   hook_post_backup: string  // JSON string or empty
   exclude_patterns: string  // JSON array string or empty
   enabled: boolean
+  // resume_interrupted: re-run a backup automatically when the agent reconnects
+  // after having disconnected mid-run.
+  resume_interrupted: boolean
   destinations: PolicyDestination[]
   last_run_at: string | null
   next_run_at: string | null

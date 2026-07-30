@@ -52,7 +52,7 @@ const PROGRESS_KEY = `arkeep:job-progress:${jobId}`
 
 // Terminal job states. Once the job reaches one of these, an in-flight fetch
 // started while it was still running must not revert it back to a live state.
-const TERMINAL: JobStatus[] = ['succeeded', 'failed', 'cancelled']
+const TERMINAL: JobStatus[] = ['succeeded', 'failed', 'cancelled', 'interrupted']
 const terminalSeen = ref(false)
 
 // ---------------------------------------------------------------------------

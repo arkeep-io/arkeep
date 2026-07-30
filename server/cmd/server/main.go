@@ -221,6 +221,17 @@ func run(ctx context.Context, cfg *config) error {
 	m := metrics.New(prometheus.DefaultRegisterer)
 	metrics.RegisterAgentsGauge(prometheus.DefaultRegisterer, agentMgr.ConnectedAgentsCount)
 
+	// --- Recover jobs orphaned by a server restart ---
+	// A job that was running when the process stopped has no stream teardown to
+	// recover it and would stay "running" forever. Marking it interrupted lets the
+	// normal resume path pick it up when its agent reconnects. Runs before the
+	// scheduler and the gRPC server so no agent can reconnect mid-sweep.
+	if n, err := jobRepo.MarkRunningJobsInterrupted(ctx, "server restarted"); err != nil {
+		logger.Warn("failed to recover jobs left running by a previous run", zap.Error(err))
+	} else if n > 0 {
+		logger.Info("recovered jobs left running by a previous run", zap.Int64("count", n))
+	}
+
 	// --- Scheduler ---
 	sched, err := scheduler.New(policyRepo, jobRepo, destinationRepo, agentMgr, logger)
 	if err != nil {
@@ -256,6 +267,11 @@ func run(ctx context.Context, cfg *config) error {
 	// email/webhook deliveries and retries them with exponential backoff
 	// (max 3 attempts: +5 min → +30 min → exhausted).
 	go notifService.Start(ctx)
+
+	// The scheduler is built before the hub, so it gets the notification service
+	// here. It uses it only to report that automatic resume of a repeatedly
+	// interrupted backup has given up.
+	sched.SetNotificationService(notifService)
 
 	// --- Log retention ---
 	// Periodically prunes old job_logs rows so the database does not grow

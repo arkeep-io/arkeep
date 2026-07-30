@@ -241,6 +241,8 @@ const schema = z.object({
   hook_pre: hookFieldSchema,
   hook_post: hookFieldSchema,
   exclude_patterns_text: z.string().optional(),
+
+  resume_interrupted: z.boolean(),
 }).superRefine((data, ctx) => {
   if (!isEdit.value) {
     if (!data.repo_password || data.repo_password.length < 8) {
@@ -454,6 +456,9 @@ const hooksOpen = ref(false)
 // Exclude patterns
 const { value: excludePatternsText } = useField<string>('exclude_patterns_text')
 
+// Resume of backups interrupted by an agent disconnection.
+const { value: resumeInterrupted } = useField<boolean>('resume_interrupted')
+
 // ---------------------------------------------------------------------------
 // Reset / populate
 // ---------------------------------------------------------------------------
@@ -477,6 +482,7 @@ function defaultValues(): FormValues {
     hook_pre: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     exclude_patterns_text: '',
+    resume_interrupted: true,
   }
 }
 
@@ -640,6 +646,8 @@ function populateForm(p: Policy, asClone = false) {
         return Array.isArray(arr) ? arr.join('\n') : ''
       } catch { return '' }
     })(),
+    // Policies created before this option existed report it as enabled.
+    resume_interrupted: p.resume_interrupted ?? true,
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
@@ -720,6 +728,7 @@ const onSubmit = handleSubmit(async (values) => {
           .map(l => l.trim())
           .filter(l => l.length > 0 && !l.startsWith('#'))
       ),
+      resume_interrupted: values.resume_interrupted,
     }
 
     if (isEdit.value) {
@@ -1341,6 +1350,22 @@ function onOpenChange(value: boolean) {
               placeholder="*.log&#10;**/.cache&#10;/tmp"
               class="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring flex w-full rounded-md border px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 font-mono"
             />
+          </div>
+
+          <!-- Resume interrupted backups -->
+          <Separator />
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium">Resume interrupted backups</p>
+              <p class="text-muted-foreground text-xs">
+                If the agent disconnects mid-backup — a laptop going to sleep or losing power —
+                run it again as soon as the agent reconnects, instead of waiting for the next
+                scheduled time. Restic keeps whatever was already uploaded, so the retry only
+                transfers what is missing.
+              </p>
+            </div>
+            <Switch :model-value="resumeInterrupted ?? true"
+              @update:model-value="resumeInterrupted = $event" />
           </div>
 
           <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->

@@ -49,26 +49,29 @@ type policyDestinationResponse struct {
 // policyResponse is the JSON representation of a policy.
 // RepoPassword is intentionally omitted — it is write-only.
 type policyResponse struct {
-	ID               string                      `json:"id"`
-	Name             string                      `json:"name"`
-	AgentID          string                      `json:"agent_id"`
-	AgentName        string                      `json:"agent_name"`
-	Schedule         string                      `json:"schedule"`
-	Enabled          bool                        `json:"enabled"`
-	Sources          string                      `json:"sources"`
-	RetentionLast    int                         `json:"retention_last"`
-	RetentionHourly  int                         `json:"retention_hourly"`
-	RetentionDaily   int                         `json:"retention_daily"`
-	RetentionWeekly  int                         `json:"retention_weekly"`
-	RetentionMonthly int                         `json:"retention_monthly"`
-	RetentionYearly  int                         `json:"retention_yearly"`
-	HookPreBackup    string                      `json:"hook_pre_backup"`
-	HookPostBackup   string                      `json:"hook_post_backup"`
-	ExcludePatterns  string                      `json:"exclude_patterns"`
-	Destinations     []policyDestinationResponse `json:"destinations"`
-	LastRunAt        *string                     `json:"last_run_at"`
-	NextRunAt        *string                     `json:"next_run_at"`
-	CreatedAt        string                      `json:"created_at"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	AgentID          string `json:"agent_id"`
+	AgentName        string `json:"agent_name"`
+	Schedule         string `json:"schedule"`
+	Enabled          bool   `json:"enabled"`
+	Sources          string `json:"sources"`
+	RetentionLast    int    `json:"retention_last"`
+	RetentionHourly  int    `json:"retention_hourly"`
+	RetentionDaily   int    `json:"retention_daily"`
+	RetentionWeekly  int    `json:"retention_weekly"`
+	RetentionMonthly int    `json:"retention_monthly"`
+	RetentionYearly  int    `json:"retention_yearly"`
+	HookPreBackup    string `json:"hook_pre_backup"`
+	HookPostBackup   string `json:"hook_post_backup"`
+	ExcludePatterns  string `json:"exclude_patterns"`
+	// ResumeInterrupted: resume a backup automatically when the agent reconnects
+	// after having disconnected mid-run.
+	ResumeInterrupted bool                        `json:"resume_interrupted"`
+	Destinations      []policyDestinationResponse `json:"destinations"`
+	LastRunAt         *string                     `json:"last_run_at"`
+	NextRunAt         *string                     `json:"next_run_at"`
+	CreatedAt         string                      `json:"created_at"`
 }
 
 // policyToResponse converts a db.Policy and its associated PolicyDestination
@@ -77,24 +80,25 @@ type policyResponse struct {
 // agentName is passed in from the caller to avoid an extra DB lookup per policy.
 func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinationWithName, agentName string) policyResponse {
 	resp := policyResponse{
-		ID:               p.ID.String(),
-		Name:             p.Name,
-		AgentID:          p.AgentID.String(),
-		AgentName:        agentName,
-		Schedule:         p.Schedule,
-		Enabled:          p.Enabled,
-		Sources:          p.Sources,
-		RetentionLast:    p.RetentionLast,
-		RetentionHourly:  p.RetentionHourly,
-		RetentionDaily:   p.RetentionDaily,
-		RetentionWeekly:  p.RetentionWeekly,
-		RetentionMonthly: p.RetentionMonthly,
-		RetentionYearly:  p.RetentionYearly,
-		HookPreBackup:    p.HookPreBackup,
-		HookPostBackup:   p.HookPostBackup,
-		ExcludePatterns:  p.ExcludePatterns,
-		Destinations:     make([]policyDestinationResponse, len(destinations)),
-		CreatedAt:        p.CreatedAt.UTC().Format(time.RFC3339),
+		ID:                p.ID.String(),
+		Name:              p.Name,
+		AgentID:           p.AgentID.String(),
+		AgentName:         agentName,
+		Schedule:          p.Schedule,
+		Enabled:           p.Enabled,
+		Sources:           p.Sources,
+		RetentionLast:     p.RetentionLast,
+		RetentionHourly:   p.RetentionHourly,
+		RetentionDaily:    p.RetentionDaily,
+		RetentionWeekly:   p.RetentionWeekly,
+		RetentionMonthly:  p.RetentionMonthly,
+		RetentionYearly:   p.RetentionYearly,
+		HookPreBackup:     p.HookPreBackup,
+		HookPostBackup:    p.HookPostBackup,
+		ExcludePatterns:   p.ExcludePatterns,
+		ResumeInterrupted: p.ResumeInterrupted,
+		Destinations:      make([]policyDestinationResponse, len(destinations)),
+		CreatedAt:         p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 
 	for i, pd := range destinations {
@@ -167,21 +171,24 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // createPolicyRequest is the JSON body expected by POST /api/v1/policies.
 type createPolicyRequest struct {
-	Name             string                    `json:"name"`
-	AgentID          string                    `json:"agent_id"`
-	Schedule         string                    `json:"schedule"`
-	Sources          string                    `json:"sources"` // JSON array
-	RepoPassword     string                    `json:"repo_password"`
-	RetentionLast    int                       `json:"retention_last"`
-	RetentionHourly  int                       `json:"retention_hourly"`
-	RetentionDaily   int                       `json:"retention_daily"`
-	RetentionWeekly  int                       `json:"retention_weekly"`
-	RetentionMonthly int                       `json:"retention_monthly"`
-	RetentionYearly  int                       `json:"retention_yearly"`
-	HookPreBackup    string                    `json:"hook_pre_backup"`
-	HookPostBackup   string                    `json:"hook_post_backup"`
-	ExcludePatterns  string                    `json:"exclude_patterns"` // JSON array
-	Destinations     []destinationEntryRequest `json:"destinations"`
+	Name             string `json:"name"`
+	AgentID          string `json:"agent_id"`
+	Schedule         string `json:"schedule"`
+	Sources          string `json:"sources"` // JSON array
+	RepoPassword     string `json:"repo_password"`
+	RetentionLast    int    `json:"retention_last"`
+	RetentionHourly  int    `json:"retention_hourly"`
+	RetentionDaily   int    `json:"retention_daily"`
+	RetentionWeekly  int    `json:"retention_weekly"`
+	RetentionMonthly int    `json:"retention_monthly"`
+	RetentionYearly  int    `json:"retention_yearly"`
+	HookPreBackup    string `json:"hook_pre_backup"`
+	HookPostBackup   string `json:"hook_post_backup"`
+	ExcludePatterns  string `json:"exclude_patterns"` // JSON array
+	// ResumeInterrupted is optional: omitted means enabled, which is the useful
+	// default for the laptop case this exists for.
+	ResumeInterrupted *bool                     `json:"resume_interrupted"`
+	Destinations      []destinationEntryRequest `json:"destinations"`
 }
 
 // destinationEntryRequest represents a single destination entry in a create/update request.
@@ -217,21 +224,22 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policy := &db.Policy{
-		Name:             req.Name,
-		AgentID:          agentID,
-		Schedule:         req.Schedule,
-		Enabled:          true,
-		Sources:          req.Sources,
-		RepoPassword:     db.EncryptedString(req.RepoPassword),
-		RetentionLast:    req.RetentionLast,
-		RetentionHourly:  req.RetentionHourly,
-		RetentionDaily:   req.RetentionDaily,
-		RetentionWeekly:  req.RetentionWeekly,
-		RetentionMonthly: req.RetentionMonthly,
-		RetentionYearly:  req.RetentionYearly,
-		HookPreBackup:    req.HookPreBackup,
-		HookPostBackup:   req.HookPostBackup,
-		ExcludePatterns:  normalizeJSONArray(req.ExcludePatterns),
+		Name:              req.Name,
+		AgentID:           agentID,
+		Schedule:          req.Schedule,
+		Enabled:           true,
+		Sources:           req.Sources,
+		RepoPassword:      db.EncryptedString(req.RepoPassword),
+		RetentionLast:     req.RetentionLast,
+		RetentionHourly:   req.RetentionHourly,
+		RetentionDaily:    req.RetentionDaily,
+		RetentionWeekly:   req.RetentionWeekly,
+		RetentionMonthly:  req.RetentionMonthly,
+		RetentionYearly:   req.RetentionYearly,
+		HookPreBackup:     req.HookPreBackup,
+		HookPostBackup:    req.HookPostBackup,
+		ExcludePatterns:   normalizeJSONArray(req.ExcludePatterns),
+		ResumeInterrupted: req.ResumeInterrupted == nil || *req.ResumeInterrupted,
 	}
 
 	if err := h.repo.Create(r.Context(), policy); err != nil {
@@ -321,22 +329,23 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 // All fields are optional — only non-nil values are applied.
 // Destinations replaces the full set when non-empty; omitting it leaves destinations unchanged.
 type updatePolicyRequest struct {
-	Name             *string                    `json:"name"`
-	AgentID          *string                    `json:"agent_id"`
-	Schedule         *string                    `json:"schedule"`
-	Enabled          *bool                      `json:"enabled"`
-	Sources          *string                    `json:"sources"`
-	RepoPassword     *string                    `json:"repo_password"`
-	RetentionLast    *int                       `json:"retention_last"`
-	RetentionHourly  *int                       `json:"retention_hourly"`
-	RetentionDaily   *int                       `json:"retention_daily"`
-	RetentionWeekly  *int                       `json:"retention_weekly"`
-	RetentionMonthly *int                       `json:"retention_monthly"`
-	RetentionYearly  *int                       `json:"retention_yearly"`
-	HookPreBackup    *string                    `json:"hook_pre_backup"`
-	HookPostBackup   *string                    `json:"hook_post_backup"`
-	ExcludePatterns  *string                    `json:"exclude_patterns"`
-	Destinations     []destinationEntryRequest  `json:"destinations"`
+	Name              *string                   `json:"name"`
+	AgentID           *string                   `json:"agent_id"`
+	Schedule          *string                   `json:"schedule"`
+	Enabled           *bool                     `json:"enabled"`
+	Sources           *string                   `json:"sources"`
+	RepoPassword      *string                   `json:"repo_password"`
+	RetentionLast     *int                      `json:"retention_last"`
+	RetentionHourly   *int                      `json:"retention_hourly"`
+	RetentionDaily    *int                      `json:"retention_daily"`
+	RetentionWeekly   *int                      `json:"retention_weekly"`
+	RetentionMonthly  *int                      `json:"retention_monthly"`
+	RetentionYearly   *int                      `json:"retention_yearly"`
+	HookPreBackup     *string                   `json:"hook_pre_backup"`
+	HookPostBackup    *string                   `json:"hook_post_backup"`
+	ExcludePatterns   *string                   `json:"exclude_patterns"`
+	ResumeInterrupted *bool                     `json:"resume_interrupted"`
+	Destinations      []destinationEntryRequest `json:"destinations"`
 }
 
 // Update handles PATCH /api/v1/policies/{id}.
@@ -450,6 +459,9 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		policy.HookPostBackup = *req.HookPostBackup
+	}
+	if req.ResumeInterrupted != nil {
+		policy.ResumeInterrupted = *req.ResumeInterrupted
 	}
 	if req.ExcludePatterns != nil {
 		policy.ExcludePatterns = normalizeJSONArray(*req.ExcludePatterns)
