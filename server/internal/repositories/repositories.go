@@ -55,6 +55,9 @@ type RefreshTokenRepository interface {
 	DeleteByHash(ctx context.Context, hash string) error
 	Revoke(ctx context.Context, id uuid.UUID) error
 	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
+	// RevokeAllForUserExcept revokes every active token except keepHash.
+	// Pass an empty keepHash to revoke all.
+	RevokeAllForUserExcept(ctx context.Context, userID uuid.UUID, keepHash string) error
 	DeleteExpired(ctx context.Context) error
 }
 

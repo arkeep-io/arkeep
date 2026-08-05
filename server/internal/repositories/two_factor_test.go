@@ -124,3 +124,47 @@ func TestRecoveryCodeRepository(t *testing.T) {
 		t.Errorf("CountUnused after use = %d, want 1", n)
 	}
 }
+
+// TestRefreshTokenRevocationIsEnforced is the regression test for revoked
+// refresh tokens remaining redeemable: GetByHash used to ignore revoked_at.
+func TestRefreshTokenRevocationIsEnforced(t *testing.T) {
+	gdb := newTestDB(t)
+	repo := NewRefreshTokenRepository(gdb)
+	ctx := context.Background()
+	user := newTwoFactorUser(t, gdb)
+
+	keep := &db.RefreshToken{UserID: user.ID, TokenHash: "keep", ExpiresAt: time.Now().Add(time.Hour)}
+	drop := &db.RefreshToken{UserID: user.ID, TokenHash: "drop", ExpiresAt: time.Now().Add(time.Hour)}
+	for _, tok := range []*db.RefreshToken{keep, drop} {
+		if err := repo.Create(ctx, tok); err != nil {
+			t.Fatalf("Create %s: %v", tok.TokenHash, err)
+		}
+	}
+
+	t.Run("revoked token is not redeemable", func(t *testing.T) {
+		if err := repo.Revoke(ctx, drop.ID); err != nil {
+			t.Fatalf("Revoke: %v", err)
+		}
+		if _, err := repo.GetByHash(ctx, "drop"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("GetByHash(revoked) err = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("RevokeAllForUserExcept spares the current session", func(t *testing.T) {
+		other := &db.RefreshToken{UserID: user.ID, TokenHash: "other", ExpiresAt: time.Now().Add(time.Hour)}
+		if err := repo.Create(ctx, other); err != nil {
+			t.Fatalf("Create other: %v", err)
+		}
+
+		if err := repo.RevokeAllForUserExcept(ctx, user.ID, "keep"); err != nil {
+			t.Fatalf("RevokeAllForUserExcept: %v", err)
+		}
+
+		if _, err := repo.GetByHash(ctx, "keep"); err != nil {
+			t.Errorf("kept token err = %v, want nil", err)
+		}
+		if _, err := repo.GetByHash(ctx, "other"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("other token err = %v, want ErrNotFound", err)
+		}
+	})
+}
