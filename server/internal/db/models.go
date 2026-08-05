@@ -55,6 +55,11 @@ type User struct {
 	OIDCProvider string `gorm:"column:oidc_provider;default:''"` // provider ID if OIDC user
     OIDCSub      string `gorm:"column:oidc_sub;default:''"` // subject claim from OIDC token
 	LastLoginAt  *time.Time
+	// TOTPSecret is the base32 TOTP shared secret, encrypted at rest. Empty
+	// means no secret. A non-empty secret with TwoFactorEnabled false is a
+	// pending enrollment that was never confirmed.
+	TOTPSecret       EncryptedString `gorm:"type:text"`
+	TwoFactorEnabled bool            `gorm:"not null;default:false"`
 }
 
 // RefreshToken stores a hashed refresh token associated with a user session.
@@ -81,6 +86,30 @@ type PasswordResetToken struct {
 	TokenHash string     `gorm:"not null;index"` // SHA-256 hex of the raw token
 	ExpiresAt time.Time  `gorm:"not null"`
 	UsedAt    *time.Time // nil = not yet used
+}
+
+// TwoFactorChallenge is the short-lived interim state of a two-step login: the
+// password has been verified but the TOTP code has not. Only the SHA-256 hash
+// of the challenge token is stored — the raw token is returned to the client
+// once and echoed back on the second step. Attempts counts failed codes; the
+// challenge is consumed (UsedAt set) on success or after too many failures.
+type TwoFactorChallenge struct {
+	Base
+	UserID    uuid.UUID  `gorm:"type:text;not null;index"`
+	TokenHash string     `gorm:"not null;index"` // SHA-256 hex of the raw token
+	Attempts  int        `gorm:"not null;default:0"`
+	ExpiresAt time.Time  `gorm:"not null"`
+	UsedAt    *time.Time // nil = still usable
+}
+
+// RecoveryCode is a single-use fallback credential issued when a user enables
+// two-factor authentication. Only the SHA-256 hash of the normalised code is
+// stored; the raw codes are shown to the user exactly once.
+type RecoveryCode struct {
+	Base
+	UserID   uuid.UUID  `gorm:"type:text;not null;index"`
+	CodeHash string     `gorm:"not null;index"` // SHA-256 hex of the normalised code
+	UsedAt   *time.Time // nil = not yet used
 }
 
 // OIDCProvider stores the configuration for an external OIDC identity provider.
