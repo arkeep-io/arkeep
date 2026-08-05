@@ -75,6 +75,45 @@ type PasswordResetTokenRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// TwoFactorChallengeRepository
+// -----------------------------------------------------------------------------
+
+// TwoFactorChallengeRepository stores the interim state of a two-step login.
+type TwoFactorChallengeRepository interface {
+	Create(ctx context.Context, challenge *db.TwoFactorChallenge) error
+	// GetUnusedByHash returns an unconsumed challenge matching the hash.
+	// Expiry is checked by the caller in Go, mirroring password reset tokens.
+	// Returns ErrNotFound if no unconsumed challenge matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.TwoFactorChallenge, error)
+	// IncrementAttempts bumps the failed-code counter by one.
+	IncrementAttempts(ctx context.Context, id uuid.UUID) error
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all outstanding challenges for a user, so a new
+	// login attempt invalidates any previous one.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// RecoveryCodeRepository
+// -----------------------------------------------------------------------------
+
+// RecoveryCodeRepository stores hashed single-use two-factor recovery codes.
+type RecoveryCodeRepository interface {
+	// CreateBatch inserts a whole freshly generated set in one call.
+	CreateBatch(ctx context.Context, codes []db.RecoveryCode) error
+	// GetUnusedByHash returns an unused code matching the hash. Returns
+	// ErrNotFound if no unused code matches. Callers must verify the returned
+	// code belongs to the expected user.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.RecoveryCode, error)
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// CountUnused reports how many codes the user has left.
+	CountUnused(ctx context.Context, userID uuid.UUID) (int64, error)
+	// DeleteByUserID removes every code for a user, used when regenerating the
+	// set or disabling two-factor authentication.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
 // OIDCProviderRepository
 // -----------------------------------------------------------------------------
 

@@ -73,8 +73,10 @@ type testDeps struct {
 	oidc     repositories.OIDCProviderRepository
 	settings repositories.SettingsRepository
 	audit    repositories.AuditRepository
-	dash     repositories.DashboardRepository
-	resets   repositories.PasswordResetTokenRepository
+	dash          repositories.DashboardRepository
+	resets        repositories.PasswordResetTokenRepository
+	challenges    repositories.TwoFactorChallengeRepository
+	recoveryCodes repositories.RecoveryCodeRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -94,8 +96,10 @@ func newTestDeps(t *testing.T) *testDeps {
 		oidc:     repositories.NewOIDCProviderRepository(gdb),
 		settings: repositories.NewSettingsRepository(gdb),
 		audit:    repositories.NewAuditRepository(gdb),
-		dash:     repositories.NewDashboardRepository(gdb),
-		resets:   repositories.NewPasswordResetTokenRepository(gdb),
+		dash:          repositories.NewDashboardRepository(gdb),
+		resets:        repositories.NewPasswordResetTokenRepository(gdb),
+		challenges:    repositories.NewTwoFactorChallengeRepository(gdb),
+		recoveryCodes: repositories.NewRecoveryCodeRepository(gdb),
 	}
 }
 
