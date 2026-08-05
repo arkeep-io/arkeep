@@ -208,6 +208,8 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		Audit:         deps.audit,
 		ResetTokens:   deps.resets,
 		RefreshTokens: deps.tokens,
+		Challenges:    deps.challenges,
+		RecoveryCodes: deps.recoveryCodes,
 		Mailer:        mailer,
 		PublicBaseURL: baseURL,
 		Secure:        false,

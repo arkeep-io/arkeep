@@ -39,6 +39,8 @@ type RouterConfig struct {
 	Audit         repositories.AuditRepository
 	ResetTokens   repositories.PasswordResetTokenRepository
 	RefreshTokens repositories.RefreshTokenRepository
+	Challenges    repositories.TwoFactorChallengeRepository
+	RecoveryCodes repositories.RecoveryCodeRepository
 
 	// LogRetention triggers an on-demand job_logs prune (Settings → Log
 	// Retention "run now"). Satisfied by *logretention.Service. Optional — if
@@ -92,7 +94,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// --- Initialize handlers ---
 	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
-	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Audit, cfg.Logger, cfg.Secure)
+	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.Audit, cfg.Logger, cfg.Secure)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	var enrollHandler *EnrollHandler
 	if cfg.AutoCerts != nil {
@@ -132,6 +134,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			loginLimiter := NewRateLimiter(5, time.Minute)
 			r.With(RateLimit(loginLimiter)).Post("/auth/login", authHandler.Login)
 			r.With(RateLimit(loginLimiter)).Post("/auth/refresh", authHandler.Refresh)
+
+			// Second step of a two-factor login. It gets its own limiter rather
+			// than sharing loginLimiter's cumulative 5/min budget, because a
+			// legitimate user may retry a mistyped code a few times.
+			r.With(RateLimit(NewRateLimiter(10, time.Minute))).
+				Post("/auth/login/2fa", authHandler.LoginTwoFactor)
 
 			// OIDC flow — public because the user is not yet authenticated.
 			// /providers lists enabled providers for the login page SSO buttons.

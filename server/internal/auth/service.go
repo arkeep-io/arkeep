@@ -57,6 +57,13 @@ func (s *AuthService) LoginLocal(ctx context.Context, req LoginRequest) (*TokenP
 	return s.local.Login(ctx, req)
 }
 
+// IssueTokenPairForUser completes a login for a user whose credentials have
+// already been verified. Used to finish two-factor authentication once the
+// second factor has been accepted.
+func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *db.User) (*TokenPair, error) {
+	return s.local.IssueTokenPair(ctx, user)
+}
+
 // AuthorizationURL generates the OIDC authorization URL for the given provider.
 // callbackURL is the server-computed redirect URI (base_url + /api/v1/auth/oidc/callback).
 // Returns the URL to redirect the user to, plus state and codeVerifier that the

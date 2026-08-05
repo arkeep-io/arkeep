@@ -181,6 +181,8 @@ func run(ctx context.Context, cfg *config) error {
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
 	auditRepo := repositories.NewAuditRepository(gormDB)
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
+	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
+	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
 
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
@@ -316,6 +318,8 @@ func run(ctx context.Context, cfg *config) error {
 		Audit:         auditRepo,
 		ResetTokens:   resetTokenRepo,
 		RefreshTokens: refreshTokenRepo,
+		Challenges:    challengeRepo,
+		RecoveryCodes: recoveryCodeRepo,
 		Mailer:        notifService,
 		PublicBaseURL: cfg.baseURL,
 		AutoCerts:     autoCerts,

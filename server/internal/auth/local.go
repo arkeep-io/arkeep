@@ -94,6 +94,20 @@ func (p *LocalAuthProvider) Login(ctx context.Context, req LoginRequest) (*Token
 		return nil, ErrInvalidCredentials
 	}
 
+	// Password is correct, but a second factor is still outstanding. Return
+	// before stamping LastLoginAt — a login halted at the first factor is not a
+	// successful login. AuthHandler.Login turns this into a challenge.
+	if user.TwoFactorEnabled {
+		return nil, &TwoFactorRequiredError{UserID: user.ID}
+	}
+
+	return p.IssueTokenPair(ctx, user)
+}
+
+// IssueTokenPair completes authentication for an already-verified user: it
+// stamps LastLoginAt and issues the token pair. Exported so the two-factor
+// login handler can finish a login it started via Login.
+func (p *LocalAuthProvider) IssueTokenPair(ctx context.Context, user *db.User) (*TokenPair, error) {
 	// Update LastLoginAt to track the most recent successful login.
 	// Non-fatal: a failure here should not block the login itself.
 	now := time.Now()
