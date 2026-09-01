@@ -249,3 +249,236 @@ func TestTwoFactorLogin(t *testing.T) {
 		assertStatus(t, fresh, http.StatusOK)
 	})
 }
+
+type twoFactorStatus struct {
+	Enabled                bool  `json:"enabled"`
+	Pending                bool  `json:"pending"`
+	RecoveryCodesRemaining int64 `json:"recovery_codes_remaining"`
+}
+
+type twoFactorSetup struct {
+	Secret     string `json:"secret"`
+	OTPAuthURL string `json:"otpauth_url"`
+}
+
+type twoFactorRecoveryCodes struct {
+	RecoveryCodes []string `json:"recovery_codes"`
+}
+
+func TestTwoFactorEnrollment(t *testing.T) {
+	t.Run("status starts disabled", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		token := e.tokenForUser(t, id, "user")
+
+		resp := e.get(t, "/api/v1/auth/2fa/status", token)
+		assertStatus(t, resp, http.StatusOK)
+		var out twoFactorStatus
+		decodeData(t, resp, &out)
+		if out.Enabled || out.Pending {
+			t.Errorf("status = %+v, want disabled and not pending", out)
+		}
+	})
+
+	t.Run("setup then verify enables 2FA and returns recovery codes", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		token := e.tokenForUser(t, id, "user")
+
+		setupResp := e.post(t, "/api/v1/auth/2fa/setup", token, nil)
+		assertStatus(t, setupResp, http.StatusOK)
+		var setup twoFactorSetup
+		decodeData(t, setupResp, &setup)
+		if setup.Secret == "" || setup.OTPAuthURL == "" {
+			t.Fatalf("setup response missing secret/otpauth_url: %+v", setup)
+		}
+
+		verifyResp := e.post(t, "/api/v1/auth/2fa/verify", token, map[string]string{
+			"code": currentCode(t, setup.Secret),
+		})
+		assertStatus(t, verifyResp, http.StatusOK)
+		var codes twoFactorRecoveryCodes
+		decodeData(t, verifyResp, &codes)
+		if len(codes.RecoveryCodes) != auth.RecoveryCodeCount {
+			t.Errorf("got %d recovery codes, want %d", len(codes.RecoveryCodes), auth.RecoveryCodeCount)
+		}
+
+		statusResp := e.get(t, "/api/v1/auth/2fa/status", token)
+		var status twoFactorStatus
+		decodeData(t, statusResp, &status)
+		if !status.Enabled {
+			t.Error("status.enabled = false after verify, want true")
+		}
+		if status.RecoveryCodesRemaining != int64(auth.RecoveryCodeCount) {
+			t.Errorf("recovery_codes_remaining = %d, want %d", status.RecoveryCodesRemaining, auth.RecoveryCodeCount)
+		}
+	})
+
+	t.Run("wrong code does not enable 2FA", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		token := e.tokenForUser(t, id, "user")
+
+		setupResp := e.post(t, "/api/v1/auth/2fa/setup", token, nil)
+		var setup twoFactorSetup
+		decodeData(t, setupResp, &setup)
+
+		resp := e.post(t, "/api/v1/auth/2fa/verify", token, map[string]string{"code": "000000"})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		statusResp := e.get(t, "/api/v1/auth/2fa/status", token)
+		var status twoFactorStatus
+		decodeData(t, statusResp, &status)
+		if status.Enabled {
+			t.Error("status.enabled = true after a wrong code, want false")
+		}
+	})
+
+	t.Run("verify without setup is rejected", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		token := e.tokenForUser(t, id, "user")
+
+		resp := e.post(t, "/api/v1/auth/2fa/verify", token, map[string]string{"code": "123456"})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("setup is rejected once already enabled", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		enable2FA(t, e.deps, id)
+		token := e.tokenForUser(t, id, "user")
+
+		resp := e.post(t, "/api/v1/auth/2fa/setup", token, nil)
+		assertStatus(t, resp, http.StatusConflict)
+	})
+
+	t.Run("OIDC accounts cannot enroll", func(t *testing.T) {
+		e := newTestEnv(t)
+		u := &db.User{DisplayName: "OIDC User", Email: "oidc@test.local", OIDCProvider: "test-provider", OIDCSub: "sub-1", IsActive: true}
+		if err := e.deps.users.Create(context.Background(), u); err != nil {
+			t.Fatalf("create OIDC user: %v", err)
+		}
+		token := e.tokenForUser(t, u.ID, "user")
+
+		resp := e.post(t, "/api/v1/auth/2fa/setup", token, nil)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("disable requires the correct password", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		enable2FA(t, e.deps, id)
+		token := e.tokenForUser(t, id, "user")
+
+		wrong := e.post(t, "/api/v1/auth/2fa/disable", token, map[string]string{"password": "wrong-password"})
+		assertStatus(t, wrong, http.StatusBadRequest)
+
+		ok := e.post(t, "/api/v1/auth/2fa/disable", token, map[string]string{"password": "test-password-123"})
+		assertStatus(t, ok, http.StatusNoContent)
+
+		statusResp := e.get(t, "/api/v1/auth/2fa/status", token)
+		var status twoFactorStatus
+		decodeData(t, statusResp, &status)
+		if status.Enabled {
+			t.Error("status.enabled = true after disable, want false")
+		}
+	})
+
+	t.Run("recovery code is single use at login", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		token := e.tokenForUser(t, id, "user")
+
+		setupResp := e.post(t, "/api/v1/auth/2fa/setup", token, nil)
+		var setup twoFactorSetup
+		decodeData(t, setupResp, &setup)
+		verifyResp := e.post(t, "/api/v1/auth/2fa/verify", token, map[string]string{"code": currentCode(t, setup.Secret)})
+		var codes twoFactorRecoveryCodes
+		decodeData(t, verifyResp, &codes)
+
+		out := loginStepOne(t, e, "u@test.local")
+		first := e.post(t, "/api/v1/auth/login/2fa", "", map[string]string{
+			"challenge_token": out.ChallengeToken,
+			"code":            codes.RecoveryCodes[0],
+		})
+		assertStatus(t, first, http.StatusOK)
+
+		out2 := loginStepOne(t, e, "u@test.local")
+		reuse := e.post(t, "/api/v1/auth/login/2fa", "", map[string]string{
+			"challenge_token": out2.ChallengeToken,
+			"code":            codes.RecoveryCodes[0],
+		})
+		assertStatus(t, reuse, http.StatusBadRequest)
+	})
+
+	t.Run("regenerate replaces the whole set", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		enable2FA(t, e.deps, id)
+		token := e.tokenForUser(t, id, "user")
+
+		resp := e.post(t, "/api/v1/auth/2fa/recovery-codes/regenerate", token, map[string]string{"password": "test-password-123"})
+		assertStatus(t, resp, http.StatusOK)
+		var codes twoFactorRecoveryCodes
+		decodeData(t, resp, &codes)
+		if len(codes.RecoveryCodes) != auth.RecoveryCodeCount {
+			t.Errorf("got %d recovery codes, want %d", len(codes.RecoveryCodes), auth.RecoveryCodeCount)
+		}
+	})
+}
+
+func TestTwoFactorAdminReset(t *testing.T) {
+	t.Run("admin resets a locked-out user and password-only login works again", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "locked@test.local", "user")
+		enable2FA(t, e.deps, id)
+		admin := e.adminToken(t)
+
+		resp := e.post(t, "/api/v1/users/"+id.String()+"/2fa/reset", admin, nil)
+		assertStatus(t, resp, http.StatusNoContent)
+
+		out := loginStepOne(t, e, "locked@test.local")
+		if out.TwoFactorRequired {
+			t.Error("two_factor_required = true after admin reset, want false")
+		}
+		if out.AccessToken == "" {
+			t.Error("access_token is empty after admin reset")
+		}
+	})
+
+	t.Run("non-admin is forbidden", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		enable2FA(t, e.deps, id)
+		user := e.userToken(t)
+
+		resp := e.post(t, "/api/v1/users/"+id.String()+"/2fa/reset", user, nil)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("unknown user is 404", func(t *testing.T) {
+		e := newTestEnv(t)
+		admin := e.adminToken(t)
+
+		resp := e.post(t, "/api/v1/users/"+uuid.NewString()+"/2fa/reset", admin, nil)
+		assertStatus(t, resp, http.StatusNotFound)
+	})
+
+	t.Run("user response exposes two_factor_enabled", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "u@test.local", "user")
+		enable2FA(t, e.deps, id)
+		admin := e.adminToken(t)
+
+		resp := e.get(t, "/api/v1/users/"+id.String(), admin)
+		assertStatus(t, resp, http.StatusOK)
+		var out struct {
+			TwoFactorEnabled bool `json:"two_factor_enabled"`
+		}
+		decodeData(t, resp, &out)
+		if !out.TwoFactorEnabled {
+			t.Error("two_factor_enabled = false, want true")
+		}
+	})
+}

@@ -233,6 +233,14 @@ func HashToken(raw string) string {
 	return hashRefreshToken(raw)
 }
 
+// VerifyPassword checks a plaintext password against a stored Argon2id hash.
+// Exported so handlers outside this package (e.g. the two-factor disable/
+// regenerate endpoints) can re-verify the current password without depending
+// on the full auth provider.
+func VerifyPassword(password, stored string) bool {
+	return verifyPassword(password, stored)
+}
+
 // verifyPassword checks a plaintext password against a stored Argon2id hash.
 // Returns false if the hash format is invalid rather than propagating an error,
 // since an invalid hash means authentication must fail.
