@@ -79,6 +79,16 @@ service AgentService {
   // JOB_TYPE_IMPORT_SNAPSHOTS assignment. The agent runs restic snapshots on the
   // destination and returns all snapshot metadata for the server to persist.
   rpc ReportSnapshotImport(SnapshotImportReport) returns (SnapshotImportResponse);
+
+  // ReportSnapshotReconcile is called by the agent after retention has run for
+  // a destination. It carries the authoritative set of snapshot IDs still
+  // present in that destination's repository, so the server can evict cached
+  // snapshot rows for snapshots the backup engine has already pruned.
+  //
+  // Fire-and-forget: a failure never affects the backup job. The agent only
+  // calls this RPC when the listing succeeded, so the server can never mistake
+  // "could not list" for "the repository is empty".
+  rpc ReportSnapshotReconcile(SnapshotReconcileReport) returns (SnapshotReconcileResponse);
 }
 
 // ─── Register ────────────────────────────────────────────────────────────────
@@ -445,4 +455,44 @@ message SnapshotImportReport {
 // SnapshotImportResponse acknowledges receipt of the snapshot import report.
 message SnapshotImportResponse {
   bool ok = 1;
+}
+
+// ─── ReportSnapshotReconcile ─────────────────────────────────────────────────
+
+// SnapshotReconcileReport carries the result of an unfiltered
+// `restic snapshots --json` run against a single destination's repository,
+// taken immediately after the retention policy was applied.
+//
+// A destination maps 1:1 to a restic repository (the repo URL is derived purely
+// from the destination record), so this listing is authoritative for every
+// snapshot stored there — including snapshots produced by other policies or
+// other agents writing to the same destination.
+message SnapshotReconcileReport {
+  // agent_id identifies the reporting agent.
+  string agent_id                     = 1;
+  // job_id is the backup job that triggered the listing, used for logging and
+  // to correlate the cleanup with a run in the GUI job log.
+  string job_id                       = 2;
+  // destination_id is the UUID of the destination whose repository was listed.
+  string destination_id               = 3;
+  // live_snapshot_ids are the full snapshot IDs present in the repository at
+  // listed_at. The listing is always UNFILTERED (no --tag / --host / --path):
+  // a filtered listing here would make the server evict other policies' valid
+  // rows. Never sent empty — see the guarantee on the RPC comment.
+  repeated string live_snapshot_ids   = 4;
+  // listed_at is the agent-side wall-clock time captured immediately BEFORE
+  // `restic snapshots` was invoked. The server never evicts rows for snapshots
+  // recorded at or after this instant, so a snapshot created concurrently by
+  // another agent writing to the same repository is never lost.
+  google.protobuf.Timestamp listed_at = 5;
+  // repo_size_bytes is the real deduplicated on-disk size of the repository
+  // (total_size from `restic stats --mode raw-data`) measured AFTER retention
+  // ran, so the reported usage reflects the prune. Zero when unavailable.
+  int64 repo_size_bytes               = 6;
+}
+
+// SnapshotReconcileResponse reports how many stale rows the server evicted, so
+// the agent can surface the cleanup in the job log the user reads in the GUI.
+message SnapshotReconcileResponse {
+  int64 deleted = 1;
 }

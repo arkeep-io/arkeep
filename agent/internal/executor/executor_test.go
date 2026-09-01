@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -36,6 +38,10 @@ func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, sna
 		r.destResults = make(map[string]destResult)
 	}
 	r.destResults[destinationID] = destResult{status: status, errMsg: errMsg}
+}
+
+func (r *fakeReporter) ReportSnapshotReconcile(jobID, destinationID string, liveIDs []string, listedAt time.Time, repoSizeBytes int64) int64 {
+	return 0
 }
 
 // TestExecuteBackupEmptyRepoURL verifies that a destination with an empty
@@ -189,4 +195,40 @@ func TestEnsureWritableDir(t *testing.T) {
 			t.Error("expected non-nil error for read-only directory")
 		}
 	})
+}
+
+// TestLiveSnapshotIDs verifies that entries with an empty ID are dropped. The
+// server treats the returned set as authoritative and evicts every cached
+// record outside it, so a malformed entry must never widen the set.
+func TestLiveSnapshotIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		snapshots []restic.SnapshotInfo
+		want      []string
+	}{
+		{
+			name:      "all ids kept in order",
+			snapshots: []restic.SnapshotInfo{{ID: "aaa"}, {ID: "bbb"}, {ID: "ccc"}},
+			want:      []string{"aaa", "bbb", "ccc"},
+		},
+		{
+			name:      "empty id is skipped",
+			snapshots: []restic.SnapshotInfo{{ID: "aaa"}, {ID: ""}, {ID: "ccc"}},
+			want:      []string{"aaa", "ccc"},
+		},
+		{
+			name:      "empty listing yields empty set",
+			snapshots: nil,
+			want:      []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := liveSnapshotIDs(tt.snapshots)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("liveSnapshotIDs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

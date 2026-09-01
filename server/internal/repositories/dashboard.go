@@ -200,24 +200,30 @@ func (r *gormDashboardRepository) GetStats(ctx context.Context) (*DashboardStats
 	}
 
 	// ── Size activity — last 7 days ───────────────────────────────────────────
-	// Sums size_bytes of snapshots created each day. Uses snapshot_at (the
-	// actual backup timestamp) rather than created_at for semantic correctness.
+	// Sums the bytes each successful backup run added to its destination.
+	//
+	// Sourced from job_destinations rather than snapshots: this is a daily
+	// ingest figure, and job_destinations rows survive retention. Snapshot
+	// records are evicted once the backup engine prunes them, which would make
+	// past days shrink retroactively — and it would undercount, because a run
+	// whose snapshot has since been pruned still ingested those bytes on the day
+	// it happened.
 
 	type sizeActivityRow struct {
 		Date      string
 		SizeBytes int64
 	}
 
-	snapshotDateExpr := r.dateColExpr("snapshot_at")
+	destDateExpr := r.dateColExpr("ended_at")
 	var sizeRows []sizeActivityRow
 	if err := d.Raw(fmt.Sprintf(`
 		SELECT %s AS date,
 		       COALESCE(SUM(size_bytes), 0) AS size_bytes
-		FROM snapshots
-		WHERE snapshot_at >= ?
+		FROM job_destinations
+		WHERE status = 'succeeded' AND ended_at >= ?
 		GROUP BY %s
 		ORDER BY date ASC
-	`, snapshotDateExpr, snapshotDateExpr), weekStart).Scan(&sizeRows).Error; err != nil {
+	`, destDateExpr, destDateExpr), weekStart).Scan(&sizeRows).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: size activity: %w", err)
 	}
 
