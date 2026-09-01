@@ -135,6 +135,19 @@ can recover if something goes wrong, and every operation leaves an audit trail.
 
 ---
 
+### Two-factor authentication (TOTP)
+
+Local accounts (not OIDC, which is managed by the identity provider) can enable
+TOTP-based two-factor authentication from their profile page: scan the QR code
+with any authenticator app (Google Authenticator, Aegis, 1Password, …) and
+confirm with a 6-digit code. Ten single-use recovery codes are issued at the
+same time, for signing in if the authenticator app is unavailable. From then
+on, login asks for the code after a correct password. An administrator can
+reset a user's two-factor authentication from the Users page if they lose
+access to both the app and their recovery codes.
+
+---
+
 ## Supported Destinations
 
 | Type | Notes |
