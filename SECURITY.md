@@ -93,6 +93,20 @@ server restart. Tokens revoked shortly before a restart may be accepted for up t
 their remaining TTL after the restart. Refresh token revocation is unaffected — it is
 persisted in the database.
 
+### Two-factor authentication
+
+TOTP secrets and recovery codes are never stored in plaintext: the secret is
+encrypted at rest the same way other credentials are (AES-256-GCM), and recovery
+codes are stored as an unsalted SHA-256 hash of the normalised code — safe because
+each code carries 80 bits of entropy, unlike a user-chosen password.
+
+A login challenge (the interim state between a correct password and a valid second
+factor) expires after 5 minutes and tolerates at most 5 wrong codes before it is
+burned, forcing the password step to be repeated. Enabling two-factor authentication
+revokes every other active session for the account except the one used to enroll;
+an administrator's reset revokes all of them, since the person completing the reset
+is not the account owner.
+
 ### Health endpoints
 
 `GET /health/live` and `GET /health/ready` are unauthenticated and accessible on the HTTP port (default `:8080`). They do not expose credentials or user data.

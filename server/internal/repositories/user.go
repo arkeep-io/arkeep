@@ -143,11 +143,13 @@ func (r *gormRefreshTokenRepository) Create(ctx context.Context, token *db.Refre
 	return nil
 }
 
-// GetByHash retrieves a refresh token by its SHA-256 hash.
-// Returns ErrNotFound if no record exists.
+// GetByHash retrieves an active refresh token by its SHA-256 hash. Revoked
+// tokens are treated as absent — without the revoked_at predicate here,
+// RevokeAllForUser would set the column but the token would stay redeemable.
+// Returns ErrNotFound if no active record exists.
 func (r *gormRefreshTokenRepository) GetByHash(ctx context.Context, hash string) (*db.RefreshToken, error) {
 	var token db.RefreshToken
-	err := r.db.WithContext(ctx).First(&token, "token_hash = ?", hash).Error
+	err := r.db.WithContext(ctx).First(&token, "token_hash = ? AND revoked_at IS NULL", hash).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
@@ -182,6 +184,21 @@ func (r *gormRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userI
 		Update("revoked_at", gorm.Expr("CURRENT_TIMESTAMP")).Error
 	if err != nil {
 		return fmt.Errorf("refresh_tokens: revoke all for user: %w", err)
+	}
+	return nil
+}
+
+// RevokeAllForUserExcept revokes every active refresh token for a user apart
+// from the one matching keepHash. Used when a security-sensitive change (e.g.
+// enabling two-factor authentication) should close other sessions without
+// logging out the session that made the change. An empty keepHash revokes all.
+func (r *gormRefreshTokenRepository) RevokeAllForUserExcept(ctx context.Context, userID uuid.UUID, keepHash string) error {
+	err := r.db.WithContext(ctx).
+		Model(&db.RefreshToken{}).
+		Where("user_id = ? AND revoked_at IS NULL AND token_hash <> ?", userID, keepHash).
+		Update("revoked_at", gorm.Expr("CURRENT_TIMESTAMP")).Error
+	if err != nil {
+		return fmt.Errorf("refresh_tokens: revoke all for user except: %w", err)
 	}
 	return nil
 }

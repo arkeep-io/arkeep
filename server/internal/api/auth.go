@@ -1,14 +1,17 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/google/uuid"
 )
@@ -27,23 +30,52 @@ const (
 
 	// oidcCookieTTL is how long the OIDC session cookies are valid.
 	oidcCookieTTL = 10 * time.Minute
+
+	// twoFactorChallengeTTL is how long the interim login challenge is valid.
+	twoFactorChallengeTTL = 5 * time.Minute
+
+	// maxTwoFactorAttempts is how many wrong codes a single challenge tolerates
+	// before it is burned. This is the per-account lockout: the per-IP rate
+	// limiter alone is weak against a six-digit code.
+	maxTwoFactorAttempts = 5
+
+	// invalidTwoFactorMessage is deliberately identical for an unknown,
+	// expired, consumed or burned challenge and for a wrong code.
+	invalidTwoFactorMessage = "invalid or expired code"
 )
+
+// totpCodePattern distinguishes a six-digit TOTP value from a recovery code.
+var totpCodePattern = regexp.MustCompile(`^[0-9]{6}$`)
 
 // AuthHandler groups all authentication-related HTTP handlers.
 type AuthHandler struct {
-	svc       *auth.AuthService
-	auditRepo repositories.AuditRepository
-	logger    *zap.Logger
-	secure    bool // true in production (HTTPS), false in development
+	svc           *auth.AuthService
+	users         repositories.UserRepository
+	challenges    repositories.TwoFactorChallengeRepository
+	recoveryCodes repositories.RecoveryCodeRepository
+	auditRepo     repositories.AuditRepository
+	logger        *zap.Logger
+	secure        bool // true in production (HTTPS), false in development
 }
 
 // NewAuthHandler creates a new AuthHandler.
-func NewAuthHandler(svc *auth.AuthService, auditRepo repositories.AuditRepository, logger *zap.Logger, secure bool) *AuthHandler {
+func NewAuthHandler(
+	svc *auth.AuthService,
+	users repositories.UserRepository,
+	challenges repositories.TwoFactorChallengeRepository,
+	recoveryCodes repositories.RecoveryCodeRepository,
+	auditRepo repositories.AuditRepository,
+	logger *zap.Logger,
+	secure bool,
+) *AuthHandler {
 	return &AuthHandler{
-		svc:       svc,
-		auditRepo: auditRepo,
-		logger:    logger.Named("auth_handler"),
-		secure:    secure,
+		svc:           svc,
+		users:         users,
+		challenges:    challenges,
+		recoveryCodes: recoveryCodes,
+		auditRepo:     auditRepo,
+		logger:        logger.Named("auth_handler"),
+		secure:        secure,
 	}
 }
 
@@ -57,8 +89,14 @@ type loginRequest struct {
 }
 
 type loginResponse struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
+	AccessToken string `json:"access_token,omitempty"`
+	ExpiresIn   int    `json:"expires_in,omitempty"`
+
+	// TwoFactorRequired and ChallengeToken are set instead of AccessToken when
+	// the password was correct but the account needs a second factor. The
+	// client posts ChallengeToken back to /auth/login/2fa with the code.
+	TwoFactorRequired bool   `json:"two_factor_required,omitempty"`
+	ChallengeToken    string `json:"challenge_token,omitempty"`
 }
 
 // Login handles POST /api/v1/auth/login.
@@ -78,6 +116,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Password: req.Password,
 	})
 	if err != nil {
+		var twoFactor *auth.TwoFactorRequiredError
+		if errors.As(err, &twoFactor) {
+			h.startTwoFactorChallenge(w, r, twoFactor.UserID)
+			return
+		}
 		if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, auth.ErrUserDisabled) {
 			ErrUnauthorized(w)
 			return
@@ -276,6 +319,171 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	expiresIn := int(time.Until(pair.AccessTokenExpiresAt).Seconds())
 	redirectURL := fmt.Sprintf("/auth/callback?token=%s&expires_in=%d", pair.AccessToken, expiresIn)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
+}
+
+// -----------------------------------------------------------------------------
+// Two-factor login (step two)
+// -----------------------------------------------------------------------------
+
+// startTwoFactorChallenge issues the interim challenge after a correct password
+// on a two-factor account. Any outstanding challenge for the user is deleted
+// first, so only the newest login attempt can be completed.
+func (h *AuthHandler) startTwoFactorChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	ctx := r.Context()
+
+	// GenerateResetToken is the package's generic 32-byte opaque token helper;
+	// the name reflects its first caller, not a restriction.
+	raw, err := auth.GenerateResetToken()
+	if err != nil {
+		h.logger.Error("2fa login: challenge token generation failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if err := h.challenges.DeleteByUserID(ctx, userID); err != nil {
+		h.logger.Error("2fa login: clearing old challenges failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if err := h.challenges.Create(ctx, &db.TwoFactorChallenge{
+		UserID:    userID,
+		TokenHash: auth.HashToken(raw),
+		ExpiresAt: time.Now().Add(twoFactorChallengeTTL),
+	}); err != nil {
+		h.logger.Error("2fa login: persisting challenge failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	Ok(w, loginResponse{TwoFactorRequired: true, ChallengeToken: raw})
+}
+
+type loginTwoFactorRequest struct {
+	ChallengeToken string `json:"challenge_token"`
+	Code           string `json:"code"`
+}
+
+// LoginTwoFactor handles POST /api/v1/auth/login/2fa.
+// It completes a login started by Login, accepting either a TOTP code or a
+// recovery code. Failures return 400 rather than 401: the GUI's api() wrapper
+// treats 401 as an expired session and silently retries after a token refresh,
+// which would swallow the error.
+func (h *AuthHandler) LoginTwoFactor(w http.ResponseWriter, r *http.Request) {
+	var req loginTwoFactorRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.ChallengeToken == "" || req.Code == "" {
+		ErrBadRequest(w, "challenge_token and code are required")
+		return
+	}
+
+	ctx := r.Context()
+
+	challenge, err := h.challenges.GetUnusedByHash(ctx, auth.HashToken(req.ChallengeToken))
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidTwoFactorMessage)
+			return
+		}
+		h.logger.Error("2fa login: challenge lookup failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if time.Now().After(challenge.ExpiresAt) {
+		ErrBadRequest(w, invalidTwoFactorMessage)
+		return
+	}
+
+	user, err := h.users.GetByID(ctx, challenge.UserID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidTwoFactorMessage)
+			return
+		}
+		h.logger.Error("2fa login: user lookup failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if !user.IsActive {
+		ErrUnauthorized(w)
+		return
+	}
+
+	valid, usedRecovery := h.verifySecondFactor(ctx, user, req.Code)
+	if !valid {
+		h.registerFailedAttempt(ctx, challenge)
+		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+			"auth.2fa.challenge_failed", "user", user.ID.String(), map[string]any{})
+		ErrBadRequest(w, invalidTwoFactorMessage)
+		return
+	}
+
+	// Consume the challenge before issuing tokens so it cannot be replayed.
+	if err := h.challenges.MarkUsed(ctx, challenge.ID); err != nil {
+		h.logger.Warn("2fa login: marking challenge used failed", zap.Error(err))
+	}
+
+	pair, err := h.svc.IssueTokenPairForUser(ctx, user)
+	if err != nil {
+		h.logger.Error("2fa login: issuing tokens failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	method := "totp"
+	if usedRecovery {
+		method = "recovery_code"
+		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+			"auth.2fa.recovery_used", "user", user.ID.String(), map[string]any{})
+	}
+	logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+		"auth.login", "user", user.ID.String(), map[string]any{"email": user.Email, "method": method})
+
+	h.setRefreshCookie(w, pair.RefreshToken, pair.RefreshTokenExpiresAt)
+	Ok(w, loginResponse{
+		AccessToken: pair.AccessToken,
+		ExpiresIn:   int(time.Until(pair.AccessTokenExpiresAt).Seconds()),
+	})
+}
+
+// verifySecondFactor accepts a six-digit TOTP value or a recovery code. The
+// second return value reports whether a recovery code was consumed.
+func (h *AuthHandler) verifySecondFactor(ctx context.Context, user *db.User, code string) (valid, usedRecovery bool) {
+	if totpCodePattern.MatchString(code) {
+		return auth.ValidateTOTPCode(string(user.TOTPSecret), code), false
+	}
+
+	stored, err := h.recoveryCodes.GetUnusedByHash(ctx, auth.HashToken(auth.NormaliseRecoveryCode(code)))
+	if err != nil {
+		return false, false
+	}
+	// A code belonging to another account must never satisfy this challenge.
+	if stored.UserID != user.ID {
+		return false, false
+	}
+	if err := h.recoveryCodes.MarkUsed(ctx, stored.ID); err != nil {
+		h.logger.Error("2fa login: marking recovery code used failed", zap.Error(err))
+		return false, false
+	}
+	return true, true
+}
+
+// registerFailedAttempt counts a wrong code against the challenge and burns it
+// once maxTwoFactorAttempts is reached, forcing the password step to be redone.
+func (h *AuthHandler) registerFailedAttempt(ctx context.Context, challenge *db.TwoFactorChallenge) {
+	if challenge.Attempts+1 >= maxTwoFactorAttempts {
+		if err := h.challenges.MarkUsed(ctx, challenge.ID); err != nil {
+			h.logger.Warn("2fa login: burning challenge failed", zap.Error(err))
+		}
+		return
+	}
+	if err := h.challenges.IncrementAttempts(ctx, challenge.ID); err != nil {
+		h.logger.Warn("2fa login: incrementing attempts failed", zap.Error(err))
+	}
 }
 
 // -----------------------------------------------------------------------------

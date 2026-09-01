@@ -1,6 +1,10 @@
 package auth
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/google/uuid"
+)
 
 // Sentinel errors returned by auth providers and the auth service.
 // Callers should use errors.Is for comparison.
@@ -39,3 +43,16 @@ var (
 	// been explicitly revoked via the denylist (e.g. after logout).
 	ErrTokenRevoked = errors.New("auth: token has been revoked")
 )
+
+// TwoFactorRequiredError is returned by LocalAuthProvider.Login when the
+// password is correct but the account has two-factor authentication enabled.
+// It carries the user ID so the handler can create a challenge without
+// re-reading the user. Authentication is not complete: no token is issued and
+// LastLoginAt is not stamped.
+type TwoFactorRequiredError struct {
+	UserID uuid.UUID
+}
+
+func (e *TwoFactorRequiredError) Error() string {
+	return "two-factor authentication required"
+}

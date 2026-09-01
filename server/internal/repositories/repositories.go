@@ -55,6 +55,9 @@ type RefreshTokenRepository interface {
 	DeleteByHash(ctx context.Context, hash string) error
 	Revoke(ctx context.Context, id uuid.UUID) error
 	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
+	// RevokeAllForUserExcept revokes every active token except keepHash.
+	// Pass an empty keepHash to revoke all.
+	RevokeAllForUserExcept(ctx context.Context, userID uuid.UUID, keepHash string) error
 	DeleteExpired(ctx context.Context) error
 }
 
@@ -71,6 +74,45 @@ type PasswordResetTokenRepository interface {
 	MarkUsed(ctx context.Context, id uuid.UUID) error
 	// DeleteByUserID removes all reset tokens for a user, invalidating any
 	// outstanding links when a new reset is requested.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// TwoFactorChallengeRepository
+// -----------------------------------------------------------------------------
+
+// TwoFactorChallengeRepository stores the interim state of a two-step login.
+type TwoFactorChallengeRepository interface {
+	Create(ctx context.Context, challenge *db.TwoFactorChallenge) error
+	// GetUnusedByHash returns an unconsumed challenge matching the hash.
+	// Expiry is checked by the caller in Go, mirroring password reset tokens.
+	// Returns ErrNotFound if no unconsumed challenge matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.TwoFactorChallenge, error)
+	// IncrementAttempts bumps the failed-code counter by one.
+	IncrementAttempts(ctx context.Context, id uuid.UUID) error
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all outstanding challenges for a user, so a new
+	// login attempt invalidates any previous one.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// RecoveryCodeRepository
+// -----------------------------------------------------------------------------
+
+// RecoveryCodeRepository stores hashed single-use two-factor recovery codes.
+type RecoveryCodeRepository interface {
+	// CreateBatch inserts a whole freshly generated set in one call.
+	CreateBatch(ctx context.Context, codes []db.RecoveryCode) error
+	// GetUnusedByHash returns an unused code matching the hash. Returns
+	// ErrNotFound if no unused code matches. Callers must verify the returned
+	// code belongs to the expected user.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.RecoveryCode, error)
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// CountUnused reports how many codes the user has left.
+	CountUnused(ctx context.Context, userID uuid.UUID) (int64, error)
+	// DeleteByUserID removes every code for a user, used when regenerating the
+	// set or disabling two-factor authentication.
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
 }
 

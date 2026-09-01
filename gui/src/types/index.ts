@@ -77,8 +77,26 @@ export interface User {
   role: UserRole
   is_active: boolean
   is_oidc: boolean      // true for OIDC-provisioned accounts
+  two_factor_enabled: boolean
   last_login_at: string | null
   created_at: string
+}
+
+// ─── Two-factor authentication ────────────────────────────────────────────────
+
+export interface TwoFactorStatus {
+  enabled: boolean
+  pending: boolean // a secret was generated via setup but never confirmed
+  recovery_codes_remaining: number
+}
+
+export interface TwoFactorSetupResponse {
+  secret: string
+  otpauth_url: string
+}
+
+export interface TwoFactorRecoveryCodesResponse {
+  recovery_codes: string[]
 }
 
 export interface Agent {
@@ -372,8 +390,12 @@ export interface LoginRequest {
 }
 
 export interface TokenResponse {
-  access_token: string
-  expires_in: number
+  // Absent when two_factor_required is true — the password was correct but a
+  // second factor is still outstanding.
+  access_token?: string
+  expires_in?: number
+  two_factor_required?: boolean
+  challenge_token?: string
 }
 
 // Agents

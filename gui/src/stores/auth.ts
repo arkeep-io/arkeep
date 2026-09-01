@@ -23,6 +23,12 @@ import { ofetch } from 'ofetch'
 import type { User, ApiResponse, TokenResponse } from '@/types'
 import { router } from '@/router'
 
+// LoginOutcome is what login() resolves to instead of throwing: a two-factor
+// account needs a second call to completeTwoFactor() before a session exists.
+export type LoginOutcome =
+  | { twoFactorRequired: false }
+  | { twoFactorRequired: true; challengeToken: string }
+
 export const useAuthStore = defineStore('auth', () => {
   // ─── State ──────────────────────────────────────────────────────────────────
 
@@ -48,13 +54,33 @@ export const useAuthStore = defineStore('auth', () => {
   // ─── Actions ──────────────────────────────────────────────────────────────────
 
   // login exchanges email/password for an access token, then fetches the
-  // user profile. Throws on invalid credentials (HTTP 401).
-  async function login(email: string, password: string): Promise<void> {
+  // user profile. Throws on invalid credentials (HTTP 401). On a two-factor
+  // account the password alone isn't enough — it resolves with a challenge
+  // token instead of establishing a session; call completeTwoFactor() next.
+  async function login(email: string, password: string): Promise<LoginOutcome> {
     const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/login', {
       method: 'POST',
       body: { email, password },
     })
-    await setTokenAndFetchUser(res.data.access_token, res.data.expires_in)
+    if (res.data.two_factor_required) {
+      return { twoFactorRequired: true, challengeToken: res.data.challenge_token! }
+    }
+    await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
+    return { twoFactorRequired: false }
+  }
+
+  // completeTwoFactor finishes a login started by login() when it returned
+  // twoFactorRequired: true. Uses raw ofetch rather than api(): the server
+  // deliberately answers a wrong/expired code with 400, not 401, so api()'s
+  // 401-refresh-retry interceptor can't swallow the error — see
+  // server/internal/api/auth.go's LoginTwoFactor.
+  async function completeTwoFactor(challengeToken: string, code: string): Promise<void> {
+    const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/login/2fa', {
+      method: 'POST',
+      credentials: 'include',
+      body: { challenge_token: challengeToken, code },
+    })
+    await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
   }
 
   // logout invalidates the refresh token server-side and clears local state.
@@ -80,7 +106,7 @@ export const useAuthStore = defineStore('auth', () => {
         method: 'POST',
         credentials: 'include',
       })
-      await setTokenAndFetchUser(res.data.access_token, res.data.expires_in)
+      await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
       return true
     } catch {
       _clearSession()
@@ -152,6 +178,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     isAdmin,
     login,
+    completeTwoFactor,
     logout,
     refresh,
     initialize,
