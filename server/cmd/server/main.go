@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
+	"github.com/arkeep-io/arkeep/server/internal/agentwatchdog"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -263,6 +264,15 @@ func run(ctx context.Context, cfg *config) error {
 	// deletes rows once an administrator configures a retention window.
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	go logRetentionSvc.Start(ctx)
+
+	// --- Agent watchdog ---
+	// Detects agents that stopped sending heartbeats (network partition, crash,
+	// unplugged cable — anything that doesn't cleanly close the gRPC stream) and
+	// marks them offline. Without this, such an agent would stay "online"
+	// forever, since the only other trigger for "offline" is the StreamJobs
+	// stream actually closing.
+	agentWatchdogSvc := agentwatchdog.NewService(agentRepo, jobRepo, agentMgr, notifService, wsHub, logger)
+	go agentWatchdogSvc.Start(ctx)
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(

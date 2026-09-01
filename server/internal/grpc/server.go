@@ -439,6 +439,13 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		)
 	}
 
+	// Push the transition to any GUI clients watching this agent, so an
+	// already-open Agents/AgentDetail page updates without a manual refresh.
+	s.hub.Publish("agent:"+req.AgentId, websocket.Message{
+		Type:    websocket.MsgAgentStatus,
+		Payload: map[string]any{"status": "online"},
+	})
+
 	// Register the agent in the in-memory manager so the scheduler can
 	// dispatch jobs to it by calling manager.Dispatch(agentID, job).
 	// Docker availability is read from the capabilities cached during the
@@ -476,6 +483,13 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 			zap.Error(err),
 		)
 	}
+
+	// Push the transition to any GUI clients watching this agent, so an
+	// already-open Agents/AgentDetail page updates without a manual refresh.
+	s.hub.Publish("agent:"+req.AgentId, websocket.Message{
+		Type:    websocket.MsgAgentStatus,
+		Payload: map[string]any{"status": "offline"},
+	})
 
 	// Orphan recovery: any job still "running" when the agent disconnects will
 	// never receive a terminal status report. Mark them as failed so they don't

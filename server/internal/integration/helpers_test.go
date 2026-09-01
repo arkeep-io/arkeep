@@ -118,6 +118,14 @@ func newTestServer(t *testing.T) *testServer {
 	return ts
 }
 
+// newTestHub returns an idle websocket.Hub. Publish is safe to call on it
+// without starting Run — there are simply no subscribers to deliver to, which
+// is all these tests need since they assert on repository/agentManager state,
+// not on delivered WebSocket frames.
+func newTestHub() *websocket.Hub {
+	return websocket.NewHub()
+}
+
 // createIntegrationJob inserts a job record with a real policy (and the given
 // agentID) to satisfy FK constraints. Returns the created job.
 func createIntegrationJob(t *testing.T, ts *testServer, agentUUID uuid.UUID) *db.Job {
