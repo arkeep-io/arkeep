@@ -16,7 +16,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { MoreHorizontal, PencilLine, Plus, RefreshCw, Trash2, Users } from '@lucide/vue'
+import { MoreHorizontal, PencilLine, Plus, RefreshCw, ShieldOff, Trash2, Users } from '@lucide/vue'
 import UserSheet from '@/components/users/UserSheet.vue'
 import { api } from '@/services/api'
 import type { ApiResponse, User } from '@/types'
@@ -56,6 +56,14 @@ const sheetRef = useTemplateRef<InstanceType<typeof UserSheet>>('sheetRef')
 const deleteDialogOpen = ref(false)
 const userToDelete = ref<User | null>(null)
 const deleteLoading = ref(false)
+
+// ---------------------------------------------------------------------------
+// State — 2FA reset
+// ---------------------------------------------------------------------------
+
+const resetDialogOpen = ref(false)
+const userToReset = ref<User | null>(null)
+const resetLoading = ref(false)
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -140,6 +148,30 @@ async function confirmDelete() {
         error.value = e?.message ?? 'Failed to delete user.'
     } finally {
         deleteLoading.value = false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2FA reset
+// ---------------------------------------------------------------------------
+
+function openResetDialog(u: User) {
+    userToReset.value = u
+    resetDialogOpen.value = true
+}
+
+async function confirmReset() {
+    if (!userToReset.value) return
+    resetLoading.value = true
+    try {
+        await api(`/api/v1/users/${userToReset.value.id}/2fa/reset`, { method: 'POST' })
+        resetDialogOpen.value = false
+        userToReset.value = null
+        await fetchUsers()
+    } catch (e: any) {
+        error.value = e?.message ?? 'Failed to reset two-factor authentication.'
+    } finally {
+        resetLoading.value = false
     }
 }
 </script>
@@ -230,7 +262,10 @@ async function confirmDelete() {
                                 </div>
                             </TableCell>
                             <TableCell>
-                                <Badge :variant="roleVariant(u.role)">{{ u.role }}</Badge>
+                                <div class="flex items-center gap-1.5">
+                                    <Badge :variant="roleVariant(u.role)">{{ u.role }}</Badge>
+                                    <Badge v-if="u.two_factor_enabled" variant="outline">2FA</Badge>
+                                </div>
                             </TableCell>
                             <TableCell>
                                 <Badge :variant="u.is_active ? 'default' : 'secondary'">
@@ -252,6 +287,10 @@ async function confirmDelete() {
                                         <DropdownMenuItem @click="openEdit(u)">
                                             <PencilLine class="w-4 h-4 mr-2" />
                                             Edit
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem v-if="u.two_factor_enabled" @click="openResetDialog(u)">
+                                            <ShieldOff class="w-4 h-4 mr-2" />
+                                            Reset 2FA
                                         </DropdownMenuItem>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem class="text-destructive focus:text-destructive"
@@ -308,6 +347,27 @@ async function confirmDelete() {
                 <AlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
+
+    <!-- Reset 2FA dialog -->
+    <AlertDialog :open="resetDialogOpen" @update:open="resetDialogOpen = $event">
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Reset two-factor authentication?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    <span v-if="userToReset">
+                        <strong>{{ userToReset.display_name }}</strong> ({{ userToReset.email }}) will need to
+                        set up two-factor authentication again. They will be signed out of all sessions.
+                    </span>
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel :disabled="resetLoading">Cancel</AlertDialogCancel>
+                <AlertDialogAction :disabled="resetLoading" @click="confirmReset">
+                    {{ resetLoading ? 'Resetting…' : 'Reset' }}
                 </AlertDialogAction>
             </AlertDialogFooter>
         </AlertDialogContent>
