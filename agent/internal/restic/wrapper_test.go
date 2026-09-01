@@ -188,7 +188,101 @@ func TestForget_ZeroPolicy_Skips(t *testing.T) {
 	w := &Wrapper{resticBin: "/nonexistent/restic", rcloneBin: "/nonexistent/rclone"}
 	dest := Destination{Type: DestLocal, RepoURL: "/tmp/repo", Password: "pw"}
 
-	if err := w.Forget(context.Background(), dest, RetentionPolicy{}); err != nil {
+	if err := w.Forget(context.Background(), dest, RetentionPolicy{}, []string{"policy:abc"}); err != nil {
 		t.Errorf("Forget with zero policy should be a no-op, got error: %v", err)
+	}
+}
+
+// TestForget_NoTags_Fails verifies that Forget refuses to run without tags.
+// An unscoped forget considers every snapshot in the repository, so a
+// destination shared by two policies would have both pruned by whichever ran
+// last. Pruning nothing is recoverable; pruning another policy's snapshots is
+// not — so this must be an error, never a fallback to the unscoped command.
+func TestForget_NoTags_Fails(t *testing.T) {
+	w := &Wrapper{resticBin: "/nonexistent/restic", rcloneBin: "/nonexistent/rclone"}
+	dest := Destination{Type: DestLocal, RepoURL: "/tmp/repo", Password: "pw"}
+
+	err := w.Forget(context.Background(), dest, RetentionPolicy{Daily: 7}, nil)
+	if err == nil {
+		t.Fatal("Forget without tags should fail, got nil error")
+	}
+	if !strings.Contains(err.Error(), "without tags") {
+		t.Errorf("error should explain the missing tags, got: %v", err)
+	}
+}
+
+// TestBuildForgetArgs verifies that retention is always scoped by tag and that
+// only the configured keep rules are passed through.
+func TestBuildForgetArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  RetentionPolicy
+		tags    []string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:   "single keep rule is tag-scoped",
+			policy: RetentionPolicy{Daily: 7},
+			tags:   []string{"policy:11111111-2222-3333-4444-555555555555"},
+			want: []string{
+				"forget", "--prune", "--json",
+				"--tag", "policy:11111111-2222-3333-4444-555555555555",
+				"--keep-daily", "7",
+			},
+		},
+		{
+			name:   "all keep rules in order",
+			policy: RetentionPolicy{Last: 1, Hourly: 2, Daily: 3, Weekly: 4, Monthly: 5, Yearly: 6},
+			tags:   []string{"policy:abc"},
+			want: []string{
+				"forget", "--prune", "--json", "--tag", "policy:abc",
+				"--keep-last", "1", "--keep-hourly", "2", "--keep-daily", "3",
+				"--keep-weekly", "4", "--keep-monthly", "5", "--keep-yearly", "6",
+			},
+		},
+		{
+			name:   "zero keep rules are omitted",
+			policy: RetentionPolicy{Weekly: 4},
+			tags:   []string{"policy:abc"},
+			want: []string{
+				"forget", "--prune", "--json", "--tag", "policy:abc",
+				"--keep-weekly", "4",
+			},
+		},
+		{
+			name:   "each tag gets its own flag",
+			policy: RetentionPolicy{Last: 1},
+			tags:   []string{"policy:abc", "env:prod"},
+			want: []string{
+				"forget", "--prune", "--json",
+				"--tag", "policy:abc", "--tag", "env:prod",
+				"--keep-last", "1",
+			},
+		},
+		{
+			name:    "no tags is rejected",
+			policy:  RetentionPolicy{Daily: 7},
+			tags:    nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildForgetArgs(tt.policy, tt.tags)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("buildForgetArgs() = %v, want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildForgetArgs() unexpected error: %v", err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("buildForgetArgs() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

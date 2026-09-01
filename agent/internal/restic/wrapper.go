@@ -250,11 +250,37 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 
 // Forget runs restic forget --prune to apply the retention policy.
 // It removes snapshot metadata and frees storage in a single pass.
-func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy RetentionPolicy) error {
+//
+// tags scopes the retention to the snapshots that carry them, so a policy only
+// ever prunes its own snapshots. Without it restic considers every snapshot in
+// the repository, and a destination shared by two policies would have both
+// pruned by whichever policy ran last — effectively applying the most
+// aggressive retention to everything. Callers pass the same tags used for the
+// backup, so the filter is symmetric by construction. tags must not be empty:
+// see buildForgetArgs.
+func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy RetentionPolicy, tags []string) error {
 	if !policy.IsEnabled() {
 		return nil
 	}
+	args, err := buildForgetArgs(policy, tags)
+	if err != nil {
+		return err
+	}
+	return w.run(ctx, dest, args)
+}
+
+// buildForgetArgs assembles the restic forget arguments for a retention policy
+// scoped to tags. It returns an error when tags is empty rather than falling
+// back to an unscoped forget: pruning nothing is recoverable, pruning another
+// policy's snapshots is not.
+func buildForgetArgs(policy RetentionPolicy, tags []string) ([]string, error) {
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("restic: refusing to run forget without tags: an unscoped forget would prune snapshots belonging to other policies")
+	}
 	args := []string{"forget", "--prune", "--json"}
+	for _, tag := range tags {
+		args = append(args, "--tag", tag)
+	}
 	if policy.Last > 0 {
 		args = append(args, "--keep-last", fmt.Sprintf("%d", policy.Last))
 	}
@@ -273,7 +299,7 @@ func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy Retention
 	if policy.Yearly > 0 {
 		args = append(args, "--keep-yearly", fmt.Sprintf("%d", policy.Yearly))
 	}
-	return w.run(ctx, dest, args)
+	return args, nil
 }
 
 // Check verifies the integrity of the repository. Progress events (one per

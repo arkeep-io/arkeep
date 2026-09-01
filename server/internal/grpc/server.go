@@ -900,6 +900,89 @@ func (s *Server) ReportSnapshotImport(ctx context.Context, req *proto.SnapshotIm
 	return &proto.SnapshotImportResponse{Ok: true}, nil
 }
 
+// ReportSnapshotReconcile receives the authoritative list of snapshot IDs still
+// present in a destination's repository, sent by the agent right after the
+// retention policy ran. Cached snapshot records for that destination that are
+// absent from the list are evicted: this is how the database learns about
+// snapshots the backup engine pruned, and it also clears records that
+// accumulated before this RPC existed.
+//
+// The listing is authoritative because a destination maps 1:1 to a repository
+// (the repo URL is derived purely from the destination record), so it covers
+// every snapshot stored there regardless of which policy or agent produced it.
+func (s *Server) ReportSnapshotReconcile(ctx context.Context, req *proto.SnapshotReconcileReport) (*proto.SnapshotReconcileResponse, error) {
+	destID, err := uuid.Parse(req.DestinationId)
+	if err != nil {
+		s.logger.Warn("ReportSnapshotReconcile: invalid destination_id",
+			zap.String("destination_id", req.DestinationId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.InvalidArgument, "invalid destination_id")
+	}
+
+	// Never treat an empty list as "the repository holds no snapshots". The
+	// agent only reports a successful listing, and the backup that triggered it
+	// just created a snapshot, so an empty list means something went wrong
+	// upstream. Acting on it would wipe every record for this destination.
+	if len(req.LiveSnapshotIds) == 0 {
+		s.logger.Warn("ReportSnapshotReconcile: empty snapshot list, skipping reconcile",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+		)
+		return &proto.SnapshotReconcileResponse{}, nil
+	}
+
+	// Take the earlier of the agent's pre-listing timestamp and the server's
+	// receive time. An agent clock running ahead would otherwise push the cutoff
+	// into the future and evict records for snapshots created after the listing
+	// was taken. A clock running behind is harmless: the reconcile is merely
+	// more conservative about recent records, and stale ones still match.
+	cutoff := time.Now().UTC()
+	if req.ListedAt != nil {
+		if listedAt := req.ListedAt.AsTime().UTC(); listedAt.Before(cutoff) {
+			cutoff = listedAt
+		}
+	}
+
+	deleted, err := s.snapshotRepo.DeleteStaleByDestination(ctx, destID, req.LiveSnapshotIds, cutoff)
+	if err != nil {
+		s.logger.Error("ReportSnapshotReconcile: failed to evict stale snapshots",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to reconcile snapshots")
+	}
+
+	if deleted > 0 {
+		s.logger.Info("stale snapshot records evicted",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.Int64("deleted", deleted),
+			zap.Int("live", len(req.LiveSnapshotIds)),
+		)
+	} else {
+		s.logger.Debug("snapshot reconcile: no stale records",
+			zap.String("destination_id", req.DestinationId),
+			zap.Int("live", len(req.LiveSnapshotIds)),
+		)
+	}
+
+	// The repository size is measured after the prune, so this is the first
+	// accurate figure for this run — the destination report sent before
+	// retention carries none. Non-fatal.
+	if req.RepoSizeBytes > 0 && s.destRepo != nil {
+		if err := s.destRepo.UpdateRepoSize(ctx, destID, req.RepoSizeBytes, time.Now().UTC()); err != nil {
+			s.logger.Warn("ReportSnapshotReconcile: failed to update destination repo size",
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
+	}
+
+	return &proto.SnapshotReconcileResponse{Deleted: deleted}, nil
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // parseAgentID parses a string UUID sent by the agent over gRPC into the

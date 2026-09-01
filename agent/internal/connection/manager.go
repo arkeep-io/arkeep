@@ -34,10 +34,13 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	// Aliased: this file uses "status" extensively as a job-status parameter name.
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/agent/internal/docker"
@@ -967,6 +970,59 @@ func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshot
 			zap.Error(err),
 		)
 	}
+}
+
+// ReportSnapshotReconcile implements executor.StatusReporter. It calls
+// ReportSnapshotReconcile via gRPC so the server can evict cached snapshot
+// records for snapshots the retention policy pruned from the repository, and
+// refresh the destination's repository size with the post-prune figure.
+//
+// Best-effort: every failure is logged and reported as 0 evicted records, never
+// propagated to the job result. The backup has already succeeded at this point.
+func (m *Manager) ReportSnapshotReconcile(jobID, destinationID string, liveIDs []string, listedAt time.Time, repoSizeBytes int64) int64 {
+	if len(liveIDs) == 0 {
+		return 0
+	}
+
+	m.mu.RLock()
+	client := m.client
+	agentID := m.agentID
+	m.mu.RUnlock()
+
+	if client == nil {
+		m.logger.Warn("ReportSnapshotReconcile: no active client, result lost",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.Int("live", len(liveIDs)),
+		)
+		return 0
+	}
+
+	resp, err := client.ReportSnapshotReconcile(m.sessionCtx, &proto.SnapshotReconcileReport{
+		AgentId:         agentID,
+		JobId:           jobID,
+		DestinationId:   destinationID,
+		LiveSnapshotIds: liveIDs,
+		ListedAt:        timestamppb.New(listedAt),
+		RepoSizeBytes:   repoSizeBytes,
+	})
+	if err != nil {
+		// An older server does not implement this RPC. That is expected during a
+		// rolling upgrade and must not warn on every backup.
+		if grpcstatus.Code(err) == codes.Unimplemented {
+			m.logger.Debug("ReportSnapshotReconcile: not supported by server",
+				zap.String("job_id", jobID),
+			)
+			return 0
+		}
+		m.logger.Warn("ReportSnapshotReconcile: RPC failed",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.Error(err),
+		)
+		return 0
+	}
+	return resp.Deleted
 }
 
 // protoToJob converts a proto.JobAssignment to an executor.JobAssignment.

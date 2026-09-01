@@ -28,6 +28,7 @@ const (
 	AgentService_ReportVolumeList_FullMethodName        = "/agent.AgentService/ReportVolumeList"
 	AgentService_ReportSnapshotBrowse_FullMethodName    = "/agent.AgentService/ReportSnapshotBrowse"
 	AgentService_ReportSnapshotImport_FullMethodName    = "/agent.AgentService/ReportSnapshotImport"
+	AgentService_ReportSnapshotReconcile_FullMethodName = "/agent.AgentService/ReportSnapshotReconcile"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -97,6 +98,15 @@ type AgentServiceClient interface {
 	// JOB_TYPE_IMPORT_SNAPSHOTS assignment. The agent runs restic snapshots on the
 	// destination and returns all snapshot metadata for the server to persist.
 	ReportSnapshotImport(ctx context.Context, in *SnapshotImportReport, opts ...grpc.CallOption) (*SnapshotImportResponse, error)
+	// ReportSnapshotReconcile is called by the agent after retention has run for
+	// a destination. It carries the authoritative set of snapshot IDs still
+	// present in that destination's repository, so the server can evict cached
+	// snapshot rows for snapshots the backup engine has already pruned.
+	//
+	// Fire-and-forget: a failure never affects the backup job. The agent only
+	// calls this RPC when the listing succeeded, so the server can never mistake
+	// "could not list" for "the repository is empty".
+	ReportSnapshotReconcile(ctx context.Context, in *SnapshotReconcileReport, opts ...grpc.CallOption) (*SnapshotReconcileResponse, error)
 }
 
 type agentServiceClient struct {
@@ -209,6 +219,16 @@ func (c *agentServiceClient) ReportSnapshotImport(ctx context.Context, in *Snaps
 	return out, nil
 }
 
+func (c *agentServiceClient) ReportSnapshotReconcile(ctx context.Context, in *SnapshotReconcileReport, opts ...grpc.CallOption) (*SnapshotReconcileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SnapshotReconcileResponse)
+	err := c.cc.Invoke(ctx, AgentService_ReportSnapshotReconcile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -276,6 +296,15 @@ type AgentServiceServer interface {
 	// JOB_TYPE_IMPORT_SNAPSHOTS assignment. The agent runs restic snapshots on the
 	// destination and returns all snapshot metadata for the server to persist.
 	ReportSnapshotImport(context.Context, *SnapshotImportReport) (*SnapshotImportResponse, error)
+	// ReportSnapshotReconcile is called by the agent after retention has run for
+	// a destination. It carries the authoritative set of snapshot IDs still
+	// present in that destination's repository, so the server can evict cached
+	// snapshot rows for snapshots the backup engine has already pruned.
+	//
+	// Fire-and-forget: a failure never affects the backup job. The agent only
+	// calls this RPC when the listing succeeded, so the server can never mistake
+	// "could not list" for "the repository is empty".
+	ReportSnapshotReconcile(context.Context, *SnapshotReconcileReport) (*SnapshotReconcileResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -312,6 +341,9 @@ func (UnimplementedAgentServiceServer) ReportSnapshotBrowse(context.Context, *Sn
 }
 func (UnimplementedAgentServiceServer) ReportSnapshotImport(context.Context, *SnapshotImportReport) (*SnapshotImportResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportSnapshotImport not implemented")
+}
+func (UnimplementedAgentServiceServer) ReportSnapshotReconcile(context.Context, *SnapshotReconcileReport) (*SnapshotReconcileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportSnapshotReconcile not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -478,6 +510,24 @@ func _AgentService_ReportSnapshotImport_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_ReportSnapshotReconcile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SnapshotReconcileReport)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ReportSnapshotReconcile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ReportSnapshotReconcile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ReportSnapshotReconcile(ctx, req.(*SnapshotReconcileReport))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -512,6 +562,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportSnapshotImport",
 			Handler:    _AgentService_ReportSnapshotImport_Handler,
+		},
+		{
+			MethodName: "ReportSnapshotReconcile",
+			Handler:    _AgentService_ReportSnapshotReconcile_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

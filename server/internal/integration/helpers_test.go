@@ -45,12 +45,14 @@ func TestMain(m *testing.M) {
 // testServer bundles the live gRPC server with all its dependencies so tests
 // can reach both the network endpoint and the underlying repositories directly.
 type testServer struct {
-	addr       string // "127.0.0.1:<port>" of the live gRPC listener
-	agentMgr   *agentmanager.Manager
-	agentRepo  repositories.AgentRepository
-	jobRepo    repositories.JobRepository
-	policyRepo repositories.PolicyRepository
-	cancel     context.CancelFunc // cancels the server context → graceful stop
+	addr         string // "127.0.0.1:<port>" of the live gRPC listener
+	agentMgr     *agentmanager.Manager
+	agentRepo    repositories.AgentRepository
+	jobRepo      repositories.JobRepository
+	policyRepo   repositories.PolicyRepository
+	snapshotRepo repositories.SnapshotRepository
+	destRepo     repositories.DestinationRepository
+	cancel       context.CancelFunc // cancels the server context → graceful stop
 }
 
 // newTestServer starts a real gRPC server on a free loopback port backed by a
@@ -98,12 +100,14 @@ func newTestServer(t *testing.T) *testServer {
 	go func() { _ = srv.Serve(ctx, lis) }()
 
 	ts := &testServer{
-		addr:       lis.Addr().String(),
-		agentMgr:   agentMgr,
-		agentRepo:  agentRepo,
-		jobRepo:    jobRepo,
-		policyRepo: policyRepo,
-		cancel:     cancel,
+		addr:         lis.Addr().String(),
+		agentMgr:     agentMgr,
+		agentRepo:    agentRepo,
+		jobRepo:      jobRepo,
+		policyRepo:   policyRepo,
+		snapshotRepo: snapshotRepo,
+		destRepo:     destinationRepo,
+		cancel:       cancel,
 	}
 
 	t.Cleanup(func() {

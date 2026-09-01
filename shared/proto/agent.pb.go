@@ -904,8 +904,10 @@ type DestinationStatusReport struct {
 	// snapshot_id is the full restic snapshot ID created by this backup run.
 	// Empty when status is "failed".
 	SnapshotId string `protobuf:"bytes,5,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
-	// size_bytes is the total bytes processed (TotalBytesProcessed from restic
-	// summary). Zero when status is "failed".
+	// size_bytes is the real footprint this backup added to the repository
+	// (data_added_packed from the restic summary, falling back to data_added) —
+	// NOT the logical source size. Zero when status is "failed" or when nothing
+	// new was added (e.g. re-backup of unchanged data).
 	SizeBytes int64 `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	// error is the error message when status is "failed". Empty on success.
 	Error string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
@@ -1787,6 +1789,159 @@ func (x *SnapshotImportResponse) GetOk() bool {
 	return false
 }
 
+// SnapshotReconcileReport carries the result of an unfiltered
+// `restic snapshots --json` run against a single destination's repository,
+// taken immediately after the retention policy was applied.
+//
+// A destination maps 1:1 to a restic repository (the repo URL is derived purely
+// from the destination record), so this listing is authoritative for every
+// snapshot stored there — including snapshots produced by other policies or
+// other agents writing to the same destination.
+type SnapshotReconcileReport struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// agent_id identifies the reporting agent.
+	AgentId string `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// job_id is the backup job that triggered the listing, used for logging and
+	// to correlate the cleanup with a run in the GUI job log.
+	JobId string `protobuf:"bytes,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	// destination_id is the UUID of the destination whose repository was listed.
+	DestinationId string `protobuf:"bytes,3,opt,name=destination_id,json=destinationId,proto3" json:"destination_id,omitempty"`
+	// live_snapshot_ids are the full snapshot IDs present in the repository at
+	// listed_at. The listing is always UNFILTERED (no --tag / --host / --path):
+	// a filtered listing here would make the server evict other policies' valid
+	// rows. Never sent empty — see the guarantee on the RPC comment.
+	LiveSnapshotIds []string `protobuf:"bytes,4,rep,name=live_snapshot_ids,json=liveSnapshotIds,proto3" json:"live_snapshot_ids,omitempty"`
+	// listed_at is the agent-side wall-clock time captured immediately BEFORE
+	// `restic snapshots` was invoked. The server never evicts rows for snapshots
+	// recorded at or after this instant, so a snapshot created concurrently by
+	// another agent writing to the same repository is never lost.
+	ListedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=listed_at,json=listedAt,proto3" json:"listed_at,omitempty"`
+	// repo_size_bytes is the real deduplicated on-disk size of the repository
+	// (total_size from `restic stats --mode raw-data`) measured AFTER retention
+	// ran, so the reported usage reflects the prune. Zero when unavailable.
+	RepoSizeBytes int64 `protobuf:"varint,6,opt,name=repo_size_bytes,json=repoSizeBytes,proto3" json:"repo_size_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotReconcileReport) Reset() {
+	*x = SnapshotReconcileReport{}
+	mi := &file_agent_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotReconcileReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotReconcileReport) ProtoMessage() {}
+
+func (x *SnapshotReconcileReport) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotReconcileReport.ProtoReflect.Descriptor instead.
+func (*SnapshotReconcileReport) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *SnapshotReconcileReport) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *SnapshotReconcileReport) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *SnapshotReconcileReport) GetDestinationId() string {
+	if x != nil {
+		return x.DestinationId
+	}
+	return ""
+}
+
+func (x *SnapshotReconcileReport) GetLiveSnapshotIds() []string {
+	if x != nil {
+		return x.LiveSnapshotIds
+	}
+	return nil
+}
+
+func (x *SnapshotReconcileReport) GetListedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ListedAt
+	}
+	return nil
+}
+
+func (x *SnapshotReconcileReport) GetRepoSizeBytes() int64 {
+	if x != nil {
+		return x.RepoSizeBytes
+	}
+	return 0
+}
+
+// SnapshotReconcileResponse reports how many stale rows the server evicted, so
+// the agent can surface the cleanup in the job log the user reads in the GUI.
+type SnapshotReconcileResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Deleted       int64                  `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotReconcileResponse) Reset() {
+	*x = SnapshotReconcileResponse{}
+	mi := &file_agent_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotReconcileResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotReconcileResponse) ProtoMessage() {}
+
+func (x *SnapshotReconcileResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotReconcileResponse.ProtoReflect.Descriptor instead.
+func (*SnapshotReconcileResponse) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *SnapshotReconcileResponse) GetDeleted() int64 {
+	if x != nil {
+		return x.Deleted
+	}
+	return 0
+}
+
 var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
@@ -1896,7 +2051,16 @@ const file_agent_proto_rawDesc = "" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12&\n" +
 	"\x0frepo_size_bytes\x18\x05 \x01(\x03R\rrepoSizeBytes\"(\n" +
 	"\x16SnapshotImportResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok*\xe9\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xff\x01\n" +
+	"\x17SnapshotReconcileReport\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x15\n" +
+	"\x06job_id\x18\x02 \x01(\tR\x05jobId\x12%\n" +
+	"\x0edestination_id\x18\x03 \x01(\tR\rdestinationId\x12*\n" +
+	"\x11live_snapshot_ids\x18\x04 \x03(\tR\x0fliveSnapshotIds\x127\n" +
+	"\tlisted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\blistedAt\x12&\n" +
+	"\x0frepo_size_bytes\x18\x06 \x01(\x03R\rrepoSizeBytes\"5\n" +
+	"\x19SnapshotReconcileResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted*\xe9\x01\n" +
 	"\aJobType\x12\x18\n" +
 	"\x14JOB_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fJOB_TYPE_BACKUP\x10\x01\x12\x13\n" +
@@ -1918,7 +2082,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x02\x12\x12\n" +
 	"\x0eLOG_LEVEL_WARN\x10\x03\x12\x13\n" +
-	"\x0fLOG_LEVEL_ERROR\x10\x042\x98\x05\n" +
+	"\x0fLOG_LEVEL_ERROR\x10\x042\xf5\x05\n" +
 	"\fAgentService\x12;\n" +
 	"\bRegister\x12\x16.agent.RegisterRequest\x1a\x17.agent.RegisterResponse\x12>\n" +
 	"\tHeartbeat\x12\x17.agent.HeartbeatRequest\x1a\x18.agent.HeartbeatResponse\x12>\n" +
@@ -1930,7 +2094,8 @@ const file_agent_proto_rawDesc = "" +
 	"StreamLogs\x12\x0f.agent.LogEntry\x1a\x18.agent.LogStreamResponse(\x01\x12F\n" +
 	"\x10ReportVolumeList\x12\x17.agent.VolumeListReport\x1a\x19.agent.VolumeListResponse\x12R\n" +
 	"\x14ReportSnapshotBrowse\x12\x1b.agent.SnapshotBrowseReport\x1a\x1d.agent.SnapshotBrowseResponse\x12R\n" +
-	"\x14ReportSnapshotImport\x12\x1b.agent.SnapshotImportReport\x1a\x1d.agent.SnapshotImportResponseB*Z(github.com/arkeep-io/arkeep/shared/protob\x06proto3"
+	"\x14ReportSnapshotImport\x12\x1b.agent.SnapshotImportReport\x1a\x1d.agent.SnapshotImportResponse\x12[\n" +
+	"\x17ReportSnapshotReconcile\x12\x1e.agent.SnapshotReconcileReport\x1a .agent.SnapshotReconcileResponseB*Z(github.com/arkeep-io/arkeep/shared/protob\x06proto3"
 
 var (
 	file_agent_proto_rawDescOnce sync.Once
@@ -1945,7 +2110,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_agent_proto_goTypes = []any{
 	(JobType)(0),                      // 0: agent.JobType
 	(JobStatus)(0),                    // 1: agent.JobStatus
@@ -1973,44 +2138,49 @@ var file_agent_proto_goTypes = []any{
 	(*ImportedSnapshotInfo)(nil),      // 23: agent.ImportedSnapshotInfo
 	(*SnapshotImportReport)(nil),      // 24: agent.SnapshotImportReport
 	(*SnapshotImportResponse)(nil),    // 25: agent.SnapshotImportResponse
-	(*timestamppb.Timestamp)(nil),     // 26: google.protobuf.Timestamp
+	(*SnapshotReconcileReport)(nil),   // 26: agent.SnapshotReconcileReport
+	(*SnapshotReconcileResponse)(nil), // 27: agent.SnapshotReconcileResponse
+	(*timestamppb.Timestamp)(nil),     // 28: google.protobuf.Timestamp
 }
 var file_agent_proto_depIdxs = []int32{
 	4,  // 0: agent.RegisterRequest.capabilities:type_name -> agent.AgentCapabilities
 	7,  // 1: agent.HeartbeatRequest.metrics:type_name -> agent.SystemMetrics
 	0,  // 2: agent.JobAssignment.type:type_name -> agent.JobType
-	26, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
+	28, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
 	1,  // 4: agent.JobStatusReport.status:type_name -> agent.JobStatus
-	26, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
-	26, // 6: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
+	28, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
+	28, // 6: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
 	2,  // 7: agent.LogEntry.level:type_name -> agent.LogLevel
-	26, // 8: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	28, // 8: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
 	17, // 9: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
 	20, // 10: agent.SnapshotBrowseReport.entries:type_name -> agent.SnapshotFileEntry
 	23, // 11: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
-	3,  // 12: agent.AgentService.Register:input_type -> agent.RegisterRequest
-	6,  // 13: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
-	9,  // 14: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
-	11, // 15: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
-	13, // 16: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
-	15, // 17: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
-	18, // 18: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
-	21, // 19: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
-	24, // 20: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
-	5,  // 21: agent.AgentService.Register:output_type -> agent.RegisterResponse
-	8,  // 22: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // 23: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
-	12, // 24: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
-	14, // 25: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
-	16, // 26: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
-	19, // 27: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
-	22, // 28: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
-	25, // 29: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
-	21, // [21:30] is the sub-list for method output_type
-	12, // [12:21] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	28, // 12: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
+	3,  // 13: agent.AgentService.Register:input_type -> agent.RegisterRequest
+	6,  // 14: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
+	9,  // 15: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
+	11, // 16: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
+	13, // 17: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
+	15, // 18: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
+	18, // 19: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
+	21, // 20: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
+	24, // 21: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
+	26, // 22: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
+	5,  // 23: agent.AgentService.Register:output_type -> agent.RegisterResponse
+	8,  // 24: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
+	10, // 25: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
+	12, // 26: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
+	14, // 27: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
+	16, // 28: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
+	19, // 29: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
+	22, // 30: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
+	25, // 31: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
+	27, // 32: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
+	23, // [23:33] is the sub-list for method output_type
+	13, // [13:23] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -2024,7 +2194,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   23,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

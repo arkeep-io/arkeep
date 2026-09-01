@@ -222,7 +222,7 @@ type SnapshotRepository interface {
 	Create(ctx context.Context, snapshot *db.Snapshot) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Snapshot, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	DeleteBySnapshotID(ctx context.Context, snapshotID string) error
+	DeleteStaleByDestination(ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time) (int64, error)
 	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)
 	List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)
