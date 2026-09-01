@@ -3,6 +3,7 @@ package agentmanager
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/metadata"
@@ -96,6 +97,46 @@ func TestDeregister_UnknownAgent(t *testing.T) {
 	mgr := newTestManager()
 	if mgr.Deregister("agent-does-not-exist", 1) {
 		t.Error("Deregister returned true for an unregistered agent, want false")
+	}
+}
+
+// TestDeregisterStale_RemovesGenuinelyStaleAgent covers the heartbeat
+// watchdog's normal case: the connection already existed when the sweep
+// started deciding to remove it.
+func TestDeregisterStale_RemovesGenuinelyStaleAgent(t *testing.T) {
+	mgr := newTestManager()
+	mgr.Register("agent-1", "host1", false, &mockStream{})
+
+	sweepStart := time.Now().UTC()
+	if !mgr.DeregisterStale("agent-1", sweepStart) {
+		t.Error("DeregisterStale returned false for a connection older than sweepStart, want true")
+	}
+	if mgr.IsConnected("agent-1") {
+		t.Error("expected agent-1 to be disconnected after DeregisterStale")
+	}
+}
+
+// TestDeregisterStale_IgnoresReconnectedAgent is the race this method exists
+// for: the agent reconnects after the watchdog captured sweepStart but before
+// it calls DeregisterStale. That fresh connection must survive.
+func TestDeregisterStale_IgnoresReconnectedAgent(t *testing.T) {
+	mgr := newTestManager()
+	sweepStart := time.Now().UTC()
+	mgr.Register("agent-1", "host1", false, &mockStream{})
+
+	if mgr.DeregisterStale("agent-1", sweepStart) {
+		t.Error("DeregisterStale returned true for a connection newer than sweepStart, want false")
+	}
+	if !mgr.IsConnected("agent-1") {
+		t.Error("the freshly reconnected agent was removed by a stale sweep decision")
+	}
+}
+
+// TestDeregisterStale_UnknownAgent guards the branch where nothing is registered.
+func TestDeregisterStale_UnknownAgent(t *testing.T) {
+	mgr := newTestManager()
+	if mgr.DeregisterStale("agent-does-not-exist", time.Now().UTC()) {
+		t.Error("DeregisterStale returned true for an unregistered agent, want false")
 	}
 }
 

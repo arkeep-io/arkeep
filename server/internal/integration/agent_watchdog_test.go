@@ -51,7 +51,9 @@ func TestStaleAgentWatchdog_MarksOfflineAndRecoversOrphans(t *testing.T) {
 	}
 
 	waitForAgentStatus(t, ts.agentRepo, agentID, "offline")
-	waitForJobStatus(t, ts.jobRepo, job.ID.String(), "failed")
+	// "interrupted", not "failed" — eligible for automatic resume once the
+	// agent reconnects, same as a clean StreamJobs disconnect (#215).
+	waitForJobStatus(t, ts.jobRepo, job.ID.String(), "interrupted")
 
 	if ts.agentMgr.IsConnected(agentID) {
 		t.Error("agent should be deregistered from agentManager after the watchdog marks it offline")

@@ -49,15 +49,19 @@ type agentStore interface {
 
 // jobStore is the subset of the job repository the watchdog needs for orphan
 // recovery — jobs left "running" by an agent that will never report a
-// terminal status again.
+// terminal status again. Marked "interrupted" rather than "failed" so they
+// are eligible for automatic resume once the agent reconnects, the same as a
+// clean StreamJobs disconnect.
 type jobStore interface {
-	FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
+	MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
 }
 
 // deregisterer removes an agent from the in-memory connection registry so the
-// scheduler stops dispatching new jobs to it. Implemented by *agentmanager.Manager.
+// scheduler stops dispatching new jobs to it, but only if its connection
+// wasn't already replaced by a newer one after cutoff was computed.
+// Implemented by *agentmanager.Manager.
 type deregisterer interface {
-	Deregister(agentID string)
+	DeregisterStale(agentID string, cutoff time.Time) bool
 }
 
 // notifier sends the agent-offline notification. Implemented by
@@ -124,7 +128,12 @@ func (s *Service) Start(ctx context.Context) {
 // RunOnce performs a single sweep for stale agents and returns how many were
 // flipped offline. Safe to call directly (e.g. from tests).
 func (s *Service) RunOnce(ctx context.Context) int {
-	cutoff := time.Now().UTC().Add(-staleTimeout)
+	// sweepStart marks the moment this sweep started deciding which agents are
+	// stale — passed to DeregisterStale so it can tell a genuinely stale
+	// connection from one that reconnected while this sweep was running. It is
+	// unrelated to (and much more recent than) the heartbeat staleness cutoff.
+	sweepStart := time.Now().UTC()
+	cutoff := sweepStart.Add(-staleTimeout)
 
 	candidates, err := s.agents.ListStale(ctx, cutoff)
 	if err != nil {
@@ -148,9 +157,9 @@ func (s *Service) RunOnce(ctx context.Context) int {
 			continue
 		}
 
-		s.registry.Deregister(agent.ID.String())
+		s.registry.DeregisterStale(agent.ID.String(), sweepStart)
 
-		if n, err := s.jobs.FailRunningJobsForAgent(ctx, agent.ID, "agent disconnected"); err != nil {
+		if n, err := s.jobs.MarkRunningJobsInterruptedForAgent(ctx, agent.ID, "agent disconnected"); err != nil {
 			s.logger.Warn("failed to recover orphaned jobs",
 				zap.String("agent_id", agent.ID.String()),
 				zap.Error(err),

@@ -224,6 +224,48 @@ func (m *Manager) Deregister(agentID string, session SessionToken) bool {
 	return true
 }
 
+// DeregisterStale removes an agent from the in-memory registry, but only if
+// its current connection was already established when the caller started
+// deciding to remove it (before). It reports whether the removal happened.
+//
+// Used by the heartbeat watchdog, which — unlike the gRPC server's own
+// StreamJobs teardown — has no session token to check: it decides an agent is
+// stale purely from how long ago its last heartbeat arrived, then acts on
+// that decision slightly later. Pass the time the watchdog captured at the
+// start of that decision (not the heartbeat staleness cutoff, which can be
+// minutes in the past and would reject every real stale connection): if the
+// agent reconnects in between, its ConnectedAt moves to after that mark, and
+// this call must leave the fresh connection and its jobs alone rather than
+// ripping out a connection the watchdog never actually observed as stale.
+func (m *Manager) DeregisterStale(agentID string, before time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	agent, exists := m.agents[agentID]
+	if !exists {
+		return false
+	}
+	if agent.ConnectedAt.After(before) {
+		m.logger.Info("ignoring stale-agent deregister: a newer connection exists",
+			zap.String("agent_id", agentID),
+			zap.Time("connected_at", agent.ConnectedAt),
+			zap.Time("before", before),
+		)
+		return false
+	}
+
+	delete(m.agents, agentID)
+
+	m.logger.Info("agent disconnected (heartbeat timeout)",
+		zap.String("agent_id", agentID),
+		zap.String("hostname", agent.Hostname),
+		zap.Duration("session_duration", time.Since(agent.ConnectedAt)),
+		zap.Int("total_connected", len(m.agents)),
+	)
+
+	return true
+}
+
 // Dispatch sends a JobAssignment to a specific agent via its open stream.
 // Returns an error if the agent is not connected or if the send fails.
 //

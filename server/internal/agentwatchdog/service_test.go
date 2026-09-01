@@ -28,11 +28,11 @@ func (f *fakeAgentStore) MarkOfflineIfStale(_ context.Context, id uuid.UUID, _ t
 }
 
 type fakeJobStore struct {
-	failCalls []uuid.UUID
+	interruptCalls []uuid.UUID
 }
 
-func (f *fakeJobStore) FailRunningJobsForAgent(_ context.Context, agentID uuid.UUID, _ string) (int64, error) {
-	f.failCalls = append(f.failCalls, agentID)
+func (f *fakeJobStore) MarkRunningJobsInterruptedForAgent(_ context.Context, agentID uuid.UUID, _ string) (int64, error) {
+	f.interruptCalls = append(f.interruptCalls, agentID)
 	return 1, nil
 }
 
@@ -40,8 +40,9 @@ type fakeRegistry struct {
 	deregisterCalls []string
 }
 
-func (f *fakeRegistry) Deregister(agentID string) {
+func (f *fakeRegistry) DeregisterStale(agentID string, _ time.Time) bool {
 	f.deregisterCalls = append(f.deregisterCalls, agentID)
+	return true
 }
 
 type fakeNotifier struct {
@@ -87,8 +88,8 @@ func TestRunOnce_FlipsStaleAgent(t *testing.T) {
 	if len(registry.deregisterCalls) != 1 || registry.deregisterCalls[0] != agentID.String() {
 		t.Errorf("Deregister calls = %v, want [%s]", registry.deregisterCalls, agentID)
 	}
-	if len(jobs.failCalls) != 1 || jobs.failCalls[0] != agentID {
-		t.Errorf("FailRunningJobsForAgent calls = %v, want [%s]", jobs.failCalls, agentID)
+	if len(jobs.interruptCalls) != 1 || jobs.interruptCalls[0] != agentID {
+		t.Errorf("MarkRunningJobsInterruptedForAgent calls = %v, want [%s]", jobs.interruptCalls, agentID)
 	}
 	if len(notif.notifyCalls) != 1 || notif.notifyCalls[0] != agentID {
 		t.Errorf("NotifyAgentOffline calls = %v, want [%s]", notif.notifyCalls, agentID)
@@ -132,8 +133,8 @@ func TestRunOnce_SkipsAgentThatReconnected(t *testing.T) {
 	if len(registry.deregisterCalls) != 0 {
 		t.Errorf("Deregister called %d times, want 0", len(registry.deregisterCalls))
 	}
-	if len(jobs.failCalls) != 0 {
-		t.Errorf("FailRunningJobsForAgent called %d times, want 0", len(jobs.failCalls))
+	if len(jobs.interruptCalls) != 0 {
+		t.Errorf("MarkRunningJobsInterruptedForAgent called %d times, want 0", len(jobs.interruptCalls))
 	}
 	if len(notif.notifyCalls) != 0 {
 		t.Errorf("NotifyAgentOffline called %d times, want 0", len(notif.notifyCalls))
