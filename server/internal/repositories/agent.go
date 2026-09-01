@@ -75,6 +75,39 @@ func (r *gormAgentRepository) UpdateStatus(ctx context.Context, id uuid.UUID, st
 	return nil
 }
 
+// ListStale returns online agents whose last_seen_at is older than cutoff —
+// candidates for the stale-agent watchdog to mark offline. Soft-deleted
+// agents are excluded by GORM's default scope.
+func (r *gormAgentRepository) ListStale(ctx context.Context, cutoff time.Time) ([]db.Agent, error) {
+	var agents []db.Agent
+	if err := r.db.WithContext(ctx).
+		Where("status = ? AND last_seen_at < ?", "online", cutoff).
+		Find(&agents).Error; err != nil {
+		return nil, fmt.Errorf("agents: list stale: %w", err)
+	}
+	return agents, nil
+}
+
+// MarkOfflineIfStale atomically flips an agent to offline, but only if it is
+// still online and still stale at write time. The condition is re-checked in
+// the UPDATE's WHERE clause, closing the race window against an agent that
+// reconnects (refreshing last_seen_at) between a ListStale read and this
+// write. Returns whether the row was actually flipped, so the caller only
+// runs offline cleanup (orphan jobs, notification) on a genuine transition.
+//
+// last_seen_at is deliberately left untouched: it records the last real
+// contact from the agent, not the moment the watchdog declared it dead.
+func (r *gormAgentRepository) MarkOfflineIfStale(ctx context.Context, id uuid.UUID, cutoff time.Time) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&db.Agent{}).
+		Where("id = ? AND status = ? AND last_seen_at < ?", id, "online", cutoff).
+		Update("status", "offline")
+	if result.Error != nil {
+		return false, fmt.Errorf("agents: mark offline if stale: %w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
 // Delete soft-deletes an agent by setting deleted_at. The record remains in
 // the database and can be restored. Use Unscoped().Delete() for hard delete.
 func (r *gormAgentRepository) Delete(ctx context.Context, id uuid.UUID) error {

@@ -104,6 +104,8 @@ type AgentRepository interface {
 	GetByHostname(ctx context.Context, hostname string) (*db.Agent, error)
 	Update(ctx context.Context, agent *db.Agent) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
+	ListStale(ctx context.Context, cutoff time.Time) ([]db.Agent, error)
+	MarkOfflineIfStale(ctx context.Context, id uuid.UUID, cutoff time.Time) (bool, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Agent, int64, error)
 	ListFiltered(ctx context.Context, filter AgentFilter, opts ListOptions) ([]db.Agent, int64, error)
