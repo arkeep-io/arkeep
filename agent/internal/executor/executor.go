@@ -171,6 +171,17 @@ func New(
 	}
 }
 
+// TranslateLocalPath applies the same host-path translation used for backup
+// and restore local destinations (see translateLocalPath). Exported so
+// connection.Manager can apply it to the detect/import and browse RPC paths,
+// which build a restic.Destination directly from the server-supplied config
+// instead of going through Execute — without this, those two paths check a
+// different actual filesystem location than a real backup on the same
+// destination would.
+func (e *Executor) TranslateLocalPath(path string) string {
+	return translateLocalPath(path, e.dockerHostRoot)
+}
+
 // translateLocalPath maps a user-provided filesystem path to the corresponding
 // container-accessible path when dockerHostRoot is set.
 //
