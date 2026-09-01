@@ -306,7 +306,14 @@ onMounted(fetchDestinations)
           <!-- Data rows -->
           <template v-else>
             <TableRow v-for="dest in destinations" :key="dest.id">
-              <TableCell class="font-medium">{{ dest.name }}</TableCell>
+              <TableCell class="font-medium">
+                <div class="flex items-center gap-2">
+                  {{ dest.name }}
+                  <Badge v-if="dest.has_repo_password" variant="outline" class="text-xs font-normal">
+                    Existing repo
+                  </Badge>
+                </div>
+              </TableCell>
               <TableCell>
                 <div class="flex items-center gap-2 text-sm text-muted-foreground">
                   <component :is="typeIcon(dest.type)" class="w-4 h-4" />

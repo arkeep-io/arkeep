@@ -62,18 +62,23 @@ type destinationResponse struct {
 	// is empty until the first measurement.
 	RepoSizeBytes     int64  `json:"repo_size_bytes"`
 	RepoSizeUpdatedAt string `json:"repo_size_updated_at"`
+	// HasRepoPassword reports whether this destination has a stored password
+	// for a pre-existing repository (captured when it was imported). Never the
+	// password itself — credentials are write-only, like everywhere else in
+	// this API.
+	HasRepoPassword bool `json:"has_repo_password"`
 }
 
 // destinationToResponse converts a db.Destination to a destinationResponse.
 func destinationToResponse(d *db.Destination) destinationResponse {
 	return destinationResponse{
-		ID:        d.ID.String(),
-		Name:      d.Name,
-		Type:      d.Type,
-		Config:    d.Config,
-		Enabled:   d.Enabled,
-		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt: d.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:            d.ID.String(),
+		Name:          d.Name,
+		Type:          d.Type,
+		Config:        d.Config,
+		Enabled:       d.Enabled,
+		CreatedAt:     d.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     d.UpdatedAt.UTC().Format(time.RFC3339),
 		RepoSizeBytes: d.RepoSizeBytes,
 		RepoSizeUpdatedAt: func() string {
 			if d.RepoSizeUpdatedAt == nil {
@@ -81,6 +86,7 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 			}
 			return d.RepoSizeUpdatedAt.UTC().Format(time.RFC3339)
 		}(),
+		HasRepoPassword: d.RepoPassword != "",
 	}
 }
 
@@ -138,10 +144,10 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 // by EncryptedString — the handler stores it as plain text and the DB layer
 // handles encryption transparently.
 type createDestinationRequest struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Credentials string `json:"credentials"`        // JSON, stored encrypted
-	Config      string `json:"config"`              // JSON, not sensitive
+	Name               string `json:"name"`
+	Type               string `json:"type"`
+	Credentials        string `json:"credentials"` // JSON, stored encrypted
+	Config             string `json:"config"`      // JSON, not sensitive
 	ImportAgentID      string `json:"import_agent_id,omitempty"`
 	ImportRepoPassword string `json:"import_repo_password,omitempty"`
 }

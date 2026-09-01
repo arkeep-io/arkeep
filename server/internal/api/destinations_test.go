@@ -172,6 +172,32 @@ func TestDestinationHandler_GetByID(t *testing.T) {
 		resp := e.get(t, "/api/v1/destinations/not-a-uuid", e.adminToken(t))
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
+
+	t.Run("has_repo_password reflects the stored password, never the value itself", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "no-password", "rclone")
+
+		var withoutPassword struct {
+			HasRepoPassword bool `json:"has_repo_password"`
+		}
+		decodeData(t, e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t)), &withoutPassword)
+		if withoutPassword.HasRepoPassword {
+			t.Error("has_repo_password = true for a destination with no stored password")
+		}
+
+		dest.RepoPassword = "imported-repo-secret"
+		if err := e.deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		var withPassword struct {
+			HasRepoPassword bool `json:"has_repo_password"`
+		}
+		decodeData(t, e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t)), &withPassword)
+		if !withPassword.HasRepoPassword {
+			t.Error("has_repo_password = false after setting a password, want true")
+		}
+	})
 }
 
 func TestDestinationHandler_Update(t *testing.T) {

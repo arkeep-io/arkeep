@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -18,16 +20,18 @@ import (
 type PolicyHandler struct {
 	repo      repositories.PolicyRepository
 	agentRepo repositories.AgentRepository
+	destRepo  repositories.DestinationRepository
 	scheduler *scheduler.Scheduler
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, sched *scheduler.Scheduler, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
 		agentRepo: agentRepo,
+		destRepo:  destRepo,
 		scheduler: sched,
 		auditRepo: auditRepo,
 		logger:    logger.Named("policy_handler"),
@@ -167,21 +171,28 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // createPolicyRequest is the JSON body expected by POST /api/v1/policies.
 type createPolicyRequest struct {
-	Name             string                    `json:"name"`
-	AgentID          string                    `json:"agent_id"`
-	Schedule         string                    `json:"schedule"`
-	Sources          string                    `json:"sources"` // JSON array
-	RepoPassword     string                    `json:"repo_password"`
-	RetentionLast    int                       `json:"retention_last"`
-	RetentionHourly  int                       `json:"retention_hourly"`
-	RetentionDaily   int                       `json:"retention_daily"`
-	RetentionWeekly  int                       `json:"retention_weekly"`
-	RetentionMonthly int                       `json:"retention_monthly"`
-	RetentionYearly  int                       `json:"retention_yearly"`
-	HookPreBackup    string                    `json:"hook_pre_backup"`
-	HookPostBackup   string                    `json:"hook_post_backup"`
-	ExcludePatterns  string                    `json:"exclude_patterns"` // JSON array
-	Destinations     []destinationEntryRequest `json:"destinations"`
+	Name         string `json:"name"`
+	AgentID      string `json:"agent_id"`
+	Schedule     string `json:"schedule"`
+	Sources      string `json:"sources"` // JSON array
+	RepoPassword string `json:"repo_password"`
+	// UseDestinationPassword, when true, ignores RepoPassword and resolves the
+	// policy's password server-side from the selected destinations' own stored
+	// password instead — set when they were imported from a pre-existing
+	// repository (Destination.RepoPassword). Avoids making the user retype a
+	// secret the server already has, and avoids ever sending it back to the
+	// browser to pre-fill.
+	UseDestinationPassword bool                      `json:"use_destination_password"`
+	RetentionLast          int                       `json:"retention_last"`
+	RetentionHourly        int                       `json:"retention_hourly"`
+	RetentionDaily         int                       `json:"retention_daily"`
+	RetentionWeekly        int                       `json:"retention_weekly"`
+	RetentionMonthly       int                       `json:"retention_monthly"`
+	RetentionYearly        int                       `json:"retention_yearly"`
+	HookPreBackup          string                    `json:"hook_pre_backup"`
+	HookPostBackup         string                    `json:"hook_post_backup"`
+	ExcludePatterns        string                    `json:"exclude_patterns"` // JSON array
+	Destinations           []destinationEntryRequest `json:"destinations"`
 }
 
 // destinationEntryRequest represents a single destination entry in a create/update request.
@@ -216,13 +227,23 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	repoPassword := req.RepoPassword
+	if req.UseDestinationPassword {
+		resolved, err := h.resolveDestinationPassword(r.Context(), req.Destinations)
+		if err != nil {
+			ErrBadRequest(w, err.Error())
+			return
+		}
+		repoPassword = resolved
+	}
+
 	policy := &db.Policy{
 		Name:             req.Name,
 		AgentID:          agentID,
 		Schedule:         req.Schedule,
 		Enabled:          true,
 		Sources:          req.Sources,
-		RepoPassword:     db.EncryptedString(req.RepoPassword),
+		RepoPassword:     db.EncryptedString(repoPassword),
 		RetentionLast:    req.RetentionLast,
 		RetentionHourly:  req.RetentionHourly,
 		RetentionDaily:   req.RetentionDaily,
@@ -290,6 +311,36 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	Created(w, policyToResponse(full, destinations, agentName))
 }
 
+// resolveDestinationPassword looks up the stored repository password on each
+// given destination and returns it, provided every destination has one and
+// they all agree — the policy's own password unlocks a repository shared by
+// every destination it backs up to, so a mismatch here would silently create
+// a policy that fails on its first run. The raw password never comes from the
+// request body: it is read straight from the database record captured when
+// the destination was imported.
+func (h *PolicyHandler) resolveDestinationPassword(ctx context.Context, entries []destinationEntryRequest) (string, error) {
+	var resolved string
+	for _, d := range entries {
+		destID, err := uuid.Parse(d.DestinationID)
+		if err != nil {
+			return "", fmt.Errorf("invalid destination_id %q", d.DestinationID)
+		}
+		dest, err := h.destRepo.GetByID(ctx, destID)
+		if err != nil {
+			return "", fmt.Errorf("destination %s not found", d.DestinationID)
+		}
+		if dest.RepoPassword == "" {
+			return "", fmt.Errorf("destination %q has no stored repository password", dest.Name)
+		}
+		if resolved == "" {
+			resolved = string(dest.RepoPassword)
+		} else if resolved != string(dest.RepoPassword) {
+			return "", errors.New("the selected destinations have different stored repository passwords")
+		}
+	}
+	return resolved, nil
+}
+
 // GetByID handles GET /api/v1/policies/{id}.
 // Returns the policy with its destination associations.
 func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
@@ -321,22 +372,22 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 // All fields are optional — only non-nil values are applied.
 // Destinations replaces the full set when non-empty; omitting it leaves destinations unchanged.
 type updatePolicyRequest struct {
-	Name             *string                    `json:"name"`
-	AgentID          *string                    `json:"agent_id"`
-	Schedule         *string                    `json:"schedule"`
-	Enabled          *bool                      `json:"enabled"`
-	Sources          *string                    `json:"sources"`
-	RepoPassword     *string                    `json:"repo_password"`
-	RetentionLast    *int                       `json:"retention_last"`
-	RetentionHourly  *int                       `json:"retention_hourly"`
-	RetentionDaily   *int                       `json:"retention_daily"`
-	RetentionWeekly  *int                       `json:"retention_weekly"`
-	RetentionMonthly *int                       `json:"retention_monthly"`
-	RetentionYearly  *int                       `json:"retention_yearly"`
-	HookPreBackup    *string                    `json:"hook_pre_backup"`
-	HookPostBackup   *string                    `json:"hook_post_backup"`
-	ExcludePatterns  *string                    `json:"exclude_patterns"`
-	Destinations     []destinationEntryRequest  `json:"destinations"`
+	Name             *string                   `json:"name"`
+	AgentID          *string                   `json:"agent_id"`
+	Schedule         *string                   `json:"schedule"`
+	Enabled          *bool                     `json:"enabled"`
+	Sources          *string                   `json:"sources"`
+	RepoPassword     *string                   `json:"repo_password"`
+	RetentionLast    *int                      `json:"retention_last"`
+	RetentionHourly  *int                      `json:"retention_hourly"`
+	RetentionDaily   *int                      `json:"retention_daily"`
+	RetentionWeekly  *int                      `json:"retention_weekly"`
+	RetentionMonthly *int                      `json:"retention_monthly"`
+	RetentionYearly  *int                      `json:"retention_yearly"`
+	HookPreBackup    *string                   `json:"hook_pre_backup"`
+	HookPostBackup   *string                   `json:"hook_post_backup"`
+	ExcludePatterns  *string                   `json:"exclude_patterns"`
+	Destinations     []destinationEntryRequest `json:"destinations"`
 }
 
 // Update handles PATCH /api/v1/policies/{id}.
@@ -583,8 +634,11 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	if req.Sources == "" {
 		return errors.New("sources is required")
 	}
-	if req.RepoPassword == "" {
+	if req.RepoPassword == "" && !req.UseDestinationPassword {
 		return errors.New("repo_password is required")
+	}
+	if len(req.Destinations) == 0 && req.UseDestinationPassword {
+		return errors.New("use_destination_password requires at least one destination")
 	}
 	if err := validateSchedule(req.Schedule); err != nil {
 		return err
