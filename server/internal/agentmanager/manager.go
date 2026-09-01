@@ -73,7 +73,21 @@ type ConnectedAgent struct {
 	// Jobs are dispatched by calling stream.Send(). The stream is closed
 	// when the agent disconnects or the context is cancelled.
 	stream proto.AgentService_StreamJobsServer
+
+	// session identifies this connection. See SessionToken.
+	session SessionToken
 }
+
+// SessionToken identifies a single StreamJobs session of an agent.
+//
+// It exists because a stream's context can expire long after the agent has
+// already reconnected: a laptop coming out of sleep reconnects in about a
+// second, while the previous connection is only noticed when TCP dead-peer
+// detection fires, minutes later. Register hands out a fresh token per
+// connection and the teardown path passes it back, so a late cleanup belonging
+// to a superseded session cannot deregister the live agent, mark it offline, or
+// interrupt the job it has just started.
+type SessionToken uint64
 
 // VolumeListResult carries the outcome of a JOB_TYPE_LIST_VOLUMES request.
 type VolumeListResult struct {
@@ -104,7 +118,9 @@ type SnapshotImportResult struct {
 type Manager struct {
 	mu     sync.RWMutex
 	agents map[string]*ConnectedAgent // keyed by agent ID
-	logger *zap.Logger
+	// nextSession hands out SessionTokens. Guarded by mu.
+	nextSession SessionToken
+	logger      *zap.Logger
 
 	// pendingMu protects both pending maps.
 	// When a REST handler calls RequestVolumeList / RequestSnapshotBrowse, it
@@ -132,8 +148,11 @@ func New(logger *zap.Logger) *Manager {
 // connection before the previous one timed out), the old entry is replaced and
 // a warning is logged.
 //
+// Returns the token identifying this session, which must be handed back to
+// Deregister when the stream closes.
+//
 // Called by the gRPC server when an agent opens a StreamJobs stream.
-func (m *Manager) Register(agentID, hostname string, dockerAvailable bool, stream proto.AgentService_StreamJobsServer) {
+func (m *Manager) Register(agentID, hostname string, dockerAvailable bool, stream proto.AgentService_StreamJobsServer) SessionToken {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -144,31 +163,52 @@ func (m *Manager) Register(agentID, hostname string, dockerAvailable bool, strea
 		)
 	}
 
+	m.nextSession++
+	session := m.nextSession
+
 	m.agents[agentID] = &ConnectedAgent{
 		ID:              agentID,
 		Hostname:        hostname,
 		ConnectedAt:     time.Now().UTC(),
 		DockerAvailable: dockerAvailable,
 		stream:          stream,
+		session:         session,
 	}
 
 	m.logger.Info("agent connected",
 		zap.String("agent_id", agentID),
 		zap.String("hostname", hostname),
 		zap.Bool("docker", dockerAvailable),
+		zap.Uint64("session", uint64(session)),
 		zap.Int("total_connected", len(m.agents)),
 	)
+
+	return session
 }
 
-// Deregister removes an agent from the in-memory registry.
+// Deregister removes an agent from the in-memory registry, but only if session
+// is the one currently registered. It reports whether the removal happened.
+//
+// A false return means the stream that is tearing down was already superseded by
+// a newer connection from the same agent — the caller must then leave the agent
+// and its jobs alone. See SessionToken.
+//
 // Called by the gRPC server when the StreamJobs stream closes.
-func (m *Manager) Deregister(agentID string) {
+func (m *Manager) Deregister(agentID string, session SessionToken) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	agent, exists := m.agents[agentID]
 	if !exists {
-		return
+		return false
+	}
+	if agent.session != session {
+		m.logger.Info("ignoring teardown of a superseded agent session",
+			zap.String("agent_id", agentID),
+			zap.Uint64("closing_session", uint64(session)),
+			zap.Uint64("current_session", uint64(agent.session)),
+		)
+		return false
 	}
 
 	delete(m.agents, agentID)
@@ -176,9 +216,12 @@ func (m *Manager) Deregister(agentID string) {
 	m.logger.Info("agent disconnected",
 		zap.String("agent_id", agentID),
 		zap.String("hostname", agent.Hostname),
+		zap.Uint64("session", uint64(session)),
 		zap.Duration("session_duration", time.Since(agent.ConnectedAt)),
 		zap.Int("total_connected", len(m.agents)),
 	)
+
+	return true
 }
 
 // Dispatch sends a JobAssignment to a specific agent via its open stream.

@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -255,5 +256,215 @@ func TestReclaimLogSpace(t *testing.T) {
 	repo := NewJobRepository(newTestDB(t))
 	if err := repo.ReclaimLogSpace(context.Background()); err != nil {
 		t.Fatalf("ReclaimLogSpace: %v", err)
+	}
+}
+
+// jobFixture inserts the agent, policy and destination a job needs to satisfy
+// the FK constraints, and returns their IDs.
+type jobFixture struct {
+	agentID  uuid.UUID
+	policyID uuid.UUID
+	destID   uuid.UUID
+}
+
+func newJobFixture(t *testing.T, gormDB *gorm.DB) jobFixture {
+	t.Helper()
+	ctx := context.Background()
+
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "online", Labels: "{}"}
+	if err := NewAgentRepository(gormDB).Create(ctx, agent); err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+	policy := &db.Policy{AgentID: agent.ID, Name: "p", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := NewPolicyRepository(gormDB).Create(ctx, policy); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+	dest := &db.Destination{Name: "dest", Type: "local"}
+	if err := gormDB.WithContext(ctx).Create(dest).Error; err != nil {
+		t.Fatalf("Create destination: %v", err)
+	}
+	return jobFixture{agentID: agent.ID, policyID: policy.ID, destID: dest.ID}
+}
+
+// TestUpdateStatus_RefusesTerminalStates covers the late report: an agent whose
+// connection dropped keeps running restic and reports the outcome after the server
+// has already recorded the job as interrupted. That report must not resurrect it.
+func TestUpdateStatus_RefusesTerminalStates(t *testing.T) {
+	for _, terminal := range []string{"succeeded", "failed", "cancelled", "interrupted"} {
+		t.Run("from "+terminal, func(t *testing.T) {
+			gormDB := newTestDB(t)
+			repo := NewJobRepository(gormDB)
+			f := newJobFixture(t, gormDB)
+			ctx := context.Background()
+
+			job := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "running"}
+			if err := repo.Create(ctx, job); err != nil {
+				t.Fatalf("Create job: %v", err)
+			}
+			now := time.Now().UTC()
+			if err := repo.UpdateStatus(ctx, job.ID, terminal, nil, &now, "first outcome"); err != nil {
+				t.Fatalf("UpdateStatus to %s: %v", terminal, err)
+			}
+
+			err := repo.UpdateStatus(ctx, job.ID, "succeeded", nil, &now, "")
+			if !errors.Is(err, ErrTerminalState) {
+				t.Fatalf("UpdateStatus after %s returned %v, want ErrTerminalState", terminal, err)
+			}
+
+			stored, err := repo.GetByID(ctx, job.ID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			if stored.Status != terminal {
+				t.Errorf("status = %q, want it left at %q", stored.Status, terminal)
+			}
+			if stored.Error != "first outcome" {
+				t.Errorf("error = %q, want the original %q", stored.Error, "first outcome")
+			}
+		})
+	}
+}
+
+// TestUpdateStatus_NotFound keeps ErrNotFound distinguishable from ErrTerminalState.
+func TestUpdateStatus_NotFound(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	now := time.Now().UTC()
+
+	err := repo.UpdateStatus(context.Background(), uuid.New(), "succeeded", nil, &now, "")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateStatus on a missing job returned %v, want ErrNotFound", err)
+	}
+}
+
+// TestMarkRunningJobsInterrupted covers the startup sweep: a job left running by a
+// dead server process, together with its destination rows.
+func TestMarkRunningJobsInterrupted(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	running := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "running"}
+	if err := repo.Create(ctx, running); err != nil {
+		t.Fatalf("Create running job: %v", err)
+	}
+	if err := repo.CreateDestination(ctx, &db.JobDestination{JobID: running.ID, DestinationID: f.destID, Status: "pending"}); err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+
+	// A job that already finished must be left alone.
+	done := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "succeeded"}
+	if err := repo.Create(ctx, done); err != nil {
+		t.Fatalf("Create finished job: %v", err)
+	}
+
+	n, err := repo.MarkRunningJobsInterrupted(ctx, "server restarted")
+	if err != nil {
+		t.Fatalf("MarkRunningJobsInterrupted: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("marked %d jobs, want 1", n)
+	}
+
+	stored, err := repo.GetByID(ctx, running.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Status != "interrupted" {
+		t.Errorf("status = %q, want \"interrupted\"", stored.Status)
+	}
+	if stored.Error != "server restarted" {
+		t.Errorf("error = %q, want %q", stored.Error, "server restarted")
+	}
+	if stored.EndedAt == nil {
+		t.Error("EndedAt is nil, want it set")
+	}
+
+	dests, err := repo.ListDestinationsByJob(ctx, running.ID)
+	if err != nil {
+		t.Fatalf("ListDestinationsByJob: %v", err)
+	}
+	if len(dests) != 1 || dests[0].Status != "interrupted" {
+		t.Errorf("destination statuses = %+v, want a single \"interrupted\" row", dests)
+	}
+
+	untouched, err := repo.GetByID(ctx, done.ID)
+	if err != nil {
+		t.Fatalf("GetByID(finished): %v", err)
+	}
+	if untouched.Status != "succeeded" {
+		t.Errorf("finished job status = %q, want it left at \"succeeded\"", untouched.Status)
+	}
+}
+
+// TestListByAgentAndStatus_FindsOldJobsBeyondTheFirstPage is the regression case
+// for filtering in Go over the most-recent page: an agent with a long history
+// would hide an older pending job, which then never got dispatched.
+func TestListByAgentAndStatus_FindsOldJobsBeyondTheFirstPage(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	oldPending := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "pending"}
+	if err := repo.Create(ctx, oldPending); err != nil {
+		t.Fatalf("Create pending job: %v", err)
+	}
+	// 120 later jobs of other statuses bury it well past the first page of 100.
+	for i := 0; i < 120; i++ {
+		j := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "succeeded"}
+		if err := repo.Create(ctx, j); err != nil {
+			t.Fatalf("Create filler job %d: %v", i, err)
+		}
+	}
+
+	got, err := repo.ListByAgentAndStatus(ctx, f.agentID, "pending", ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListByAgentAndStatus: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("found %d pending jobs, want 1", len(got))
+	}
+	if got[0].ID != oldPending.ID {
+		t.Errorf("found job %s, want the buried pending job %s", got[0].ID, oldPending.ID)
+	}
+}
+
+// TestHasJobForPolicyAfter covers the guard that stops a resume once a later
+// scheduled run has already covered the same data.
+func TestHasJobForPolicyAfter(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	first := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "interrupted"}
+	if err := repo.Create(ctx, first); err != nil {
+		t.Fatalf("Create first job: %v", err)
+	}
+
+	has, err := repo.HasJobForPolicyAfter(ctx, f.policyID, first.CreatedAt)
+	if err != nil {
+		t.Fatalf("HasJobForPolicyAfter: %v", err)
+	}
+	if has {
+		t.Error("reported a newer job when the interrupted one is the only job")
+	}
+
+	later := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "pending"}
+	if err := repo.Create(ctx, later); err != nil {
+		t.Fatalf("Create later job: %v", err)
+	}
+	if err := gormDB.Model(later).Update("created_at", first.CreatedAt.Add(time.Hour)).Error; err != nil {
+		t.Fatalf("age later job: %v", err)
+	}
+
+	has, err = repo.HasJobForPolicyAfter(ctx, f.policyID, first.CreatedAt)
+	if err != nil {
+		t.Fatalf("HasJobForPolicyAfter: %v", err)
+	}
+	if !has {
+		t.Error("did not report the newer job")
 	}
 }

@@ -205,8 +205,17 @@ type Policy struct {
 	HookPreBackup    string          `gorm:"type:text;default:''"` // shell command, optional
 	HookPostBackup   string          `gorm:"type:text;default:''"` // shell command, optional
 	ExcludePatterns  string          `gorm:"type:text;default:'[]'"` // JSON array of --exclude patterns
-	LastRunAt        *time.Time
-	NextRunAt        *time.Time
+	// ResumeInterrupted enables automatic resume of a backup whose agent
+	// disconnected mid-run. New policies default to true — restic reuses the
+	// packs already uploaded, so resuming only transfers what is missing.
+	//
+	// No `default` tag on purpose: GORM omits a zero-valued field from the INSERT
+	// when it knows the column has a default, which would silently turn an
+	// explicit false into true. The DEFAULT TRUE in the migration is what
+	// backfills pre-existing rows.
+	ResumeInterrupted bool `gorm:"not null"`
+	LastRunAt         *time.Time
+	NextRunAt         *time.Time
 
 	// Destinations is populated by GetByIDWithDestinations via a manual query.
 	// The gorm:"-" tag prevents GORM from attempting foreign key resolution
@@ -229,7 +238,13 @@ type PolicyDestination struct {
 // -----------------------------------------------------------------------------
 
 // Job represents a single backup execution triggered by the scheduler or
-// manually. Status transitions: pending -> running -> succeeded | failed.
+// manually. Status transitions: pending -> running -> succeeded | failed |
+// cancelled | interrupted.
+//
+// "interrupted" means the agent vanished while the job was running (host shut
+// down, sleep, network loss), as opposed to "failed", which is a real error
+// reported by the agent. Only interrupted jobs are eligible for automatic
+// resume.
 //
 // Destinations and Logs are populated by GetByIDWithDetails via manual queries.
 // The gorm:"-" tag prevents GORM from attempting foreign key resolution on
@@ -239,10 +254,17 @@ type Job struct {
 	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
 	Type      string     `gorm:"not null;default:'backup'"` // "backup", "restore"
-	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled"
+	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled", "interrupted"
 	StartedAt *time.Time
 	EndedAt   *time.Time
 	Error     string `gorm:"type:text;default:''"` // populated on failure
+
+	// ResumeOfJobID is the interrupted job this run resumes, nil for a normal
+	// run. No foreign key: the original job may be removed by job retention.
+	ResumeOfJobID *uuid.UUID `gorm:"type:text"`
+	// ResumeAttempt counts consecutive resumes, so a host that dies at the same
+	// point every time stops being retried. Zero for a normal run.
+	ResumeAttempt int `gorm:"not null;default:0"`
 
 	// Populated manually by GetByIDWithDetails — not managed by GORM.
 	Destinations []JobDestination `gorm:"-"`

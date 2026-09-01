@@ -155,6 +155,32 @@ func createIntegrationJob(t *testing.T, ts *testServer, agentUUID uuid.UUID) *db
 	return job
 }
 
+// addJobDestination attaches a destination to job with the given status, mirroring
+// what the scheduler creates alongside every backup job. Returns the destination.
+func addJobDestination(t *testing.T, ts *testServer, job *db.Job, status string) *db.Destination {
+	t.Helper()
+	ctx := context.Background()
+
+	dest := &db.Destination{
+		Name:        "integration-test-dest-" + uuid.NewString(),
+		Type:        "local",
+		Credentials: db.EncryptedString(`{}`),
+		Config:      `{"path":"/tmp/repo"}`,
+		Enabled:     true,
+	}
+	if err := ts.destRepo.Create(ctx, dest); err != nil {
+		t.Fatalf("addJobDestination: create destination: %v", err)
+	}
+	if err := ts.jobRepo.CreateDestination(ctx, &db.JobDestination{
+		JobID:         job.ID,
+		DestinationID: dest.ID,
+		Status:        status,
+	}); err != nil {
+		t.Fatalf("addJobDestination: create job destination: %v", err)
+	}
+	return dest
+}
+
 // ─── fakeAgent ────────────────────────────────────────────────────────────────
 
 // fakeAgent is a lightweight gRPC client that simulates an agent connecting to
@@ -294,6 +320,19 @@ func waitForJobStatus(t *testing.T, repo repositories.JobRepository, jobID, want
 		j, err := repo.GetByID(context.Background(), id)
 		return err == nil && j.Status == want
 	})
+}
+
+// connectedAtOf returns the ConnectedAt of the registered session for agentID.
+// Register resets it on every reconnect, so it identifies which session the
+// registry currently holds. Zero time if the agent is not registered.
+func connectedAtOf(t *testing.T, ts *testServer, agentID string) time.Time {
+	t.Helper()
+	for _, a := range ts.agentMgr.ConnectedAgents() {
+		if a.ID == agentID {
+			return a.ConnectedAt
+		}
+	}
+	return time.Time{}
 }
 
 func mustParseUUID(t *testing.T, s string) uuid.UUID {

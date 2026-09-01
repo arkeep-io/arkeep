@@ -8,6 +8,7 @@ import {
     CheckCircle,
     Clock,
     Loader,
+    PlugZap,
     XCircle,
 } from '@lucide/vue'
 
@@ -20,6 +21,7 @@ export function statusVariant(status: string): 'default' | 'secondary' | 'destru
         case 'failed': return 'destructive'
         case 'pending': return 'outline'
         case 'cancelled': return 'outline'
+        case 'interrupted': return 'outline'
         default: return 'secondary'
     }
 }
@@ -30,6 +32,9 @@ export function statusClass(status: string): string {
         case 'running': return 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20'
         case 'pending': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
         case 'cancelled': return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
+        // Amber rather than red: the backup was cut off, not broken, and it is
+        // normally picked up again when the agent reconnects.
+        case 'interrupted': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
         default: return ''
     }
 }
@@ -45,6 +50,7 @@ export function statusIcon(status: string) {
         case 'running': return Loader
         case 'failed': return XCircle
         case 'cancelled': return Ban
+        case 'interrupted': return PlugZap
         case 'pending':
         default: return Clock
     }

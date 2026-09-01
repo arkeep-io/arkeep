@@ -234,12 +234,16 @@ type JobRepository interface {
     GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
     Update(ctx context.Context, job *db.Job) error
     UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
-    FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
+    MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
+    MarkRunningJobsInterrupted(ctx context.Context, errMsg string) (int64, error)
+    MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error
     List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
     ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
     ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
     ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
     ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+    ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
+    HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
 
     // JobDestination
     CreateDestination(ctx context.Context, jd *db.JobDestination) error

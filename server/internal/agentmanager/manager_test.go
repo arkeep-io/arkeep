@@ -41,9 +41,11 @@ func TestRegister_AddsAgent(t *testing.T) {
 
 func TestDeregister_RemovesAgent(t *testing.T) {
 	mgr := newTestManager()
-	mgr.Register("agent-1", "host1", false, &mockStream{})
-	mgr.Deregister("agent-1")
+	session := mgr.Register("agent-1", "host1", false, &mockStream{})
 
+	if !mgr.Deregister("agent-1", session) {
+		t.Error("Deregister returned false for the current session, want true")
+	}
 	if mgr.IsConnected("agent-1") {
 		t.Error("expected agent-1 to be disconnected after Deregister")
 	}
@@ -59,6 +61,41 @@ func TestRegister_ReplacesExistingConnection(t *testing.T) {
 
 	if got := mgr.ConnectedAgentsCount(); got != 1 {
 		t.Errorf("ConnectedAgentsCount() = %d after duplicate register, want 1", got)
+	}
+}
+
+// TestDeregister_IgnoresSupersededSession covers the laptop-wake ordering: the
+// agent has already reconnected when the previous stream's context finally
+// expires. That late teardown must not remove the live connection.
+func TestDeregister_IgnoresSupersededSession(t *testing.T) {
+	mgr := newTestManager()
+	stale := mgr.Register("agent-1", "host1", false, &mockStream{})
+	live := mgr.Register("agent-1", "host1", false, &mockStream{})
+
+	if stale == live {
+		t.Fatalf("Register handed out the same token twice (%d): sessions cannot be told apart", stale)
+	}
+	if mgr.Deregister("agent-1", stale) {
+		t.Error("Deregister returned true for a superseded session, want false")
+	}
+	if !mgr.IsConnected("agent-1") {
+		t.Error("the live agent was removed by the teardown of a superseded session")
+	}
+
+	// The live session can still deregister itself.
+	if !mgr.Deregister("agent-1", live) {
+		t.Error("Deregister returned false for the live session, want true")
+	}
+	if mgr.IsConnected("agent-1") {
+		t.Error("expected agent-1 to be disconnected after the live session tore down")
+	}
+}
+
+// TestDeregister_UnknownAgent guards the branch where nothing is registered.
+func TestDeregister_UnknownAgent(t *testing.T) {
+	mgr := newTestManager()
+	if mgr.Deregister("agent-does-not-exist", 1) {
+		t.Error("Deregister returned true for an unregistered agent, want false")
 	}
 }
 

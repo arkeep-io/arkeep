@@ -54,8 +54,10 @@ func TestGracefulShutdown(t *testing.T) {
 }
 
 // TestOrphanRecovery verifies that when an agent disconnects mid-job, any
-// running jobs are marked "failed" with an "agent disconnected" error so they
-// do not appear stuck in the UI indefinitely.
+// running job is marked "interrupted" — not "failed" — so it can be told apart
+// from a genuine backup error and resumed when the agent comes back. Its
+// destination rows must be moved off "pending" in the same transition, or the
+// job detail view shows destinations still waiting under a finished job.
 func TestOrphanRecovery(t *testing.T) {
 	ts := newTestServer(t)
 	agent := newFakeAgent(t, ts.addr)
@@ -67,6 +69,7 @@ func TestOrphanRecovery(t *testing.T) {
 	// Create and dispatch a job.
 	agentUUID := mustParseUUID(t, agentID)
 	job := createIntegrationJob(t, ts, agentUUID)
+	addJobDestination(t, ts, job, "pending")
 
 	if err := ts.agentMgr.Dispatch(agentID, &proto.JobAssignment{
 		JobId:       job.ID.String(),
@@ -90,7 +93,7 @@ func TestOrphanRecovery(t *testing.T) {
 
 	// Server must mark the agent offline and recover the orphaned job.
 	waitForAgentStatus(t, ts.agentRepo, agentID, "offline")
-	waitForJobStatus(t, ts.jobRepo, job.ID.String(), "failed")
+	waitForJobStatus(t, ts.jobRepo, job.ID.String(), "interrupted")
 
 	// Verify the error message was stored.
 	finalJob, err := ts.jobRepo.GetByID(context.Background(), job.ID)
@@ -99,6 +102,75 @@ func TestOrphanRecovery(t *testing.T) {
 	}
 	if finalJob.Error == "" {
 		t.Error("job.Error is empty after orphan recovery, want non-empty error message")
+	}
+
+	// Destination rows must not be left pending.
+	dests, err := ts.jobRepo.ListDestinationsByJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("ListDestinationsByJob: %v", err)
+	}
+	if len(dests) != 1 {
+		t.Fatalf("job has %d destination rows, want 1", len(dests))
+	}
+	if dests[0].Status == "pending" {
+		t.Error("job destination is still 'pending' after the agent disconnected, want a terminal status")
+	}
+}
+
+// TestLateTeardownDoesNotKillLiveSession covers the laptop-wake sequence: the
+// agent reconnects within a second, but the previous stream's context only
+// expires minutes later when TCP dead-peer detection finally fires. That late
+// teardown must not touch the live session — otherwise it deregisters the
+// reconnected agent and interrupts the job it has just started, which with
+// automatic resume turns into an interrupted → resume → interrupted loop.
+func TestLateTeardownDoesNotKillLiveSession(t *testing.T) {
+	ts := newTestServer(t)
+	agent := newFakeAgent(t, ts.addr)
+
+	agentID := agent.register(t)
+	_, cancelStaleStream := agent.openStream(t)
+	waitForAgentStatus(t, ts.agentRepo, agentID, "online")
+
+	staleConnectedAt := connectedAtOf(t, ts, agentID)
+
+	// The agent reconnects: a second stream replaces the first in the registry.
+	// ConnectedAt is reset on every Register, so it tells us the live stream has
+	// actually taken over rather than merely that some stream is registered.
+	_, cancelLiveStream := agent.openStream(t)
+	defer cancelLiveStream()
+	pollUntil(t, 3*time.Second, func() bool {
+		return connectedAtOf(t, ts, agentID).After(staleConnectedAt)
+	})
+
+	// A job is running on the live session. Reported over the unary RPC rather
+	// than dispatched, so the test does not depend on which stream receives it.
+	agentUUID := mustParseUUID(t, agentID)
+	job := createIntegrationJob(t, ts, agentUUID)
+	agent.reportStatus(t, job.ID.String(), proto.JobStatus_JOB_STATUS_RUNNING)
+	waitForJobStatus(t, ts.jobRepo, job.ID.String(), "running")
+
+	// Now the stale stream's teardown finally runs.
+	cancelStaleStream()
+
+	// Give the teardown time to do damage, then assert it did none.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := ts.agentMgr.ConnectedAgentsCount(); got != 1 {
+		t.Errorf("ConnectedAgentsCount = %d after the stale stream tore down, want 1: the live agent was deregistered", got)
+	}
+	liveAgent, err := ts.agentRepo.GetByID(context.Background(), agentUUID)
+	if err != nil {
+		t.Fatalf("GetByID(agent): %v", err)
+	}
+	if liveAgent.Status != "online" {
+		t.Errorf("agent status = %q after the stale stream tore down, want \"online\"", liveAgent.Status)
+	}
+	liveJob, err := ts.jobRepo.GetByID(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetByID(job): %v", err)
+	}
+	if liveJob.Status != "running" {
+		t.Errorf("job status = %q after the stale stream tore down, want \"running\": the freshly started job was killed", liveJob.Status)
 	}
 }
 
