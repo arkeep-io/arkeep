@@ -63,9 +63,9 @@ func newSnapshotFixture(t *testing.T, destCount int) (*snapshotFixture, []uuid.U
 func (f *snapshotFixture) createSnapshot(t *testing.T, destID uuid.UUID, snapshotID string, snapshotAt time.Time) {
 	t.Helper()
 	snap := &db.Snapshot{
-		PolicyID:      f.policy.ID,
+		PolicyID:      &f.policy.ID,
 		DestinationID: destID,
-		JobID:         f.jobID,
+		JobID:         &f.jobID,
 		SnapshotID:    snapshotID,
 		SnapshotAt:    snapshotAt,
 		Tags:          "[]",
