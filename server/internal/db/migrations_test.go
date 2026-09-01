@@ -15,7 +15,7 @@ import (
 
 // TestSQLiteMigrationsDownUp walks every SQLite migration all the way down and
 // back up, with an imported snapshot present, so the table rebuilds in the
-// 000018 down migration are exercised rather than assumed.
+// 000019 down migration are exercised rather than assumed.
 func TestSQLiteMigrationsDownUp(t *testing.T) {
 	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("InitEncryption: %v", err)
