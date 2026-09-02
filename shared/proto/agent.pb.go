@@ -1586,7 +1586,15 @@ type ImportedSnapshotInfo struct {
 	// tags is the list of tags attached to the snapshot.
 	Tags []string `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`
 	// hostname is the hostname of the machine that created the snapshot.
-	Hostname      string `protobuf:"bytes,5,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Hostname string `protobuf:"bytes,5,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	// size_bytes is the footprint this snapshot added to the repository
+	// (data_added_packed from the snapshot summary), the same metric recorded for
+	// snapshots produced by a backup, so usage figures reconcile. Zero for
+	// snapshots created by restic < 0.17, which carry no summary.
+	SizeBytes int64 `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	// file_count is the number of files the snapshot processed
+	// (total_files_processed from the summary). Zero when unavailable.
+	FileCount     int64 `protobuf:"varint,7,opt,name=file_count,json=fileCount,proto3" json:"file_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1654,6 +1662,20 @@ func (x *ImportedSnapshotInfo) GetHostname() string {
 		return x.Hostname
 	}
 	return ""
+}
+
+func (x *ImportedSnapshotInfo) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *ImportedSnapshotInfo) GetFileCount() int64 {
+	if x != nil {
+		return x.FileCount
+	}
+	return 0
 }
 
 // SnapshotImportReport is sent by the agent in response to a
@@ -2037,13 +2059,17 @@ const file_agent_proto_rawDesc = "" +
 	"\aentries\x18\x03 \x03(\v2\x18.agent.SnapshotFileEntryR\aentries\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\"(\n" +
 	"\x16SnapshotBrowseResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xaf\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xed\x01\n" +
 	"\x14ImportedSnapshotInfo\x12,\n" +
 	"\x12restic_snapshot_id\x18\x01 \x01(\tR\x10resticSnapshotId\x12#\n" +
 	"\rsnapshot_time\x18\x02 \x01(\tR\fsnapshotTime\x12\x14\n" +
 	"\x05paths\x18\x03 \x03(\tR\x05paths\x12\x12\n" +
 	"\x04tags\x18\x04 \x03(\tR\x04tags\x12\x1a\n" +
-	"\bhostname\x18\x05 \x01(\tR\bhostname\"\xd1\x01\n" +
+	"\bhostname\x18\x05 \x01(\tR\bhostname\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x06 \x01(\x03R\tsizeBytes\x12\x1d\n" +
+	"\n" +
+	"file_count\x18\a \x01(\x03R\tfileCount\"\xd1\x01\n" +
 	"\x14SnapshotImportReport\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12%\n" +
 	"\x0ecorrelation_id\x18\x02 \x01(\tR\rcorrelationId\x129\n" +

@@ -151,6 +151,10 @@ export interface Destination {
   // restic repository, refreshed after each backup/import. 0 until first measured.
   repo_size_bytes: number
   repo_size_updated_at: string // RFC3339, empty until first measured
+  // has_repo_password: true when this destination has a repository password
+  // on file, captured when it was imported from a pre-existing repository.
+  // Never the password itself — credentials are write-only.
+  has_repo_password: boolean
 }
 
 // ─── Policy ───────────────────────────────────────────────────────────────────
@@ -364,9 +368,13 @@ export interface ImportDestinationRequest {
 }
 
 // ImportDestinationResponse is returned by the import endpoint.
+// found is what the repository holds, imported were newly recorded, skipped
+// were already known for this destination, and failed could not be recorded.
 export interface ImportDestinationResponse {
   found: number
   imported: number
+  skipped: number
+  failed: number
 }
 
 // CreateDestinationResponse is returned by POST /api/v1/destinations.

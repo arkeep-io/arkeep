@@ -45,7 +45,7 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 		t.Fatalf("Create policy: %v", err)
 	}
 	for _, jobID := range []uuid.UUID{jobAID, jobBID} {
-		job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "pending"}
+		job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "pending"}
 		if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 			t.Fatalf("Create job %s: %v", jobID, err)
 		}
@@ -114,7 +114,7 @@ func TestUpdateDestinationStatus_Idempotent(t *testing.T) {
 	if err := policyRepo.Create(ctx, policy); err != nil {
 		t.Fatalf("Create policy: %v", err)
 	}
-	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "pending"}
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "pending"}
 	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 		t.Fatalf("Create job: %v", err)
 	}
@@ -163,7 +163,7 @@ func seedJobWithLogs(t *testing.T, gormDB *gorm.DB, repo JobRepository, logs []d
 		t.Fatalf("Create policy: %v", err)
 	}
 	jobID := uuid.New()
-	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: policy.ID, AgentID: agent.ID, Status: "succeeded"}
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "succeeded"}
 	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
 		t.Fatalf("Create job: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestUpdateStatus_RefusesTerminalStates(t *testing.T) {
 			f := newJobFixture(t, gormDB)
 			ctx := context.Background()
 
-			job := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "running"}
+			job := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "running"}
 			if err := repo.Create(ctx, job); err != nil {
 				t.Fatalf("Create job: %v", err)
 			}
@@ -345,7 +345,7 @@ func TestMarkRunningJobsInterrupted(t *testing.T) {
 	f := newJobFixture(t, gormDB)
 	ctx := context.Background()
 
-	running := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "running"}
+	running := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "running"}
 	if err := repo.Create(ctx, running); err != nil {
 		t.Fatalf("Create running job: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestMarkRunningJobsInterrupted(t *testing.T) {
 	}
 
 	// A job that already finished must be left alone.
-	done := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "succeeded"}
+	done := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "succeeded"}
 	if err := repo.Create(ctx, done); err != nil {
 		t.Fatalf("Create finished job: %v", err)
 	}
@@ -407,13 +407,13 @@ func TestListByAgentAndStatus_FindsOldJobsBeyondTheFirstPage(t *testing.T) {
 	f := newJobFixture(t, gormDB)
 	ctx := context.Background()
 
-	oldPending := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "pending"}
+	oldPending := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "pending"}
 	if err := repo.Create(ctx, oldPending); err != nil {
 		t.Fatalf("Create pending job: %v", err)
 	}
 	// 120 later jobs of other statuses bury it well past the first page of 100.
 	for i := 0; i < 120; i++ {
-		j := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "succeeded"}
+		j := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "succeeded"}
 		if err := repo.Create(ctx, j); err != nil {
 			t.Fatalf("Create filler job %d: %v", i, err)
 		}
@@ -439,7 +439,7 @@ func TestHasJobForPolicyAfter(t *testing.T) {
 	f := newJobFixture(t, gormDB)
 	ctx := context.Background()
 
-	first := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "interrupted"}
+	first := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "interrupted"}
 	if err := repo.Create(ctx, first); err != nil {
 		t.Fatalf("Create first job: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestHasJobForPolicyAfter(t *testing.T) {
 		t.Error("reported a newer job when the interrupted one is the only job")
 	}
 
-	later := &db.Job{PolicyID: f.policyID, AgentID: f.agentID, Status: "pending"}
+	later := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "pending"}
 	if err := repo.Create(ctx, later); err != nil {
 		t.Fatalf("Create later job: %v", err)
 	}

@@ -93,6 +93,20 @@ type SnapshotInfo struct {
 	Username string   `json:"username"`
 	// ShortID is the 8-character abbreviated snapshot ID.
 	ShortID  string   `json:"short_id"`
+	// Summary carries the per-snapshot statistics restic records since 0.17.
+	// Absent for snapshots written by older versions, leaving the fields zero.
+	Summary SnapshotSummary `json:"summary"`
+}
+
+// SnapshotSummary holds the subset of a snapshot's stored statistics that is
+// needed to report its size, as emitted by `restic snapshots --json`.
+type SnapshotSummary struct {
+	// DataAddedPacked is the footprint the snapshot added to the repository
+	// after compression and deduplication — the same metric recorded for
+	// snapshots produced by a backup.
+	DataAddedPacked int64 `json:"data_added_packed"`
+	// TotalFilesProcessed is the number of files the snapshot covered.
+	TotalFilesProcessed int64 `json:"total_files_processed"`
 }
 
 // RetentionPolicy mirrors the keep_* fields from db.Policy.

@@ -241,10 +241,17 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 	for i := range pendingJobs {
 		j := &pendingJobs[i]
 
+		// A job without a policy is a restore of an imported snapshot: there is
+		// no policy to rebuild a backup payload from, and it is not this
+		// method's job to re-dispatch it.
+		if j.PolicyID == nil {
+			continue
+		}
+
 		// Load policy and destinations to rebuild the full payload.
 		// This is necessary because the job record alone does not carry
 		// source paths, credentials, or retention settings.
-		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, j.PolicyID)
+		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, *j.PolicyID)
 		if err != nil {
 			s.logger.Warn("failed to load policy for pending job dispatch",
 				zap.String("job_id", j.ID.String()),
@@ -301,7 +308,7 @@ func (s *Scheduler) ResumeInterrupted(ctx context.Context, agentID uuid.UUID) {
 			continue
 		}
 
-		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, j.PolicyID)
+		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, *j.PolicyID)
 		if err != nil {
 			s.logger.Info("not resuming interrupted job: policy unavailable",
 				jobField,
@@ -322,7 +329,7 @@ func (s *Scheduler) ResumeInterrupted(ctx context.Context, agentID uuid.UUID) {
 		// A later run of the same policy already covers this data, so resuming
 		// would be duplicate work. This is also what stops an already-resumed job
 		// from being picked up again on every subsequent reconnection.
-		superseded, err := s.jobs.HasJobForPolicyAfter(ctx, j.PolicyID, j.CreatedAt)
+		superseded, err := s.jobs.HasJobForPolicyAfter(ctx, *j.PolicyID, j.CreatedAt)
 		if err != nil {
 			s.logger.Warn("could not check for a newer run of the policy, not resuming",
 				jobField,
@@ -448,7 +455,7 @@ func (s *Scheduler) createAndDispatch(policy *db.Policy, destinations []reposito
 
 	// --- Create Job record ---
 	job := &db.Job{
-		PolicyID: policy.ID,
+		PolicyID: &policy.ID,
 		AgentID:  policy.AgentID,
 		Status:   "pending",
 	}
@@ -588,7 +595,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 
 	assignment := &proto.JobAssignment{
 		JobId:       job.ID.String(),
-		PolicyId:    job.PolicyID.String(),
+		PolicyId:    policy.ID.String(),
 		Type:        proto.JobType_JOB_TYPE_BACKUP,
 		Payload:     payloadBytes,
 		ScheduledAt: timestamppb.Now(),

@@ -14,10 +14,11 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// TestSQLiteMigrationsDownUp walks every SQLite migration all the way down and
-// back up with data present, so the table rebuilds the CHECK-constraint
-// migrations rely on are exercised in both directions rather than assumed.
-func TestSQLiteMigrationsDownUp(t *testing.T) {
+// TestSQLiteMigrationsDownUp_InterruptedStatus walks every SQLite migration
+// all the way down and back up with data present, so the table rebuilds the
+// CHECK-constraint migrations rely on are exercised in both directions
+// rather than assumed.
+func TestSQLiteMigrationsDownUp_InterruptedStatus(t *testing.T) {
 	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("InitEncryption: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestSQLiteMigrationsDownUp(t *testing.T) {
 	if err := gdb.Create(dest).Error; err != nil {
 		t.Fatalf("create destination: %v", err)
 	}
-	job := &Job{PolicyID: policy.ID, AgentID: agent.ID, Type: "backup", Status: "interrupted"}
+	job := &Job{PolicyID: &policy.ID, AgentID: agent.ID, Type: "backup", Status: "interrupted"}
 	if err := gdb.Create(job).Error; err != nil {
 		t.Fatalf("create interrupted job: %v", err)
 	}
@@ -91,6 +92,53 @@ func TestSQLiteMigrationsDownUp(t *testing.T) {
 	}
 }
 
+// TestSQLiteMigrationsDownUp_NullablePolicyJob walks every SQLite migration
+// all the way down and back up, with an imported snapshot present, so the
+// table rebuilds in the 000019 down migration are exercised rather than
+// assumed.
+func TestSQLiteMigrationsDownUp_NullablePolicyJob(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	dsn := "file:" + t.TempDir() + "/down.db"
+	gdb, err := New(Config{Driver: "sqlite", DSN: dsn, Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	dest := &Destination{Name: "imported", Type: "rclone", Config: "{}", Enabled: true}
+	if err := gdb.Create(dest).Error; err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	if err := gdb.Create(&Snapshot{
+		DestinationID: dest.ID, IsImported: true, SnapshotID: "deadbeef",
+		Tags: "[]", Sources: `["/data"]`, SnapshotAt: time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatalf("create imported snapshot: %v", err)
+	}
+
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Down(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Down: %v", err)
+	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Up after Down: %v", err)
+	}
+
+	// Schema is usable again after the round trip.
+	var count int64
+	if err := gdb.Raw(`SELECT count(*) FROM snapshots`).Scan(&count).Error; err != nil {
+		t.Fatalf("query snapshots after down/up: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("snapshots after down/up = %d, want 0 (the down migration drops everything)", count)
+	}
+}
+
 // TestInterruptedStatusIsAccepted pins the migrated CHECK constraints: both the
 // job and its destination rows must accept 'interrupted'.
 func TestInterruptedStatusIsAccepted(t *testing.T) {
@@ -117,7 +165,7 @@ func TestInterruptedStatusIsAccepted(t *testing.T) {
 
 	prior := uuid.New()
 	job := &Job{
-		PolicyID:      policy.ID,
+		PolicyID:      &policy.ID,
 		AgentID:       agent.ID,
 		Type:          "backup",
 		Status:        "interrupted",

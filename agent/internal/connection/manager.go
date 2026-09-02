@@ -697,9 +697,14 @@ func (m *Manager) handleSnapshotBrowseRequest(correlationID, agentID string, pay
 		return
 	}
 
+	repoURL := p.Destination.RepoURL
+	if restic.DestinationType(p.Destination.Type) == restic.DestLocal {
+		repoURL = m.exec.TranslateLocalPath(repoURL)
+	}
+
 	dest := restic.Destination{
 		Type:     restic.DestinationType(p.Destination.Type),
-		RepoURL:  p.Destination.RepoURL,
+		RepoURL:  repoURL,
 		Password: p.RepoPassword,
 		Env:      p.Destination.Env,
 	}
@@ -772,9 +777,14 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 		return
 	}
 
+	repoURL := p.RepoURL
+	if restic.DestinationType(p.Type) == restic.DestLocal {
+		repoURL = m.exec.TranslateLocalPath(repoURL)
+	}
+
 	dest := restic.Destination{
 		Type:    restic.DestinationType(p.Type),
-		RepoURL: p.RepoURL,
+		RepoURL: repoURL,
 		Env:     p.Env,
 	}
 
@@ -790,6 +800,8 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 				Paths:            s.Paths,
 				Tags:             s.Tags,
 				Hostname:         s.Hostname,
+				SizeBytes:        s.Summary.DataAddedPacked,
+				FileCount:        s.Summary.TotalFilesProcessed,
 			}
 		}
 		// Capture the repo's real size so imported destinations show accurate

@@ -9,7 +9,7 @@ CREATE TABLE jobs_new (
     id          TEXT      NOT NULL PRIMARY KEY,
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    policy_id   TEXT      NOT NULL,
+    policy_id   TEXT,
     agent_id    TEXT      NOT NULL,
     status      TEXT      NOT NULL DEFAULT 'pending',
     started_at  TIMESTAMP,

@@ -81,7 +81,7 @@ type jobLogResponse struct {
 func jobToResponse(j *repositories.JobWithNames, destinations []repositories.JobDestinationWithName, logs []db.JobLog) jobResponse {
 	resp := jobResponse{
 		ID:           j.ID.String(),
-		PolicyID:     j.PolicyID.String(),
+		PolicyID:     uuidString(j.PolicyID),
 		PolicyName:   j.PolicyName,
 		AgentID:      j.AgentID.String(),
 		AgentName:    j.AgentName,

@@ -174,6 +174,11 @@ type Destination struct {
 	// each backup. Zero until the first backup or import completes.
 	RepoSizeBytes     int64      `gorm:"not null;default:0"`
 	RepoSizeUpdatedAt *time.Time `gorm:""`
+	// RepoPassword is the Restic repository password, stored only for
+	// destinations whose snapshots were imported from a pre-existing
+	// repository. Those snapshots have no policy to take the password from,
+	// so browse and restore rely on this field. Empty otherwise.
+	RepoPassword EncryptedString `gorm:"type:text"`
 }
 
 // -----------------------------------------------------------------------------
@@ -251,7 +256,9 @@ type PolicyDestination struct {
 // these fields, which would fail with uuid.UUID primary keys.
 type Job struct {
 	Base
-	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
+	// PolicyID is nil for a restore job started from an imported snapshot:
+	// such a snapshot belongs to no policy.
+	PolicyID  *uuid.UUID `gorm:"type:text;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
 	Type      string     `gorm:"not null;default:'backup'"` // "backup", "restore"
 	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled", "interrupted"
@@ -305,10 +312,13 @@ type JobLog struct {
 // in the database for fast listing and filtering without hitting the engine.
 type Snapshot struct {
 	Base
-	PolicyID      uuid.UUID `gorm:"type:text;not null;index"`
-	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
-	JobID         uuid.UUID `gorm:"type:text;not null;index"`
-	SnapshotID    string    `gorm:"not null;index"` // opaque ID from the backup engine
+	// PolicyID and JobID are nil for snapshots imported from a pre-existing
+	// repository: they belong to a destination but were not produced by any
+	// backup run of any policy.
+	PolicyID      *uuid.UUID `gorm:"type:text;index"`
+	DestinationID uuid.UUID  `gorm:"type:text;not null;index"`
+	JobID         *uuid.UUID `gorm:"type:text;index"`
+	SnapshotID    string     `gorm:"not null;index"` // opaque ID from the backup engine
 	// SizeBytes is the real footprint this backup added to the repository
 	// (restic data_added_packed), not the logical source size — so it reconciles
 	// with the destination's real repo size and never double-counts. Zero when

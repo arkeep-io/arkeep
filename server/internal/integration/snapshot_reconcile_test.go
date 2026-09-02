@@ -56,7 +56,7 @@ func (f *reconcileFixture) seedSnapshot(t *testing.T, destID uuid.UUID, snapshot
 	snap := &db.Snapshot{
 		PolicyID:      job.PolicyID,
 		DestinationID: destID,
-		JobID:         f.jobID,
+		JobID:         &f.jobID,
 		SnapshotID:    snapshotID,
 		SnapshotAt:    snapshotAt,
 		Tags:          "[]",

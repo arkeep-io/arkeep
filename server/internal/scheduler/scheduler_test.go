@@ -79,7 +79,7 @@ func newResumeFixture(t *testing.T, gdb *gorm.DB, policies repositories.PolicyRe
 	}
 
 	job := &db.Job{
-		PolicyID: policy.ID,
+		PolicyID: &policy.ID,
 		AgentID:  agent.ID,
 		Type:     "backup",
 		Status:   "pending",
@@ -177,7 +177,7 @@ func TestResumeInterrupted_Skips(t *testing.T) {
 			name: "a newer run of the policy already exists",
 			setup: func(t *testing.T, gdb *gorm.DB, f *resumeFixture) {
 				newer := &db.Job{
-					PolicyID: f.policy.ID,
+					PolicyID: &f.policy.ID,
 					AgentID:  f.agentID,
 					Type:     "backup",
 					Status:   "succeeded",

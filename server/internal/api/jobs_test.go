@@ -22,7 +22,7 @@ func createDBJobWith(t *testing.T, deps *testDeps, jobType, status string) *db.J
 	agent := createDBAgent(t, deps, "test-agent-"+uuid.NewString())
 	policy := createDBPolicy(t, deps, "test-policy-"+uuid.NewString(), agent.ID)
 	job := &db.Job{
-		PolicyID: policy.ID,
+		PolicyID: &policy.ID,
 		AgentID:  agent.ID,
 		Type:     jobType,
 		Status:   status,

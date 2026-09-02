@@ -144,7 +144,7 @@ func createIntegrationJob(t *testing.T, ts *testServer, agentUUID uuid.UUID) *db
 	}
 
 	job := &db.Job{
-		PolicyID: p.ID,
+		PolicyID: &p.ID,
 		AgentID:  agentUUID,
 		Type:     "backup",
 		Status:   "pending",

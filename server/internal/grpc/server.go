@@ -644,13 +644,20 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 		return
 	}
 
+	// A restore of an imported snapshot has no policy; the notification payload
+	// then carries a zero policy ID.
+	var policyID uuid.UUID
+	if job.PolicyID != nil {
+		policyID = *job.PolicyID
+	}
+
 	switch st {
 	case proto.JobStatus_JOB_STATUS_COMPLETED:
-		if err := s.notifSvc.NotifyJobSucceeded(ctx, jobID, job.PolicyID, job.PolicyName); err != nil {
+		if err := s.notifSvc.NotifyJobSucceeded(ctx, jobID, policyID, job.PolicyName); err != nil {
 			s.logger.Warn("failed to send job-succeeded notification", zap.Error(err))
 		}
 	case proto.JobStatus_JOB_STATUS_FAILED:
-		if err := s.notifSvc.NotifyJobFailed(ctx, jobID, job.PolicyID, job.PolicyName, errMsg); err != nil {
+		if err := s.notifSvc.NotifyJobFailed(ctx, jobID, policyID, job.PolicyName, errMsg); err != nil {
 			s.logger.Warn("failed to send job-failed notification", zap.Error(err))
 		}
 	}
@@ -869,14 +876,16 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 			// reflects what was backed up. This uses the policy's current sources,
 			// which is accurate for the vast majority of cases.
 			snapshotSources := "[]"
-			if policy, pErr := s.policyRepo.GetByID(ctx, job.PolicyID); pErr == nil {
-				snapshotSources = policy.Sources
+			if job.PolicyID != nil {
+				if policy, pErr := s.policyRepo.GetByID(ctx, *job.PolicyID); pErr == nil {
+					snapshotSources = policy.Sources
+				}
 			}
 
 			snap := &db.Snapshot{
 				PolicyID:      job.PolicyID,
 				DestinationID: destID,
-				JobID:         jobID,
+				JobID:         &jobID,
 				SnapshotID:    req.SnapshotId,
 				SizeBytes:     req.SizeBytes,
 				Tags:          "[]",

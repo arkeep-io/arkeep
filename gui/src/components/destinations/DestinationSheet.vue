@@ -2,6 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import { z } from 'zod'
 import { api } from '@/services/api'
+import { summariseImport } from '@/lib/importSummary'
 import type { ApiResponse, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
 import { AsyncCombobox } from '@/components/ui/async-combobox'
 import {
@@ -133,6 +134,10 @@ const importPasswordError = ref('')
 const importError = ref<string | null>(null)
 const importResult = ref<ImportDestinationResponse | null>(null)
 const creationDone = ref(false)
+
+const importSummary = computed(() =>
+    importResult.value ? summariseImport(importResult.value) : null,
+)
 
 // Base fields
 const name = ref('')
@@ -433,12 +438,12 @@ function onOpenChange(value: boolean) {
             <SheetHeader>
                 <SheetTitle>{{ creationDone ? 'Destination Created' : (isEdit ? 'Edit Destination' : isClone ? 'Clone Destination' : 'New Destination') }}</SheetTitle>
                 <SheetDescription>
-                    {{ creationDone ? 'The destination has been saved and snapshots imported.' : (isEdit ? 'Update the destination settings.' : isClone ? 'Review the copied settings and re-enter the credentials.' : 'Configure a new backup storage target.') }}
+                    {{ creationDone ? 'The destination has been saved.' : (isEdit ? 'Update the destination settings.' : isClone ? 'Review the copied settings and re-enter the credentials.' : 'Configure a new backup storage target.') }}
                 </SheetDescription>
             </SheetHeader>
 
             <!-- Success state shown after creation with import -->
-            <div v-if="creationDone && importResult" class="py-8 px-4 flex flex-col gap-6">
+            <div v-if="creationDone && importSummary" class="py-8 px-4 flex flex-col gap-6">
                 <div class="space-y-3">
                     <div class="flex items-center gap-3">
                         <CheckCircle2 class="size-5 text-green-500 shrink-0" />
@@ -448,14 +453,15 @@ function onOpenChange(value: boolean) {
                         </div>
                     </div>
                     <div class="flex items-center gap-3">
-                        <CheckCircle2 class="size-5 shrink-0" :class="importResult.found > 0 ? 'text-green-500' : 'text-muted-foreground'" />
+                        <AlertCircle v-if="importSummary.tone === 'error'" class="size-5 shrink-0 text-destructive" />
+                        <CheckCircle2
+                            v-else
+                            class="size-5 shrink-0"
+                            :class="importSummary.tone === 'success' ? 'text-green-500' : 'text-muted-foreground'"
+                        />
                         <div>
-                            <p class="text-sm font-medium">
-                                {{ importResult.found > 0 ? `${importResult.imported} snapshot${importResult.imported !== 1 ? 's' : ''} imported` : 'Repository is empty' }}
-                            </p>
-                            <p class="text-xs text-muted-foreground">
-                                {{ importResult.found > 0 ? `${importResult.found} found, ${importResult.imported} new` : 'No existing snapshots were found in this repository.' }}
-                            </p>
+                            <p class="text-sm font-medium">{{ importSummary.headline }}</p>
+                            <p class="text-xs text-muted-foreground">{{ importSummary.detail }}</p>
                         </div>
                     </div>
                 </div>

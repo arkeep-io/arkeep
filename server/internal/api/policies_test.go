@@ -252,6 +252,80 @@ func TestPolicyHandler_Create(t *testing.T) {
 			t.Errorf("fetch: retention_yearly = %d, want 0", fetched.RetentionYearly)
 		}
 	})
+
+	t.Run("use_destination_password resolves the password from the destination, never from the request", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		dest := createDBDestination(t, e.deps, "imported", "rclone")
+		dest.RepoPassword = "captured-at-import"
+		if err := e.deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{{"destination_id": dest.ID.String(), "priority": 0}}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var created struct {
+			ID string `json:"id"`
+		}
+		decodeData(t, resp, &created)
+		id, err := uuid.Parse(created.ID)
+		if err != nil {
+			t.Fatalf("parse id: %v", err)
+		}
+		policy, err := e.deps.policies.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if string(policy.RepoPassword) != "captured-at-import" {
+			t.Errorf("RepoPassword = %q, want the destination's stored password", policy.RepoPassword)
+		}
+	})
+
+	t.Run("use_destination_password fails when the destination has no stored password", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		dest := createDBDestination(t, e.deps, "fresh", "rclone")
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{{"destination_id": dest.ID.String(), "priority": 0}}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("use_destination_password fails when selected destinations disagree", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		destA := createDBDestination(t, e.deps, "imported-a", "rclone")
+		destA.RepoPassword = "password-a"
+		if err := e.deps.dests.Update(context.Background(), destA); err != nil {
+			t.Fatalf("Update destA: %v", err)
+		}
+		destB := createDBDestination(t, e.deps, "imported-b", "rclone")
+		destB.RepoPassword = "password-b"
+		if err := e.deps.dests.Update(context.Background(), destB); err != nil {
+			t.Fatalf("Update destB: %v", err)
+		}
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{
+			{"destination_id": destA.ID.String(), "priority": 0},
+			{"destination_id": destB.ID.String(), "priority": 1},
+		}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
 }
 
 func TestPolicyHandler_Update(t *testing.T) {

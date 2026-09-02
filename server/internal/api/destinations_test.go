@@ -6,6 +6,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	proto "github.com/arkeep-io/arkeep/shared/proto"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
@@ -167,6 +172,32 @@ func TestDestinationHandler_GetByID(t *testing.T) {
 		resp := e.get(t, "/api/v1/destinations/not-a-uuid", e.adminToken(t))
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
+
+	t.Run("has_repo_password reflects the stored password, never the value itself", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "no-password", "rclone")
+
+		var withoutPassword struct {
+			HasRepoPassword bool `json:"has_repo_password"`
+		}
+		decodeData(t, e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t)), &withoutPassword)
+		if withoutPassword.HasRepoPassword {
+			t.Error("has_repo_password = true for a destination with no stored password")
+		}
+
+		dest.RepoPassword = "imported-repo-secret"
+		if err := e.deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		var withPassword struct {
+			HasRepoPassword bool `json:"has_repo_password"`
+		}
+		decodeData(t, e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t)), &withPassword)
+		if !withPassword.HasRepoPassword {
+			t.Error("has_repo_password = false after setting a password, want true")
+		}
+	})
 }
 
 func TestDestinationHandler_Update(t *testing.T) {
@@ -180,7 +211,9 @@ func TestDestinationHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ Name string `json:"name"` }
+		var data struct {
+			Name string `json:"name"`
+		}
 		decodeData(t, resp, &data)
 		if data.Name != "new-name" {
 			t.Errorf("name = %q, want new-name", data.Name)
@@ -277,5 +310,133 @@ func TestDestinationHandler_Delete(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.del(t, "/api/v1/destinations/00000000-0000-0000-0000-000000000001", "")
 		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+// TestPersistImportedSnapshots covers importing the snapshots of a pre-existing
+// Restic repository. Such snapshots belong to no policy and no job, so they are
+// stored with a nil policy_id / job_id.
+func TestPersistImportedSnapshots(t *testing.T) {
+	newHandler := func(deps *testDeps) *DestinationHandler {
+		// agentMgr is not touched by persistImportedSnapshots.
+		return &DestinationHandler{
+			repo:         deps.dests,
+			snapshotRepo: deps.snaps,
+			logger:       zap.NewNop(),
+		}
+	}
+	result := func(ids ...string) *agentmanager.SnapshotImportResult {
+		res := &agentmanager.SnapshotImportResult{}
+		for _, id := range ids {
+			res.Snapshots = append(res.Snapshots, &proto.ImportedSnapshotInfo{
+				ResticSnapshotId: id,
+				SnapshotTime:     "2026-07-26T13:20:45.123456789+02:00",
+				Paths:            []string{"/data"},
+				Tags:             []string{},
+				Hostname:         "nas",
+				SizeBytes:        2048,
+				FileCount:        7,
+			})
+		}
+		return res
+	}
+
+	t.Run("persists every snapshot found", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "imported", "rclone")
+		h := newHandler(e.deps)
+
+		out := h.persistImportedSnapshots(context.Background(), dest, result("aaa111", "bbb222"))
+
+		if out.Imported != 2 || out.Skipped != 0 || out.Failed != 0 {
+			t.Fatalf("outcome = %+v, want {Imported:2 Skipped:0 Failed:0}", out)
+		}
+
+		rows, total, err := e.deps.snaps.ListByDestination(context.Background(), dest.ID, repositories.ListOptions{Limit: 10})
+		if err != nil {
+			t.Fatalf("ListByDestination: %v", err)
+		}
+		if total != 2 {
+			t.Fatalf("stored %d snapshots, want 2", total)
+		}
+		for _, row := range rows {
+			if row.PolicyID != nil {
+				t.Errorf("snapshot %s: PolicyID = %v, want nil", row.SnapshotID, row.PolicyID)
+			}
+			if row.JobID != nil {
+				t.Errorf("snapshot %s: JobID = %v, want nil", row.SnapshotID, row.JobID)
+			}
+			if !row.IsImported {
+				t.Errorf("snapshot %s: IsImported = false, want true", row.SnapshotID)
+			}
+			if row.Hostname != "nas" {
+				t.Errorf("snapshot %s: Hostname = %q, want %q", row.SnapshotID, row.Hostname, "nas")
+			}
+			if row.SnapshotAt.IsZero() {
+				t.Errorf("snapshot %s: SnapshotAt is zero, want the parsed restic timestamp", row.SnapshotID)
+			}
+			if row.SizeBytes != 2048 {
+				t.Errorf("snapshot %s: SizeBytes = %d, want 2048", row.SnapshotID, row.SizeBytes)
+			}
+			if row.FileCount != 7 {
+				t.Errorf("snapshot %s: FileCount = %d, want 7", row.SnapshotID, row.FileCount)
+			}
+		}
+	})
+
+	t.Run("reports already known snapshots as skipped, not imported", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "imported", "rclone")
+		h := newHandler(e.deps)
+		ctx := context.Background()
+
+		if out := h.persistImportedSnapshots(ctx, dest, result("aaa111", "bbb222")); out.Imported != 2 {
+			t.Fatalf("first import: outcome = %+v, want 2 imported", out)
+		}
+
+		out := h.persistImportedSnapshots(ctx, dest, result("aaa111", "bbb222", "ccc333"))
+
+		if out.Imported != 1 || out.Skipped != 2 || out.Failed != 0 {
+			t.Fatalf("second import: outcome = %+v, want {Imported:1 Skipped:2 Failed:0}", out)
+		}
+	})
+
+	t.Run("the same repository copied to another destination is importable again", func(t *testing.T) {
+		// Migrating a repository between cloud providers yields two
+		// destinations holding the same restic snapshot IDs.
+		e := newTestEnv(t)
+		oldDest := createDBDestination(t, e.deps, "provider1", "rclone")
+		newDest := createDBDestination(t, e.deps, "provider2", "rclone")
+		h := newHandler(e.deps)
+		ctx := context.Background()
+
+		if out := h.persistImportedSnapshots(ctx, oldDest, result("aaa111")); out.Imported != 1 {
+			t.Fatalf("import into provider1: outcome = %+v, want 1 imported", out)
+		}
+
+		out := h.persistImportedSnapshots(ctx, newDest, result("aaa111"))
+
+		if out.Imported != 1 || out.Skipped != 0 || out.Failed != 0 {
+			t.Fatalf("import into provider2: outcome = %+v, want {Imported:1 Skipped:0 Failed:0}", out)
+		}
+	})
+
+	t.Run("caches the repository size reported by the agent", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "imported", "rclone")
+		h := newHandler(e.deps)
+
+		res := result("aaa111")
+		res.RepoSizeBytes = 4096
+
+		h.persistImportedSnapshots(context.Background(), dest, res)
+
+		stored, err := e.deps.dests.GetByID(context.Background(), dest.ID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if stored.RepoSizeBytes != 4096 {
+			t.Errorf("RepoSizeBytes = %d, want 4096", stored.RepoSizeBytes)
+		}
 	})
 }

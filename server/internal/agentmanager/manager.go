@@ -47,8 +47,12 @@ const volumeListTimeout = 10 * time.Second
 const snapshotBrowseTimeout = 5 * time.Minute
 
 // snapshotImportTimeout is how long RequestSnapshotImport waits for the agent.
-// Generous because restic snapshots on a large remote repository can be slow.
-const snapshotImportTimeout = 60 * time.Second
+// Matches snapshotBrowseTimeout and the extended HTTP write deadline on the
+// import handlers: listing snapshots on a cold remote repository (rclone to a
+// cloud provider) plus `restic stats --mode raw-data` routinely takes minutes,
+// and a shorter budget makes the request fail while the agent still succeeds —
+// its report then arrives with no waiter left and is discarded.
+const snapshotImportTimeout = 5 * time.Minute
 // ConnectedAgent represents an agent that has an active gRPC connection
 // and an open StreamJobs stream through which jobs can be dispatched.
 type ConnectedAgent struct {

@@ -62,18 +62,23 @@ type destinationResponse struct {
 	// is empty until the first measurement.
 	RepoSizeBytes     int64  `json:"repo_size_bytes"`
 	RepoSizeUpdatedAt string `json:"repo_size_updated_at"`
+	// HasRepoPassword reports whether this destination has a stored password
+	// for a pre-existing repository (captured when it was imported). Never the
+	// password itself — credentials are write-only, like everywhere else in
+	// this API.
+	HasRepoPassword bool `json:"has_repo_password"`
 }
 
 // destinationToResponse converts a db.Destination to a destinationResponse.
 func destinationToResponse(d *db.Destination) destinationResponse {
 	return destinationResponse{
-		ID:        d.ID.String(),
-		Name:      d.Name,
-		Type:      d.Type,
-		Config:    d.Config,
-		Enabled:   d.Enabled,
-		CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt: d.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:            d.ID.String(),
+		Name:          d.Name,
+		Type:          d.Type,
+		Config:        d.Config,
+		Enabled:       d.Enabled,
+		CreatedAt:     d.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     d.UpdatedAt.UTC().Format(time.RFC3339),
 		RepoSizeBytes: d.RepoSizeBytes,
 		RepoSizeUpdatedAt: func() string {
 			if d.RepoSizeUpdatedAt == nil {
@@ -81,6 +86,7 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 			}
 			return d.RepoSizeUpdatedAt.UTC().Format(time.RFC3339)
 		}(),
+		HasRepoPassword: d.RepoPassword != "",
 	}
 }
 
@@ -138,10 +144,10 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 // by EncryptedString — the handler stores it as plain text and the DB layer
 // handles encryption transparently.
 type createDestinationRequest struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Credentials string `json:"credentials"`        // JSON, stored encrypted
-	Config      string `json:"config"`              // JSON, not sensitive
+	Name               string `json:"name"`
+	Type               string `json:"type"`
+	Credentials        string `json:"credentials"` // JSON, stored encrypted
+	Config             string `json:"config"`      // JSON, not sensitive
 	ImportAgentID      string `json:"import_agent_id,omitempty"`
 	ImportRepoPassword string `json:"import_repo_password,omitempty"`
 }
@@ -199,8 +205,10 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Listing snapshots on a cold remote repository can exceed the server's
-		// default 30s write timeout; extend it so the response isn't severed.
-		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute)); err != nil {
+		// default 30s write timeout; extend it past the agent wait
+		// (snapshotImportTimeout, 5m) so the response — success or the 503 —
+		// can always be written.
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(6 * time.Minute)); err != nil {
 			h.logger.Debug("import: could not extend write deadline", zap.Error(err))
 		}
 		correlationID := uuid.New().String()
@@ -223,6 +231,9 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		importResult = &res
+		// Store the repository password: the imported snapshots have no policy
+		// to take it from, and browse/restore need it.
+		dest.RepoPassword = db.EncryptedString(req.ImportRepoPassword)
 	}
 
 	if err := h.repo.Create(ctx, dest); err != nil {
@@ -234,12 +245,15 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	resp := createDestinationResponse{destinationResponse: destinationToResponse(dest)}
 
 	if importResult != nil {
-		imported := h.persistImportedSnapshots(ctx, dest, importResult)
+		out := h.persistImportedSnapshots(ctx, dest, importResult)
 		logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", dest.ID.String(), map[string]any{
 			"found":    len(importResult.Snapshots),
-			"imported": imported,
+			"imported": out.Imported,
+			"skipped":  out.Skipped,
+			"failed":   out.Failed,
 		})
-		resp.Import = &importDestinationResponse{Found: len(importResult.Snapshots), Imported: imported}
+		imp := newImportDestinationResponse(len(importResult.Snapshots), out)
+		resp.Import = &imp
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "destination.create", "destination", dest.ID.String(), map[string]any{"name": dest.Name, "type": dest.Type})
@@ -352,9 +366,24 @@ type importDestinationRequest struct {
 }
 
 // importDestinationResponse reports how many snapshots were found and saved.
+// Found is what the repository holds; Imported were newly recorded; Skipped
+// were already known for this destination; Failed could not be recorded, which
+// the GUI must surface rather than pass off as a successful import.
 type importDestinationResponse struct {
 	Found    int `json:"found"`
 	Imported int `json:"imported"`
+	Skipped  int `json:"skipped"`
+	Failed   int `json:"failed"`
+}
+
+// newImportDestinationResponse builds the API payload from an import outcome.
+func newImportDestinationResponse(found int, out importOutcome) importDestinationResponse {
+	return importDestinationResponse{
+		Found:    found,
+		Imported: out.Imported,
+		Skipped:  out.Skipped,
+		Failed:   out.Failed,
+	}
 }
 
 // snapshotImportPayload is the JSON payload sent to the agent for IMPORT_SNAPSHOTS.
@@ -422,8 +451,10 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Listing snapshots on a cold remote repository can exceed the server's
-	// default 30s write timeout; extend it so the response isn't severed.
-	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute)); err != nil {
+	// default 30s write timeout; extend it past the agent wait
+	// (snapshotImportTimeout, 5m) so the response — success or the 503 — can
+	// always be written.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(6 * time.Minute)); err != nil {
 		h.logger.Debug("import: could not extend write deadline", zap.Error(err))
 	}
 	correlationID := uuid.New().String()
@@ -447,54 +478,96 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imported := h.persistImportedSnapshots(ctx, dest, &result)
+	// Store the repository password so the imported snapshots — which have no
+	// policy to take it from — can later be browsed and restored. Non-fatal:
+	// the snapshots are still worth recording without it.
+	dest.RepoPassword = db.EncryptedString(req.RepoPassword)
+	if err := h.repo.Update(ctx, dest); err != nil {
+		h.logger.Warn("failed to store repository password on destination after import",
+			zap.String("id", id.String()),
+			zap.Error(err),
+		)
+	}
+
+	out := h.persistImportedSnapshots(ctx, dest, &result)
 
 	logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", id.String(), map[string]any{
 		"found":    len(result.Snapshots),
-		"imported": imported,
+		"imported": out.Imported,
+		"skipped":  out.Skipped,
+		"failed":   out.Failed,
 	})
-	Ok(w, importDestinationResponse{Found: len(result.Snapshots), Imported: imported})
+	Ok(w, newImportDestinationResponse(len(result.Snapshots), out))
+}
+
+// importOutcome breaks down what happened to the snapshots the agent reported,
+// so a caller can tell "nothing new to import" apart from "the import failed".
+type importOutcome struct {
+	// Imported counts newly persisted snapshots.
+	Imported int
+	// Skipped counts snapshots already recorded for this destination.
+	Skipped int
+	// Failed counts snapshots that could not be persisted.
+	Failed int
 }
 
 // persistImportedSnapshots saves snapshots returned by a JOB_TYPE_IMPORT_SNAPSHOTS
-// RPC call that have not yet been seen for this destination. Returns the count of
-// newly persisted snapshots.
-func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest *db.Destination, result *agentmanager.SnapshotImportResult) int {
-	imported := 0
+// RPC call that have not yet been seen for this destination.
+//
+// Imported snapshots carry no policy and no job: they were not produced by a
+// backup run, so PolicyID and JobID stay nil.
+func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest *db.Destination, result *agentmanager.SnapshotImportResult) importOutcome {
+	var out importOutcome
 	for _, info := range result.Snapshots {
 		exists, err := h.snapshotRepo.ExistsBySnapshotIDAndDestination(ctx, info.ResticSnapshotId, dest.ID)
 		if err != nil {
-			h.logger.Error("failed to check snapshot existence", zap.Error(err))
+			h.logger.Error("failed to check snapshot existence",
+				zap.String("restic_snapshot_id", info.ResticSnapshotId),
+				zap.Error(err),
+			)
+			out.Failed++
 			continue
 		}
 		if exists {
+			out.Skipped++
 			continue
 		}
 
 		snapshotAt, err := time.Parse(time.RFC3339Nano, info.SnapshotTime)
 		if err != nil {
-			snapshotAt, _ = time.Parse(time.RFC3339, info.SnapshotTime)
+			snapshotAt, err = time.Parse(time.RFC3339, info.SnapshotTime)
+			if err != nil {
+				h.logger.Warn("imported snapshot has an unparsable timestamp",
+					zap.String("restic_snapshot_id", info.ResticSnapshotId),
+					zap.String("snapshot_time", info.SnapshotTime),
+					zap.Error(err),
+				)
+			}
 		}
 
 		sourcesJSON, _ := json.Marshal(info.Paths)
 		tagsJSON, _ := json.Marshal(info.Tags)
 
 		snap := &db.Snapshot{
-			PolicyID:      uuid.Nil,
-			JobID:         uuid.Nil,
 			DestinationID: dest.ID,
 			IsImported:    true,
 			SnapshotID:    info.ResticSnapshotId,
 			Hostname:      info.Hostname,
 			Sources:       string(sourcesJSON),
 			Tags:          string(tagsJSON),
+			SizeBytes:     info.SizeBytes,
+			FileCount:     info.FileCount,
 			SnapshotAt:    snapshotAt,
 		}
 		if err := h.snapshotRepo.Create(ctx, snap); err != nil {
-			h.logger.Error("failed to create imported snapshot", zap.Error(err))
+			h.logger.Error("failed to create imported snapshot",
+				zap.String("restic_snapshot_id", info.ResticSnapshotId),
+				zap.Error(err),
+			)
+			out.Failed++
 			continue
 		}
-		imported++
+		out.Imported++
 	}
 
 	// Cache the repo's real size so an imported destination reports accurate
@@ -505,7 +578,7 @@ func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest 
 		}
 	}
 
-	return imported
+	return out
 }
 
 // Delete handles DELETE /api/v1/destinations/{id}.

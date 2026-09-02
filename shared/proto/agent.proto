@@ -430,6 +430,14 @@ message ImportedSnapshotInfo {
   repeated string tags      = 4;
   // hostname is the hostname of the machine that created the snapshot.
   string hostname           = 5;
+  // size_bytes is the footprint this snapshot added to the repository
+  // (data_added_packed from the snapshot summary), the same metric recorded for
+  // snapshots produced by a backup, so usage figures reconcile. Zero for
+  // snapshots created by restic < 0.17, which carry no summary.
+  int64 size_bytes          = 6;
+  // file_count is the number of files the snapshot processed
+  // (total_files_processed from the summary). Zero when unavailable.
+  int64 file_count          = 7;
 }
 
 // SnapshotImportReport is sent by the agent in response to a

@@ -223,6 +223,9 @@ const schema = z.object({
   // Write-only — required on create, optional on edit (blank = keep existing).
   repo_password: z.string().optional(),
   repo_password_confirm: z.string().optional(),
+  // When true (create only), the password is resolved server-side from the
+  // selected destinations' own stored password instead of the fields above.
+  use_destination_password: z.boolean(),
 
   schedule: z.string().min(1, 'Schedule is required'),
 
@@ -245,7 +248,9 @@ const schema = z.object({
   resume_interrupted: z.boolean(),
 }).superRefine((data, ctx) => {
   if (!isEdit.value) {
-    if (!data.repo_password || data.repo_password.length < 8) {
+    if (data.use_destination_password) {
+      // Password resolved server-side from the selected destination(s).
+    } else if (!data.repo_password || data.repo_password.length < 8) {
       ctx.addIssue({
         code: "custom",
         path: ['repo_password'],
@@ -331,6 +336,7 @@ const { value: enabledValue } = useField<boolean>('enabled')
 // Repository password
 const { value: repoPassValue, errorMessage: repoPassError } = useField<string>('repo_password')
 const { value: repoPassConfirmValue, errorMessage: repoPassConfirmError } = useField<string>('repo_password_confirm')
+const { value: useDestinationPasswordValue } = useField<boolean>('use_destination_password')
 const showPassword = ref(false)
 
 // Sources
@@ -422,6 +428,21 @@ function destByIdName(id: string): string {
   return availableDestinations.value.find(d => d.id === id)?.name ?? id
 }
 
+// The "use the destination's password" option is only offered when every
+// selected destination is known to have one on file — if the destinations
+// disagree with each other, the server rejects the request with a clear
+// error instead (the actual passwords never reach the browser, so that
+// mismatch can't be detected here).
+const canUseDestinationPassword = computed(() => {
+  const ids = orderedDestIds.value ?? []
+  if (ids.length === 0) return false
+  return ids.every(id => availableDestinations.value.find(d => d.id === id)?.has_repo_password)
+})
+
+watch(canUseDestinationPassword, (can) => {
+  if (!can) useDestinationPasswordValue.value = false
+})
+
 // Hooks
 const { value: hookPreEnabled } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName } = useField<string>('hook_pre.name')
@@ -470,6 +491,7 @@ function defaultValues(): FormValues {
     enabled: true,
     repo_password: '',
     repo_password_confirm: '',
+    use_destination_password: false,
     schedule: '0 2 * * *',
     sources: [{ type: 'directory', path: '', label: '' }],
     retention_keep_last: 0,
@@ -627,6 +649,7 @@ function populateForm(p: Policy, asClone = false) {
     enabled: p.enabled,
     repo_password: '',
     repo_password_confirm: '',
+    use_destination_password: false,
     schedule: p.schedule,
     sources: mappedSources.length > 0
       ? mappedSources
@@ -738,9 +761,14 @@ const onSubmit = handleSubmit(async (values) => {
       if (values.repo_password) body.repo_password = values.repo_password
       body.destinations = destinationsPayload
     } else {
-      // POST-only: agent, password (required), destinations
+      // POST-only: agent, password (required unless resolved from the
+      // destination), destinations
       body.agent_id = values.agent_id
-      body.repo_password = values.repo_password ?? ''
+      if (values.use_destination_password) {
+        body.use_destination_password = true
+      } else {
+        body.repo_password = values.repo_password ?? ''
+      }
       body.destinations = destinationsPayload
     }
 
@@ -833,6 +861,21 @@ function onOpenChange(value: boolean) {
               Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
             </p>
 
+            <!-- Selected destination(s) already have a password on file (imported
+                 from a pre-existing repository) — offer to reuse it instead of
+                 asking the user to retype a secret the server already has. -->
+            <div v-if="canUseDestinationPassword" class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Use the destination's existing password</p>
+                <p class="text-muted-foreground text-xs">
+                  The selected destination already has a repository password on file from when it was imported.
+                </p>
+              </div>
+              <Switch :model-value="useDestinationPasswordValue"
+                @update:model-value="useDestinationPasswordValue = $event" />
+            </div>
+
+            <template v-if="!useDestinationPasswordValue">
             <Field>
               <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
               <div class="relative">
@@ -857,6 +900,7 @@ function onOpenChange(value: boolean) {
                 :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
               <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
             </Field>
+            </template>
 
             <Separator />
           </template>
