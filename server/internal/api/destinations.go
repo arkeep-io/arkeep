@@ -544,6 +544,11 @@ func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest 
 				)
 			}
 		}
+		// Stored in UTC, matching every other SnapshotAt write site — restic
+		// reports the local timezone offset, and a non-UTC time.Time round-trips
+		// through the SQLite driver as a text format the read-side scan can fail
+		// to parse back into time.Time.
+		snapshotAt = snapshotAt.UTC()
 
 		sourcesJSON, _ := json.Marshal(info.Paths)
 		tagsJSON, _ := json.Marshal(info.Tags)
