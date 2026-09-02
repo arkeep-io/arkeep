@@ -10,7 +10,7 @@ import { PinInput, PinInputGroup, PinInputSlot } from '@/components/ui/pin-input
 import {
     Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertCircle, Loader2, ShieldCheck } from '@lucide/vue'
+import { AlertCircle, Eye, EyeOff, Loader2, ShieldCheck } from '@lucide/vue'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type {
@@ -44,7 +44,10 @@ onMounted(fetchStatus)
 // Enrollment (setup → verify)
 // ---------------------------------------------------------------------------
 
-const enrolling = ref(false)
+// Enrollment runs as a two-step dialog: the QR step, then the verify step.
+// enrollDialogOpen controls the shared dialog; enrollStep picks its content.
+const enrollDialogOpen = ref(false)
+const enrollStep = ref<'qr' | 'verify'>('qr')
 const setupData = ref<TwoFactorSetupResponse | null>(null)
 const qrDataUrl = ref('')
 const verifyCode = ref<string[]>([])
@@ -61,7 +64,8 @@ async function startEnrollment(): Promise<void> {
         setupData.value = res.data
         qrDataUrl.value = await QRCode.toDataURL(res.data.otpauth_url, { width: 200, margin: 1 })
         verifyCode.value = []
-        enrolling.value = true
+        enrollStep.value = 'qr'
+        enrollDialogOpen.value = true
     } catch (e: any) {
         enrollError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to start enrollment.'
     } finally {
@@ -70,7 +74,8 @@ async function startEnrollment(): Promise<void> {
 }
 
 function cancelEnrollment(): void {
-    enrolling.value = false
+    enrollDialogOpen.value = false
+    enrollStep.value = 'qr'
     setupData.value = null
     qrDataUrl.value = ''
     verifyCode.value = []
@@ -89,7 +94,8 @@ async function submitVerify(): Promise<void> {
             body: { code },
         })
         if (auth.user) auth.user.two_factor_enabled = true
-        enrolling.value = false
+        enrollDialogOpen.value = false
+        enrollStep.value = 'qr'
         setupData.value = null
         qrDataUrl.value = ''
         recoveryCodes.value = res.data.recovery_codes
@@ -134,6 +140,7 @@ const disableDialogOpen = ref(false)
 const disablePassword = ref('')
 const disableError = ref<string | null>(null)
 const disableLoading = ref(false)
+const showDisablePassword = ref(false)
 
 function openDisableDialog(): void {
     disablePassword.value = ''
@@ -167,6 +174,7 @@ const regenerateDialogOpen = ref(false)
 const regeneratePassword = ref('')
 const regenerateError = ref<string | null>(null)
 const regenerateLoading = ref(false)
+const showRegeneratePassword = ref(false)
 
 function openRegenerateDialog(): void {
     regeneratePassword.value = ''
@@ -213,46 +221,6 @@ async function confirmRegenerate(): Promise<void> {
             <Loader2 class="size-5 animate-spin" />
         </div>
 
-        <!-- Enrollment in progress -->
-        <div v-else-if="enrolling" class="flex flex-col gap-4">
-            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                <Alert v-if="enrollError" variant="destructive">
-                    <AlertCircle class="size-4" />
-                    <AlertDescription>{{ enrollError }}</AlertDescription>
-                </Alert>
-            </Transition>
-
-            <div class="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-                <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR code for authenticator app enrollment"
-                    class="rounded-md border" width="200" height="200">
-                <div class="text-sm text-muted-foreground">
-                    <p>Scan this QR code with your authenticator app, or enter the setup key manually:</p>
-                    <code class="mt-2 block break-all rounded bg-muted px-2 py-1 text-xs">{{ setupData?.secret }}</code>
-                </div>
-            </div>
-
-            <FieldGroup class="flex flex-col gap-4">
-                <Field class="items-center">
-                    <FieldLabel>Enter the 6-digit code to confirm</FieldLabel>
-                    <PinInput v-model="verifyCode" otp @complete="submitVerify">
-                        <PinInputGroup>
-                            <PinInputSlot v-for="i in 6" :key="i" :index="i - 1" />
-                        </PinInputGroup>
-                    </PinInput>
-                </Field>
-                <div class="flex justify-end gap-2">
-                    <Button variant="outline" :disabled="enrollSubmitting" @click="cancelEnrollment">
-                        Cancel
-                    </Button>
-                    <Button :disabled="enrollSubmitting || verifyCode.join('').length !== 6" @click="submitVerify">
-                        <Loader2 v-if="enrollSubmitting" class="size-4 animate-spin" />
-                        {{ enrollSubmitting ? 'Verifying…' : 'Verify and enable' }}
-                    </Button>
-                </div>
-            </FieldGroup>
-        </div>
-
         <!-- Enabled -->
         <div v-else-if="status.enabled" class="flex flex-col gap-4">
             <div class="flex items-center gap-2">
@@ -285,6 +253,60 @@ async function confirmRegenerate(): Promise<void> {
             </Button>
         </div>
     </div>
+
+    <!-- Enrollment — QR step, then verify step, same dialog throughout -->
+    <Dialog :open="enrollDialogOpen" @update:open="(v) => { if (!v) cancelEnrollment() }">
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>Set up two-factor authentication</DialogTitle>
+                <DialogDescription v-if="enrollStep === 'qr'">
+                    Scan this QR code with an authenticator app (Google Authenticator, Aegis, 1Password, …). If you
+                    can't scan it, enter the setup key manually instead.
+                </DialogDescription>
+                <DialogDescription v-else>
+                    Enter the 6-digit code your authenticator app is now showing to confirm setup.
+                </DialogDescription>
+            </DialogHeader>
+
+            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
+                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
+                <Alert v-if="enrollError" variant="destructive">
+                    <AlertCircle class="size-4" />
+                    <AlertDescription>{{ enrollError }}</AlertDescription>
+                </Alert>
+            </Transition>
+
+            <div v-if="enrollStep === 'qr'" class="flex flex-col items-center gap-3">
+                <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR code for authenticator app enrollment"
+                    class="rounded-md border" width="200" height="200">
+                <code class="block w-full break-all rounded bg-muted px-2 py-1 text-center text-xs">{{ setupData?.secret }}</code>
+            </div>
+
+            <FieldGroup v-else>
+                <Field class="items-center">
+                    <PinInput v-model="verifyCode" otp class="w-full" @complete="submitVerify">
+                        <PinInputGroup class="w-full justify-between">
+                            <PinInputSlot v-for="i in 6" :key="i" :index="i - 1" />
+                        </PinInputGroup>
+                    </PinInput>
+                </Field>
+            </FieldGroup>
+
+            <DialogFooter>
+                <template v-if="enrollStep === 'qr'">
+                    <Button variant="outline" @click="cancelEnrollment">Cancel</Button>
+                    <Button @click="enrollStep = 'verify'">Done</Button>
+                </template>
+                <template v-else>
+                    <Button variant="outline" :disabled="enrollSubmitting" @click="enrollStep = 'qr'">Back</Button>
+                    <Button :disabled="enrollSubmitting || verifyCode.join('').length !== 6" @click="submitVerify">
+                        <Loader2 v-if="enrollSubmitting" class="size-4 animate-spin" />
+                        {{ enrollSubmitting ? 'Verifying…' : 'Verify' }}
+                    </Button>
+                </template>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
 
     <!-- Recovery codes — shown once after verify or regenerate -->
     <Dialog :open="recoveryCodesDialogOpen" @update:open="recoveryCodesDialogOpen = $event">
@@ -328,8 +350,18 @@ async function confirmRegenerate(): Promise<void> {
                 </Transition>
                 <Field>
                     <FieldLabel for="disable-password">Password</FieldLabel>
-                    <Input id="disable-password" v-model="disablePassword" type="password"
-                        autocomplete="current-password" @keydown.enter.prevent="confirmDisable" />
+                    <div class="relative">
+                        <Input id="disable-password" v-model="disablePassword"
+                            :type="showDisablePassword ? 'text' : 'password'" autocomplete="current-password"
+                            class="pr-10" @keydown.enter.prevent="confirmDisable" />
+                        <button type="button"
+                            class="absolute transition-colors -translate-y-1/2 right-3 top-1/2 text-muted-foreground hover:text-foreground"
+                            :aria-label="showDisablePassword ? 'Hide password' : 'Show password'"
+                            @click="showDisablePassword = !showDisablePassword">
+                            <EyeOff v-if="showDisablePassword" class="size-4" />
+                            <Eye v-else class="size-4" />
+                        </button>
+                    </div>
                 </Field>
             </FieldGroup>
             <DialogFooter>
@@ -361,8 +393,18 @@ async function confirmRegenerate(): Promise<void> {
                 </Transition>
                 <Field>
                     <FieldLabel for="regenerate-password">Password</FieldLabel>
-                    <Input id="regenerate-password" v-model="regeneratePassword" type="password"
-                        autocomplete="current-password" @keydown.enter.prevent="confirmRegenerate" />
+                    <div class="relative">
+                        <Input id="regenerate-password" v-model="regeneratePassword"
+                            :type="showRegeneratePassword ? 'text' : 'password'" autocomplete="current-password"
+                            class="pr-10" @keydown.enter.prevent="confirmRegenerate" />
+                        <button type="button"
+                            class="absolute transition-colors -translate-y-1/2 right-3 top-1/2 text-muted-foreground hover:text-foreground"
+                            :aria-label="showRegeneratePassword ? 'Hide password' : 'Show password'"
+                            @click="showRegeneratePassword = !showRegeneratePassword">
+                            <EyeOff v-if="showRegeneratePassword" class="size-4" />
+                            <Eye v-else class="size-4" />
+                        </button>
+                    </div>
                 </Field>
             </FieldGroup>
             <DialogFooter>

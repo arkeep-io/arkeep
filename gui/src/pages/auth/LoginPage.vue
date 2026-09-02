@@ -91,8 +91,15 @@ const onSubmit = handleSubmit(async (values) => {
 
 async function onSubmitCode(): Promise<void> {
     serverError.value = null
-    const code = useRecoveryCode.value ? recoveryCodeValue.value : pinValue.value.join('')
-    if (!code) return
+    const code = useRecoveryCode.value ? recoveryCodeValue.value.trim() : pinValue.value.join('')
+    if (!code) {
+        serverError.value = useRecoveryCode.value ? 'Enter your recovery code' : 'Enter the 6-digit code'
+        return
+    }
+    if (!useRecoveryCode.value && code.length !== 6) {
+        serverError.value = 'Enter all 6 digits'
+        return
+    }
 
     isVerifying.value = true
     try {
@@ -268,9 +275,9 @@ onMounted(fetchOIDCProviders)
                                 </Transition>
 
                                 <!-- TOTP code -->
-                                <Field v-if="!useRecoveryCode" class="items-center">
-                                    <PinInput v-model="pinValue" otp @complete="onSubmitCode">
-                                        <PinInputGroup>
+                                <Field v-if="!useRecoveryCode">
+                                    <PinInput v-model="pinValue" otp class="w-full" @complete="onSubmitCode">
+                                        <PinInputGroup class="w-full justify-between">
                                             <PinInputSlot v-for="i in 6" :key="i" :index="i - 1" />
                                         </PinInputGroup>
                                     </PinInput>
