@@ -9,7 +9,7 @@ RUN npm install -g pnpm
 
 WORKDIR /src/gui
 
-COPY gui/package.json gui/pnpm-lock.yaml* ./
+COPY gui/package.json gui/pnpm-lock.yaml* gui/pnpm-workspace.yaml* ./
 RUN pnpm install --frozen-lockfile
 
 COPY gui/ ./
