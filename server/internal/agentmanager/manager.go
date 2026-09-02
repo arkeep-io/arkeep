@@ -280,7 +280,7 @@ func (m *Manager) Dispatch(agentID string, job *proto.JobAssignment) error {
 	m.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("agent %s is not connected", agentID)
+		return ErrAgentNotConnected
 	}
 
 	if err := agent.stream.Send(job); err != nil {

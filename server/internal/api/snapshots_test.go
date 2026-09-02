@@ -286,15 +286,15 @@ func TestSnapshotHandler_RestoreImported(t *testing.T) {
 		s, _ := createDBImportedSnapshot(t, e.deps, "repo-secret")
 		agent := createDBAgent(t, e.deps, "restore-agent")
 
-		// The agent is not connected, so the dispatch fails with 503 — but the
-		// job must already have been persisted by then, which is what proves
-		// a policy-less restore job is storable.
+		// The agent is not connected, so the job is queued (202) rather than
+		// dispatched immediately — but it must already have been persisted by
+		// then, which is what proves a policy-less restore job is storable.
 		resp := e.post(t, "/api/v1/snapshots/"+s.ID.String()+"/restore",
 			e.adminToken(t), map[string]string{
 				"agent_id":    agent.ID.String(),
 				"target_path": "/restore/path",
 			})
-		assertStatus(t, resp, http.StatusServiceUnavailable)
+		assertStatus(t, resp, http.StatusAccepted)
 
 		var jobs []db.Job
 		if err := e.deps.gdb.Where("agent_id = ?", agent.ID).Find(&jobs).Error; err != nil {

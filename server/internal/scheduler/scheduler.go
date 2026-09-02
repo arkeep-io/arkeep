@@ -435,6 +435,29 @@ func (s *Scheduler) addJob(policy *db.Policy) error {
 // policy timestamps, and dispatches the assignment to the agent.
 // It returns the created Job so callers can surface its ID.
 func (s *Scheduler) runJob(policy *db.Policy, destinations []repositories.PolicyDestinationWithName) (*db.Job, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// If a pending job already exists for this policy, skip creating another one.
+	// The existing pending job will be dispatched when the agent reconnects.
+	// Only guards scheduled/manual runs: a resume (see createAndDispatch) must
+	// not be skipped just because an unrelated pending job exists for the policy.
+	hasPending, err := s.jobs.HasPendingJob(ctx, policy.ID)
+	if err != nil {
+		s.logger.Error("failed to check pending jobs for policy",
+			zap.String("policy_id", policy.ID.String()),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("failed to check pending jobs for policy %s: %w", policy.ID, err)
+	}
+	if hasPending {
+		s.logger.Debug("skipping scheduled backup: pending job already exists for policy",
+			zap.String("policy_id", policy.ID.String()),
+			zap.String("policy_name", policy.Name),
+		)
+		return nil, nil
+	}
+
 	return s.createAndDispatch(policy, destinations, nil)
 }
 
@@ -451,24 +474,6 @@ func (s *Scheduler) createAndDispatch(policy *db.Policy, destinations []reposito
 			zap.String("policy_id", policy.ID.String()),
 		)
 		return nil, ErrPolicyDisabled
-	}
-
-	// If a pending job already exists for this policy, skip creating another one.
-	// The existing pending job will be dispatched when the agent reconnects.
-	hasPending, err := s.jobs.HasPendingJob(ctx, policy.ID)
-	if err != nil {
-		s.logger.Error("failed to check pending jobs for policy",
-			zap.String("policy_id", policy.ID.String()),
-			zap.Error(err),
-		)
-		return nil, fmt.Errorf("failed to check pending jobs for policy %s: %w", policy.ID, err)
-	}
-	if hasPending {
-		s.logger.Debug("skipping scheduled backup: pending job already exists for policy",
-			zap.String("policy_id", policy.ID.String()),
-			zap.String("policy_name", policy.Name),
-		)
-		return nil, nil
 	}
 
 	// --- Create Job record ---
