@@ -130,7 +130,7 @@ func run(ctx context.Context, cfg *config) error {
 	// Idempotent: skips extraction if the file already exists with the
 	// correct size. Must run before NewWrapper.
 	extractor := restic.NewExtractor(cfg.stateDir)
-	wrapper, err := restic.NewWrapper(extractor)
+	wrapper, err := restic.NewWrapper(extractor, logger)
 	if err != nil {
 		return fmt.Errorf("failed to prepare restic/rclone binaries: %w", err)
 	}

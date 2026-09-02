@@ -39,11 +39,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// PendingDispatcher is implemented by the scheduler to flush pending jobs when
-// an agent reconnects. Defined as an interface to avoid importing the scheduler
-// package from the grpc package.
+// PendingDispatcher is implemented by the scheduler to catch an agent up when it
+// reconnects: flushing jobs queued while it was offline, and queueing a fresh run
+// for backups its previous session left interrupted. Defined as an interface to
+// avoid importing the scheduler package from the grpc package.
 type PendingDispatcher interface {
 	DispatchPending(ctx context.Context, agentID uuid.UUID)
+	ResumeInterrupted(ctx context.Context, agentID uuid.UUID)
 }
 
 // Server is the gRPC server that handles agent connections.
@@ -439,11 +441,18 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		)
 	}
 
+	// Push the transition to any GUI clients watching this agent, so an
+	// already-open Agents/AgentDetail page updates without a manual refresh.
+	s.hub.Publish("agent:"+req.AgentId, websocket.Message{
+		Type:    websocket.MsgAgentStatus,
+		Payload: map[string]any{"status": "online"},
+	})
+
 	// Register the agent in the in-memory manager so the scheduler can
 	// dispatch jobs to it by calling manager.Dispatch(agentID, job).
 	// Docker availability is read from the capabilities cached during the
 	// Register RPC — StreamJobsRequest does not carry capability fields.
-	s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
+	session := s.agentManager.Register(req.AgentId, agent.Hostname, s.dockerAvailable(req.AgentId), stream)
 
 	if s.notifSvc != nil {
 		go func() {
@@ -455,16 +464,35 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		}()
 	}
 
-	// Flush any jobs that were created while the agent was offline.
+	// Flush any jobs that were created while the agent was offline, then queue a
+	// fresh run for anything that was interrupted mid-backup last time the agent
+	// disappeared. Sequential in one goroutine so the ordering is deterministic:
+	// pending work already queued goes out before new resume jobs are created.
 	if s.pendingDispatch != nil {
-		go s.pendingDispatch.DispatchPending(context.Background(), agentID)
+		go func() {
+			bgCtx := context.Background()
+			s.pendingDispatch.DispatchPending(bgCtx, agentID)
+			s.pendingDispatch.ResumeInterrupted(bgCtx, agentID)
+		}()
 	}
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
 
 	// Cleanup: remove from in-memory registry and mark offline in the DB.
-	s.agentManager.Deregister(req.AgentId)
+	//
+	// Deregister reports false when this stream was already superseded by a newer
+	// connection from the same agent, which is the normal case after a laptop
+	// wakes up: the agent reconnects within a second, and this context only
+	// completes minutes later when TCP dead-peer detection fires. Touching the
+	// agent or its jobs at that point would deregister a live agent and interrupt
+	// the job it has just started, so the whole cleanup is skipped.
+	if !s.agentManager.Deregister(req.AgentId, session) {
+		s.logger.Info("StreamJobs stream closed for a superseded session, skipping cleanup",
+			zap.String("agent_id", req.AgentId),
+		)
+		return nil
+	}
 
 	// Use a fresh context for cleanup since the stream context is already done.
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -477,12 +505,19 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 		)
 	}
 
+	// Push the transition to any GUI clients watching this agent, so an
+	// already-open Agents/AgentDetail page updates without a manual refresh.
+	s.hub.Publish("agent:"+req.AgentId, websocket.Message{
+		Type:    websocket.MsgAgentStatus,
+		Payload: map[string]any{"status": "offline"},
+	})
+
 	// Orphan recovery: any job still "running" when the agent disconnects will
-	// never receive a terminal status report. Mark them as failed so they don't
-	// appear stuck in the UI indefinitely. The agent may have already reported
-	// "cancelled" for a job it was gracefully shutting down; UpdateStatus is
-	// idempotent for terminal states (RowsAffected == 0 if already terminal).
-	if n, err := s.jobRepo.FailRunningJobsForAgent(cleanupCtx, agentID, "agent disconnected"); err != nil {
+	// never receive a terminal status report. Mark them "interrupted" — not
+	// "failed" — so they are distinguishable from a genuine backup error and can
+	// be resumed when the agent comes back. A job the user cancelled is already
+	// out of "running" and is left alone.
+	if n, err := s.jobRepo.MarkRunningJobsInterruptedForAgent(cleanupCtx, agentID, "agent disconnected"); err != nil {
 		s.logger.Warn("failed to recover orphaned jobs",
 			zap.String("agent_id", req.AgentId),
 			zap.Error(err),
@@ -540,6 +575,17 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 		return nil, status.Error(codes.InvalidArgument, "unknown job status")
 	}
 
+	if errors.Is(err, repositories.ErrTerminalState) {
+		// Expected: the connection dropped mid-job, the server recorded the job
+		// as interrupted, and restic kept running on the agent — this is its
+		// outcome arriving late. The recorded outcome wins, and the resume that
+		// was already queued stands.
+		s.logger.Info("ignoring status report for a job already in a terminal state",
+			zap.String("job_id", req.JobId),
+			zap.String("reported_status", dbStatus),
+		)
+		return &proto.JobStatusResponse{Ok: true}, nil
+	}
 	if err != nil {
 		s.logger.Error("failed to update job status",
 			zap.String("job_id", req.JobId),
@@ -598,13 +644,20 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 		return
 	}
 
+	// A restore of an imported snapshot has no policy; the notification payload
+	// then carries a zero policy ID.
+	var policyID uuid.UUID
+	if job.PolicyID != nil {
+		policyID = *job.PolicyID
+	}
+
 	switch st {
 	case proto.JobStatus_JOB_STATUS_COMPLETED:
-		if err := s.notifSvc.NotifyJobSucceeded(ctx, jobID, job.PolicyID, job.PolicyName); err != nil {
+		if err := s.notifSvc.NotifyJobSucceeded(ctx, jobID, policyID, job.PolicyName); err != nil {
 			s.logger.Warn("failed to send job-succeeded notification", zap.Error(err))
 		}
 	case proto.JobStatus_JOB_STATUS_FAILED:
-		if err := s.notifSvc.NotifyJobFailed(ctx, jobID, job.PolicyID, job.PolicyName, errMsg); err != nil {
+		if err := s.notifSvc.NotifyJobFailed(ctx, jobID, policyID, job.PolicyName, errMsg); err != nil {
 			s.logger.Warn("failed to send job-failed notification", zap.Error(err))
 		}
 	}
@@ -823,14 +876,16 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 			// reflects what was backed up. This uses the policy's current sources,
 			// which is accurate for the vast majority of cases.
 			snapshotSources := "[]"
-			if policy, pErr := s.policyRepo.GetByID(ctx, job.PolicyID); pErr == nil {
-				snapshotSources = policy.Sources
+			if job.PolicyID != nil {
+				if policy, pErr := s.policyRepo.GetByID(ctx, *job.PolicyID); pErr == nil {
+					snapshotSources = policy.Sources
+				}
 			}
 
 			snap := &db.Snapshot{
 				PolicyID:      job.PolicyID,
 				DestinationID: destID,
-				JobID:         jobID,
+				JobID:         &jobID,
 				SnapshotID:    req.SnapshotId,
 				SizeBytes:     req.SizeBytes,
 				Tags:          "[]",
@@ -898,6 +953,89 @@ func (s *Server) ReportSnapshotBrowse(ctx context.Context, req *proto.SnapshotBr
 func (s *Server) ReportSnapshotImport(ctx context.Context, req *proto.SnapshotImportReport) (*proto.SnapshotImportResponse, error) {
 	s.agentManager.DeliverSnapshotImport(req)
 	return &proto.SnapshotImportResponse{Ok: true}, nil
+}
+
+// ReportSnapshotReconcile receives the authoritative list of snapshot IDs still
+// present in a destination's repository, sent by the agent right after the
+// retention policy ran. Cached snapshot records for that destination that are
+// absent from the list are evicted: this is how the database learns about
+// snapshots the backup engine pruned, and it also clears records that
+// accumulated before this RPC existed.
+//
+// The listing is authoritative because a destination maps 1:1 to a repository
+// (the repo URL is derived purely from the destination record), so it covers
+// every snapshot stored there regardless of which policy or agent produced it.
+func (s *Server) ReportSnapshotReconcile(ctx context.Context, req *proto.SnapshotReconcileReport) (*proto.SnapshotReconcileResponse, error) {
+	destID, err := uuid.Parse(req.DestinationId)
+	if err != nil {
+		s.logger.Warn("ReportSnapshotReconcile: invalid destination_id",
+			zap.String("destination_id", req.DestinationId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.InvalidArgument, "invalid destination_id")
+	}
+
+	// Never treat an empty list as "the repository holds no snapshots". The
+	// agent only reports a successful listing, and the backup that triggered it
+	// just created a snapshot, so an empty list means something went wrong
+	// upstream. Acting on it would wipe every record for this destination.
+	if len(req.LiveSnapshotIds) == 0 {
+		s.logger.Warn("ReportSnapshotReconcile: empty snapshot list, skipping reconcile",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+		)
+		return &proto.SnapshotReconcileResponse{}, nil
+	}
+
+	// Take the earlier of the agent's pre-listing timestamp and the server's
+	// receive time. An agent clock running ahead would otherwise push the cutoff
+	// into the future and evict records for snapshots created after the listing
+	// was taken. A clock running behind is harmless: the reconcile is merely
+	// more conservative about recent records, and stale ones still match.
+	cutoff := time.Now().UTC()
+	if req.ListedAt != nil {
+		if listedAt := req.ListedAt.AsTime().UTC(); listedAt.Before(cutoff) {
+			cutoff = listedAt
+		}
+	}
+
+	deleted, err := s.snapshotRepo.DeleteStaleByDestination(ctx, destID, req.LiveSnapshotIds, cutoff)
+	if err != nil {
+		s.logger.Error("ReportSnapshotReconcile: failed to evict stale snapshots",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to reconcile snapshots")
+	}
+
+	if deleted > 0 {
+		s.logger.Info("stale snapshot records evicted",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.Int64("deleted", deleted),
+			zap.Int("live", len(req.LiveSnapshotIds)),
+		)
+	} else {
+		s.logger.Debug("snapshot reconcile: no stale records",
+			zap.String("destination_id", req.DestinationId),
+			zap.Int("live", len(req.LiveSnapshotIds)),
+		)
+	}
+
+	// The repository size is measured after the prune, so this is the first
+	// accurate figure for this run — the destination report sent before
+	// retention carries none. Non-fatal.
+	if req.RepoSizeBytes > 0 && s.destRepo != nil {
+		if err := s.destRepo.UpdateRepoSize(ctx, destID, req.RepoSizeBytes, time.Now().UTC()); err != nil {
+			s.logger.Warn("ReportSnapshotReconcile: failed to update destination repo size",
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
+	}
+
+	return &proto.SnapshotReconcileResponse{Deleted: deleted}, nil
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ package agentmanager
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/metadata"
@@ -41,9 +42,11 @@ func TestRegister_AddsAgent(t *testing.T) {
 
 func TestDeregister_RemovesAgent(t *testing.T) {
 	mgr := newTestManager()
-	mgr.Register("agent-1", "host1", false, &mockStream{})
-	mgr.Deregister("agent-1")
+	session := mgr.Register("agent-1", "host1", false, &mockStream{})
 
+	if !mgr.Deregister("agent-1", session) {
+		t.Error("Deregister returned false for the current session, want true")
+	}
 	if mgr.IsConnected("agent-1") {
 		t.Error("expected agent-1 to be disconnected after Deregister")
 	}
@@ -59,6 +62,81 @@ func TestRegister_ReplacesExistingConnection(t *testing.T) {
 
 	if got := mgr.ConnectedAgentsCount(); got != 1 {
 		t.Errorf("ConnectedAgentsCount() = %d after duplicate register, want 1", got)
+	}
+}
+
+// TestDeregister_IgnoresSupersededSession covers the laptop-wake ordering: the
+// agent has already reconnected when the previous stream's context finally
+// expires. That late teardown must not remove the live connection.
+func TestDeregister_IgnoresSupersededSession(t *testing.T) {
+	mgr := newTestManager()
+	stale := mgr.Register("agent-1", "host1", false, &mockStream{})
+	live := mgr.Register("agent-1", "host1", false, &mockStream{})
+
+	if stale == live {
+		t.Fatalf("Register handed out the same token twice (%d): sessions cannot be told apart", stale)
+	}
+	if mgr.Deregister("agent-1", stale) {
+		t.Error("Deregister returned true for a superseded session, want false")
+	}
+	if !mgr.IsConnected("agent-1") {
+		t.Error("the live agent was removed by the teardown of a superseded session")
+	}
+
+	// The live session can still deregister itself.
+	if !mgr.Deregister("agent-1", live) {
+		t.Error("Deregister returned false for the live session, want true")
+	}
+	if mgr.IsConnected("agent-1") {
+		t.Error("expected agent-1 to be disconnected after the live session tore down")
+	}
+}
+
+// TestDeregister_UnknownAgent guards the branch where nothing is registered.
+func TestDeregister_UnknownAgent(t *testing.T) {
+	mgr := newTestManager()
+	if mgr.Deregister("agent-does-not-exist", 1) {
+		t.Error("Deregister returned true for an unregistered agent, want false")
+	}
+}
+
+// TestDeregisterStale_RemovesGenuinelyStaleAgent covers the heartbeat
+// watchdog's normal case: the connection already existed when the sweep
+// started deciding to remove it.
+func TestDeregisterStale_RemovesGenuinelyStaleAgent(t *testing.T) {
+	mgr := newTestManager()
+	mgr.Register("agent-1", "host1", false, &mockStream{})
+
+	sweepStart := time.Now().UTC()
+	if !mgr.DeregisterStale("agent-1", sweepStart) {
+		t.Error("DeregisterStale returned false for a connection older than sweepStart, want true")
+	}
+	if mgr.IsConnected("agent-1") {
+		t.Error("expected agent-1 to be disconnected after DeregisterStale")
+	}
+}
+
+// TestDeregisterStale_IgnoresReconnectedAgent is the race this method exists
+// for: the agent reconnects after the watchdog captured sweepStart but before
+// it calls DeregisterStale. That fresh connection must survive.
+func TestDeregisterStale_IgnoresReconnectedAgent(t *testing.T) {
+	mgr := newTestManager()
+	sweepStart := time.Now().UTC()
+	mgr.Register("agent-1", "host1", false, &mockStream{})
+
+	if mgr.DeregisterStale("agent-1", sweepStart) {
+		t.Error("DeregisterStale returned true for a connection newer than sweepStart, want false")
+	}
+	if !mgr.IsConnected("agent-1") {
+		t.Error("the freshly reconnected agent was removed by a stale sweep decision")
+	}
+}
+
+// TestDeregisterStale_UnknownAgent guards the branch where nothing is registered.
+func TestDeregisterStale_UnknownAgent(t *testing.T) {
+	mgr := newTestManager()
+	if mgr.DeregisterStale("agent-does-not-exist", time.Now().UTC()) {
+		t.Error("DeregisterStale returned true for an unregistered agent, want false")
 	}
 }
 

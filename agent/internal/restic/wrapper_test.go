@@ -2,9 +2,18 @@ package restic
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 )
 
 // TestParseResticStats verifies the repository size is extracted from
@@ -188,7 +197,259 @@ func TestForget_ZeroPolicy_Skips(t *testing.T) {
 	w := &Wrapper{resticBin: "/nonexistent/restic", rcloneBin: "/nonexistent/rclone"}
 	dest := Destination{Type: DestLocal, RepoURL: "/tmp/repo", Password: "pw"}
 
-	if err := w.Forget(context.Background(), dest, RetentionPolicy{}); err != nil {
+	if err := w.Forget(context.Background(), dest, RetentionPolicy{}, []string{"policy:abc"}); err != nil {
 		t.Errorf("Forget with zero policy should be a no-op, got error: %v", err)
+	}
+}
+
+// TestForget_NoTags_Fails verifies that Forget refuses to run without tags.
+// An unscoped forget considers every snapshot in the repository, so a
+// destination shared by two policies would have both pruned by whichever ran
+// last. Pruning nothing is recoverable; pruning another policy's snapshots is
+// not — so this must be an error, never a fallback to the unscoped command.
+func TestForget_NoTags_Fails(t *testing.T) {
+	w := &Wrapper{resticBin: "/nonexistent/restic", rcloneBin: "/nonexistent/rclone"}
+	dest := Destination{Type: DestLocal, RepoURL: "/tmp/repo", Password: "pw"}
+
+	err := w.Forget(context.Background(), dest, RetentionPolicy{Daily: 7}, nil)
+	if err == nil {
+		t.Fatal("Forget without tags should fail, got nil error")
+	}
+	if !strings.Contains(err.Error(), "without tags") {
+		t.Errorf("error should explain the missing tags, got: %v", err)
+	}
+}
+
+// TestBuildForgetArgs verifies that retention is always scoped by tag and that
+// only the configured keep rules are passed through.
+func TestBuildForgetArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  RetentionPolicy
+		tags    []string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:   "single keep rule is tag-scoped",
+			policy: RetentionPolicy{Daily: 7},
+			tags:   []string{"policy:11111111-2222-3333-4444-555555555555"},
+			want: []string{
+				"forget", "--prune", "--json",
+				"--tag", "policy:11111111-2222-3333-4444-555555555555",
+				"--keep-daily", "7",
+			},
+		},
+		{
+			name:   "all keep rules in order",
+			policy: RetentionPolicy{Last: 1, Hourly: 2, Daily: 3, Weekly: 4, Monthly: 5, Yearly: 6},
+			tags:   []string{"policy:abc"},
+			want: []string{
+				"forget", "--prune", "--json", "--tag", "policy:abc",
+				"--keep-last", "1", "--keep-hourly", "2", "--keep-daily", "3",
+				"--keep-weekly", "4", "--keep-monthly", "5", "--keep-yearly", "6",
+			},
+		},
+		{
+			name:   "zero keep rules are omitted",
+			policy: RetentionPolicy{Weekly: 4},
+			tags:   []string{"policy:abc"},
+			want: []string{
+				"forget", "--prune", "--json", "--tag", "policy:abc",
+				"--keep-weekly", "4",
+			},
+		},
+		{
+			name:   "each tag gets its own flag",
+			policy: RetentionPolicy{Last: 1},
+			tags:   []string{"policy:abc", "env:prod"},
+			want: []string{
+				"forget", "--prune", "--json",
+				"--tag", "policy:abc", "--tag", "env:prod",
+				"--keep-last", "1",
+			},
+		},
+		{
+			name:    "no tags is rejected",
+			policy:  RetentionPolicy{Daily: 7},
+			tags:    nil,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildForgetArgs(tt.policy, tt.tags)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("buildForgetArgs() = %v, want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildForgetArgs() unexpected error: %v", err)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("buildForgetArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildCmd_GracefulCancelSendsSIGINT verifies that cancelling the context
+// passed to buildCmd sends SIGINT to the child process instead of the Go
+// default (an immediate SIGKILL). This is what gives restic a chance to run
+// its own shutdown handler and release its repository lock — without it, any
+// cancellation (job cancel, agent shutdown, systemd restart) that lands
+// mid-operation orphans an exclusive lock that blocks every future run.
+func TestBuildCmd_GracefulCancelSendsSIGINT(t *testing.T) {
+	// /bin/sleep installs no signal handler of its own, so its termination
+	// signal directly reflects what buildCmd's cmd.Cancel actually sent —
+	// no shell/trap semantics in the way (POSIX shells only run pending traps
+	// once their current foreground child exits, which would make a
+	// shell-script stand-in useless for testing prompt signal delivery).
+	w := &Wrapper{resticBin: "/bin/sleep", rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: "/tmp", Password: "pw"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := w.buildCmd(ctx, dest, []string{"5"})
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start /bin/sleep: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	waitErr := cmd.Wait()
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("Wait() error = %v, want *exec.ExitError", waitErr)
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok {
+		t.Fatalf("could not read a Unix wait status from %v", exitErr)
+	}
+	if !ws.Signaled() || ws.Signal() != syscall.SIGINT {
+		t.Errorf("process terminated by signal %v (signaled=%v), want SIGINT — "+
+			"the default (Go stdlib) behavior of an immediate SIGKILL would never "+
+			"give restic a chance to release its repository lock", ws.Signal(), ws.Signaled())
+	}
+}
+
+// writeFakeResticScript creates a shell script standing in for the restic
+// binary. It handles two commands: "unlock", which always succeeds and
+// records that it ran, and any other command ("the real command"), which
+// fails with restic's lock-conflict exit code (11) for the first failTimes
+// invocations and succeeds afterwards. Invocation counts are tracked via
+// files so the test can assert exactly how many times each command ran.
+func writeFakeResticScript(t *testing.T, dir string, failTimes int) (script, counterFile, unlockMarker string) {
+	t.Helper()
+	script = filepath.Join(dir, "fake-restic.sh")
+	counterFile = filepath.Join(dir, "count")
+	unlockMarker = filepath.Join(dir, "unlocked")
+
+	body := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "unlock" ]; then
+  echo ran >> %q
+  exit 0
+fi
+count=0
+if [ -f %q ]; then
+  count=$(cat %q)
+fi
+count=$((count+1))
+echo "$count" > %q
+if [ "$count" -le %d ]; then
+  echo "unable to create lock in backend: repository is already locked exclusively" >&2
+  exit 11
+fi
+exit 0
+`, unlockMarker, counterFile, counterFile, counterFile, failTimes)
+
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, counterFile, unlockMarker
+}
+
+func readCounter(t *testing.T, path string) int {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &n); err != nil {
+		t.Fatalf("failed to parse counter file %q = %q: %v", path, data, err)
+	}
+	return n
+}
+
+// TestRun_RetriesOnceAfterUnlockOnLockConflict is the end-to-end regression
+// for issue #252: a command that fails once with restic's lock-conflict exit
+// code must trigger `restic unlock` and a single retry, succeeding overall —
+// instead of failing identically forever the way Arkeep did before this fix.
+func TestRun_RetriesOnceAfterUnlockOnLockConflict(t *testing.T) {
+	dir := t.TempDir()
+	script, counterFile, unlockMarker := writeFakeResticScript(t, dir, 1)
+	w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: dir, Password: "pw"}
+
+	if err := w.run(context.Background(), dest, []string{"forget"}); err != nil {
+		t.Fatalf("run() = %v, want nil (should recover after unlock)", err)
+	}
+
+	if got := readCounter(t, counterFile); got != 2 {
+		t.Errorf("real command invoked %d times, want 2 (one failure + one retry)", got)
+	}
+	if _, err := os.Stat(unlockMarker); err != nil {
+		t.Error("restic unlock was not invoked")
+	}
+}
+
+// TestRun_DoesNotRetryOnOtherErrors verifies that only the specific
+// lock-conflict exit code (11) triggers the unlock-and-retry path — any other
+// failure is returned immediately, with no unlock attempt.
+func TestRun_DoesNotRetryOnOtherErrors(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	unlockMarker := filepath.Join(dir, "unlocked")
+	body := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = \"unlock\" ]; then echo ran >> %q; exit 0; fi\nexit 1\n", unlockMarker)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: dir, Password: "pw"}
+
+	if err := w.run(context.Background(), dest, []string{"forget"}); err == nil {
+		t.Fatal("run() = nil, want an error for a non-lock-conflict failure")
+	}
+	if _, err := os.Stat(unlockMarker); err == nil {
+		t.Error("restic unlock should not be invoked for a non-lock-conflict failure")
+	}
+}
+
+// TestRun_FailsIfSecondAttemptAlsoLocked verifies there is no unbounded retry
+// loop: if the retry ALSO hits a lock conflict (e.g. another operation is
+// genuinely still running), the error is propagated after exactly one retry.
+func TestRun_FailsIfSecondAttemptAlsoLocked(t *testing.T) {
+	dir := t.TempDir()
+	script, counterFile, unlockMarker := writeFakeResticScript(t, dir, 2)
+	w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: dir, Password: "pw"}
+
+	if err := w.run(context.Background(), dest, []string{"forget"}); err == nil {
+		t.Fatal("run() = nil, want an error when the retry also hits a lock conflict")
+	}
+
+	if got := readCounter(t, counterFile); got != 2 {
+		t.Errorf("real command invoked %d times, want 2 (one failure + exactly one retry, no more)", got)
+	}
+	if _, err := os.Stat(unlockMarker); err != nil {
+		t.Error("restic unlock should have been attempted once")
 	}
 }

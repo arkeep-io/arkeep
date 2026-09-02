@@ -252,6 +252,80 @@ func TestPolicyHandler_Create(t *testing.T) {
 			t.Errorf("fetch: retention_yearly = %d, want 0", fetched.RetentionYearly)
 		}
 	})
+
+	t.Run("use_destination_password resolves the password from the destination, never from the request", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		dest := createDBDestination(t, e.deps, "imported", "rclone")
+		dest.RepoPassword = "captured-at-import"
+		if err := e.deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{{"destination_id": dest.ID.String(), "priority": 0}}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var created struct {
+			ID string `json:"id"`
+		}
+		decodeData(t, resp, &created)
+		id, err := uuid.Parse(created.ID)
+		if err != nil {
+			t.Fatalf("parse id: %v", err)
+		}
+		policy, err := e.deps.policies.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if string(policy.RepoPassword) != "captured-at-import" {
+			t.Errorf("RepoPassword = %q, want the destination's stored password", policy.RepoPassword)
+		}
+	})
+
+	t.Run("use_destination_password fails when the destination has no stored password", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		dest := createDBDestination(t, e.deps, "fresh", "rclone")
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{{"destination_id": dest.ID.String(), "priority": 0}}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("use_destination_password fails when selected destinations disagree", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		destA := createDBDestination(t, e.deps, "imported-a", "rclone")
+		destA.RepoPassword = "password-a"
+		if err := e.deps.dests.Update(context.Background(), destA); err != nil {
+			t.Fatalf("Update destA: %v", err)
+		}
+		destB := createDBDestination(t, e.deps, "imported-b", "rclone")
+		destB.RepoPassword = "password-b"
+		if err := e.deps.dests.Update(context.Background(), destB); err != nil {
+			t.Fatalf("Update destB: %v", err)
+		}
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{
+			{"destination_id": destA.ID.String(), "priority": 0},
+			{"destination_id": destB.ID.String(), "priority": 1},
+		}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
 }
 
 func TestPolicyHandler_Update(t *testing.T) {
@@ -347,4 +421,94 @@ func TestPolicyHandler_Delete(t *testing.T) {
 		resp := e.del(t, "/api/v1/policies/00000000-0000-0000-0000-000000000001", "")
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
+}
+
+// TestPolicyHandler_ResumeInterrupted locks the create/update contract for the
+// resume option. Worth its own test because db.Policy.ResumeInterrupted carries
+// no GORM default tag: were one added, GORM would drop an explicit false from the
+// INSERT and silently turn it into true.
+func TestPolicyHandler_ResumeInterrupted(t *testing.T) {
+	body := func(agentID string) map[string]any {
+		return map[string]any{
+			"name":          "laptop-policy",
+			"agent_id":      agentID,
+			"schedule":      "@daily",
+			"sources":       `["/data"]`,
+			"repo_password": "supersecret",
+		}
+	}
+	type policyBody struct {
+		ID                string `json:"id"`
+		ResumeInterrupted bool   `json:"resume_interrupted"`
+	}
+
+	t.Run("defaults to enabled when omitted", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body(agentID))
+		assertStatus(t, resp, http.StatusCreated)
+
+		var data policyBody
+		decodeData(t, resp, &data)
+		if !data.ResumeInterrupted {
+			t.Error("resume_interrupted = false, want true when the field is omitted")
+		}
+	})
+
+	t.Run("honours an explicit false on create", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		b := body(agentID)
+		b["resume_interrupted"] = false
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), b)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var data policyBody
+		decodeData(t, resp, &data)
+		if data.ResumeInterrupted {
+			t.Error("resume_interrupted = true, want false as requested")
+		}
+
+		// And it survives a round trip through the database.
+		stored, err := e.deps.policies.GetByID(context.Background(), mustParsePolicyUUID(t, data.ID))
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if stored.ResumeInterrupted {
+			t.Error("stored policy has resume_interrupted = true, want false")
+		}
+	})
+
+	t.Run("can be toggled off and back on", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body(agentID))
+		assertStatus(t, resp, http.StatusCreated)
+		var created policyBody
+		decodeData(t, resp, &created)
+
+		for _, want := range []bool{false, true} {
+			resp = e.patch(t, "/api/v1/policies/"+created.ID, e.adminToken(t), map[string]any{
+				"resume_interrupted": want,
+			})
+			assertStatus(t, resp, http.StatusOK)
+
+			var updated policyBody
+			decodeData(t, resp, &updated)
+			if updated.ResumeInterrupted != want {
+				t.Errorf("resume_interrupted = %v after PATCH, want %v", updated.ResumeInterrupted, want)
+			}
+		}
+	})
+}
+
+func mustParsePolicyUUID(t *testing.T, s string) uuid.UUID {
+	t.Helper()
+	id, err := uuid.Parse(s)
+	if err != nil {
+		t.Fatalf("parse policy id %q: %v", s, err)
+	}
+	return id
 }

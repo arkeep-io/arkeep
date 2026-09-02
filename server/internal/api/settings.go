@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -10,9 +11,16 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
+
+// LogPruner runs an on-demand job_logs retention sweep. Satisfied by
+// *logretention.Service.
+type LogPruner interface {
+	RunOnce(ctx context.Context) (int64, error)
+}
 
 // SettingsHandler groups settings-related HTTP handlers.
 // All routes in this handler are admin-only, enforced by RequireRole("admin")
@@ -23,20 +31,24 @@ type SettingsHandler struct {
 	oidcRepo     repositories.OIDCProviderRepository
 	settingsRepo repositories.SettingsRepository
 	auditRepo    repositories.AuditRepository
+	logPruner    LogPruner
 	logger       *zap.Logger
 }
 
-// NewSettingsHandler creates a new SettingsHandler.
+// NewSettingsHandler creates a new SettingsHandler. logPruner may be nil, in
+// which case the manual log-prune endpoint is unavailable.
 func NewSettingsHandler(
 	oidcRepo repositories.OIDCProviderRepository,
 	settingsRepo repositories.SettingsRepository,
 	auditRepo repositories.AuditRepository,
+	logPruner LogPruner,
 	logger *zap.Logger,
 ) *SettingsHandler {
 	return &SettingsHandler{
 		oidcRepo:     oidcRepo,
 		settingsRepo: settingsRepo,
 		auditRepo:    auditRepo,
+		logPruner:    logPruner,
 		logger:       logger.Named("settings_handler"),
 	}
 }
@@ -484,6 +496,96 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 }
 
 // =============================================================================
+// Job-log retention settings
+// =============================================================================
+
+// maxRetentionDays caps the retention window at a sane upper bound (~10 years).
+const maxRetentionDays = 3650
+
+type logRetentionSettings struct {
+	InfoDays      int `json:"info_days"`
+	WarnErrorDays int `json:"warn_error_days"`
+}
+
+// GetLogRetention handles GET /api/v1/settings/logs (admin only).
+// Returns the current retention windows in days. 0 means "keep forever".
+func (h *SettingsHandler) GetLogRetention(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.settingsRepo.GetMany(r.Context(), "logs.retention.")
+	if err != nil {
+		h.logger.Error("failed to load log retention settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	idx := settingsToMap(settings)
+	Ok(w, logRetentionSettings{
+		InfoDays:      intSetting(idx, logretention.KeyInfoRetentionDays),
+		WarnErrorDays: intSetting(idx, logretention.KeyWarnErrorRetentionDays),
+	})
+}
+
+// UpsertLogRetention handles PUT /api/v1/settings/logs (admin only).
+func (h *SettingsHandler) UpsertLogRetention(w http.ResponseWriter, r *http.Request) {
+	var req logRetentionSettings
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.InfoDays < 0 || req.WarnErrorDays < 0 {
+		ErrBadRequest(w, "retention days must be zero or greater")
+		return
+	}
+	if req.InfoDays > maxRetentionDays || req.WarnErrorDays > maxRetentionDays {
+		ErrBadRequest(w, "retention days is too large")
+		return
+	}
+
+	ctx := r.Context()
+	pairs := []struct {
+		key   string
+		value string
+	}{
+		{logretention.KeyInfoRetentionDays, strconv.Itoa(req.InfoDays)},
+		{logretention.KeyWarnErrorRetentionDays, strconv.Itoa(req.WarnErrorDays)},
+	}
+	for _, p := range pairs {
+		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
+			h.logger.Error("failed to save log retention setting",
+				zap.String("key", p.key),
+				zap.Error(err),
+			)
+			ErrInternal(w)
+			return
+		}
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "settings.logs.update", "settings", "", map[string]any{
+		"info_days":       req.InfoDays,
+		"warn_error_days": req.WarnErrorDays,
+	})
+	Ok(w, req)
+}
+
+// PruneLogsNow handles POST /api/v1/settings/logs/prune (admin only). It runs a
+// retention sweep immediately using the currently saved settings, so an admin
+// with an already-bloated database does not have to wait for the daily run.
+func (h *SettingsHandler) PruneLogsNow(w http.ResponseWriter, r *http.Request) {
+	if h.logPruner == nil {
+		ErrServiceUnavailable(w, "log retention is not available")
+		return
+	}
+	deleted, err := h.logPruner.RunOnce(r.Context())
+	if err != nil {
+		h.logger.Error("manual log prune failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	logAudit(r, h.auditRepo, h.logger, "settings.logs.prune", "settings", "", map[string]any{
+		"deleted": deleted,
+	})
+	Ok(w, map[string]any{"deleted": deleted})
+}
+
+// =============================================================================
 // Internal helpers
 // =============================================================================
 
@@ -498,6 +600,20 @@ func splitRecipients(raw string) []string {
 		}
 	}
 	return out
+}
+
+// intSetting parses a stored setting as a non-negative int, returning 0 when the
+// key is absent or unparseable.
+func intSetting(idx map[string]string, key string) int {
+	v, ok := idx[key]
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func boolSetting(idx map[string]string, key string, defaultVal bool) bool {

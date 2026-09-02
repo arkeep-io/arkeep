@@ -36,6 +36,7 @@ import {
   PencilLine,
   Copy,
   Trash2,
+  Archive,
   HardDrive,
   ChevronUp,
   ChevronDown,
@@ -48,6 +49,7 @@ import {
 import { api } from '@/services/api'
 import type { Destination, ApiResponse } from '@/types'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
+import ImportSnapshotsDialog from '@/components/destinations/ImportSnapshotsDialog.vue'
 
 interface DestinationListResponse {
   items: Destination[]
@@ -77,6 +79,10 @@ const sheetOpen = ref(false)
 const editingDestination = ref<Destination | null>(null)
 // Source destination when duplicating; mutually exclusive with editingDestination.
 const cloningDestination = ref<Destination | null>(null)
+
+// Import-snapshots dialog
+const importDialogOpen = ref(false)
+const destinationToImport = ref<Destination | null>(null)
 
 // Delete dialog
 const deleteDialogOpen = ref(false)
@@ -167,6 +173,11 @@ function openCloneSheet(dest: Destination) {
 
 function onSaved() {
   fetchDestinations()
+}
+
+function openImportDialog(dest: Destination) {
+  destinationToImport.value = dest
+  importDialogOpen.value = true
 }
 
 async function goToPage(p: number) {
@@ -295,7 +306,14 @@ onMounted(fetchDestinations)
           <!-- Data rows -->
           <template v-else>
             <TableRow v-for="dest in destinations" :key="dest.id">
-              <TableCell class="font-medium">{{ dest.name }}</TableCell>
+              <TableCell class="font-medium">
+                <div class="flex items-center gap-2">
+                  {{ dest.name }}
+                  <Badge v-if="dest.has_repo_password" variant="outline" class="text-xs font-normal">
+                    Existing repo
+                  </Badge>
+                </div>
+              </TableCell>
               <TableCell>
                 <div class="flex items-center gap-2 text-sm text-muted-foreground">
                   <component :is="typeIcon(dest.type)" class="w-4 h-4" />
@@ -332,6 +350,10 @@ onMounted(fetchDestinations)
                       <Copy class="w-4 h-4 mr-2" />
                       Duplicate
                     </DropdownMenuItem>
+                    <DropdownMenuItem @click="openImportDialog(dest)">
+                      <Archive class="w-4 h-4 mr-2" />
+                      Import snapshots
+                    </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem class="text-destructive focus:text-destructive" @click="openDeleteDialog(dest)">
                       <Trash2 class="w-4 h-4 mr-2" />
@@ -367,6 +389,10 @@ onMounted(fetchDestinations)
   <!-- Edit / create sheet -->
   <DestinationSheet :destination="editingDestination" :clone-from="cloningDestination" :open="sheetOpen"
     @update:open="sheetOpen = $event" @saved="onSaved" />
+
+  <!-- Import snapshots from an existing repository into this destination -->
+  <ImportSnapshotsDialog :destination="destinationToImport" :open="importDialogOpen"
+    @update:open="importDialogOpen = $event" @imported="onSaved" />
 
   <!-- Delete confirmation dialog -->
   <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">

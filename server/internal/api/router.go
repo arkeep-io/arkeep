@@ -39,6 +39,13 @@ type RouterConfig struct {
 	Audit         repositories.AuditRepository
 	ResetTokens   repositories.PasswordResetTokenRepository
 	RefreshTokens repositories.RefreshTokenRepository
+	Challenges    repositories.TwoFactorChallengeRepository
+	RecoveryCodes repositories.RecoveryCodeRepository
+
+	// LogRetention triggers an on-demand job_logs prune (Settings → Log
+	// Retention "run now"). Satisfied by *logretention.Service. Optional — if
+	// nil, the manual-prune endpoint responds 503.
+	LogRetention LogPruner
 
 	// Mailer sends transactional emails (e.g. password reset links) and reports
 	// whether SMTP is configured. Satisfied by *notification.NotificationService.
@@ -86,25 +93,26 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 
 	// --- Initialize handlers ---
-	setupHandler        := NewSetupHandler(cfg.Users, cfg.Logger)
-	authHandler         := NewAuthHandler(cfg.AuthService, cfg.Audit, cfg.Logger, cfg.Secure)
+	setupHandler := NewSetupHandler(cfg.Users, cfg.Logger)
+	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.Audit, cfg.Logger, cfg.Secure)
+	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	var enrollHandler *EnrollHandler
 	if cfg.AutoCerts != nil {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
-	agentHandler        := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	destinationHandler  := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	policyHandler       := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Scheduler, cfg.Audit, cfg.Logger)
-	jobHandler          := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Logger)
-	snapshotHandler     := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	userHandler         := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
+	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Audit, cfg.Logger)
+	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Logger)
+	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	userHandler := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler     := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.Logger)
-	wsHandler           := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
-	dashboardHandler    := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
-	versionHandler      := newVersionHandler(cfg.ServerVersion)
-	auditHandler        := NewAuditHandler(cfg.Audit, cfg.Logger)
+	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
+	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
+	dashboardHandler := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
+	versionHandler := newVersionHandler(cfg.ServerVersion)
+	auditHandler := NewAuditHandler(cfg.Audit, cfg.Logger)
 
 	healthHandler := newHealthHandler(cfg.DB, cfg.Scheduler)
 	r.Get("/health/live", healthHandler.Live)
@@ -127,6 +135,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			loginLimiter := NewRateLimiter(5, time.Minute)
 			r.With(RateLimit(loginLimiter)).Post("/auth/login", authHandler.Login)
 			r.With(RateLimit(loginLimiter)).Post("/auth/refresh", authHandler.Refresh)
+
+			// Second step of a two-factor login. It gets its own limiter rather
+			// than sharing loginLimiter's cumulative 5/min budget, because a
+			// legitimate user may retry a mistyped code a few times.
+			r.With(RateLimit(NewRateLimiter(10, time.Minute))).
+				Post("/auth/login/2fa", authHandler.LoginTwoFactor)
 
 			// OIDC flow — public because the user is not yet authenticated.
 			// /providers lists enabled providers for the login page SSO buttons.
@@ -162,6 +176,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			r.Get("/users/me", userHandler.GetMe)
 			r.Patch("/users/me", userHandler.UpdateMe)
+
+			// Two-factor self-service enrollment. These live under /api/v1/auth
+			// so the refresh cookie (scoped to /api/v1/auth) reaches Verify.
+			r.Get("/auth/2fa/status", twoFactorHandler.Status)
+			r.Post("/auth/2fa/setup", twoFactorHandler.Setup)
+			r.Post("/auth/2fa/verify", twoFactorHandler.Verify)
+			r.Post("/auth/2fa/disable", twoFactorHandler.Disable)
+			r.Post("/auth/2fa/recovery-codes/regenerate", twoFactorHandler.RegenerateRecoveryCodes)
 
 			// Agents
 			r.Get("/agents", agentHandler.List)
@@ -216,6 +238,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/users/{id}", userHandler.GetByID)
 				r.Patch("/users/{id}", userHandler.Update)
 				r.Delete("/users/{id}", userHandler.Delete)
+				r.Post("/users/{id}/2fa/reset", twoFactorHandler.AdminReset)
 
 				// OIDC provider configuration (multiple providers supported)
 				r.Get("/settings/oidc", settingsHandler.ListOIDC)
@@ -231,6 +254,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
 				r.Put("/settings/notifications", settingsHandler.UpsertNotificationSettings)
+
+				// Job-log retention
+				r.Get("/settings/logs", settingsHandler.GetLogRetention)
+				r.Put("/settings/logs", settingsHandler.UpsertLogRetention)
+				r.Post("/settings/logs/prune", settingsHandler.PruneLogsNow)
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)

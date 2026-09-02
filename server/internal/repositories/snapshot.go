@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/google/uuid"
@@ -160,18 +161,33 @@ func (r *gormSnapshotRepository) ExistsBySnapshotIDAndDestination(ctx context.Co
 	return count > 0, nil
 }
 
-// DeleteBySnapshotID removes a snapshot record by the opaque engine snapshot ID.
-// Used during retention policy enforcement when the backup engine prunes old
-// snapshots — the cached records in the database must be kept in sync.
-func (r *gormSnapshotRepository) DeleteBySnapshotID(ctx context.Context, snapshotID string) error {
+// DeleteStaleByDestination removes cached snapshot records for a destination
+// whose opaque engine snapshot ID is absent from liveIDs — that is, snapshots
+// the backup engine has pruned. This is how the database learns about retention
+// enforcement: the engine prunes the repository and the cached records must be
+// kept in sync.
+//
+// liveIDs must come from an UNFILTERED repository listing. A destination maps
+// 1:1 to a repository, so an unfiltered listing is authoritative for every row
+// carrying that destination_id; a filtered one would make this delete valid
+// records belonging to other policies.
+//
+// Only records with snapshot_at strictly before cutoff are considered, so a
+// snapshot created after the listing was taken — for instance by a concurrent
+// backup from another agent writing to the same repository — is never removed.
+//
+// Returns the number of records removed. Callers must reject an empty liveIDs
+// slice before calling: an empty listing means the engine could not be read,
+// not that the repository is empty.
+func (r *gormSnapshotRepository) DeleteStaleByDestination(
+	ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time,
+) (int64, error) {
 	result := r.db.WithContext(ctx).
-		Where("snapshot_id = ?", snapshotID).
+		Where("destination_id = ? AND snapshot_at < ? AND snapshot_id NOT IN ?",
+			destinationID, cutoff, liveIDs).
 		Delete(&db.Snapshot{})
 	if result.Error != nil {
-		return fmt.Errorf("snapshots: delete by snapshot id: %w", result.Error)
+		return 0, fmt.Errorf("snapshots: delete stale by destination: %w", result.Error)
 	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return result.RowsAffected, nil
 }

@@ -30,6 +30,9 @@ export const JobStatus = {
   Succeeded: 'succeeded',
   Failed: 'failed',
   Cancelled: 'cancelled',
+  // Interrupted: the agent vanished mid-run (host shut down, sleep, network
+  // loss) rather than the backup failing. Eligible for automatic resume.
+  Interrupted: 'interrupted',
 } as const
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus]
 export const JobType = {
@@ -77,8 +80,26 @@ export interface User {
   role: UserRole
   is_active: boolean
   is_oidc: boolean      // true for OIDC-provisioned accounts
+  two_factor_enabled: boolean
   last_login_at: string | null
   created_at: string
+}
+
+// ─── Two-factor authentication ────────────────────────────────────────────────
+
+export interface TwoFactorStatus {
+  enabled: boolean
+  pending: boolean // a secret was generated via setup but never confirmed
+  recovery_codes_remaining: number
+}
+
+export interface TwoFactorSetupResponse {
+  secret: string
+  otpauth_url: string
+}
+
+export interface TwoFactorRecoveryCodesResponse {
+  recovery_codes: string[]
 }
 
 export interface Agent {
@@ -130,6 +151,10 @@ export interface Destination {
   // restic repository, refreshed after each backup/import. 0 until first measured.
   repo_size_bytes: number
   repo_size_updated_at: string // RFC3339, empty until first measured
+  // has_repo_password: true when this destination has a repository password
+  // on file, captured when it was imported from a pre-existing repository.
+  // Never the password itself — credentials are write-only.
+  has_repo_password: boolean
 }
 
 // ─── Policy ───────────────────────────────────────────────────────────────────
@@ -177,6 +202,9 @@ export interface Policy {
   hook_post_backup: string  // JSON string or empty
   exclude_patterns: string  // JSON array string or empty
   enabled: boolean
+  // resume_interrupted: re-run a backup automatically when the agent reconnects
+  // after having disconnected mid-run.
+  resume_interrupted: boolean
   destinations: PolicyDestination[]
   last_run_at: string | null
   next_run_at: string | null
@@ -304,6 +332,13 @@ export interface NotificationSettings {
   agent_online: boolean
 }
 
+// LogRetentionSettings controls automatic pruning of job_logs rows. Days are
+// counted from each log line's timestamp; 0 means "keep forever" (disabled).
+export interface LogRetentionSettings {
+  info_days: number
+  warn_error_days: number
+}
+
 // OIDCProvider maps to the oidc_providers table (admin settings view).
 // callback_url is computed server-side and returned read-only — copy it into
 // the identity provider's allowed redirect URIs.
@@ -333,9 +368,13 @@ export interface ImportDestinationRequest {
 }
 
 // ImportDestinationResponse is returned by the import endpoint.
+// found is what the repository holds, imported were newly recorded, skipped
+// were already known for this destination, and failed could not be recorded.
 export interface ImportDestinationResponse {
   found: number
   imported: number
+  skipped: number
+  failed: number
 }
 
 // CreateDestinationResponse is returned by POST /api/v1/destinations.
@@ -365,8 +404,12 @@ export interface LoginRequest {
 }
 
 export interface TokenResponse {
-  access_token: string
-  expires_in: number
+  // Absent when two_factor_required is true — the password was correct but a
+  // second factor is still outstanding.
+  access_token?: string
+  expires_in?: number
+  two_factor_required?: boolean
+  challenge_token?: string
 }
 
 // Agents

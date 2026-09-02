@@ -39,26 +39,28 @@ func NewUserHandler(repo repositories.UserRepository, auditRepo repositories.Aud
 // Password and OIDCSub are intentionally omitted — they are write-only or
 // internal fields that must never be exposed via the API.
 type userResponse struct {
-	ID          string  `json:"id"`
-	Email       string  `json:"email"`
-	DisplayName string  `json:"display_name"`
-	Role        string  `json:"role"`
-	IsActive    bool    `json:"is_active"`
-	IsOIDC      bool    `json:"is_oidc"`
-	LastLoginAt *string `json:"last_login_at"`
-	CreatedAt   string  `json:"created_at"`
+	ID               string  `json:"id"`
+	Email            string  `json:"email"`
+	DisplayName      string  `json:"display_name"`
+	Role             string  `json:"role"`
+	IsActive         bool    `json:"is_active"`
+	IsOIDC           bool    `json:"is_oidc"`
+	TwoFactorEnabled bool    `json:"two_factor_enabled"`
+	LastLoginAt      *string `json:"last_login_at"`
+	CreatedAt        string  `json:"created_at"`
 }
 
 // userToResponse converts a db.User to a userResponse.
 func userToResponse(u *db.User) userResponse {
 	resp := userResponse{
-		ID:          u.ID.String(),
-		Email:       u.Email,
-		DisplayName: u.DisplayName,
-		Role:        u.Role,
-		IsActive:    u.IsActive,
-		IsOIDC:      u.OIDCProvider != "",
-		CreatedAt:   u.CreatedAt.UTC().Format(time.RFC3339),
+		ID:               u.ID.String(),
+		Email:            u.Email,
+		DisplayName:      u.DisplayName,
+		Role:             u.Role,
+		IsActive:         u.IsActive,
+		IsOIDC:           u.OIDCProvider != "",
+		TwoFactorEnabled: u.TwoFactorEnabled,
+		CreatedAt:        u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if u.LastLoginAt != nil {
 		s := u.LastLoginAt.UTC().Format(time.RFC3339)

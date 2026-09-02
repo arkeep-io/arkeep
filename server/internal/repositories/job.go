@@ -101,6 +101,9 @@ func (r *gormJobRepository) Update(ctx context.Context, job *db.Job) error {
 	return nil
 }
 
+// terminalJobStatuses are the statuses a job never moves out of.
+var terminalJobStatuses = []string{"succeeded", "failed", "cancelled", "interrupted"}
+
 // UpdateStatus updates the status, started_at, ended_at and error fields of a
 // job. Called by the gRPC server on each agent status report:
 //   - running:   startedAt = &now, endedAt = nil
@@ -109,6 +112,11 @@ func (r *gormJobRepository) Update(ctx context.Context, job *db.Job) error {
 //
 // A nil pointer is skipped — passing nil for startedAt on terminal transitions
 // preserves the value already written when the job started running.
+//
+// A job already in a terminal status is never modified: it returns
+// ErrTerminalState and writes nothing, so a report that arrives after the server
+// gave up on the job cannot resurrect it. Returns ErrNotFound if no such job
+// exists.
 func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error {
 	updates := map[string]interface{}{
 		"status": status,
@@ -123,10 +131,105 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 
 	result := r.db.WithContext(ctx).
 		Model(&db.Job{}).
-		Where("id = ?", id).
+		Where("id = ? AND status NOT IN ?", id, terminalJobStatuses).
 		Updates(updates)
 	if result.Error != nil {
 		return fmt.Errorf("jobs: update status: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		// Tell "already finished" apart from "does not exist" — the caller logs
+		// them very differently.
+		var count int64
+		if err := r.db.WithContext(ctx).Model(&db.Job{}).Where("id = ?", id).Count(&count).Error; err != nil {
+			return fmt.Errorf("jobs: update status: %w", err)
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
+		return ErrTerminalState
+	}
+	return nil
+}
+
+// MarkRunningJobsInterruptedForAgent marks all jobs in "running" state for the
+// given agent as "interrupted" with the provided error message. Called during
+// agent disconnection cleanup to recover orphaned jobs that would otherwise be
+// stuck in "running" forever.
+//
+// "interrupted" rather than "failed" is what makes these jobs eligible for
+// automatic resume: the agent vanished, it did not report an error. The
+// status = "running" filter leaves a job the user cancelled untouched, since the
+// cancel already moved it to a terminal state.
+//
+// Non-terminal destination rows of the same jobs are moved along with them,
+// otherwise the job detail view shows destinations still "pending" underneath a
+// finished job.
+//
+// Returns the number of jobs updated.
+func (r *gormJobRepository) MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error) {
+	now := time.Now().UTC()
+
+	var updated int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Collect the affected job IDs first: the destination rows have to be
+		// found before the parent rows stop matching status = "running".
+		var jobIDs []uuid.UUID
+		if err := tx.Model(&db.Job{}).
+			Where("agent_id = ? AND status = ?", agentID, "running").
+			Pluck("id", &jobIDs).Error; err != nil {
+			return fmt.Errorf("select running jobs: %w", err)
+		}
+		if len(jobIDs) == 0 {
+			return nil
+		}
+
+		result := tx.Model(&db.Job{}).
+			Where("id IN ?", jobIDs).
+			Updates(map[string]interface{}{
+				"status":   "interrupted",
+				"ended_at": now,
+				"error":    errMsg,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("update jobs: %w", result.Error)
+		}
+		updated = result.RowsAffected
+
+		if err := tx.Model(&db.JobDestination{}).
+			Where("job_id IN ? AND status IN ?", jobIDs, []string{"pending", "running"}).
+			Updates(map[string]interface{}{
+				"status":   "interrupted",
+				"ended_at": now,
+				"error":    errMsg,
+			}).Error; err != nil {
+			return fmt.Errorf("update job destinations: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("jobs: mark running interrupted for agent: %w", err)
+	}
+	return updated, nil
+}
+
+// MarkResumeExhausted moves an interrupted job to "failed" with errMsg, once the
+// automatic resume has given up on it.
+//
+// The transition matters for more than presentation: it takes the job out of the
+// set scanned on every reconnect, so the give-up notification fires once instead
+// of on every reconnection until the next scheduled run. The status = "interrupted"
+// filter makes it idempotent. Returns ErrNotFound if the job is not (or no longer)
+// interrupted.
+func (r *gormJobRepository) MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Where("id = ? AND status = ?", id, "interrupted").
+		Updates(map[string]interface{}{
+			"status": "failed",
+			"error":  errMsg,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("jobs: mark resume exhausted: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
 		return ErrNotFound
@@ -134,24 +237,53 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 	return nil
 }
 
-// FailRunningJobsForAgent marks all jobs in "running" state for the given agent
-// as "failed" with the provided error message. Called during agent disconnection
-// cleanup to recover orphaned jobs that would otherwise be stuck in "running" forever.
-// Returns the number of rows updated.
-func (r *gormJobRepository) FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error) {
+// MarkRunningJobsInterrupted does the same for every agent. Called once at server
+// startup: a job that was running when the process died has no stream teardown
+// to recover it and would stay "running" forever.
+//
+// Returns the number of jobs updated.
+func (r *gormJobRepository) MarkRunningJobsInterrupted(ctx context.Context, errMsg string) (int64, error) {
 	now := time.Now().UTC()
-	result := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Where("agent_id = ? AND status = ?", agentID, "running").
-		Updates(map[string]interface{}{
-			"status":   "failed",
-			"ended_at": now,
-			"error":    errMsg,
-		})
-	if result.Error != nil {
-		return 0, fmt.Errorf("jobs: fail running for agent: %w", result.Error)
+
+	var updated int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var jobIDs []uuid.UUID
+		if err := tx.Model(&db.Job{}).
+			Where("status = ?", "running").
+			Pluck("id", &jobIDs).Error; err != nil {
+			return fmt.Errorf("select running jobs: %w", err)
+		}
+		if len(jobIDs) == 0 {
+			return nil
+		}
+
+		result := tx.Model(&db.Job{}).
+			Where("id IN ?", jobIDs).
+			Updates(map[string]interface{}{
+				"status":   "interrupted",
+				"ended_at": now,
+				"error":    errMsg,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("update jobs: %w", result.Error)
+		}
+		updated = result.RowsAffected
+
+		if err := tx.Model(&db.JobDestination{}).
+			Where("job_id IN ? AND status IN ?", jobIDs, []string{"pending", "running"}).
+			Updates(map[string]interface{}{
+				"status":   "interrupted",
+				"ended_at": now,
+				"error":    errMsg,
+			}).Error; err != nil {
+			return fmt.Errorf("update job destinations: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("jobs: mark running interrupted: %w", err)
 	}
-	return result.RowsAffected, nil
+	return updated, nil
 }
 
 // JobWithNames extends db.Job with denormalised policy and agent names.
@@ -252,6 +384,45 @@ func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, 
 	}
 
 	return rows, total, nil
+}
+
+// ListByAgentAndStatus returns jobs for an agent that are in the given status,
+// oldest first, with policy and agent names.
+//
+// Filtering in SQL matters here: callers that reach for ListByAgent and filter in
+// Go only ever see the most recent page of jobs, so on an agent with a long
+// history an older job in the wanted status is silently never found.
+// Oldest-first because these are work queues — a pending job created earlier
+// should be dispatched, and an interruption resumed, before a later one.
+func (r *gormJobRepository) ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error) {
+	var rows []JobWithNames
+	if err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Where("jobs.agent_id = ? AND jobs.status = ?", agentID, jobStatus).
+		Limit(opts.Limit).
+		Offset(opts.Offset).
+		Order("jobs.created_at ASC").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list by agent and status: %w", err)
+	}
+	return rows, nil
+}
+
+// HasJobForPolicyAfter reports whether the policy has a job created strictly
+// after the given time. Used to decide against resuming an interrupted backup
+// that a later scheduled run has already superseded.
+func (r *gormJobRepository) HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Where("policy_id = ? AND created_at > ?", policyID, after).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("jobs: has job for policy after: %w", err)
+	}
+	return count > 0, nil
 }
 
 // ListFiltered returns a paginated list of jobs filtered by any combination of
@@ -415,5 +586,63 @@ func (r *gormJobRepository) GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.
 		return nil, fmt.Errorf("jobs: get logs: %w", err)
 	}
 	return logs, nil
+}
+
+// PruneLogsByLevel deletes job_logs rows matching the given levels and older
+// than before, in batches of batchSize, and returns the total number of rows
+// deleted. Deleting in batches keeps each statement short so the SQLite single
+// writer is not blocked for the whole (potentially very large) first cleanup.
+// The delete targets the indexed timestamp column (idx_job_logs_timestamp).
+//
+// The associated jobs are never touched — only their verbose log lines — so the
+// job history in the jobs table is preserved.
+func (r *gormJobRepository) PruneLogsByLevel(ctx context.Context, levels []string, before time.Time, batchSize int) (int64, error) {
+	if len(levels) == 0 || batchSize <= 0 {
+		return 0, nil
+	}
+
+	var total int64
+	for {
+		res := r.db.WithContext(ctx).Exec(
+			`DELETE FROM job_logs WHERE id IN (
+				SELECT id FROM job_logs WHERE level IN ? AND timestamp < ? LIMIT ?
+			)`,
+			levels, before, batchSize,
+		)
+		if res.Error != nil {
+			return total, fmt.Errorf("jobs: prune logs: %w", res.Error)
+		}
+		total += res.RowsAffected
+		// A short (or empty) batch means there is nothing left to delete.
+		if res.RowsAffected < int64(batchSize) {
+			break
+		}
+	}
+	return total, nil
+}
+
+// ReclaimLogSpace returns disk space freed by pruning back to the filesystem.
+// It is driver-aware because the two engines reclaim space differently:
+//   - sqlite:   VACUUM rewrites the whole database file; it is the only way in
+//     SQLite to actually shrink the .db file on disk.
+//   - postgres: VACUUM (ANALYZE) job_logs marks the dead tuples reusable and
+//     refreshes planner stats without taking an exclusive lock. VACUUM FULL is
+//     deliberately avoided so it stays safe to run on a live production server.
+//
+// VACUUM cannot run inside a transaction, so the statement is executed with the
+// default transaction wrapping disabled.
+func (r *gormJobRepository) ReclaimLogSpace(ctx context.Context) error {
+	tx := r.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true})
+	switch r.db.Name() {
+	case "sqlite":
+		if err := tx.Exec("VACUUM").Error; err != nil {
+			return fmt.Errorf("jobs: vacuum sqlite: %w", err)
+		}
+	case "postgres":
+		if err := tx.Exec("VACUUM (ANALYZE) job_logs").Error; err != nil {
+			return fmt.Errorf("jobs: vacuum postgres: %w", err)
+		}
+	}
+	return nil
 }
 

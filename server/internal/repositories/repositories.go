@@ -55,6 +55,9 @@ type RefreshTokenRepository interface {
 	DeleteByHash(ctx context.Context, hash string) error
 	Revoke(ctx context.Context, id uuid.UUID) error
 	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
+	// RevokeAllForUserExcept revokes every active token except keepHash.
+	// Pass an empty keepHash to revoke all.
+	RevokeAllForUserExcept(ctx context.Context, userID uuid.UUID, keepHash string) error
 	DeleteExpired(ctx context.Context) error
 }
 
@@ -71,6 +74,45 @@ type PasswordResetTokenRepository interface {
 	MarkUsed(ctx context.Context, id uuid.UUID) error
 	// DeleteByUserID removes all reset tokens for a user, invalidating any
 	// outstanding links when a new reset is requested.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// TwoFactorChallengeRepository
+// -----------------------------------------------------------------------------
+
+// TwoFactorChallengeRepository stores the interim state of a two-step login.
+type TwoFactorChallengeRepository interface {
+	Create(ctx context.Context, challenge *db.TwoFactorChallenge) error
+	// GetUnusedByHash returns an unconsumed challenge matching the hash.
+	// Expiry is checked by the caller in Go, mirroring password reset tokens.
+	// Returns ErrNotFound if no unconsumed challenge matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.TwoFactorChallenge, error)
+	// IncrementAttempts bumps the failed-code counter by one.
+	IncrementAttempts(ctx context.Context, id uuid.UUID) error
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all outstanding challenges for a user, so a new
+	// login attempt invalidates any previous one.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// RecoveryCodeRepository
+// -----------------------------------------------------------------------------
+
+// RecoveryCodeRepository stores hashed single-use two-factor recovery codes.
+type RecoveryCodeRepository interface {
+	// CreateBatch inserts a whole freshly generated set in one call.
+	CreateBatch(ctx context.Context, codes []db.RecoveryCode) error
+	// GetUnusedByHash returns an unused code matching the hash. Returns
+	// ErrNotFound if no unused code matches. Callers must verify the returned
+	// code belongs to the expected user.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.RecoveryCode, error)
+	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// CountUnused reports how many codes the user has left.
+	CountUnused(ctx context.Context, userID uuid.UUID) (int64, error)
+	// DeleteByUserID removes every code for a user, used when regenerating the
+	// set or disabling two-factor authentication.
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -104,6 +146,8 @@ type AgentRepository interface {
 	GetByHostname(ctx context.Context, hostname string) (*db.Agent, error)
 	Update(ctx context.Context, agent *db.Agent) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
+	ListStale(ctx context.Context, cutoff time.Time) ([]db.Agent, error)
+	MarkOfflineIfStale(ctx context.Context, id uuid.UUID, cutoff time.Time) (bool, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Agent, int64, error)
 	ListFiltered(ctx context.Context, filter AgentFilter, opts ListOptions) ([]db.Agent, int64, error)
@@ -190,12 +234,16 @@ type JobRepository interface {
     GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
     Update(ctx context.Context, job *db.Job) error
     UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
-    FailRunningJobsForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
+    MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
+    MarkRunningJobsInterrupted(ctx context.Context, errMsg string) (int64, error)
+    MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error
     List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
     ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
     ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
     ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
     ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+    ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
+    HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
     HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
 
     // JobDestination
@@ -206,6 +254,13 @@ type JobRepository interface {
     // JobLog
     BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
     GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)
+
+    // Log retention. PruneLogsByLevel deletes job_logs rows whose level is in
+    // levels and whose timestamp is before the cutoff, in batches of batchSize
+    // so a large first cleanup does not hold a long write lock. ReclaimLogSpace
+    // returns freed disk space to the filesystem (driver-aware).
+    PruneLogsByLevel(ctx context.Context, levels []string, before time.Time, batchSize int) (int64, error)
+    ReclaimLogSpace(ctx context.Context) error
 }
 
 // -----------------------------------------------------------------------------
@@ -216,7 +271,7 @@ type SnapshotRepository interface {
 	Create(ctx context.Context, snapshot *db.Snapshot) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Snapshot, error)
 	Delete(ctx context.Context, id uuid.UUID) error
-	DeleteBySnapshotID(ctx context.Context, snapshotID string) error
+	DeleteStaleByDestination(ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time) (int64, error)
 	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)
 	List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)

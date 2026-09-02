@@ -223,6 +223,9 @@ const schema = z.object({
   // Write-only — required on create, optional on edit (blank = keep existing).
   repo_password: z.string().optional(),
   repo_password_confirm: z.string().optional(),
+  // When true (create only), the password is resolved server-side from the
+  // selected destinations' own stored password instead of the fields above.
+  use_destination_password: z.boolean(),
 
   schedule: z.string().min(1, 'Schedule is required'),
 
@@ -241,9 +244,13 @@ const schema = z.object({
   hook_pre: hookFieldSchema,
   hook_post: hookFieldSchema,
   exclude_patterns_text: z.string().optional(),
+
+  resume_interrupted: z.boolean(),
 }).superRefine((data, ctx) => {
   if (!isEdit.value) {
-    if (!data.repo_password || data.repo_password.length < 8) {
+    if (data.use_destination_password) {
+      // Password resolved server-side from the selected destination(s).
+    } else if (!data.repo_password || data.repo_password.length < 8) {
       ctx.addIssue({
         code: "custom",
         path: ['repo_password'],
@@ -329,6 +336,7 @@ const { value: enabledValue } = useField<boolean>('enabled')
 // Repository password
 const { value: repoPassValue, errorMessage: repoPassError } = useField<string>('repo_password')
 const { value: repoPassConfirmValue, errorMessage: repoPassConfirmError } = useField<string>('repo_password_confirm')
+const { value: useDestinationPasswordValue } = useField<boolean>('use_destination_password')
 const showPassword = ref(false)
 
 // Sources
@@ -420,6 +428,21 @@ function destByIdName(id: string): string {
   return availableDestinations.value.find(d => d.id === id)?.name ?? id
 }
 
+// The "use the destination's password" option is only offered when every
+// selected destination is known to have one on file — if the destinations
+// disagree with each other, the server rejects the request with a clear
+// error instead (the actual passwords never reach the browser, so that
+// mismatch can't be detected here).
+const canUseDestinationPassword = computed(() => {
+  const ids = orderedDestIds.value ?? []
+  if (ids.length === 0) return false
+  return ids.every(id => availableDestinations.value.find(d => d.id === id)?.has_repo_password)
+})
+
+watch(canUseDestinationPassword, (can) => {
+  if (!can) useDestinationPasswordValue.value = false
+})
+
 // Hooks
 const { value: hookPreEnabled } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName } = useField<string>('hook_pre.name')
@@ -454,6 +477,9 @@ const hooksOpen = ref(false)
 // Exclude patterns
 const { value: excludePatternsText } = useField<string>('exclude_patterns_text')
 
+// Resume of backups interrupted by an agent disconnection.
+const { value: resumeInterrupted } = useField<boolean>('resume_interrupted')
+
 // ---------------------------------------------------------------------------
 // Reset / populate
 // ---------------------------------------------------------------------------
@@ -465,6 +491,7 @@ function defaultValues(): FormValues {
     enabled: true,
     repo_password: '',
     repo_password_confirm: '',
+    use_destination_password: false,
     schedule: '0 2 * * *',
     sources: [{ type: 'directory', path: '', label: '' }],
     retention_keep_last: 0,
@@ -477,6 +504,7 @@ function defaultValues(): FormValues {
     hook_pre: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     exclude_patterns_text: '',
+    resume_interrupted: true,
   }
 }
 
@@ -621,6 +649,7 @@ function populateForm(p: Policy, asClone = false) {
     enabled: p.enabled,
     repo_password: '',
     repo_password_confirm: '',
+    use_destination_password: false,
     schedule: p.schedule,
     sources: mappedSources.length > 0
       ? mappedSources
@@ -640,6 +669,8 @@ function populateForm(p: Policy, asClone = false) {
         return Array.isArray(arr) ? arr.join('\n') : ''
       } catch { return '' }
     })(),
+    // Policies created before this option existed report it as enabled.
+    resume_interrupted: p.resume_interrupted ?? true,
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
@@ -720,6 +751,7 @@ const onSubmit = handleSubmit(async (values) => {
           .map(l => l.trim())
           .filter(l => l.length > 0 && !l.startsWith('#'))
       ),
+      resume_interrupted: values.resume_interrupted,
     }
 
     if (isEdit.value) {
@@ -729,9 +761,14 @@ const onSubmit = handleSubmit(async (values) => {
       if (values.repo_password) body.repo_password = values.repo_password
       body.destinations = destinationsPayload
     } else {
-      // POST-only: agent, password (required), destinations
+      // POST-only: agent, password (required unless resolved from the
+      // destination), destinations
       body.agent_id = values.agent_id
-      body.repo_password = values.repo_password ?? ''
+      if (values.use_destination_password) {
+        body.use_destination_password = true
+      } else {
+        body.repo_password = values.repo_password ?? ''
+      }
       body.destinations = destinationsPayload
     }
 
@@ -824,6 +861,21 @@ function onOpenChange(value: boolean) {
               Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
             </p>
 
+            <!-- Selected destination(s) already have a password on file (imported
+                 from a pre-existing repository) — offer to reuse it instead of
+                 asking the user to retype a secret the server already has. -->
+            <div v-if="canUseDestinationPassword" class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Use the destination's existing password</p>
+                <p class="text-muted-foreground text-xs">
+                  The selected destination already has a repository password on file from when it was imported.
+                </p>
+              </div>
+              <Switch :model-value="useDestinationPasswordValue"
+                @update:model-value="useDestinationPasswordValue = $event" />
+            </div>
+
+            <template v-if="!useDestinationPasswordValue">
             <Field>
               <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
               <div class="relative">
@@ -848,6 +900,7 @@ function onOpenChange(value: boolean) {
                 :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
               <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
             </Field>
+            </template>
 
             <Separator />
           </template>
@@ -1341,6 +1394,22 @@ function onOpenChange(value: boolean) {
               placeholder="*.log&#10;**/.cache&#10;/tmp"
               class="border-input bg-background placeholder:text-muted-foreground focus-visible:ring-ring flex w-full rounded-md border px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 font-mono"
             />
+          </div>
+
+          <!-- Resume interrupted backups -->
+          <Separator />
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium">Resume interrupted backups</p>
+              <p class="text-muted-foreground text-xs">
+                If the agent disconnects mid-backup — a laptop going to sleep or losing power —
+                run it again as soon as the agent reconnects, instead of waiting for the next
+                scheduled time. Restic keeps whatever was already uploaded, so the retry only
+                transfers what is missing.
+              </p>
+            </div>
+            <Switch :model-value="resumeInterrupted ?? true"
+              @update:model-value="resumeInterrupted = $event" />
           </div>
 
           <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->

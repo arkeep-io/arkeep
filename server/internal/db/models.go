@@ -55,6 +55,11 @@ type User struct {
 	OIDCProvider string `gorm:"column:oidc_provider;default:''"` // provider ID if OIDC user
     OIDCSub      string `gorm:"column:oidc_sub;default:''"` // subject claim from OIDC token
 	LastLoginAt  *time.Time
+	// TOTPSecret is the base32 TOTP shared secret, encrypted at rest. Empty
+	// means no secret. A non-empty secret with TwoFactorEnabled false is a
+	// pending enrollment that was never confirmed.
+	TOTPSecret       EncryptedString `gorm:"type:text"`
+	TwoFactorEnabled bool            `gorm:"not null;default:false"`
 }
 
 // RefreshToken stores a hashed refresh token associated with a user session.
@@ -81,6 +86,30 @@ type PasswordResetToken struct {
 	TokenHash string     `gorm:"not null;index"` // SHA-256 hex of the raw token
 	ExpiresAt time.Time  `gorm:"not null"`
 	UsedAt    *time.Time // nil = not yet used
+}
+
+// TwoFactorChallenge is the short-lived interim state of a two-step login: the
+// password has been verified but the TOTP code has not. Only the SHA-256 hash
+// of the challenge token is stored — the raw token is returned to the client
+// once and echoed back on the second step. Attempts counts failed codes; the
+// challenge is consumed (UsedAt set) on success or after too many failures.
+type TwoFactorChallenge struct {
+	Base
+	UserID    uuid.UUID  `gorm:"type:text;not null;index"`
+	TokenHash string     `gorm:"not null;index"` // SHA-256 hex of the raw token
+	Attempts  int        `gorm:"not null;default:0"`
+	ExpiresAt time.Time  `gorm:"not null"`
+	UsedAt    *time.Time // nil = still usable
+}
+
+// RecoveryCode is a single-use fallback credential issued when a user enables
+// two-factor authentication. Only the SHA-256 hash of the normalised code is
+// stored; the raw codes are shown to the user exactly once.
+type RecoveryCode struct {
+	Base
+	UserID   uuid.UUID  `gorm:"type:text;not null;index"`
+	CodeHash string     `gorm:"not null;index"` // SHA-256 hex of the normalised code
+	UsedAt   *time.Time // nil = not yet used
 }
 
 // OIDCProvider stores the configuration for an external OIDC identity provider.
@@ -145,6 +174,11 @@ type Destination struct {
 	// each backup. Zero until the first backup or import completes.
 	RepoSizeBytes     int64      `gorm:"not null;default:0"`
 	RepoSizeUpdatedAt *time.Time `gorm:""`
+	// RepoPassword is the Restic repository password, stored only for
+	// destinations whose snapshots were imported from a pre-existing
+	// repository. Those snapshots have no policy to take the password from,
+	// so browse and restore rely on this field. Empty otherwise.
+	RepoPassword EncryptedString `gorm:"type:text"`
 }
 
 // -----------------------------------------------------------------------------
@@ -176,8 +210,17 @@ type Policy struct {
 	HookPreBackup    string          `gorm:"type:text;default:''"` // shell command, optional
 	HookPostBackup   string          `gorm:"type:text;default:''"` // shell command, optional
 	ExcludePatterns  string          `gorm:"type:text;default:'[]'"` // JSON array of --exclude patterns
-	LastRunAt        *time.Time
-	NextRunAt        *time.Time
+	// ResumeInterrupted enables automatic resume of a backup whose agent
+	// disconnected mid-run. New policies default to true — restic reuses the
+	// packs already uploaded, so resuming only transfers what is missing.
+	//
+	// No `default` tag on purpose: GORM omits a zero-valued field from the INSERT
+	// when it knows the column has a default, which would silently turn an
+	// explicit false into true. The DEFAULT TRUE in the migration is what
+	// backfills pre-existing rows.
+	ResumeInterrupted bool `gorm:"not null"`
+	LastRunAt         *time.Time
+	NextRunAt         *time.Time
 
 	// Destinations is populated by GetByIDWithDestinations via a manual query.
 	// The gorm:"-" tag prevents GORM from attempting foreign key resolution
@@ -200,20 +243,35 @@ type PolicyDestination struct {
 // -----------------------------------------------------------------------------
 
 // Job represents a single backup execution triggered by the scheduler or
-// manually. Status transitions: pending -> running -> succeeded | failed.
+// manually. Status transitions: pending -> running -> succeeded | failed |
+// cancelled | interrupted.
+//
+// "interrupted" means the agent vanished while the job was running (host shut
+// down, sleep, network loss), as opposed to "failed", which is a real error
+// reported by the agent. Only interrupted jobs are eligible for automatic
+// resume.
 //
 // Destinations and Logs are populated by GetByIDWithDetails via manual queries.
 // The gorm:"-" tag prevents GORM from attempting foreign key resolution on
 // these fields, which would fail with uuid.UUID primary keys.
 type Job struct {
 	Base
-	PolicyID  uuid.UUID  `gorm:"type:text;not null;index"`
+	// PolicyID is nil for a restore job started from an imported snapshot:
+	// such a snapshot belongs to no policy.
+	PolicyID  *uuid.UUID `gorm:"type:text;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
 	Type      string     `gorm:"not null;default:'backup'"` // "backup", "restore"
-	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled"
+	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled", "interrupted"
 	StartedAt *time.Time
 	EndedAt   *time.Time
 	Error     string `gorm:"type:text;default:''"` // populated on failure
+
+	// ResumeOfJobID is the interrupted job this run resumes, nil for a normal
+	// run. No foreign key: the original job may be removed by job retention.
+	ResumeOfJobID *uuid.UUID `gorm:"type:text"`
+	// ResumeAttempt counts consecutive resumes, so a host that dies at the same
+	// point every time stops being retried. Zero for a normal run.
+	ResumeAttempt int `gorm:"not null;default:0"`
 
 	// Populated manually by GetByIDWithDetails — not managed by GORM.
 	Destinations []JobDestination `gorm:"-"`
@@ -254,10 +312,13 @@ type JobLog struct {
 // in the database for fast listing and filtering without hitting the engine.
 type Snapshot struct {
 	Base
-	PolicyID      uuid.UUID `gorm:"type:text;not null;index"`
-	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
-	JobID         uuid.UUID `gorm:"type:text;not null;index"`
-	SnapshotID    string    `gorm:"not null;index"` // opaque ID from the backup engine
+	// PolicyID and JobID are nil for snapshots imported from a pre-existing
+	// repository: they belong to a destination but were not produced by any
+	// backup run of any policy.
+	PolicyID      *uuid.UUID `gorm:"type:text;index"`
+	DestinationID uuid.UUID  `gorm:"type:text;not null;index"`
+	JobID         *uuid.UUID `gorm:"type:text;index"`
+	SnapshotID    string     `gorm:"not null;index"` // opaque ID from the backup engine
 	// SizeBytes is the real footprint this backup added to the repository
 	// (restic data_added_packed), not the logical source size — so it reconciles
 	// with the destination's real repo size and never double-counts. Zero when

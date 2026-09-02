@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -134,11 +135,20 @@ type destinationFields struct {
 	Env           map[string]string `json:"env"`
 }
 
+// uuidString renders an optional UUID, returning "" when it is unset.
+// Imported snapshots carry no policy and no job.
+func uuidString(id *uuid.UUID) string {
+	if id == nil {
+		return ""
+	}
+	return id.String()
+}
+
 // snapshotWithNamesToResponse converts a SnapshotWithNames to a snapshotResponse.
 func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotResponse {
-	policyID := s.PolicyID.String()
+	policyID := uuidString(s.PolicyID)
 	policyName := s.PolicyName
-	jobID := s.JobID.String()
+	jobID := uuidString(s.JobID)
 	if s.IsImported {
 		policyID = ""
 		policyName = "(imported)"
@@ -229,8 +239,8 @@ func (h *SnapshotHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyID := snapshot.PolicyID.String()
-	jobID := snapshot.JobID.String()
+	policyID := uuidString(snapshot.PolicyID)
+	jobID := uuidString(snapshot.JobID)
 	policyName := ""
 	if snapshot.IsImported {
 		policyID = ""
@@ -273,6 +283,59 @@ func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	NoContent(w)
 }
 
+// Sentinel errors returned by resolveRepoAccess.
+var (
+	// errRepoPasswordUnavailable means the snapshot was imported and its
+	// destination carries no stored repository password, so the repository
+	// cannot be opened at all.
+	errRepoPasswordUnavailable = errors.New("repository password unavailable")
+	// errPolicyMissing means a snapshot produced by a backup no longer has the
+	// policy it was created by.
+	errPolicyMissing = errors.New("policy not found")
+)
+
+// resolveRepoAccess returns the Restic repository password needed to open the
+// snapshot's repository and, when the snapshot belongs to a policy, that
+// policy's agent.
+//
+// Snapshots produced by a backup take the password from their policy. Snapshots
+// imported from a pre-existing repository have no policy: the password comes
+// from the destination (stored at import time) and the returned agent is empty,
+// so the caller must supply one.
+func (h *SnapshotHandler) resolveRepoAccess(ctx context.Context, snapshot *db.Snapshot, dest *db.Destination) (repoPassword, policyAgentID string, err error) {
+	if snapshot.PolicyID == nil {
+		if dest.RepoPassword == "" {
+			return "", "", errRepoPasswordUnavailable
+		}
+		return string(dest.RepoPassword), "", nil
+	}
+
+	policy, err := h.policies.GetByID(ctx, *snapshot.PolicyID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			return "", "", errPolicyMissing
+		}
+		return "", "", err
+	}
+	return string(policy.RepoPassword), policy.AgentID.String(), nil
+}
+
+// writeRepoAccessError maps a resolveRepoAccess failure onto an HTTP response.
+func (h *SnapshotHandler) writeRepoAccessError(w http.ResponseWriter, err error, action string) {
+	switch {
+	case errors.Is(err, errRepoPasswordUnavailable):
+		ErrUnprocessable(w, "this snapshot was imported and its destination has no stored repository password — run the import again on the destination to store it")
+	case errors.Is(err, errPolicyMissing):
+		ErrBadRequest(w, "policy not found")
+	default:
+		h.logger.Error("failed to resolve repository access",
+			zap.String("action", action),
+			zap.Error(err),
+		)
+		ErrInternal(w)
+	}
+}
+
 // Restore handles POST /api/v1/snapshots/{id}/restore.
 // Creates a restore job and dispatches it to the chosen agent via gRPC.
 // The agent will run `restic restore <snapshot_id> --target <target_path>`.
@@ -280,7 +343,7 @@ func (h *SnapshotHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // Flow:
 //  1. Load snapshot → get restic_snapshot_id, destination_id, policy_id
 //  2. Load destination → build repo URL and env (credentials)
-//  3. Load policy → get repo password
+//  3. Resolve repo password (from the policy, or the destination if imported)
 //  4. Create db.Job{Type: "restore"} for the chosen agent
 //  5. Build and dispatch JobAssignment with JOB_TYPE_RESTORE
 func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
@@ -335,15 +398,12 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- 3. Load policy (for repo password) ---
-	policy, err := h.policies.GetByID(ctx, snapshot.PolicyID)
+	// --- 3. Resolve the repo password (from the policy, or from the
+	// destination when the snapshot was imported). The agent stays the one the
+	// caller asked for: a restore may legitimately target another machine.
+	repoPassword, _, err := h.resolveRepoAccess(ctx, snapshot, dest)
 	if err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			ErrBadRequest(w, "policy not found")
-			return
-		}
-		h.logger.Error("failed to load policy for restore", zap.Error(err))
-		ErrInternal(w)
+		h.writeRepoAccessError(w, err, "restore")
 		return
 	}
 
@@ -363,7 +423,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// --- 5. Build and dispatch ---
 	payload := restorePayload{
 		ResticSnapshotID: snapshot.SnapshotID,
-		RepoPassword:     string(policy.RepoPassword),
+		RepoPassword:     repoPassword,
 		TargetPath:       req.TargetPath,
 		IncludePaths:     req.IncludePaths,
 		Destination: destinationFields{
@@ -383,7 +443,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 
 	assignment := &proto.JobAssignment{
 		JobId:       job.ID.String(),
-		PolicyId:    job.PolicyID.String(),
+		PolicyId:    uuidString(job.PolicyID),
 		Type:        proto.JobType_JOB_TYPE_RESTORE,
 		Payload:     payloadBytes,
 		ScheduledAt: timestamppb.Now(),
@@ -461,25 +521,7 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- 2. Load policy (for agent_id and repo_password) ---
-	policy, err := h.policies.GetByID(ctx, snapshot.PolicyID)
-	if err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			ErrBadRequest(w, "policy not found")
-			return
-		}
-		h.logger.Error("failed to load policy for browse", zap.Error(err))
-		ErrInternal(w)
-		return
-	}
-
-	agentID := policy.AgentID.String()
-	if !h.agentMgr.IsConnected(agentID) {
-		ErrServiceUnavailable(w, "agent is not connected — ensure the agent is online and try again")
-		return
-	}
-
-	// --- 3. Load destination ---
+	// --- 2. Load destination ---
 	dest, err := h.dests.GetByID(ctx, snapshot.DestinationID)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
@@ -491,10 +533,30 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// --- 3. Resolve repo password and agent ---
+	// An imported snapshot has no policy to name an agent, so the caller picks
+	// one via ?agent_id=.
+	repoPassword, agentID, err := h.resolveRepoAccess(ctx, snapshot, dest)
+	if err != nil {
+		h.writeRepoAccessError(w, err, "browse")
+		return
+	}
+	if agentID == "" {
+		agentID = r.URL.Query().Get("agent_id")
+		if _, err := uuid.Parse(agentID); err != nil {
+			ErrBadRequest(w, "agent_id is required to browse an imported snapshot and must be a valid UUID")
+			return
+		}
+	}
+	if !h.agentMgr.IsConnected(agentID) {
+		ErrServiceUnavailable(w, "agent is not connected — ensure the agent is online and try again")
+		return
+	}
+
 	// --- 4. Build and dispatch browse request ---
 	browsePayload := snapshotBrowsePayload{
 		ResticSnapshotID: snapshot.SnapshotID,
-		RepoPassword:     string(policy.RepoPassword),
+		RepoPassword:     repoPassword,
 		Path:             path,
 		Destination: destinationFields{
 			DestinationID: dest.ID.String(),

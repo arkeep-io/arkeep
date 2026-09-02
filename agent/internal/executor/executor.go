@@ -49,6 +49,15 @@ type StatusReporter interface {
 	// repoSizeBytes is the real deduplicated repo size from `restic stats`
 	// (0 when unavailable or on failure).
 	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string)
+	// ReportSnapshotReconcile sends the authoritative set of snapshot IDs still
+	// present in a destination's repository so the server can evict cached
+	// records for snapshots the backup engine has pruned. liveIDs must come from
+	// an unfiltered listing and must be non-empty; listedAt must be captured
+	// before the listing ran. repoSizeBytes is the post-prune repository size
+	// from `restic stats` (0 when unavailable).
+	// Returns the number of records the server evicted, or 0 on any failure —
+	// this is best-effort and never affects the job outcome.
+	ReportSnapshotReconcile(jobID, destinationID string, liveIDs []string, listedAt time.Time, repoSizeBytes int64) int64
 }
 
 // JobAssignment is the internal representation of a job received from the server.
@@ -162,6 +171,17 @@ func New(
 	}
 }
 
+// TranslateLocalPath applies the same host-path translation used for backup
+// and restore local destinations (see translateLocalPath). Exported so
+// connection.Manager can apply it to the detect/import and browse RPC paths,
+// which build a restic.Destination directly from the server-supplied config
+// instead of going through Execute — without this, those two paths check a
+// different actual filesystem location than a real backup on the same
+// destination would.
+func (e *Executor) TranslateLocalPath(path string) string {
+	return translateLocalPath(path, e.dockerHostRoot)
+}
+
 // translateLocalPath maps a user-provided filesystem path to the corresponding
 // container-accessible path when dockerHostRoot is set.
 //
@@ -199,6 +219,20 @@ func translateLocalPath(path, hostRoot string) string {
 	}
 	// Relative path — no translation.
 	return path
+}
+
+// liveSnapshotIDs extracts the full snapshot IDs from a repository listing.
+// Entries with an empty ID are skipped: the server treats the returned set as
+// authoritative and evicts everything outside it, so a malformed entry must
+// never widen it.
+func liveSnapshotIDs(snapshots []restic.SnapshotInfo) []string {
+	ids := make([]string, 0, len(snapshots))
+	for _, s := range snapshots {
+		if s.ID != "" {
+			ids = append(ids, s.ID)
+		}
+	}
+	return ids
 }
 
 // ensureWritableDir ensures dir exists and is writable.
@@ -487,16 +521,12 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
 			dest.DestinationID, result.SnapshotID, addedBytes))
 
-		// Capture the repository's real deduplicated size for per-destination
-		// usage reporting. Non-fatal: the backup already succeeded, so a stats
-		// failure just leaves the size unreported (0).
-		var repoSizeBytes int64
-		if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
-			log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", dest.DestinationID, statsErr))
-		} else {
-			repoSizeBytes = int64(stats.TotalSize)
-		}
-
+		// Report the destination result before retention runs. Pruning a large
+		// repository takes minutes, and the GUI would show the destination as
+		// still running for all of it; worse, an agent crash mid-prune would
+		// lose the record of a backup that actually succeeded. The repository
+		// size is left at 0 here and reported after the prune instead, so the
+		// figure reflects the pruned repository rather than the one before it.
 		reporter.ReportDestinationResult(
 			job.JobID,
 			dest.DestinationID,
@@ -504,11 +534,13 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			result.SnapshotID,
 			destStartedAt,
 			addedBytes,
-			repoSizeBytes,
+			0,
 			"",
 		)
 
 		// Apply retention policy — non-fatal if it fails (backup data is safe).
+		// Scoped to this policy's tags so it never prunes snapshots belonging to
+		// another policy sharing the same destination.
 		retention := restic.RetentionPolicy{
 			Last:    payload.Retention.Last,
 			Hourly:  payload.Retention.Hourly,
@@ -517,8 +549,43 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			Monthly: payload.Retention.Monthly,
 			Yearly:  payload.Retention.Yearly,
 		}
-		if err := e.wrapper.Forget(ctx, d, retention); err != nil {
+		if err := e.wrapper.Forget(ctx, d, retention, payload.Tags); err != nil {
 			log("warn", fmt.Sprintf("retention policy failed for destination %s: %v", dest.DestinationID, err))
+		}
+
+		// Capture the repository's real deduplicated size for per-destination
+		// usage reporting, now that retention has freed whatever it was going to
+		// free. Non-fatal: the backup already succeeded, so a stats failure just
+		// leaves the size unreported (0).
+		var repoSizeBytes int64
+		if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
+			log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", dest.DestinationID, statsErr))
+		} else {
+			repoSizeBytes = int64(stats.TotalSize)
+		}
+
+		// Reconcile the server's cached snapshot list against the repository, so
+		// records for snapshots retention just pruned stop being offered as
+		// restore points. Runs whether or not this policy has retention enabled:
+		// the repository may also be pruned by another policy, another server,
+		// or by hand.
+		//
+		// The listing MUST stay unfiltered — no --tag/--host/--path. The server
+		// treats it as authoritative for EVERY snapshot in this repository, so a
+		// filtered listing here would make it evict other policies' valid rows.
+		// Note the deliberate asymmetry with Forget above, which IS tag-scoped.
+		//
+		// Non-fatal: the backup already succeeded, so a listing failure just
+		// leaves stale records for the next run to clear.
+		listedAt := time.Now().UTC()
+		if snaps, listErr := e.wrapper.Snapshots(ctx, d); listErr != nil {
+			log("warn", fmt.Sprintf("could not list snapshots for destination %s: %v", dest.DestinationID, listErr))
+		} else if liveIDs := liveSnapshotIDs(snaps); len(liveIDs) > 0 {
+			removed := reporter.ReportSnapshotReconcile(job.JobID, dest.DestinationID, liveIDs, listedAt, repoSizeBytes)
+			if removed > 0 {
+				log("info", fmt.Sprintf("removed %d stale snapshot record(s) for destination %s "+
+					"(no longer present in the repository)", removed, dest.DestinationID))
+			}
 		}
 	}
 

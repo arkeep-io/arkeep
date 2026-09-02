@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Loader2 } from '@lucide/vue'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
+import TwoFactorSection from '@/components/users/TwoFactorSection.vue'
 import type { ApiResponse, User } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -205,7 +206,7 @@ async function submitPassword() {
         </div>
 
         <!-- ── Password section ─────────────────────────────────────────────── -->
-        <div class="grid grid-cols-[280px_1fr] gap-12 py-8">
+        <div class="grid grid-cols-[280px_1fr] gap-12 py-8 border-b">
             <div>
                 <h2 class="text-sm font-semibold">Password</h2>
                 <p class="mt-1 text-sm text-muted-foreground">
@@ -282,6 +283,8 @@ async function submitPassword() {
                 </FieldGroup>
             </form>
         </div>
+
+        <TwoFactorSection />
 
     </div>
 </template>

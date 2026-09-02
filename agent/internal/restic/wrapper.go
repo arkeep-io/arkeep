@@ -18,12 +18,23 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
+
+	"go.uber.org/zap"
 )
+
+// cancelGracePeriod is how long a restic subprocess is given to exit after
+// receiving SIGINT (see buildCmd) before Go escalates to SIGKILL. Kept well
+// under systemd's default TimeoutStopSec (30s) so a clean shutdown always has
+// a chance to complete before the service manager forces a kill.
+const cancelGracePeriod = 15 * time.Second
 
 // DestinationType identifies the storage backend for a destination.
 // It maps directly to the db.Destination.Type field on the server.
@@ -82,6 +93,20 @@ type SnapshotInfo struct {
 	Username string   `json:"username"`
 	// ShortID is the 8-character abbreviated snapshot ID.
 	ShortID  string   `json:"short_id"`
+	// Summary carries the per-snapshot statistics restic records since 0.17.
+	// Absent for snapshots written by older versions, leaving the fields zero.
+	Summary SnapshotSummary `json:"summary"`
+}
+
+// SnapshotSummary holds the subset of a snapshot's stored statistics that is
+// needed to report its size, as emitted by `restic snapshots --json`.
+type SnapshotSummary struct {
+	// DataAddedPacked is the footprint the snapshot added to the repository
+	// after compression and deduplication — the same metric recorded for
+	// snapshots produced by a backup.
+	DataAddedPacked int64 `json:"data_added_packed"`
+	// TotalFilesProcessed is the number of files the snapshot covered.
+	TotalFilesProcessed int64 `json:"total_files_processed"`
 }
 
 // RetentionPolicy mirrors the keep_* fields from db.Policy.
@@ -159,11 +184,12 @@ type ProgressFunc func(event ProgressEvent) error
 type Wrapper struct {
 	resticBin string // absolute path to the extracted restic binary
 	rcloneBin string // absolute path to the extracted rclone binary
+	logger    *zap.Logger
 }
 
 // NewWrapper extracts the embedded binaries (if needed) and returns a ready
 // Wrapper. This should be called once at agent startup.
-func NewWrapper(extractor *Extractor) (*Wrapper, error) {
+func NewWrapper(extractor *Extractor, logger *zap.Logger) (*Wrapper, error) {
 	resticBin, err := extractor.ResticPath()
 	if err != nil {
 		return nil, fmt.Errorf("restic: failed to prepare restic binary: %w", err)
@@ -177,6 +203,7 @@ func NewWrapper(extractor *Extractor) (*Wrapper, error) {
 	return &Wrapper{
 		resticBin: resticBin,
 		rcloneBin: rcloneBin,
+		logger:    logger.Named("restic"),
 	}, nil
 }
 
@@ -250,11 +277,37 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 
 // Forget runs restic forget --prune to apply the retention policy.
 // It removes snapshot metadata and frees storage in a single pass.
-func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy RetentionPolicy) error {
+//
+// tags scopes the retention to the snapshots that carry them, so a policy only
+// ever prunes its own snapshots. Without it restic considers every snapshot in
+// the repository, and a destination shared by two policies would have both
+// pruned by whichever policy ran last — effectively applying the most
+// aggressive retention to everything. Callers pass the same tags used for the
+// backup, so the filter is symmetric by construction. tags must not be empty:
+// see buildForgetArgs.
+func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy RetentionPolicy, tags []string) error {
 	if !policy.IsEnabled() {
 		return nil
 	}
+	args, err := buildForgetArgs(policy, tags)
+	if err != nil {
+		return err
+	}
+	return w.run(ctx, dest, args)
+}
+
+// buildForgetArgs assembles the restic forget arguments for a retention policy
+// scoped to tags. It returns an error when tags is empty rather than falling
+// back to an unscoped forget: pruning nothing is recoverable, pruning another
+// policy's snapshots is not.
+func buildForgetArgs(policy RetentionPolicy, tags []string) ([]string, error) {
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("restic: refusing to run forget without tags: an unscoped forget would prune snapshots belonging to other policies")
+	}
 	args := []string{"forget", "--prune", "--json"}
+	for _, tag := range tags {
+		args = append(args, "--tag", tag)
+	}
 	if policy.Last > 0 {
 		args = append(args, "--keep-last", fmt.Sprintf("%d", policy.Last))
 	}
@@ -273,7 +326,7 @@ func (w *Wrapper) Forget(ctx context.Context, dest Destination, policy Retention
 	if policy.Yearly > 0 {
 		args = append(args, "--keep-yearly", fmt.Sprintf("%d", policy.Yearly))
 	}
-	return w.run(ctx, dest, args)
+	return args, nil
 }
 
 // Check verifies the integrity of the repository. Progress events (one per
@@ -471,38 +524,40 @@ func parseResticStats(r io.Reader) (StatsResult, bool, error) {
 // with a bind-mounted host filesystem); on native binaries hostRoot is "" and
 // all errors are propagated unchanged.
 func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []string, hostRoot string) error {
-	cmd := w.buildCmd(ctx, dest, args)
+	return w.withLockRetry(ctx, dest, func() error {
+		cmd := w.buildCmd(ctx, dest, args)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("restic: failed to open stdout pipe: %w", err)
-	}
-	var stderrBuf strings.Builder
-	cmd.Stderr = &stderrBuf
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("restic: failed to start: %w", err)
-	}
-
-	// Drain stdout to prevent the subprocess from blocking when its pipe buffer
-	// fills up. We ignore the JSON content for now — restore progress is not
-	// currently streamed to the UI.
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		// discard
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("restic: failed to read stdout: %w", err)
-	}
-
-	if err := cmd.Wait(); err != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		if hostRoot != "" && isOnlyHostRootLchownErrors(stderr, hostRoot) {
-			return nil
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("restic: failed to open stdout pipe: %w", err)
 		}
-		return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
-	}
-	return nil
+		var stderrBuf strings.Builder
+		cmd.Stderr = &stderrBuf
+
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("restic: failed to start: %w", err)
+		}
+
+		// Drain stdout to prevent the subprocess from blocking when its pipe buffer
+		// fills up. We ignore the JSON content for now — restore progress is not
+		// currently streamed to the UI.
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			// discard
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("restic: failed to read stdout: %w", err)
+		}
+
+		if err := cmd.Wait(); err != nil {
+			stderr := strings.TrimSpace(stderrBuf.String())
+			if hostRoot != "" && isOnlyHostRootLchownErrors(stderr, hostRoot) {
+				return nil
+			}
+			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+		}
+		return nil
+	})
 }
 
 // isOnlyHostRootLchownErrors returns true when every error restic encountered
@@ -574,29 +629,94 @@ func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 	return foundLchownError
 }
 
-// run executes a restic command and waits for it to finish.
-// stderr is captured and included in the error if the command fails.
-func (w *Wrapper) run(ctx context.Context, dest Destination, args []string) error {
-	cmd := w.buildCmd(ctx, dest, args)
+// lockConflictExitCode is restic's dedicated, stable exit status for "unable
+// to create lock in backend: repository is already locked" — distinct from
+// its other error codes, so detecting it doesn't require matching the
+// human-readable (and version-dependent) error string.
+const lockConflictExitCode = 11
+
+// isLockConflict reports whether err is restic exiting because it could not
+// acquire a repository lock. err may be wrapped (e.g. via fmt.Errorf's %w),
+// so this unwraps down to the underlying *exec.ExitError rather than doing a
+// direct type assertion.
+func isLockConflict(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	return exitErr.ExitCode() == lockConflictExitCode
+}
+
+// unlock runs `restic unlock` (without --remove-all) against dest's
+// repository. This only removes locks restic itself judges stale — created
+// more than 30 minutes ago, or created by a PID no longer running on this
+// host — so it never touches a lock genuinely held by a live operation, even
+// one running on a different host. Safe to call speculatively.
+func (w *Wrapper) unlock(ctx context.Context, dest Destination) error {
+	cmd := w.buildCmd(ctx, dest, []string{"unlock"})
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("restic: command failed: %w\n%s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("restic: unlock failed: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
+// withLockRetry runs fn once. If fn fails because the repository is already
+// locked, it attempts to clear a stale lock via unlock and, if that succeeds,
+// runs fn again exactly once.
+//
+// This is what lets a backup recover from an exclusive lock orphaned by a
+// forget/prune that was killed mid-run (see buildCmd's graceful-cancellation
+// handling for the other half of this fix) instead of failing identically on
+// every future run against the same destination. A second failure — including
+// a fresh lock conflict, meaning some other operation is genuinely still
+// running — is returned as-is; there is no unbounded retry loop.
+func (w *Wrapper) withLockRetry(ctx context.Context, dest Destination, fn func() error) error {
+	err := fn()
+	if !isLockConflict(err) {
+		return err
+	}
+	if unlockErr := w.unlock(ctx, dest); unlockErr != nil {
+		// Could not confirm/clear the lock (e.g. it genuinely isn't stale) —
+		// surface the original conflict rather than the unlock attempt's error.
+		w.logger.Debug("restic: repository locked, unlock attempt did not clear it",
+			zap.Error(unlockErr))
+		return err
+	}
+	w.logger.Warn("restic: recovered from a stale repository lock, retrying")
+	return fn()
+}
+
+// run executes a restic command and waits for it to finish.
+// stderr is captured and included in the error if the command fails.
+func (w *Wrapper) run(ctx context.Context, dest Destination, args []string) error {
+	return w.withLockRetry(ctx, dest, func() error {
+		cmd := w.buildCmd(ctx, dest, args)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("restic: command failed: %w\n%s", err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
+}
+
 // output executes a restic command and returns its stdout as raw bytes.
 func (w *Wrapper) output(ctx context.Context, dest Destination, args []string) ([]byte, error) {
-	cmd := w.buildCmd(ctx, dest, args)
-	out, err := cmd.Output()
-	if err != nil {
-		stderr := ""
-		if ee, ok := err.(*exec.ExitError); ok {
-			stderr = strings.TrimSpace(string(ee.Stderr))
+	var result []byte
+	err := w.withLockRetry(ctx, dest, func() error {
+		cmd := w.buildCmd(ctx, dest, args)
+		out, err := cmd.Output()
+		if err != nil {
+			stderr := ""
+			if ee, ok := err.(*exec.ExitError); ok {
+				stderr = strings.TrimSpace(string(ee.Stderr))
+			}
+			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
 		}
-		return nil, fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
-	}
-	return out, nil
+		result = out
+		return nil
+	})
+	return result, err
 }
 
 // runWithProgress executes a restic command, reading stdout line by line and
@@ -608,55 +728,57 @@ func (w *Wrapper) output(ctx context.Context, dest Destination, args []string) (
 // has a "message_type" field that identifies the event kind. Non-JSON lines
 // (e.g. deprecation warnings) are logged at debug level and skipped.
 func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []string, onProgress ProgressFunc) error {
-	cmd := w.buildCmd(ctx, dest, args)
+	return w.withLockRetry(ctx, dest, func() error {
+		cmd := w.buildCmd(ctx, dest, args)
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("restic: failed to open stdout pipe: %w", err)
-	}
-
-	// Collect stderr separately so it can be included in error messages.
-	var stderrBuf strings.Builder
-	cmd.Stderr = &stderrBuf
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("restic: failed to start: %w", err)
-	}
-
-	// Read stdout line by line, parsing each as a JSON progress event.
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return fmt.Errorf("restic: failed to open stdout pipe: %w", err)
 		}
 
-		var event ProgressEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			// Non-JSON line (e.g. a warning from an older restic version) —
-			// skip silently. The raw line is not forwarded to avoid noise.
-			continue
-		}
-		event.Raw = line
+		// Collect stderr separately so it can be included in error messages.
+		var stderrBuf strings.Builder
+		cmd.Stderr = &stderrBuf
 
-		if onProgress != nil {
-			if err := onProgress(event); err != nil {
-				// Caller signalled cancellation — kill the process.
-				// Ignore the kill error: the process may have already exited.
-				_ = cmd.Process.Kill()
-				return fmt.Errorf("restic: progress callback cancelled: %w", err)
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("restic: failed to start: %w", err)
+		}
+
+		// Read stdout line by line, parsing each as a JSON progress event.
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+
+			var event ProgressEvent
+			if err := json.Unmarshal([]byte(line), &event); err != nil {
+				// Non-JSON line (e.g. a warning from an older restic version) —
+				// skip silently. The raw line is not forwarded to avoid noise.
+				continue
+			}
+			event.Raw = line
+
+			if onProgress != nil {
+				if err := onProgress(event); err != nil {
+					// Caller signalled cancellation — kill the process.
+					// Ignore the kill error: the process may have already exited.
+					_ = cmd.Process.Kill()
+					return fmt.Errorf("restic: progress callback cancelled: %w", err)
+				}
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("restic: failed to read stdout: %w", err)
-	}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("restic: failed to read stdout: %w", err)
+		}
 
-	if err := cmd.Wait(); err != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
-	}
-	return nil
+		if err := cmd.Wait(); err != nil {
+			stderr := strings.TrimSpace(stderrBuf.String())
+			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+		}
+		return nil
+	})
 }
 
 // buildCmd constructs the exec.Cmd for a restic invocation.
@@ -676,6 +798,16 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 	}
 
 	cmd := exec.CommandContext(ctx, w.resticBin, args...)
+
+	// By default, exec.CommandContext kills the process with SIGKILL the
+	// instant ctx is cancelled — restic never gets a chance to run its own
+	// shutdown handler, which releases its repository lock. Sending SIGINT
+	// instead lets restic clean up (it explicitly handles this, same as a
+	// user pressing Ctrl-C), avoiding an orphaned exclusive lock that would
+	// otherwise block every future backup to this repository. WaitDelay is a
+	// safety net: if restic doesn't exit within it, Go falls back to SIGKILL.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = cancelGracePeriod
 
 	// Build environment: start from the current process env so that PATH,
 	// HOME, and system variables are inherited, then overlay restic-specific

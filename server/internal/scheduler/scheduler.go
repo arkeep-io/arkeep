@@ -32,6 +32,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -91,6 +92,18 @@ type Scheduler struct {
 	agentMgr *agentmanager.Manager
 	logger   *zap.Logger
 	running  atomic.Bool
+
+	// notifSvc may be nil. Set via SetNotificationService after construction,
+	// because the notification service is built after the scheduler (it needs the
+	// WebSocket hub). Only used to report that automatic resume gave up.
+	notifSvc notification.Service
+}
+
+// SetNotificationService attaches the notification service. Safe to skip: the
+// scheduler only uses it to tell the user that a repeatedly interrupted backup
+// will no longer be resumed automatically.
+func (s *Scheduler) SetNotificationService(svc notification.Service) {
+	s.notifSvc = svc
 }
 
 // New creates and configures a new Scheduler. Call Start to begin processing.
@@ -216,7 +229,7 @@ func (s *Scheduler) TriggerNow(ctx context.Context, policyID uuid.UUID) (*db.Job
 // reconnects, ensuring jobs created while the agent was offline are not lost.
 func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 	opts := repositories.ListOptions{Limit: 100, Offset: 0}
-	pendingJobs, _, err := s.jobs.ListByAgent(ctx, agentID, opts)
+	pendingJobs, err := s.jobs.ListByAgentAndStatus(ctx, agentID, "pending", opts)
 	if err != nil {
 		s.logger.Error("failed to fetch pending jobs for agent",
 			zap.String("agent_id", agentID.String()),
@@ -227,14 +240,18 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 
 	for i := range pendingJobs {
 		j := &pendingJobs[i]
-		if j.Status != "pending" {
+
+		// A job without a policy is a restore of an imported snapshot: there is
+		// no policy to rebuild a backup payload from, and it is not this
+		// method's job to re-dispatch it.
+		if j.PolicyID == nil {
 			continue
 		}
 
 		// Load policy and destinations to rebuild the full payload.
 		// This is necessary because the job record alone does not carry
 		// source paths, credentials, or retention settings.
-		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, j.PolicyID)
+		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, *j.PolicyID)
 		if err != nil {
 			s.logger.Warn("failed to load policy for pending job dispatch",
 				zap.String("job_id", j.ID.String()),
@@ -251,6 +268,126 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 				zap.Error(err),
 			)
 		}
+	}
+}
+
+// maxResumeAttempts caps how many times in a row a backup is resumed after being
+// interrupted. Without a cap, a machine that always dies at the same point would
+// be retried on every reconnection forever; with it, the user is told once that
+// automatic resume gave up.
+const maxResumeAttempts = 3
+
+// ResumeInterrupted queues a fresh run for each backup of this agent that was
+// interrupted by a disconnection. Called by the gRPC server when an agent
+// reconnects, right after DispatchPending.
+//
+// The interrupted job keeps its own record; a new job is created that points back
+// to it. Resuming is cheap: restic keeps the packs already uploaded, so the new
+// run only transfers what is missing.
+//
+// Skips are logged with a reason — a resume that silently does not happen is
+// indistinguishable from a bug.
+func (s *Scheduler) ResumeInterrupted(ctx context.Context, agentID uuid.UUID) {
+	opts := repositories.ListOptions{Limit: 100, Offset: 0}
+	interrupted, err := s.jobs.ListByAgentAndStatus(ctx, agentID, "interrupted", opts)
+	if err != nil {
+		s.logger.Error("failed to fetch interrupted jobs for agent",
+			zap.String("agent_id", agentID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
+	for i := range interrupted {
+		j := &interrupted[i]
+		jobField := zap.String("job_id", j.ID.String())
+
+		// Restores are user-initiated and write to a chosen target path; silently
+		// re-running one on reconnect would be surprising.
+		if j.Type != "backup" {
+			continue
+		}
+
+		policy, destinations, err := s.policies.GetByIDWithDestinations(ctx, *j.PolicyID)
+		if err != nil {
+			s.logger.Info("not resuming interrupted job: policy unavailable",
+				jobField,
+				zap.String("policy_id", j.PolicyID.String()),
+				zap.Error(err),
+			)
+			continue
+		}
+		if !policy.Enabled {
+			s.logger.Info("not resuming interrupted job: policy is disabled", jobField)
+			continue
+		}
+		if !policy.ResumeInterrupted {
+			s.logger.Info("not resuming interrupted job: resume disabled on the policy", jobField)
+			continue
+		}
+
+		// A later run of the same policy already covers this data, so resuming
+		// would be duplicate work. This is also what stops an already-resumed job
+		// from being picked up again on every subsequent reconnection.
+		superseded, err := s.jobs.HasJobForPolicyAfter(ctx, *j.PolicyID, j.CreatedAt)
+		if err != nil {
+			s.logger.Warn("could not check for a newer run of the policy, not resuming",
+				jobField,
+				zap.Error(err),
+			)
+			continue
+		}
+		if superseded {
+			s.logger.Info("not resuming interrupted job: a newer run of the policy exists", jobField)
+			continue
+		}
+
+		if j.ResumeAttempt >= maxResumeAttempts {
+			s.giveUpOnResume(ctx, j, policy)
+			continue
+		}
+
+		if _, err := s.createAndDispatch(policy, destinations, &j.Job); err != nil {
+			s.logger.Warn("failed to resume interrupted job",
+				jobField,
+				zap.Error(err),
+			)
+		}
+	}
+}
+
+// giveUpOnResume closes out an interrupted job that has exhausted its resume
+// attempts: it becomes "failed" with an explanatory message, which also takes it
+// out of the set ResumeInterrupted scans, and the user is notified once.
+func (s *Scheduler) giveUpOnResume(ctx context.Context, j *repositories.JobWithNames, policy *db.Policy) {
+	errMsg := fmt.Sprintf("backup interrupted %d times in a row; automatic resume gave up", j.ResumeAttempt+1)
+
+	if err := s.jobs.MarkResumeExhausted(ctx, j.ID, errMsg); err != nil {
+		// Another reconnection got there first; the notification was sent then.
+		if errors.Is(err, repositories.ErrNotFound) {
+			return
+		}
+		s.logger.Warn("failed to close out a job whose resume attempts are exhausted",
+			zap.String("job_id", j.ID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
+	s.logger.Warn("giving up on resuming a repeatedly interrupted backup",
+		zap.String("job_id", j.ID.String()),
+		zap.String("policy_id", policy.ID.String()),
+		zap.Int("attempts", j.ResumeAttempt+1),
+	)
+
+	if s.notifSvc == nil {
+		return
+	}
+	if err := s.notifSvc.NotifyJobFailed(ctx, j.ID, policy.ID, policy.Name, errMsg); err != nil {
+		s.logger.Warn("failed to send resume-exhausted notification",
+			zap.String("job_id", j.ID.String()),
+			zap.Error(err),
+		)
 	}
 }
 
@@ -301,6 +438,37 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []repositories.Policy
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// If a pending job already exists for this policy, skip creating another one.
+	// The existing pending job will be dispatched when the agent reconnects.
+	// Only guards scheduled/manual runs: a resume (see createAndDispatch) must
+	// not be skipped just because an unrelated pending job exists for the policy.
+	hasPending, err := s.jobs.HasPendingJob(ctx, policy.ID)
+	if err != nil {
+		s.logger.Error("failed to check pending jobs for policy",
+			zap.String("policy_id", policy.ID.String()),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("failed to check pending jobs for policy %s: %w", policy.ID, err)
+	}
+	if hasPending {
+		s.logger.Debug("skipping scheduled backup: pending job already exists for policy",
+			zap.String("policy_id", policy.ID.String()),
+			zap.String("policy_name", policy.Name),
+		)
+		return nil, nil
+	}
+
+	return s.createAndDispatch(policy, destinations, nil)
+}
+
+// createAndDispatch is the body of runJob. resumeOf, when non-nil, is the
+// interrupted job this run continues: the new job records the provenance and the
+// attempt counter, and the policy's schedule timestamps are left alone, because a
+// resume is not a scheduled execution and must not move the next run.
+func (s *Scheduler) createAndDispatch(policy *db.Policy, destinations []repositories.PolicyDestinationWithName, resumeOf *db.Job) (*db.Job, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	if !policy.Enabled {
 		s.logger.Info("skipping job for disabled policy",
 			zap.String("policy_id", policy.ID.String()),
@@ -328,20 +496,31 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []repositories.Policy
 
 	// --- Create Job record ---
 	job := &db.Job{
-		PolicyID: policy.ID,
+		PolicyID: &policy.ID,
 		AgentID:  policy.AgentID,
 		Status:   "pending",
+	}
+	if resumeOf != nil {
+		job.ResumeOfJobID = &resumeOf.ID
+		job.ResumeAttempt = resumeOf.ResumeAttempt + 1
 	}
 	if err := s.jobs.Create(ctx, job); err != nil {
 		return nil, fmt.Errorf("failed to create job record for policy %s: %w", policy.ID, err)
 	}
 
-	s.logger.Info("job created",
+	fields := []zap.Field{
 		zap.String("job_id", job.ID.String()),
 		zap.String("policy_id", policy.ID.String()),
 		zap.String("policy_name", policy.Name),
 		zap.String("agent_id", policy.AgentID.String()),
-	)
+	}
+	if resumeOf != nil {
+		fields = append(fields,
+			zap.String("resume_of_job_id", resumeOf.ID.String()),
+			zap.Int("resume_attempt", job.ResumeAttempt),
+		)
+	}
+	s.logger.Info("job created", fields...)
 
 	// --- Create JobDestination records ---
 	for _, pd := range destinations {
@@ -361,13 +540,17 @@ func (s *Scheduler) runJob(policy *db.Policy, destinations []repositories.Policy
 	}
 
 	// --- Update policy schedule timestamps ---
-	now := time.Now().UTC()
-	if err := s.policies.UpdateSchedule(ctx, policy.ID, now, now); err != nil {
-		// Non-fatal — the job was already created, just log the failure.
-		s.logger.Warn("failed to update policy schedule timestamps",
-			zap.String("policy_id", policy.ID.String()),
-			zap.Error(err),
-		)
+	// Skipped for a resume: it is a continuation of an earlier scheduled run, so
+	// it must not shift the policy's last/next run.
+	if resumeOf == nil {
+		now := time.Now().UTC()
+		if err := s.policies.UpdateSchedule(ctx, policy.ID, now, now); err != nil {
+			// Non-fatal — the job was already created, just log the failure.
+			s.logger.Warn("failed to update policy schedule timestamps",
+				zap.String("policy_id", policy.ID.String()),
+				zap.Error(err),
+			)
+		}
 	}
 
 	// --- Dispatch to agent ---
@@ -453,7 +636,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 
 	assignment := &proto.JobAssignment{
 		JobId:       job.ID.String(),
-		PolicyId:    job.PolicyID.String(),
+		PolicyId:    policy.ID.String(),
 		Type:        proto.JobType_JOB_TYPE_BACKUP,
 		Payload:     payloadBytes,
 		ScheduledAt: timestamppb.Now(),

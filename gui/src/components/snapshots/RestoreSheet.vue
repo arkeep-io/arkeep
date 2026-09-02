@@ -193,7 +193,12 @@ async function browseSnapshot() {
 // An empty path lists the snapshot root.
 async function loadChildren(path: string): Promise<SnapshotFileEntry[]> {
     if (!props.snapshot) return []
-    const query = path ? `?path=${encodeURIComponent(path)}` : ''
+    const params = new URLSearchParams()
+    if (path) params.set('path', path)
+    // An imported snapshot has no policy, so the server cannot work out which
+    // agent to run the listing on: the selected target agent is used instead.
+    if (agentId.value) params.set('agent_id', agentId.value)
+    const query = params.size > 0 ? `?${params}` : ''
     const res = await api<{ data: { entries: SnapshotFileEntry[] } }>(
         `/api/v1/snapshots/${props.snapshot.id}/browse${query}`,
     )
@@ -332,7 +337,7 @@ function onOpenChange(value: boolean) {
                             type="button"
                             variant="outline"
                             size="sm"
-                            :disabled="isBrowsing || isSubmitting"
+                            :disabled="isBrowsing || isSubmitting || !agentId"
                             @click="browseSnapshot"
                         >
                             <Loader2 v-if="isBrowsing" class="mr-2 h-4 w-4 animate-spin" />
