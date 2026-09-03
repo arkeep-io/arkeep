@@ -82,6 +82,32 @@ jobs:
         env:
           GOTOOLCHAIN: auto
 
+  # ─── Agent cross-compile smoke check ───────────────────────────────────────
+  # Verifies the agent still builds for the embedded Linux targets shipped by
+  # goreleaser (armv7, mips, mipsle — e.g. DVB-S2 receivers). Build-only:
+  # these architectures can't run in the CI runner, so this catches
+  # embed/extractor regressions without proving runtime behavior on real
+  # hardware.
+  build-agent-embedded:
+    name: Build agent (embedded targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Download agent deps (restic + rclone) for all release platforms
+        run: cd agent && go run ./scripts/download_deps.go --all-platforms
+
+      - name: Cross-compile for linux/arm, linux/mips, linux/mipsle
+        run: |
+          cd agent
+          GOOS=linux GOARCH=arm    GOARM=7 CGO_ENABLED=0 GOWORK=off go build -o /dev/null ./cmd/agent
+          GOOS=linux GOARCH=mips           CGO_ENABLED=0 GOWORK=off go build -o /dev/null ./cmd/agent
+          GOOS=linux GOARCH=mipsle         CGO_ENABLED=0 GOWORK=off go build -o /dev/null ./cmd/agent
+
   # ─── GUI ────────────────────────────────────────────────────────────────────
   test-gui:
     name: Test GUI

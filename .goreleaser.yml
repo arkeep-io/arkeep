@@ -51,6 +51,31 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
+  # Linux-only targets for embedded backup sources (e.g. DVB-S2 receivers).
+  # Kept as a separate build id rather than extending the agent build's
+  # matrix, to avoid a long ignore: list for the darwin/windows combinations
+  # that don't apply to these architectures.
+  - id: agent-embedded
+    binary: arkeep-agent
+    main: ./cmd/agent
+    dir: agent
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos:
+      - linux
+    goarch:
+      - arm
+      - mips
+      - mipsle
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
 archives:
   - id: server
     ids: [server]
@@ -61,7 +86,7 @@ archives:
       - README.md
 
   - id: agent
-    ids: [agent]
+    ids: [agent, agent-embedded]
     name_template: "arkeep-agent_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
@@ -248,7 +273,7 @@ release:
 
     ### Included deliverables
     - arkeep-server binaries for Linux and macOS
-    - arkeep-agent binaries for Linux, macOS and Windows
+    - arkeep-agent binaries for Linux (amd64, arm64, armv7, mips, mipsle), macOS and Windows
     - multi-arch Docker images for server and agent
     - SHA256 checksums for all release artifacts
 
