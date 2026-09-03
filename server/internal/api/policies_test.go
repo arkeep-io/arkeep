@@ -18,7 +18,7 @@ func createDBPolicy(t *testing.T, deps *testDeps, name string, agentID uuid.UUID
 		AgentID:          agentID,
 		Schedule:         "@daily",
 		Enabled:          true,
-		Sources:          `["/data"]`,
+		Sources:          `[{"type":"directory","path":"/data"}]`,
 		RepoPassword:     "secret",
 		RetentionDaily:   7,
 		RetentionWeekly:  4,
@@ -219,6 +219,31 @@ func TestPolicyHandler_Create(t *testing.T) {
 		body["hook_pre_backup"] = "/usr/local/bin/pre-backup.sh"
 		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
 		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 403 when non-admin sets a command source", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 201 when admin sets a command source", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		body := validPolicy(agentID)
+		body["sources"] = `[{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+	})
+
+	t.Run("returns 400 when a command source has an invalid name", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"command","path":"pg_dump mydb","label":"has space"}]`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
 	t.Run("returns 400 when hook_pre_backup contains shell injection", func(t *testing.T) {
@@ -445,6 +470,37 @@ func TestPolicyHandler_Update(t *testing.T) {
 		newSources := `[{"type":"directory","path":"/var/backups"}]`
 		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
 			"sources": &newSources,
+		})
+		assertStatus(t, resp, http.StatusOK)
+	})
+
+	t.Run("returns 403 when non-admin adds a command source", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		newSources := `[{"type":"directory","path":"/data"},{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
+			"sources": &newSources,
+		})
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("allows a non-admin to edit other fields of a policy that has an unchanged command source", func(t *testing.T) {
+		// Regression guard for commandSourcesChanged: a non-admin must not be
+		// blocked from editing a policy just because it already has a
+		// command source they are leaving untouched.
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+		policy.Sources = `[{"type":"directory","path":"/data"},{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		if err := e.deps.policies.Update(context.Background(), policy); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		name := "renamed-by-non-admin"
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
+			"name": &name,
 		})
 		assertStatus(t, resp, http.StatusOK)
 	})

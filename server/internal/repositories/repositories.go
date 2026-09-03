@@ -251,6 +251,10 @@ type JobRepository interface {
     ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
     UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
+    // JobDestinationCommand
+    UpsertDestinationCommandResult(ctx context.Context, jobID, destID uuid.UUID, sourceName, status string, startedAt, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+    ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestinationCommand, error)
+
     // JobLog
     BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
     GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)

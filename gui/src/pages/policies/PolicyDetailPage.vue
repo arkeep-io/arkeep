@@ -34,6 +34,7 @@ import {
     Loader2,
     FolderOpen,
     Container,
+    Terminal,
     CalendarClock,
 } from '@lucide/vue'
 import { api } from '@/services/api'
@@ -295,6 +296,8 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                     <div v-for="(src, idx) in parsedSources" :key="idx"
                         class="flex items-start gap-2.5 rounded-md bg-muted/50 px-3 py-2">
                         <Container v-if="src.type === 'docker-volume'"
+                            class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+                        <Terminal v-else-if="src.type === 'command'"
                             class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
                         <FolderOpen v-else class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
                         <div class="min-w-0">

@@ -233,6 +233,14 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// setting backup source paths is core non-admin functionality. So sources
 	// are not admin-gated — instead validateCreatePolicy rejects flag-like
 	// entries for every caller, admin included.
+	//
+	// A "command" source is the one exception: it runs an arbitrary shell
+	// command with agent privileges, the same trust class as a hook, so it
+	// gets the same gate.
+	if policyHasCommandSource(req.Sources) && !isAdmin(r) {
+		ErrForbidden(w)
+		return
+	}
 
 	agentID, err := uuid.Parse(req.AgentID)
 	if err != nil {
@@ -472,6 +480,15 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Sources != nil {
 		if err := validateSourcesJSON(*req.Sources); err != nil {
 			ErrBadRequest(w, "sources: "+err.Error())
+			return
+		}
+		// Command sources execute with agent privileges — only admins may
+		// change them. Compared rather than merely detected, exactly like
+		// the hook gates below, so a non-admin can still edit a policy's
+		// schedule or retention without being blocked by a command source
+		// they are leaving untouched.
+		if commandSourcesChanged(policy.Sources, *req.Sources) && !isAdmin(r) {
+			ErrForbidden(w)
 			return
 		}
 		policy.Sources = *req.Sources

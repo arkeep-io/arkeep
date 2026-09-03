@@ -50,9 +50,11 @@ service AgentService {
   // Intermediate RUNNING calls can carry a progress message for the UI.
   rpc ReportJobStatus(JobStatusReport) returns (JobStatusResponse);
 
-  // ReportDestinationStatus is called by the agent once per destination after
-  // the backup to that destination completes or fails. It carries the restic
-  // snapshot ID and byte counts extracted from the restic --json summary event.
+  // ReportDestinationStatus is called by the agent once per destination for
+  // the regular sources' backup, plus once per command-type source of the
+  // policy (identified by command_source_name), after each backup completes
+  // or fails. It carries the restic snapshot ID and byte counts extracted
+  // from the restic --json summary event.
   rpc ReportDestinationStatus(DestinationStatusReport) returns (DestinationStatusResponse);
 
   // StreamLogs ships log lines produced during job execution to the server in
@@ -305,6 +307,13 @@ message DestinationStatusReport {
   // restic repository after this backup (total_size from `restic stats
   // --mode raw-data`). Zero when unavailable (stats failed or backup failed).
   int64 repo_size_bytes = 9;
+  // command_source_name identifies which "command"-type source this report
+  // belongs to. Empty (the default — every agent built before command
+  // sources existed sends this) means the regular destination backup,
+  // routed to job_destinations. Non-empty routes to
+  // job_destination_commands, because a command source is its own restic
+  // invocation with its own snapshot.
+  string command_source_name = 10;
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.

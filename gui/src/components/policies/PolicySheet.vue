@@ -192,14 +192,24 @@ async function fetchVolumes() {
 // ---------------------------------------------------------------------------
 
 // SourceType uses "docker-volume" (hyphen) to match the frontend SourceType enum.
-const SOURCE_TYPES = ['directory', 'docker-volume'] as const
+// "command" backs up the stdout of a shell command via restic's
+// --stdin-from-command (e.g. a pg_dump), instead of a filesystem path.
+const SOURCE_TYPES = ['directory', 'docker-volume', 'command'] as const
 type SourceTypeValue = typeof SOURCE_TYPES[number]
+
+// commandSourceNameRe mirrors server/internal/api/source_validation.go's
+// commandSourceNameRe: the name is interpolated into a restic retention tag
+// and used as --stdin-filename.
+const commandSourceNameRe = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 const sourceItemSchema = z.object({
   type: z.enum(SOURCE_TYPES),
   // path is required for directory; for docker-volume the selection lives in
-  // selectedVolumes and path stays empty until serialisation.
+  // selectedVolumes and path stays empty until serialisation. For command,
+  // path holds the shell command itself.
   path: z.string().optional().default(''),
+  // label is optional display text for directory/docker-volume, but is the
+  // required source name for command (see commandSourceNameRe above).
   label: z.string().optional(),
 }).superRefine((val, ctx) => {
   if (val.type === 'directory' && (!val.path || val.path.trim() === '')) {
@@ -209,6 +219,17 @@ const sourceItemSchema = z.object({
   // starting with "-" would otherwise be parsed by restic as a flag).
   if (val.type === 'directory' && val.path.startsWith('-')) {
     ctx.addIssue({ code: 'custom', path: ['path'], message: 'Path must not start with "-"' })
+  }
+  if (val.type === 'command') {
+    if (!val.path || val.path.trim() === '') {
+      ctx.addIssue({ code: 'custom', path: ['path'], message: 'Command is required' })
+    }
+    // label is the source name: it becomes the restic retention tag suffix
+    // and the filename inside the snapshot, so the server enforces this
+    // charset too.
+    if (!val.label || !commandSourceNameRe.test(val.label)) {
+      ctx.addIssue({ code: 'custom', path: ['label'], message: 'Name is required (letters, digits, ".", "_", "-")' })
+    }
   }
 })
 
@@ -951,25 +972,41 @@ function onOpenChange(value: boolean) {
                     <span v-if="selectedAgent && !selectedAgent.docker_available"
                       class="text-xs text-muted-foreground ml-1">(unavailable)</span>
                   </SelectItem>
+                  <SelectItem value="command" :disabled="!authStore.isAdmin">
+                    Command (stdin)
+                    <span v-if="!authStore.isAdmin" class="text-xs text-muted-foreground ml-1">(admins only)</span>
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
+            <!-- Admin-only warning for command sources -->
+            <Alert v-if="!authStore.isAdmin && (field.value as any).type === 'command'" variant="default"
+              class="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+              <AlertCircle class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <AlertDescription class="text-amber-800 dark:text-amber-300 text-xs">
+                Command sources run with agent process privileges. Only admins can configure them.
+              </AlertDescription>
+            </Alert>
+
             <!-- Label — full width -->
             <div class="flex flex-col gap-1.5">
               <Label :for="`source-label-${idx}`" class="text-sm">
-                Label
-                <span class="text-muted-foreground font-normal">(optional)</span>
+                {{ (field.value as any).type === 'command' ? 'Name' : 'Label' }}
+                <span v-if="(field.value as any).type !== 'command'" class="text-muted-foreground font-normal">(optional)</span>
               </Label>
               <Input :id="`source-label-${idx}`" :model-value="(field.value as any).label as string" class="w-full"
-                placeholder="e.g. postgres-data" @update:model-value="(field.value as any).label = $event" />
+                :disabled="!authStore.isAdmin && (field.value as any).type === 'command'"
+                :placeholder="(field.value as any).type === 'command' ? 'e.g. postgres-dump' : 'e.g. postgres-data'"
+                @update:model-value="(field.value as any).label = $event" />
             </div>
 
-            <!-- Path / Volumes — full width -->
+            <!-- Path / Volumes / Command — full width -->
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between">
                 <Label class="text-sm">
-                  {{ (field.value as any).type === 'docker-volume' ? 'Volumes' : 'Path' }}
+                  {{ (field.value as any).type === 'docker-volume' ? 'Volumes'
+                    : (field.value as any).type === 'command' ? 'Command' : 'Path' }}
                 </Label>
                 <button v-if="(field.value as any).type === 'docker-volume' && agentValue" type="button"
                   class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -1042,6 +1079,18 @@ function onOpenChange(value: boolean) {
                       @update:model-value="(field.value as any).path = $event" />
                   </template>
                 </template>
+              </template>
+
+              <!-- command: shell command whose stdout is streamed into restic -->
+              <template v-else-if="(field.value as any).type === 'command'">
+                <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
+                  class="font-mono w-full" placeholder="pg_dump -U postgres mydb | gzip"
+                  :disabled="!authStore.isAdmin"
+                  @update:model-value="(field.value as any).path = $event" />
+                <p class="text-xs text-muted-foreground">
+                  Runs on the agent; its output is streamed directly into the backup — no
+                  temporary file is ever written. A non-zero exit code aborts the backup.
+                </p>
               </template>
 
               <!-- directory: plain path input -->

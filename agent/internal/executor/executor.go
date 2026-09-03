@@ -50,6 +50,12 @@ type StatusReporter interface {
 	// repoSizeBytes is the real deduplicated repo size from `restic stats`
 	// (0 when unavailable or on failure).
 	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string)
+	// ReportCommandSourceResult reports the outcome of one command source's
+	// own restic invocation for one destination. Called once per
+	// (destination, command source). No repo size: the destination's
+	// post-prune repository size is still reported once, by
+	// ReportSnapshotReconcile.
+	ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string)
 	// ReportSnapshotReconcile sends the authoritative set of snapshot IDs still
 	// present in a destination's repository so the server can evict cached
 	// records for snapshots the backup engine has pruned. liveIDs must come from
@@ -75,14 +81,15 @@ type JobAssignment struct {
 // All credentials arrive already decrypted — the server handles encryption
 // at rest, the gRPC channel handles transport security.
 type backupPayload struct {
-	Sources         string               `json:"sources"`
-	RepoPassword    string               `json:"repo_password"`
-	Destinations    []destinationPayload `json:"destinations"`
-	Retention       retentionPayload     `json:"retention"`
-	HookPreBackup   string               `json:"hook_pre_backup"`
-	HookPostBackup  string               `json:"hook_post_backup"`
-	Tags            []string             `json:"tags"`
-	ExcludePatterns []string             `json:"exclude_patterns"`
+	Sources         string                 `json:"sources"`
+	RepoPassword    string                 `json:"repo_password"`
+	Destinations    []destinationPayload   `json:"destinations"`
+	Retention       retentionPayload       `json:"retention"`
+	HookPreBackup   string                 `json:"hook_pre_backup"`
+	HookPostBackup  string                 `json:"hook_post_backup"`
+	Tags            []string               `json:"tags"`
+	ExcludePatterns []string               `json:"exclude_patterns"`
+	CommandSources  []commandSourcePayload `json:"command_sources"`
 }
 
 // restorePayload mirrors the struct serialized by the server snapshot handler.
@@ -112,6 +119,15 @@ type retentionPayload struct {
 	Weekly  int `json:"weekly"`
 	Monthly int `json:"monthly"`
 	Yearly  int `json:"yearly"`
+}
+
+// commandSourcePayload mirrors the struct of the same name in the server
+// scheduler: one command-type source, backed up via its own restic
+// backup --stdin-from-command invocation.
+type commandSourcePayload struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Tags    []string `json:"tags"`
 }
 
 type hookPayload struct {
@@ -394,13 +410,13 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		fail(fmt.Sprintf("failed to resolve backup sources: %v", err))
 		return
 	}
-	if len(sources) == 0 {
+	if len(sources) == 0 && len(payload.CommandSources) == 0 {
 		fail("no accessible backup sources: all docker-volume mountpoints are unreachable on this host. " +
 			"If running a native agent on Windows, Docker volume paths are not directly accessible. " +
 			"Use the Docker-based agent deployment to back up Docker volumes.")
 		return
 	}
-	log("info", fmt.Sprintf("resolved %d source(s)", len(sources)))
+	log("info", fmt.Sprintf("resolved %d source(s), %d command source(s)", len(sources), len(payload.CommandSources)))
 
 	// --- 4. Pre-backup hook ---
 	if payload.HookPreBackup != "" {
@@ -489,59 +505,16 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			Env:      dest.Env,
 		}
 
-		opts := restic.BackupOptions{
-			Sources:         sources,
-			Tags:            payload.Tags,
-			ExcludePatterns: payload.ExcludePatterns,
-		}
-
-		result, err := e.wrapper.Backup(ctx, d, opts, func(ev restic.ProgressEvent) error {
+		onProgress := func(ev restic.ProgressEvent) error {
 			if data, err := json.Marshal(ev); err == nil {
 				sink.SendLog(job.JobID, "info", string(data))
 			}
 			return nil
-		})
-		if err != nil {
-			errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
-			log("error", errMsg)
-			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, err.Error())
-			backupFailed = true
-			continue
 		}
-
-		// addedBytes is the real deduplicated/compressed footprint this backup added
-		// to the repo (data_added_packed, falling back to data_added on older restic).
-		// Stored as the snapshot's size so per-snapshot and per-day figures reconcile
-		// with the destination's real repo size — total_bytes_processed is the logical
-		// source size and would inflate/double-count across snapshots.
-		addedBytes := int64(result.DataAddedPacked)
-		if addedBytes == 0 {
-			addedBytes = int64(result.DataAdded)
-		}
-
-		log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
-			dest.DestinationID, result.SnapshotID, addedBytes))
-
-		// Report the destination result before retention runs. Pruning a large
-		// repository takes minutes, and the GUI would show the destination as
-		// still running for all of it; worse, an agent crash mid-prune would
-		// lose the record of a backup that actually succeeded. The repository
-		// size is left at 0 here and reported after the prune instead, so the
-		// figure reflects the pruned repository rather than the one before it.
-		reporter.ReportDestinationResult(
-			job.JobID,
-			dest.DestinationID,
-			"succeeded",
-			result.SnapshotID,
-			destStartedAt,
-			addedBytes,
-			0,
-			"",
-		)
 
 		// Apply retention policy — non-fatal if it fails (backup data is safe).
-		// Scoped to this policy's tags so it never prunes snapshots belonging to
-		// another policy sharing the same destination.
+		// Built once and reused by both the regular backup below and each
+		// command source's own Forget call.
 		retention := restic.RetentionPolicy{
 			Last:    payload.Retention.Last,
 			Hourly:  payload.Retention.Hourly,
@@ -550,8 +523,109 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			Monthly: payload.Retention.Monthly,
 			Yearly:  payload.Retention.Yearly,
 		}
-		if err := e.wrapper.Forget(ctx, d, retention, payload.Tags); err != nil {
-			log("warn", fmt.Sprintf("retention policy failed for destination %s: %v", dest.DestinationID, err))
+
+		if len(sources) > 0 {
+			opts := restic.BackupOptions{
+				Sources:         sources,
+				Tags:            payload.Tags,
+				ExcludePatterns: payload.ExcludePatterns,
+			}
+
+			result, err := e.wrapper.Backup(ctx, d, opts, onProgress)
+			if err != nil {
+				errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
+				log("error", errMsg)
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, err.Error())
+				backupFailed = true
+			} else {
+				// addedBytes is the real deduplicated/compressed footprint this backup added
+				// to the repo (data_added_packed, falling back to data_added on older restic).
+				// Stored as the snapshot's size so per-snapshot and per-day figures reconcile
+				// with the destination's real repo size — total_bytes_processed is the logical
+				// source size and would inflate/double-count across snapshots.
+				addedBytes := int64(result.DataAddedPacked)
+				if addedBytes == 0 {
+					addedBytes = int64(result.DataAdded)
+				}
+
+				log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
+					dest.DestinationID, result.SnapshotID, addedBytes))
+
+				// Report the destination result before retention runs. Pruning a large
+				// repository takes minutes, and the GUI would show the destination as
+				// still running for all of it; worse, an agent crash mid-prune would
+				// lose the record of a backup that actually succeeded. The repository
+				// size is left at 0 here and reported after the prune instead, so the
+				// figure reflects the pruned repository rather than the one before it.
+				reporter.ReportDestinationResult(
+					job.JobID,
+					dest.DestinationID,
+					"succeeded",
+					result.SnapshotID,
+					destStartedAt,
+					addedBytes,
+					0,
+					"",
+				)
+
+				// Scoped to this policy's tags so it never prunes snapshots
+				// belonging to another policy sharing the same destination.
+				if err := e.wrapper.Forget(ctx, d, retention, payload.Tags); err != nil {
+					log("warn", fmt.Sprintf("retention policy failed for destination %s: %v", dest.DestinationID, err))
+				}
+			}
+		}
+
+		// Each command source is its own restic invocation: restic executes
+		// the command itself and streams its stdout straight into the
+		// repository, so nothing is ever written to a temp file on this
+		// host. One snapshot each, with its own retention pool (cs.Tags) so
+		// "keep last N" applies independently to each source.
+		cmdFailed := false
+		for _, cs := range payload.CommandSources {
+			if ctx.Err() != nil {
+				break
+			}
+			cmdStartedAt := time.Now().UTC()
+			res, err := e.wrapper.BackupFromCommand(ctx, d, restic.StdinBackupOptions{
+				Command:  cs.Command,
+				Filename: cs.Name,
+				Tags:     cs.Tags,
+			}, onProgress)
+			if err != nil {
+				// A non-zero exit from the command cancels the backup — restic
+				// never stores a partial dump.
+				errMsg := fmt.Sprintf("command source %q to destination %s failed: %v", cs.Name, dest.DestinationID, err)
+				log("error", errMsg)
+				reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "failed", "", cmdStartedAt, 0, err.Error())
+				cmdFailed = true
+				backupFailed = true
+				continue
+			}
+
+			addedBytes := int64(res.DataAddedPacked)
+			if addedBytes == 0 {
+				addedBytes = int64(res.DataAdded)
+			}
+			log("info", fmt.Sprintf("command source %q to destination %s completed (snapshot: %s, added: %d bytes)",
+				cs.Name, dest.DestinationID, res.SnapshotID, addedBytes))
+			reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "succeeded", res.SnapshotID, cmdStartedAt, addedBytes, "")
+
+			if err := e.wrapper.Forget(ctx, d, retention, cs.Tags); err != nil {
+				log("warn", fmt.Sprintf("retention policy failed for command source %q on destination %s: %v", cs.Name, dest.DestinationID, err))
+			}
+		}
+
+		// With no regular sources, nothing above reports this destination, so
+		// its job_destinations row would stay 'pending' forever. Report the
+		// aggregate of its command sources here; the per-source detail lives
+		// in job_destination_commands.
+		if len(sources) == 0 {
+			st, errMsg := "succeeded", ""
+			if cmdFailed {
+				st, errMsg = "failed", "one or more command sources failed"
+			}
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, st, "", destStartedAt, 0, 0, errMsg)
 		}
 
 		// Capture the repository's real deduplicated size for per-destination

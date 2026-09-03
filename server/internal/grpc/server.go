@@ -840,6 +840,15 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		startedAt = req.StartedAt.AsTime().UTC()
 	}
 
+	// A non-empty command_source_name means this report is for one command
+	// source's own restic invocation, not the destination's regular backup.
+	// Those results live in job_destination_commands: job_destinations holds
+	// exactly one row per (job, destination) and cannot represent several
+	// snapshots.
+	if req.CommandSourceName != "" {
+		return s.reportCommandSourceStatus(ctx, req, jobID, destID, startedAt, now)
+	}
+
 	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobID, destID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			s.logger.Error("ReportDestinationStatus: job_destinations row not found — was CreateDestination skipped?",
@@ -859,53 +868,8 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	// If the backup to this destination succeeded and the agent reported a
 	// restic snapshot ID, persist a Snapshot record. This is the primary way
 	// snapshots are created — there is no separate catalog sync step.
-	//
-	// The job record is fetched to resolve PolicyID, which is not carried in
-	// the DestinationStatusReport proto message.
-	// Snapshot creation is non-fatal: a failure here does not roll back the
-	// destination status update that already succeeded above.
 	if req.Status == "succeeded" && req.SnapshotId != "" {
-		job, err := s.jobRepo.GetByID(ctx, jobID)
-		if err != nil {
-			s.logger.Warn("ReportDestinationStatus: could not fetch job for snapshot creation",
-				zap.String("job_id", req.JobId),
-				zap.Error(err),
-			)
-		} else {
-			// Populate Sources from the current policy so the snapshot record
-			// reflects what was backed up. This uses the policy's current sources,
-			// which is accurate for the vast majority of cases.
-			snapshotSources := "[]"
-			if job.PolicyID != nil {
-				if policy, pErr := s.policyRepo.GetByID(ctx, *job.PolicyID); pErr == nil {
-					snapshotSources = policy.Sources
-				}
-			}
-
-			snap := &db.Snapshot{
-				PolicyID:      job.PolicyID,
-				DestinationID: destID,
-				JobID:         &jobID,
-				SnapshotID:    req.SnapshotId,
-				SizeBytes:     req.SizeBytes,
-				Tags:          "[]",
-				Sources:       snapshotSources,
-				SnapshotAt:    now,
-			}
-			if err := s.snapshotRepo.Create(ctx, snap); err != nil {
-				s.logger.Error("ReportDestinationStatus: failed to create snapshot record",
-					zap.String("job_id", req.JobId),
-					zap.String("snapshot_id", req.SnapshotId),
-					zap.Error(err),
-				)
-			} else {
-				s.logger.Info("snapshot record created",
-					zap.String("job_id", req.JobId),
-					zap.String("destination_id", req.DestinationId),
-					zap.String("snapshot_id", req.SnapshotId),
-				)
-			}
-		}
+		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
 	}
 
 	// Refresh the destination's cached real repository size (from restic stats)
@@ -926,6 +890,92 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		zap.String("snapshot_id", req.SnapshotId),
 		zap.Int64("size_bytes", req.SizeBytes),
 		zap.Int64("repo_size_bytes", req.RepoSizeBytes),
+	)
+
+	return &proto.DestinationStatusResponse{Ok: true}, nil
+}
+
+// createSnapshotRecord persists the Snapshot row for a completed backup.
+// Shared by the regular-destination and command-source report paths;
+// non-fatal — the destination/command result has already been recorded by
+// the caller before this runs.
+//
+// The job record is fetched to resolve PolicyID, which is not carried in the
+// DestinationStatusReport proto message.
+func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UUID, snapshotID string, sizeBytes int64, at time.Time) {
+	job, err := s.jobRepo.GetByID(ctx, jobID)
+	if err != nil {
+		s.logger.Warn("createSnapshotRecord: could not fetch job for snapshot creation",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+
+	// Populate Sources from the current policy so the snapshot record
+	// reflects what was backed up. This uses the policy's current sources,
+	// which is accurate for the vast majority of cases.
+	snapshotSources := "[]"
+	if job.PolicyID != nil {
+		if policy, pErr := s.policyRepo.GetByID(ctx, *job.PolicyID); pErr == nil {
+			snapshotSources = policy.Sources
+		}
+	}
+
+	snap := &db.Snapshot{
+		PolicyID:      job.PolicyID,
+		DestinationID: destID,
+		JobID:         &jobID,
+		SnapshotID:    snapshotID,
+		SizeBytes:     sizeBytes,
+		Tags:          "[]",
+		Sources:       snapshotSources,
+		SnapshotAt:    at,
+	}
+	if err := s.snapshotRepo.Create(ctx, snap); err != nil {
+		s.logger.Error("createSnapshotRecord: failed to create snapshot record",
+			zap.String("job_id", jobID.String()),
+			zap.String("snapshot_id", snapshotID),
+			zap.Error(err),
+		)
+		return
+	}
+	s.logger.Info("snapshot record created",
+		zap.String("job_id", jobID.String()),
+		zap.String("destination_id", destID.String()),
+		zap.String("snapshot_id", snapshotID),
+	)
+}
+
+// reportCommandSourceStatus handles a DestinationStatusReport for a
+// command-type source (req.CommandSourceName != ""). Each command source is
+// its own restic invocation with its own snapshot, so its result is upserted
+// into job_destination_commands rather than overwriting the destination's
+// regular job_destinations row. Unlike the regular path, repo size is not
+// updated here — it is still reported once per destination via the existing
+// ReportSnapshotReconcile flow.
+func (s *Server) reportCommandSourceStatus(ctx context.Context, req *proto.DestinationStatusReport, jobID, destID uuid.UUID, startedAt, now time.Time) (*proto.DestinationStatusResponse, error) {
+	if err := s.jobRepo.UpsertDestinationCommandResult(ctx, jobID, destID, req.CommandSourceName, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
+		s.logger.Error("reportCommandSourceStatus: db error upserting command source result",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.String("command_source_name", req.CommandSourceName),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to update command source status")
+	}
+
+	if req.Status == "succeeded" && req.SnapshotId != "" {
+		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
+	}
+
+	s.logger.Info("destination command source status recorded",
+		zap.String("job_id", req.JobId),
+		zap.String("destination_id", req.DestinationId),
+		zap.String("command_source_name", req.CommandSourceName),
+		zap.String("status", req.Status),
+		zap.String("snapshot_id", req.SnapshotId),
+		zap.Int64("size_bytes", req.SizeBytes),
 	)
 
 	return &proto.DestinationStatusResponse{Ok: true}, nil

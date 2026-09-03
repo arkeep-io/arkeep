@@ -47,14 +47,15 @@ import (
 // before dispatch. The gRPC channel provides transport security.
 // The agent must never log or expose these values.
 type backupPayload struct {
-	Sources         string               `json:"sources"`
-	RepoPassword    string               `json:"repo_password"`
-	Destinations    []destinationPayload `json:"destinations"`
-	Retention       retentionPayload     `json:"retention"`
-	HookPreBackup   string               `json:"hook_pre_backup"`
-	HookPostBackup  string               `json:"hook_post_backup"`
-	Tags            []string             `json:"tags"`
-	ExcludePatterns []string             `json:"exclude_patterns"`
+	Sources         string                 `json:"sources"`
+	RepoPassword    string                 `json:"repo_password"`
+	Destinations    []destinationPayload   `json:"destinations"`
+	Retention       retentionPayload       `json:"retention"`
+	HookPreBackup   string                 `json:"hook_pre_backup"`
+	HookPostBackup  string                 `json:"hook_post_backup"`
+	Tags            []string               `json:"tags"`
+	ExcludePatterns []string               `json:"exclude_patterns"`
+	CommandSources  []commandSourcePayload `json:"command_sources"`
 }
 
 // destinationPayload carries the resolved details of a single backup target.
@@ -78,6 +79,19 @@ type retentionPayload struct {
 	Weekly  int `json:"weekly"`
 	Monthly int `json:"monthly"`
 	Yearly  int `json:"yearly"`
+}
+
+// commandSourcePayload is one command-type source: the agent runs it as its
+// own restic backup --stdin-from-command invocation, producing its own
+// snapshot.
+type commandSourcePayload struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	// Tags is this source's own retention pool. It deliberately does NOT
+	// include the bare policy:<id> tag: restic's forget --tag filter matches
+	// snapshots *containing* the tag, so a shared tag would let the regular
+	// pool's forget sweep this source's snapshots (and vice versa).
+	Tags []string `json:"tags"`
 }
 
 // ErrPolicyDisabled is returned by TriggerNow when the target policy is disabled.
@@ -589,6 +603,19 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 	}
 	sourcesFlat := string(sourcesFlatBytes)
 
+	commandSources, err := policyutil.CommandSources(policy.Sources)
+	if err != nil {
+		return fmt.Errorf("failed to build command sources list: %w", err)
+	}
+	cmdPayloads := make([]commandSourcePayload, 0, len(commandSources))
+	for _, cs := range commandSources {
+		cmdPayloads = append(cmdPayloads, commandSourcePayload{
+			Name:    cs.Name,
+			Command: cs.Command,
+			Tags:    []string{fmt.Sprintf("policy:%s:command:%s", policy.ID.String(), cs.Name)},
+		})
+	}
+
 	var excludePatterns []string
 	if policy.ExcludePatterns != "" && policy.ExcludePatterns != "[]" {
 		if err := json.Unmarshal([]byte(policy.ExcludePatterns), &excludePatterns); err != nil {
@@ -615,6 +642,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		HookPostBackup:  policy.HookPostBackup,
 		Tags:            []string{fmt.Sprintf("policy:%s", policy.ID.String())},
 		ExcludePatterns: excludePatterns,
+		CommandSources:  cmdPayloads,
 	}
 
 	payloadBytes, err := json.Marshal(payload)

@@ -73,9 +73,11 @@ type AgentServiceClient interface {
 	// transitions: RUNNING when execution starts, then COMPLETED or FAILED when done.
 	// Intermediate RUNNING calls can carry a progress message for the UI.
 	ReportJobStatus(ctx context.Context, in *JobStatusReport, opts ...grpc.CallOption) (*JobStatusResponse, error)
-	// ReportDestinationStatus is called by the agent once per destination after
-	// the backup to that destination completes or fails. It carries the restic
-	// snapshot ID and byte counts extracted from the restic --json summary event.
+	// ReportDestinationStatus is called by the agent once per destination for
+	// the regular sources' backup, plus once per command-type source of the
+	// policy (identified by command_source_name), after each backup completes
+	// or fails. It carries the restic snapshot ID and byte counts extracted
+	// from the restic --json summary event.
 	ReportDestinationStatus(ctx context.Context, in *DestinationStatusReport, opts ...grpc.CallOption) (*DestinationStatusResponse, error)
 	// StreamLogs ships log lines produced during job execution to the server in
 	// real-time using client-streaming. The server buffers entries in memory and
@@ -271,9 +273,11 @@ type AgentServiceServer interface {
 	// transitions: RUNNING when execution starts, then COMPLETED or FAILED when done.
 	// Intermediate RUNNING calls can carry a progress message for the UI.
 	ReportJobStatus(context.Context, *JobStatusReport) (*JobStatusResponse, error)
-	// ReportDestinationStatus is called by the agent once per destination after
-	// the backup to that destination completes or fails. It carries the restic
-	// snapshot ID and byte counts extracted from the restic --json summary event.
+	// ReportDestinationStatus is called by the agent once per destination for
+	// the regular sources' backup, plus once per command-type source of the
+	// policy (identified by command_source_name), after each backup completes
+	// or fails. It carries the restic snapshot ID and byte counts extracted
+	// from the restic --json summary event.
 	ReportDestinationStatus(context.Context, *DestinationStatusReport) (*DestinationStatusResponse, error)
 	// StreamLogs ships log lines produced during job execution to the server in
 	// real-time using client-streaming. The server buffers entries in memory and

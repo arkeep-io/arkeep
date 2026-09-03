@@ -543,6 +543,63 @@ func (r *gormJobRepository) UpdateDestinationStatus(ctx context.Context, jobID u
 }
 
 // -----------------------------------------------------------------------------
+// JobDestinationCommand
+// -----------------------------------------------------------------------------
+
+// UpsertDestinationCommandResult records the outcome of one command source's
+// backup to one destination. Upsert rather than update-only: unlike
+// JobDestination rows, these are not pre-created at job creation time — the
+// server does not know in advance how many command sources a job will
+// report, so the agent's first report for a given (job, destination,
+// source) creates the row.
+func (r *gormJobRepository) UpsertDestinationCommandResult(ctx context.Context, jobID, destID uuid.UUID, sourceName, status string, startedAt, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.JobDestinationCommand{}).
+		Where("job_id = ? AND destination_id = ? AND source_name = ?", jobID, destID, sourceName).
+		Updates(map[string]interface{}{
+			"status":      status,
+			"started_at":  startedAt,
+			"ended_at":    endedAt,
+			"snapshot_id": snapshotID,
+			"size_bytes":  sizeBytes,
+			"error":       errMsg,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("jobs: upsert destination command result: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	row := &db.JobDestinationCommand{
+		JobID:         jobID,
+		DestinationID: destID,
+		SourceName:    sourceName,
+		Status:        status,
+		StartedAt:     startedAt,
+		EndedAt:       endedAt,
+		SnapshotID:    snapshotID,
+		SizeBytes:     sizeBytes,
+		Error:         errMsg,
+	}
+	if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
+		return fmt.Errorf("jobs: create destination command result: %w", err)
+	}
+	return nil
+}
+
+// ListDestinationCommandsByJob returns all JobDestinationCommand records for
+// a given job.
+func (r *gormJobRepository) ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestinationCommand, error) {
+	var results []db.JobDestinationCommand
+	if err := r.db.WithContext(ctx).
+		Where("job_id = ?", jobID).
+		Find(&results).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list destination commands by job: %w", err)
+	}
+	return results, nil
+}
+
+// -----------------------------------------------------------------------------
 // JobLog
 // -----------------------------------------------------------------------------
 

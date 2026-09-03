@@ -176,6 +176,67 @@ func TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions(t *testing.T) {
 	}
 }
 
+func TestBuildStdinBackupArgs_Linux(t *testing.T) {
+	opts := StdinBackupOptions{
+		Command:  "pg_dump -U postgres mydb | gzip",
+		Filename: "pgdump",
+		Tags:     []string{"policy:abc:command:pgdump"},
+	}
+	args := buildStdinBackupArgs(opts, "linux")
+
+	want := []string{
+		"backup", "--json", "--stdin-from-command",
+		"--stdin-filename", "pgdump",
+		"--tag", "policy:abc:command:pgdump",
+		"--", "/bin/sh", "-c", "pg_dump -U postgres mydb | gzip",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("buildStdinBackupArgs() = %v, want %v", args, want)
+	}
+	if slices.Contains(args, "--use-fs-snapshot") {
+		t.Error("unexpected --use-fs-snapshot: there is no filesystem to snapshot for a stdin backup")
+	}
+}
+
+func TestBuildStdinBackupArgs_Windows(t *testing.T) {
+	opts := StdinBackupOptions{
+		Command:  "pg_dump mydb",
+		Filename: "pgdump",
+		Tags:     []string{"policy:abc:command:pgdump"},
+	}
+	args := buildStdinBackupArgs(opts, "windows")
+
+	want := []string{
+		"backup", "--json", "--stdin-from-command",
+		"--stdin-filename", "pgdump",
+		"--tag", "policy:abc:command:pgdump",
+		"--", "cmd", "/C", "pg_dump mydb",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("buildStdinBackupArgs() = %v, want %v", args, want)
+	}
+}
+
+// TestBuildStdinBackupArgs_CommandAfterEndOfOptions is a regression test
+// mirroring TestBuildBackupArgs_SourcesAfterEndOfOptions: a command
+// beginning with "-" must still land strictly after "--", so it can never be
+// reinterpreted by restic as one of its own flags (e.g. --password-command).
+func TestBuildStdinBackupArgs_CommandAfterEndOfOptions(t *testing.T) {
+	opts := StdinBackupOptions{Command: "--password-command=touch /tmp/pwned", Filename: "x"}
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			args := buildStdinBackupArgs(opts, goos)
+			idx := slices.Index(args, "--")
+			if idx == -1 {
+				t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
+			}
+			if got := args[len(args)-1]; got != opts.Command {
+				t.Errorf("command = %q, want it as the final positional arg", got)
+			}
+		})
+	}
+}
+
 // SFTP destinations are routed through rclone (repo URL "rclone:..."), so
 // buildCmd must point restic at the embedded rclone binary even though the
 // destination type is sftp, not rclone.
@@ -329,6 +390,20 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy:  RetentionPolicy{Daily: 7},
 			tags:    nil,
 			wantErr: true,
+		},
+		{
+			// A command source's own retention pool (see buildStdinBackupArgs):
+			// it must be the ONLY tag, never combined with the bare
+			// "policy:<id>" tag also used by the regular pool, or forgetting
+			// one pool would sweep the other's snapshots too.
+			name:   "command source retention tag is passed through verbatim",
+			policy: RetentionPolicy{Last: 7},
+			tags:   []string{"policy:abc:command:pgdump"},
+			want: []string{
+				"forget", "--prune", "--json",
+				"--tag", "policy:abc:command:pgdump",
+				"--keep-last", "7",
+			},
 		},
 	}
 

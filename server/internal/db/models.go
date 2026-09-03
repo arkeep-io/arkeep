@@ -292,6 +292,26 @@ type JobDestination struct {
 	Error         string `gorm:"type:text;default:''"`
 }
 
+// JobDestinationCommand tracks the result of one command-type source backed
+// up to one destination. A command source is its own restic invocation and
+// its own snapshot, so a job can have several of these per destination —
+// which is why they cannot live in JobDestination (UNIQUE(job_id,
+// destination_id), one scalar snapshot_id).
+type JobDestinationCommand struct {
+	Base
+	JobID         uuid.UUID `gorm:"type:text;not null;index"`
+	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
+	// SourceName is the policy source's name — also the restic
+	// --stdin-filename and the suffix of its retention tag.
+	SourceName string `gorm:"not null"`
+	Status     string `gorm:"not null;default:'pending'"`
+	SnapshotID string `gorm:"default:''"`
+	SizeBytes  int64  `gorm:"default:0"`
+	StartedAt  *time.Time
+	EndedAt    *time.Time
+	Error      string `gorm:"type:text;default:''"`
+}
+
 // JobLog stores structured log lines emitted during a job execution.
 // Logs are flushed to the database in batches during execution so that
 // the GUI can show partial logs even for in-progress jobs.
