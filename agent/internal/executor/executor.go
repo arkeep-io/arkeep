@@ -31,6 +31,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"github.com/arkeep-io/arkeep/shared/validation"
 )
 
 // LogSink receives log lines produced during job execution and forwards them
@@ -836,6 +837,16 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 		}
 
 		resolved = append(resolved, info.Mountpoint)
+	}
+
+	// Defense in depth against argument injection: the server validates
+	// sources at save time, but this also guards policies stored before that
+	// validation existed, and any path this function itself resolves to a
+	// flag-like string (e.g. a maliciously named Docker volume mountpoint).
+	for _, path := range resolved {
+		if err := validation.ValidateSourceEntry(path); err != nil {
+			return nil, err
+		}
 	}
 
 	return resolved, nil
