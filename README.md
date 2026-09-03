@@ -270,6 +270,14 @@ curl -L https://github.com/arkeep-io/arkeep/releases/latest/download/arkeep-agen
 > Use `--grpc-tls-ca` only when connecting to a server that uses an external cert
 > (not auto-PKI) signed by a non-system CA.
 
+> **Embedded Linux targets:** in addition to `linux_amd64`/`linux_arm64`, the
+> agent is also published for `linux_arm` (armv7, e.g. Raspberry Pi and similar
+> single-board computers), `linux_mips`, and `linux_mipsle` — useful for
+> backing up embedded systems such as DVB-S2 satellite receivers. These
+> architectures compile and are covered by CI build checks, but are not
+> exercised on real hardware by our test suite; please report any
+> hardware-specific issues you run into.
+
 **Server and agent on the same machine (no reverse proxy, no TLS):**
 
 If you are running both binaries on the same host and do not want TLS on the loopback interface, add `--grpc-insecure` to **both**. Communication stays on loopback and is never exposed to the network.

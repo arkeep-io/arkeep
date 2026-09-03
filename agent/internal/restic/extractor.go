@@ -28,6 +28,9 @@ import (
 //
 //	bin/restic_linux_amd64    bin/rclone_linux_amd64
 //	bin/restic_linux_arm64    bin/rclone_linux_arm64
+//	bin/restic_linux_arm      bin/rclone_linux_arm
+//	bin/restic_linux_mips     bin/rclone_linux_mips
+//	bin/restic_linux_mipsle   bin/rclone_linux_mipsle
 //	bin/restic_darwin_amd64   bin/rclone_darwin_amd64
 //	bin/restic_darwin_arm64   bin/rclone_darwin_arm64
 //	bin/restic_windows_amd64.exe  bin/rclone_windows_amd64.exe
@@ -163,7 +166,7 @@ func embeddedPath(name string) (string, error) {
 		return "", fmt.Errorf("restic: unsupported OS %q", goos)
 	}
 	switch goarch {
-	case "amd64", "arm64":
+	case "amd64", "arm64", "arm", "mips", "mipsle":
 	default:
 		return "", fmt.Errorf("restic: unsupported architecture %q", goarch)
 	}
