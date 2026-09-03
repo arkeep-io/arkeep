@@ -205,6 +205,11 @@ const sourceItemSchema = z.object({
   if (val.type === 'directory' && (!val.path || val.path.trim() === '')) {
     ctx.addIssue({ code: 'custom', path: ['path'], message: 'Path is required' })
   }
+  // Cosmetic only — the real enforcement is server- and agent-side (a path
+  // starting with "-" would otherwise be parsed by restic as a flag).
+  if (val.type === 'directory' && val.path.startsWith('-')) {
+    ctx.addIssue({ code: 'custom', path: ['path'], message: 'Path must not start with "-"' })
+  }
 })
 
 const hookFieldSchema = z.object({
