@@ -217,16 +217,15 @@ func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
 	return err
 }
 
-// Backup runs a restic backup for the given destination and sources.
-// Progress events are forwarded to onProgress as they arrive on stdout.
-// onProgress may be nil if the caller does not need live progress.
-//
-// Returns a BackupResult with snapshot metadata extracted from the restic
-// summary event, and an error if the backup fails. A non-zero restic exit
-// code is always wrapped in the returned error with stderr included.
 // buildBackupArgs constructs the restic backup argument slice for the given
 // options. goos mirrors runtime.GOOS and is a parameter so the function can
 // be tested without cross-compiling.
+//
+// Sources are appended after a "--" end-of-options marker so that a source
+// path beginning with "-" (e.g. "--password-command=...") can never be
+// interpreted by restic as a flag: without the marker, restic accepts global
+// flags after the backup subcommand, and --password-command in particular
+// runs an arbitrary shell command to obtain the repository password.
 func buildBackupArgs(opts BackupOptions, goos string) []string {
 	args := []string{"backup", "--json"}
 	if goos == "windows" {
@@ -240,10 +239,18 @@ func buildBackupArgs(opts BackupOptions, goos string) []string {
 	for _, ex := range opts.ExcludePatterns {
 		args = append(args, "--exclude", ex)
 	}
+	args = append(args, "--")
 	args = append(args, opts.Sources...)
 	return args
 }
 
+// Backup runs a restic backup for the given destination and sources.
+// Progress events are forwarded to onProgress as they arrive on stdout.
+// onProgress may be nil if the caller does not need live progress.
+//
+// Returns a BackupResult with snapshot metadata extracted from the restic
+// summary event, and an error if the backup fails. A non-zero restic exit
+// code is always wrapped in the returned error with stderr included.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
 	if err := w.Init(ctx, dest); err != nil {
 		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
@@ -364,14 +371,24 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 // file data is restored correctly. When empty (native Linux/Windows deployments),
 // all errors are propagated as-is.
 func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePaths []string, excludePaths []string, hostRoot string) error {
-	args := []string{"restore", snapshotID, "--target", targetDir, "--json"}
+	args := buildRestoreArgs(snapshotID, targetDir, includePaths, excludePaths)
+	return w.runRestoreJSON(ctx, dest, args, hostRoot)
+}
+
+// buildRestoreArgs constructs the restic restore argument slice. snapshotID
+// is appended last, after a "--" end-of-options marker, so a snapshot ID (or
+// "latest") can never be interpreted by restic as a flag — see
+// buildBackupArgs for why this matters.
+func buildRestoreArgs(snapshotID, targetDir string, includePaths []string, excludePaths []string) []string {
+	args := []string{"restore", "--target", targetDir, "--json"}
 	for _, p := range includePaths {
 		args = append(args, "--include", p)
 	}
 	for _, ex := range excludePaths {
 		args = append(args, "--exclude", ex)
 	}
-	return w.runRestoreJSON(ctx, dest, args, hostRoot)
+	args = append(args, "--", snapshotID)
+	return args
 }
 
 // Ls returns the direct children of dir within snapshotID (non-recursive).

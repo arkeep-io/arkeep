@@ -228,6 +228,12 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sources also execute with agent privileges (restic's --password-command
+	// can be smuggled in via an unvalidated source entry), but unlike hooks,
+	// setting backup source paths is core non-admin functionality. So sources
+	// are not admin-gated — instead validateCreatePolicy rejects flag-like
+	// entries for every caller, admin included.
+
 	agentID, err := uuid.Parse(req.AgentID)
 	if err != nil {
 		ErrBadRequest(w, "agent_id must be a valid UUID")
@@ -464,6 +470,10 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		policy.Enabled = *req.Enabled
 	}
 	if req.Sources != nil {
+		if err := validateSourcesJSON(*req.Sources); err != nil {
+			ErrBadRequest(w, "sources: "+err.Error())
+			return
+		}
 		policy.Sources = *req.Sources
 	}
 	if req.RepoPassword != nil {
@@ -645,6 +655,9 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	}
 	if req.Sources == "" {
 		return errors.New("sources is required")
+	}
+	if err := validateSourcesJSON(req.Sources); err != nil {
+		return errors.New("sources: " + err.Error())
 	}
 	if req.RepoPassword == "" && !req.UseDestinationPassword {
 		return errors.New("repo_password is required")
