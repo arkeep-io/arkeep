@@ -115,7 +115,7 @@ func TestPolicyHandler_Create(t *testing.T) {
 			"name":          "backup-policy",
 			"agent_id":      agentID,
 			"schedule":      "@daily",
-			"sources":       `["/data"]`,
+			"sources":       `[{"type":"directory","path":"/data"}]`,
 			"repo_password": "supersecret",
 		}
 	}
@@ -190,6 +190,26 @@ func TestPolicyHandler_Create(t *testing.T) {
 		body := validPolicy(uuid.New().String())
 		delete(body, "repo_password")
 		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 when a source is flag-like, even for an admin", func(t *testing.T) {
+		// Regression test for GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: sources
+		// are rejected for looking like a restic flag, not gated by admin
+		// status like hooks are — an admin token must be rejected too, proving
+		// this is a validation rule and not a privilege check.
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 when a source is flag-like for a non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
+		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
@@ -391,6 +411,43 @@ func TestPolicyHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
+
+	t.Run("returns 400 when updating with a flag-like source, storage unchanged", func(t *testing.T) {
+		// Regression test for GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g.
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		badSources := `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
+			"sources": &badSources,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		getResp := e.get(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t))
+		assertStatus(t, getResp, http.StatusOK)
+		var data struct {
+			Sources string `json:"sources"`
+		}
+		decodeData(t, getResp, &data)
+		if data.Sources != policy.Sources {
+			t.Errorf("sources = %q, want unchanged %q", data.Sources, policy.Sources)
+		}
+	})
+
+	t.Run("non-admin can update sources with a normal path", func(t *testing.T) {
+		// Guards against over-restricting: sources are validated, not
+		// admin-gated like hooks.
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		newSources := `[{"type":"directory","path":"/var/backups"}]`
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
+			"sources": &newSources,
+		})
+		assertStatus(t, resp, http.StatusOK)
+	})
 }
 
 func TestPolicyHandler_Delete(t *testing.T) {
@@ -433,7 +490,7 @@ func TestPolicyHandler_ResumeInterrupted(t *testing.T) {
 			"name":          "laptop-policy",
 			"agent_id":      agentID,
 			"schedule":      "@daily",
-			"sources":       `["/data"]`,
+			"sources":       `[{"type":"directory","path":"/data"}]`,
 			"repo_password": "supersecret",
 		}
 	}

@@ -77,6 +77,36 @@ func TestExecuteBackupEmptyRepoURL(t *testing.T) {
 	}
 }
 
+// TestResolveSources_RejectsFlagLikeEntries is a regression test for
+// GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: resolveSources is the agent-side
+// defense-in-depth gate that must still reject a flag-like source even if a
+// malicious policy predates server-side validation.
+func TestResolveSources_RejectsFlagLikeEntries(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	noopLog := func(level, msg string) {}
+
+	_, err := e.resolveSources(context.Background(), `["--password-command=touch /tmp/pwned"]`, noopLog)
+	if err == nil {
+		t.Fatal("expected an error rejecting a flag-like source, got nil")
+	}
+}
+
+// TestResolveSources_AcceptsNormalPaths guards against over-restricting: the
+// flag-like check must not reject legitimate source paths.
+func TestResolveSources_AcceptsNormalPaths(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	noopLog := func(level, msg string) {}
+
+	got, err := e.resolveSources(context.Background(), `["/data", "C:\\Users"]`, noopLog)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/data", `C:\Users`}
+	if !slices.Equal(got, want) {
+		t.Errorf("resolveSources() = %v, want %v", got, want)
+	}
+}
+
 func TestTranslateLocalPath(t *testing.T) {
 	tests := []struct {
 		name     string
