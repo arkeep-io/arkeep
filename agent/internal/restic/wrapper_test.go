@@ -107,6 +107,7 @@ func TestBuildBackupArgs_Windows(t *testing.T) {
 	if !slices.Contains(args, "--use-fs-snapshot") {
 		t.Errorf("expected --use-fs-snapshot in args on windows, got %v", args)
 	}
+	assertSourcesAfterEndOfOptions(t, args, opts.Sources)
 }
 
 func TestBuildBackupArgs_Linux(t *testing.T) {
@@ -118,6 +119,60 @@ func TestBuildBackupArgs_Linux(t *testing.T) {
 
 	if slices.Contains(args, "--use-fs-snapshot") {
 		t.Errorf("unexpected --use-fs-snapshot in args on linux, got %v", args)
+	}
+	assertSourcesAfterEndOfOptions(t, args, opts.Sources)
+}
+
+// assertSourcesAfterEndOfOptions verifies that wantSources are exactly the
+// tail of args, immediately after a "--" end-of-options marker. This is the
+// property that prevents a source beginning with "-" (e.g.
+// "--password-command=...") from ever being parsed by restic as a flag.
+func assertSourcesAfterEndOfOptions(t *testing.T, args []string, wantSources []string) {
+	t.Helper()
+	idx := slices.Index(args, "--")
+	if idx == -1 {
+		t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
+	}
+	got := args[idx+1:]
+	if !slices.Equal(got, wantSources) {
+		t.Errorf("args after \"--\" = %v, want %v", got, wantSources)
+	}
+}
+
+// TestBuildBackupArgs_SourcesAfterEndOfOptions is a regression test for
+// GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: a source entry that looks like a
+// restic flag must still end up strictly after "--", proving it cannot be
+// reinterpreted by restic as e.g. --password-command, even if validation
+// upstream were ever bypassed.
+func TestBuildBackupArgs_SourcesAfterEndOfOptions(t *testing.T) {
+	opts := BackupOptions{
+		Tags:    []string{"weekly"},
+		Sources: []string{"--password-command=touch /tmp/pwned", "/data"},
+	}
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			args := buildBackupArgs(opts, goos)
+			assertSourcesAfterEndOfOptions(t, args, opts.Sources)
+		})
+	}
+}
+
+// TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions is a defense-in-depth
+// regression test: snapshotID must be the final element, after "--", so it
+// can never be parsed as a restic flag even though today's callers only ever
+// pass restic-generated snapshot hashes.
+func TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions(t *testing.T) {
+	args := buildRestoreArgs("--password-command=touch /tmp/pwned", "/restore/target", []string{"/inc"}, []string{"/exc"})
+
+	idx := slices.Index(args, "--")
+	if idx == -1 {
+		t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
+	}
+	if idx != len(args)-2 {
+		t.Errorf("expected \"--\" immediately before the final element, got %v", args)
+	}
+	if got := args[len(args)-1]; got != "--password-command=touch /tmp/pwned" {
+		t.Errorf("snapshotID = %q, want it as the final positional arg", got)
 	}
 }
 
