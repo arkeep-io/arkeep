@@ -230,6 +230,23 @@ export interface JobDestination {
   error: string
 }
 
+// JobDestinationCommand is the result of one command-type source's own
+// restic invocation (backup --stdin-from-command) to one destination. A job
+// can have several of these per destination — one per command source of the
+// policy — distinct from the single regular backup result in JobDestination.
+export interface JobDestinationCommand {
+  id: string
+  destination_id: string
+  destination_name: string  // denormalized via JOIN in the API layer
+  source_name: string
+  status: JobStatus
+  snapshot_id: string
+  size_bytes: number
+  started_at: string | null
+  ended_at: string | null
+  error: string
+}
+
 export interface JobLog {
   id: string
   level: 'debug' | 'info' | 'warn' | 'error'
@@ -251,10 +268,11 @@ export interface Job {
   created_at: string
   // Populated only on GetByID (detail endpoint)
   destinations?: JobDestination[]
+  command_sources?: JobDestinationCommand[]
 }
 
 // JobListItem is the leaner shape returned by the list endpoint.
-export type JobListItem = Omit<Job, 'destinations'>
+export type JobListItem = Omit<Job, 'destinations' | 'command_sources'>
 
 // ─── Snapshot Browse ──────────────────────────────────────────────────────────
 

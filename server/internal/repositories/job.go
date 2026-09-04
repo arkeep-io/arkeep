@@ -51,7 +51,7 @@ func (r *gormJobRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Job,
 //
 // Logs are ordered by timestamp ascending so the caller can replay execution
 // order without additional sorting.
-func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error) {
+func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobLog, error) {
 	var row JobWithNames
 	err := r.db.WithContext(ctx).
 		Model(&db.Job{}).
@@ -61,11 +61,11 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		Where("jobs.id = ?", id).
 		Scan(&row).Error
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
 	}
 	// GORM Scan does not set ErrRecordNotFound — detect a missing row via zero UUID.
 	if row.ID == (uuid.UUID{}) {
-		return nil, nil, nil, ErrNotFound
+		return nil, nil, nil, nil, ErrNotFound
 	}
 
 	var destinations []JobDestinationWithName
@@ -75,7 +75,12 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		Joins("LEFT JOIN destinations ON destinations.id = job_destinations.destination_id").
 		Where("job_id = ?", id).
 		Scan(&destinations).Error; err != nil {
-		return nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
+		return nil, nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
+	}
+
+	commandResults, err := r.ListDestinationCommandsByJob(ctx, id)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("jobs: get destination commands for job %s: %w", id, err)
 	}
 
 	var logs []db.JobLog
@@ -83,10 +88,10 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		Where("job_id = ?", id).
 		Order("timestamp ASC").
 		Find(&logs).Error; err != nil {
-		return nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
+		return nil, nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
 	}
 
-	return &row, destinations, logs, nil
+	return &row, destinations, commandResults, logs, nil
 }
 
 // Update persists all fields of an existing job record.
@@ -304,8 +309,22 @@ type JobDestinationWithName struct {
 	DestinationName string
 }
 
+// JobDestinationCommandWithName extends db.JobDestinationCommand with the
+// destination's display name, resolved via LEFT JOIN in
+// ListDestinationCommandsByJob. LEFT JOIN ensures rows survive even if the
+// destination was deleted.
+type JobDestinationCommandWithName struct {
+	db.JobDestinationCommand
+	DestinationName string
+}
+
 // listDestinationsJoin is the shared SELECT fragment for destination queries.
 const listDestinationsJoin = `job_destinations.*,
+	COALESCE(destinations.name, '') AS destination_name`
+
+// listDestinationCommandsJoin is the shared SELECT fragment for
+// job_destination_commands queries.
+const listDestinationCommandsJoin = `job_destination_commands.*,
 	COALESCE(destinations.name, '') AS destination_name`
 // Extracted as a constant to avoid repetition and keep the join clause in sync.
 const listJobsJoin = `jobs.*,
@@ -588,12 +607,15 @@ func (r *gormJobRepository) UpsertDestinationCommandResult(ctx context.Context, 
 }
 
 // ListDestinationCommandsByJob returns all JobDestinationCommand records for
-// a given job.
-func (r *gormJobRepository) ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobDestinationCommand, error) {
-	var results []db.JobDestinationCommand
+// a given job, with the destination display name resolved via LEFT JOIN.
+func (r *gormJobRepository) ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationCommandWithName, error) {
+	var results []JobDestinationCommandWithName
 	if err := r.db.WithContext(ctx).
+		Model(&db.JobDestinationCommand{}).
+		Select(listDestinationCommandsJoin).
+		Joins("LEFT JOIN destinations ON destinations.id = job_destination_commands.destination_id").
 		Where("job_id = ?", jobID).
-		Find(&results).Error; err != nil {
+		Scan(&results).Error; err != nil {
 		return nil, fmt.Errorf("jobs: list destination commands by job: %w", err)
 	}
 	return results, nil

@@ -635,7 +635,7 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	job, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
+	job, _, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
 	if err != nil {
 		s.logger.Warn("notifyJobTerminal: could not fetch job details",
 			zap.String("job_id", jobID.String()),
