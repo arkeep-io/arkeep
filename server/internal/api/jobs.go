@@ -43,11 +43,11 @@ type jobDestinationResponse struct {
 	DestinationID   string  `json:"destination_id"`
 	DestinationName string  `json:"destination_name"`
 	Status          string  `json:"status"`
-	SnapshotID    string  `json:"snapshot_id"`
-	SizeBytes     int64   `json:"size_bytes"`
-	StartedAt     *string `json:"started_at"`
-	EndedAt       *string `json:"ended_at"`
-	Error         string  `json:"error"`
+	SnapshotID      string  `json:"snapshot_id"`
+	SizeBytes       int64   `json:"size_bytes"`
+	StartedAt       *string `json:"started_at"`
+	EndedAt         *string `json:"ended_at"`
+	Error           string  `json:"error"`
 }
 
 // jobDestinationCommandResponse represents the result of a single command
@@ -68,6 +68,19 @@ type jobDestinationCommandResponse struct {
 	Error           string  `json:"error"`
 }
 
+// jobRetentionTagResponse represents the result of one restic tag's forget
+// --prune sweep within a standalone retention job (type "retention"). A job
+// can have several of these per destination — one per policy attached there,
+// plus one per that policy's command sources.
+type jobRetentionTagResponse struct {
+	ID        string  `json:"id"`
+	Tag       string  `json:"tag"`
+	Status    string  `json:"status"`
+	StartedAt *string `json:"started_at"`
+	EndedAt   *string `json:"ended_at"`
+	Error     string  `json:"error"`
+}
+
 // jobResponse is the JSON representation of a job.
 type jobResponse struct {
 	ID             string                          `json:"id"`
@@ -82,6 +95,7 @@ type jobResponse struct {
 	EndedAt        *string                         `json:"ended_at"`
 	Destinations   []jobDestinationResponse        `json:"destinations,omitempty"`
 	CommandSources []jobDestinationCommandResponse `json:"command_sources,omitempty"`
+	RetentionTags  []jobRetentionTagResponse       `json:"retention_tags,omitempty"`
 	CreatedAt      string                          `json:"created_at"`
 }
 
@@ -98,7 +112,7 @@ type jobLogResponse struct {
 // because they are not embedded in the Job struct (see db/models.go for
 // rationale). Pass nil for all three when building list responses where
 // details are not needed.
-func jobToResponse(j *repositories.JobWithNames, destinations []repositories.JobDestinationWithName, commandSources []repositories.JobDestinationCommandWithName, logs []db.JobLog) jobResponse {
+func jobToResponse(j *repositories.JobWithNames, destinations []repositories.JobDestinationWithName, commandSources []repositories.JobDestinationCommandWithName, retentionTags []db.JobRetentionTag, logs []db.JobLog) jobResponse {
 	resp := jobResponse{
 		ID:             j.ID.String(),
 		PolicyID:       uuidString(j.PolicyID),
@@ -110,6 +124,7 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 		Error:          j.Error,
 		Destinations:   make([]jobDestinationResponse, len(destinations)),
 		CommandSources: make([]jobDestinationCommandResponse, len(commandSources)),
+		RetentionTags:  make([]jobRetentionTagResponse, len(retentionTags)),
 		CreatedAt:      j.CreatedAt.UTC().Format(time.RFC3339),
 	}
 
@@ -165,6 +180,24 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 		resp.CommandSources[i] = c
 	}
 
+	for i, rt := range retentionTags {
+		t := jobRetentionTagResponse{
+			ID:     rt.ID.String(),
+			Tag:    rt.Tag,
+			Status: rt.Status,
+			Error:  rt.Error,
+		}
+		if rt.StartedAt != nil {
+			s := rt.StartedAt.UTC().Format(time.RFC3339)
+			t.StartedAt = &s
+		}
+		if rt.EndedAt != nil {
+			s := rt.EndedAt.UTC().Format(time.RFC3339)
+			t.EndedAt = &s
+		}
+		resp.RetentionTags[i] = t
+	}
+
 	// logs is unused in the job response body — served separately via
 	// GET /jobs/{id}/logs. Accepted here to keep the call sites uniform.
 	_ = logs
@@ -183,7 +216,8 @@ type listJobsResponse struct {
 // -----------------------------------------------------------------------------
 
 // List handles GET /api/v1/jobs.
-// Supports optional filtering by policy_id, agent_id, status, and type via query parameters.
+// Supports optional filtering by policy_id, agent_id, destination_id, status,
+// and type via query parameters.
 // Destinations are not included in list responses — use GET /jobs/{id} for details.
 func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
@@ -221,6 +255,22 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if destinationID := r.URL.Query().Get("destination_id"); destinationID != "" {
+		id, err := parseUUIDString(destinationID)
+		if err != nil {
+			ErrBadRequest(w, "invalid destination_id: must be a valid UUID")
+			return
+		}
+		jobs, total, err := h.repo.ListByDestination(r.Context(), id, opts)
+		if err != nil {
+			h.logger.Error("failed to list jobs by destination", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		h.writeJobList(w, jobs, total)
+		return
+	}
+
 	var filter repositories.JobFilter
 
 	if status := r.URL.Query().Get("status"); status != "" {
@@ -235,10 +285,10 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if jobType := r.URL.Query().Get("type"); jobType != "" {
 		switch jobType {
-		case "backup", "restore":
+		case "backup", "restore", "retention":
 			filter.Type = jobType
 		default:
-			ErrBadRequest(w, "invalid type: must be one of backup, restore")
+			ErrBadRequest(w, "invalid type: must be one of backup, restore, retention")
 			return
 		}
 	}
@@ -273,7 +323,7 @@ func (h *JobHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, destinations, commandSources, logs, err := h.repo.GetByIDWithDetails(r.Context(), id)
+	job, destinations, commandSources, retentionTags, logs, err := h.repo.GetByIDWithDetails(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
@@ -284,7 +334,7 @@ func (h *JobHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, jobToResponse(job, destinations, commandSources, logs))
+	Ok(w, jobToResponse(job, destinations, commandSources, retentionTags, logs))
 }
 
 // GetLogs handles GET /api/v1/jobs/{id}/logs.
@@ -347,7 +397,7 @@ func (h *JobHandler) ListByPolicy(w http.ResponseWriter, r *http.Request) {
 func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.JobWithNames, total int64) {
 	items := make([]jobResponse, len(jobs))
 	for i := range jobs {
-		items[i] = jobToResponse(&jobs[i], nil, nil, nil)
+		items[i] = jobToResponse(&jobs[i], nil, nil, nil, nil)
 	}
 	Ok(w, listJobsResponse{Items: items, Total: total})
 }

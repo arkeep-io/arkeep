@@ -31,10 +31,18 @@ type commandResult struct {
 	errMsg        string
 }
 
+type retentionTagResult struct {
+	destinationID string
+	tag           string
+	status        string
+	errMsg        string
+}
+
 type fakeReporter struct {
-	statuses       []string
-	destResults    map[string]destResult
-	commandResults []commandResult
+	statuses         []string
+	destResults      map[string]destResult
+	commandResults   []commandResult
+	retentionResults []retentionTagResult
 }
 
 func (r *fakeReporter) ReportStatus(jobID, status, message string) {
@@ -52,6 +60,15 @@ func (r *fakeReporter) ReportCommandSourceResult(jobID, destinationID, sourceNam
 	r.commandResults = append(r.commandResults, commandResult{
 		destinationID: destinationID,
 		sourceName:    sourceName,
+		status:        status,
+		errMsg:        errMsg,
+	})
+}
+
+func (r *fakeReporter) ReportRetentionTagResult(jobID, destinationID, tag, status string, startedAt time.Time, errMsg string) {
+	r.retentionResults = append(r.retentionResults, retentionTagResult{
+		destinationID: destinationID,
+		tag:           tag,
 		status:        status,
 		errMsg:        errMsg,
 	})
@@ -86,6 +103,27 @@ func TestExecuteBackupEmptyRepoURL(t *testing.T) {
 	if got := reporter.destResults["dest-1"].status; got != "failed" {
 		t.Errorf("destination status = %q, want %q", got, "failed")
 	}
+	if len(reporter.statuses) == 0 {
+		t.Fatal("no job status reported")
+	}
+	if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
+		t.Errorf("final job status = %q, want %q (all statuses: %v)", final, "failed", reporter.statuses)
+	}
+}
+
+// TestExecuteRetention_MalformedPayloadFails verifies that a retention job
+// (JOB_TYPE_FORGET) with an undeserializable payload is reported as failed,
+// mirroring TestExecuteBackupEmptyRepoURL's shape for the backup path. This
+// is the deepest executeRetention path testable without a real restic
+// wrapper (unlike backup, retention has no destination/repo_url validation
+// gate before its first wrapper call — every other path touches e.wrapper).
+func TestExecuteRetention_MalformedPayloadFails(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_FORGET, Payload: []byte("not json")}
+
+	e.executeRetention(context.Background(), job, fakeSink{}, reporter)
+
 	if len(reporter.statuses) == 0 {
 		t.Fatal("no job status reported")
 	}

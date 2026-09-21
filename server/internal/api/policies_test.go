@@ -14,16 +14,12 @@ import (
 func createDBPolicy(t *testing.T, deps *testDeps, name string, agentID uuid.UUID) *db.Policy {
 	t.Helper()
 	p := &db.Policy{
-		Name:             name,
-		AgentID:          agentID,
-		Schedule:         "@daily",
-		Enabled:          true,
-		Sources:          `[{"type":"directory","path":"/data"}]`,
-		RepoPassword:     "secret",
-		RetentionDaily:   7,
-		RetentionWeekly:  4,
-		RetentionMonthly: 6,
-		RetentionYearly:  1,
+		Name:         name,
+		AgentID:      agentID,
+		Schedule:     "@daily",
+		Enabled:      true,
+		Sources:      `[{"type":"directory","path":"/data"}]`,
+		RepoPassword: "secret",
 	}
 	if err := deps.policies.Create(context.Background(), p); err != nil {
 		t.Fatalf("createDBPolicy: %v", err)
@@ -260,44 +256,6 @@ func TestPolicyHandler_Create(t *testing.T) {
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
 
-	t.Run("preserves zero retention values", func(t *testing.T) {
-		e := newTestEnv(t)
-		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
-		body := validPolicy(agentID)
-		body["retention_daily"] = 0
-		body["retention_yearly"] = 0
-
-		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
-		assertStatus(t, resp, http.StatusCreated)
-
-		var created struct {
-			ID             string `json:"id"`
-			RetentionDaily int    `json:"retention_daily"`
-			RetentionYearly int   `json:"retention_yearly"`
-		}
-		decodeData(t, resp, &created)
-		if created.RetentionDaily != 0 {
-			t.Errorf("create: retention_daily = %d, want 0", created.RetentionDaily)
-		}
-		if created.RetentionYearly != 0 {
-			t.Errorf("create: retention_yearly = %d, want 0", created.RetentionYearly)
-		}
-
-		resp2 := e.get(t, "/api/v1/policies/"+created.ID, e.adminToken(t))
-		assertStatus(t, resp2, http.StatusOK)
-		var fetched struct {
-			RetentionDaily  int `json:"retention_daily"`
-			RetentionYearly int `json:"retention_yearly"`
-		}
-		decodeData(t, resp2, &fetched)
-		if fetched.RetentionDaily != 0 {
-			t.Errorf("fetch: retention_daily = %d, want 0", fetched.RetentionDaily)
-		}
-		if fetched.RetentionYearly != 0 {
-			t.Errorf("fetch: retention_yearly = %d, want 0", fetched.RetentionYearly)
-		}
-	})
-
 	t.Run("use_destination_password resolves the password from the destination, never from the request", func(t *testing.T) {
 		e := newTestEnv(t)
 		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
@@ -445,7 +403,9 @@ func TestPolicyHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ Name string `json:"name"` }
+		var data struct {
+			Name string `json:"name"`
+		}
 		decodeData(t, resp, &data)
 		if data.Name != "updated" {
 			t.Errorf("name = %q, want updated", data.Name)

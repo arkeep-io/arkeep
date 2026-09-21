@@ -33,7 +33,6 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Agent, ApiResponse, Destination, Policy, VolumeInfo } from '@/types'
@@ -257,13 +256,6 @@ const schema = z.object({
 
   sources: z.array(sourceItemSchema).min(1, 'At least one source is required'),
 
-  retention_keep_last: z.coerce.number().int().min(0),
-  retention_keep_hourly: z.coerce.number().int().min(0),
-  retention_keep_daily: z.coerce.number().int().min(0),
-  retention_keep_weekly: z.coerce.number().int().min(0),
-  retention_keep_monthly: z.coerce.number().int().min(0),
-  retention_keep_yearly: z.coerce.number().int().min(0),
-
   // Destination IDs in priority order (index 0 = priority 1).
   ordered_destination_ids: z.array(z.string()).min(1, 'At least one destination is required'),
 
@@ -404,14 +396,6 @@ function applyPreset(value: string) {
   scheduleValue.value = value
   selectedPreset.value = value
 }
-
-// Retention
-const { value: retLastValue, errorMessage: retLastError } = useField<number>('retention_keep_last')
-const { value: retHourlyValue, errorMessage: retHourlyError } = useField<number>('retention_keep_hourly')
-const { value: retDailyValue, errorMessage: retDailyError } = useField<number>('retention_keep_daily')
-const { value: retWeeklyValue, errorMessage: retWeeklyError } = useField<number>('retention_keep_weekly')
-const { value: retMonthlyValue, errorMessage: retMonthlyError } = useField<number>('retention_keep_monthly')
-const { value: retYearlyValue, errorMessage: retYearlyError } = useField<number>('retention_keep_yearly')
 
 // Destinations
 const { value: orderedDestIds, errorMessage: orderedDestIdsError } = useField<string[]>('ordered_destination_ids')
@@ -572,12 +556,6 @@ function defaultValues(): FormValues {
     use_destination_password: false,
     schedule: '0 2 * * *',
     sources: [{ type: 'directory', path: '', label: '' }],
-    retention_keep_last: 0,
-    retention_keep_hourly: 0,
-    retention_keep_daily: 7,
-    retention_keep_weekly: 4,
-    retention_keep_monthly: 6,
-    retention_keep_yearly: 1,
     ordered_destination_ids: [],
     hook_pre: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
@@ -733,12 +711,6 @@ function populateForm(p: Policy, asClone = false) {
     sources: mappedSources.length > 0
       ? mappedSources
       : [{ type: 'directory', path: '', label: '' }],
-    retention_keep_last: p.retention_last ?? 0,
-    retention_keep_hourly: p.retention_hourly ?? 0,
-    retention_keep_daily: p.retention_daily ?? 7,
-    retention_keep_weekly: p.retention_weekly ?? 4,
-    retention_keep_monthly: p.retention_monthly ?? 6,
-    retention_keep_yearly: p.retention_yearly ?? 1,
     ordered_destination_ids: preDestIds,
     hook_pre: parsedPreHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPreHook },
     hook_post: parsedPostHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPostHook },
@@ -824,12 +796,6 @@ const onSubmit = handleSubmit(async (values) => {
           return Array.from(sel).map(name => ({ type: s.type, path: name, label: s.label ?? '' }))
         })
       ),
-      retention_last: values.retention_keep_last,
-      retention_hourly: values.retention_keep_hourly,
-      retention_daily: values.retention_keep_daily,
-      retention_weekly: values.retention_keep_weekly,
-      retention_monthly: values.retention_keep_monthly,
-      retention_yearly: values.retention_keep_yearly,
       hook_pre_backup: serialiseHook(values.hook_pre),
       hook_post_backup: serialiseHook(values.hook_post),
       exclude_patterns: JSON.stringify(
@@ -1137,108 +1103,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         4. RETENTION
-                    ══════════════════════════════════════════════════ -->
-          <p class="text-sm font-medium">Retention</p>
-          <p class="text-muted-foreground text-xs -mt-3">
-            Number of snapshots to keep per rule. Set to 0 to disable that rule.
-          </p>
-
-          <div class="grid grid-cols-2 gap-3">
-            <Field>
-              <FieldLabel for="ret-last" class="flex items-center gap-1">
-                Last
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the N most recent snapshots regardless of when they were taken. Useful to ensure at least N backups are always available.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-last" v-model="retLastValue" type="number" min="0"
-                :class="retLastError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retLastError">{{ retLastError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-hourly" class="flex items-center gap-1">
-                Hourly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N hours that contain a snapshot.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-hourly" v-model="retHourlyValue" type="number" min="0"
-                :class="retHourlyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retHourlyError">{{ retHourlyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-daily" class="flex items-center gap-1">
-                Daily
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N days that contain a snapshot.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-daily" v-model="retDailyValue" type="number" min="0"
-                :class="retDailyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retDailyError">{{ retDailyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-weekly" class="flex items-center gap-1">
-                Weekly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N weeks.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-weekly" v-model="retWeeklyValue" type="number" min="0"
-                :class="retWeeklyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retWeeklyError">{{ retWeeklyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-monthly" class="flex items-center gap-1">
-                Monthly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N months.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-monthly" v-model="retMonthlyValue" type="number" min="0"
-                :class="retMonthlyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retMonthlyError">{{ retMonthlyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-yearly" class="flex items-center gap-1">
-                Yearly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N years.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-yearly" v-model="retYearlyValue" type="number" min="0"
-                :class="retYearlyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retYearlyError">{{ retYearlyError }}</FieldError>
-            </Field>
-          </div>
-
-          <p class="text-muted-foreground text-xs">
-            Time-based rules (Daily and above) keep only one snapshot per period. Set <strong>Last</strong> or <strong>Hourly</strong> to preserve more recent history.
-          </p>
-
-          <Separator />
-
-          <!-- ══════════════════════════════════════════════════
-                         5. DESTINATIONS
+                         4. DESTINATIONS
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Destinations</p>
           <p class="text-muted-foreground text-xs -mt-3">
@@ -1274,6 +1139,12 @@ function onOpenChange(value: boolean) {
                 <div>
                   <p class="text-sm font-medium leading-none">{{ dest.name }}</p>
                   <p class="text-xs text-muted-foreground mt-0.5">{{ dest.type }}</p>
+                  <!-- Retention now lives on the destination (issue #130) —
+                       a destination used by other policies shares one
+                       retention configuration with them, informational only. -->
+                  <p v-if="dest.policy_count > 0" class="text-xs text-muted-foreground mt-0.5">
+                    Already used by {{ dest.policy_count }} other polic{{ dest.policy_count === 1 ? 'y' : 'ies' }} — shares one retention configuration.
+                  </p>
                 </div>
               </div>
               <Badge v-if="isDestSelected(dest.id)" variant="outline" class="text-xs tabular-nums">
@@ -1306,7 +1177,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         6. REPOSITORY PASSWORD (create only)
+                         5. REPOSITORY PASSWORD (create only)
                     ══════════════════════════════════════════════════ -->
           <template v-if="!isEdit">
             <p class="text-sm font-medium">Repository Password</p>
@@ -1378,7 +1249,7 @@ function onOpenChange(value: boolean) {
           </template>
 
           <!-- ══════════════════════════════════════════════════
-                         7. HOOKS (collapsible)
+                         6. HOOKS (collapsible)
                     ══════════════════════════════════════════════════ -->
           <Collapsible v-model:open="hooksOpen">
             <CollapsibleTrigger as-child>

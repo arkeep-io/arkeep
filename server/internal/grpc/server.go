@@ -54,21 +54,21 @@ type PendingDispatcher interface {
 type Server struct {
 	proto.UnimplementedAgentServiceServer
 
-	agentManager     *agentmanager.Manager
-	agentRepo        repositories.AgentRepository
-	jobRepo          repositories.JobRepository
-	snapshotRepo     repositories.SnapshotRepository
-	policyRepo       repositories.PolicyRepository
-	destRepo         repositories.DestinationRepository
-	hub              *websocket.Hub
-	pendingDispatch  PendingDispatcher // may be nil in tests that don't need it
-	notifSvc         notification.Service
-	metrics          *metrics.Metrics // may be nil when metrics are disabled
-	logger           *zap.Logger
-	sharedSecret     string // shared secret agents must present in gRPC metadata
-	tlsCertFile      string
-	tlsKeyFile       string
-	autoCerts        *AutoCerts // non-nil when auto-PKI + mTLS is active
+	agentManager    *agentmanager.Manager
+	agentRepo       repositories.AgentRepository
+	jobRepo         repositories.JobRepository
+	snapshotRepo    repositories.SnapshotRepository
+	policyRepo      repositories.PolicyRepository
+	destRepo        repositories.DestinationRepository
+	hub             *websocket.Hub
+	pendingDispatch PendingDispatcher // may be nil in tests that don't need it
+	notifSvc        notification.Service
+	metrics         *metrics.Metrics // may be nil when metrics are disabled
+	logger          *zap.Logger
+	sharedSecret    string // shared secret agents must present in gRPC metadata
+	tlsCertFile     string
+	tlsKeyFile      string
+	autoCerts       *AutoCerts // non-nil when auto-PKI + mTLS is active
 
 	// capabilitiesMu guards capabilitiesCache.
 	capabilitiesMu sync.Mutex
@@ -635,7 +635,7 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	job, _, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
+	job, _, _, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
 	if err != nil {
 		s.logger.Warn("notifyJobTerminal: could not fetch job details",
 			zap.String("job_id", jobID.String()),
@@ -849,6 +849,16 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		return s.reportCommandSourceStatus(ctx, req, jobID, destID, startedAt, now)
 	}
 
+	// A non-empty retention_tag means this report is for one restic tag's own
+	// forget --prune sweep within a standalone retention job (issue #130),
+	// not a backup. Those results live in job_retention_tags; the aggregate
+	// destination result for the whole sweep still arrives separately via
+	// this same RPC with retention_tag empty (see executor.executeRetention),
+	// so it falls through to the regular path below like a backup would.
+	if req.RetentionTag != "" {
+		return s.reportRetentionTagStatus(ctx, req, jobID, destID, startedAt, now)
+	}
+
 	if err := s.jobRepo.UpdateDestinationStatus(ctx, jobID, destID, req.Status, &startedAt, &now, req.SnapshotId, req.SizeBytes, req.Error); err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			s.logger.Error("ReportDestinationStatus: job_destinations row not found — was CreateDestination skipped?",
@@ -870,6 +880,21 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	// snapshots are created — there is no separate catalog sync step.
 	if req.Status == "succeeded" && req.SnapshotId != "" {
 		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
+	}
+
+	// Release the busy gate (issue #130): this destination's terminal result
+	// has been recorded, so another backup or retention sweep may now be
+	// dispatched against it. Covers both a backup's own destination result
+	// and a retention job's aggregate destination result — both flow through
+	// this same path (see the retention_tag branch above, which only
+	// intercepts per-tag sub-results).
+	if s.destRepo != nil {
+		if err := s.destRepo.ReleaseBusy(ctx, destID, jobID); err != nil {
+			s.logger.Warn("ReportDestinationStatus: failed to release destination busy gate",
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
 	}
 
 	// Refresh the destination's cached real repository size (from restic stats)
@@ -976,6 +1001,34 @@ func (s *Server) reportCommandSourceStatus(ctx context.Context, req *proto.Desti
 		zap.String("status", req.Status),
 		zap.String("snapshot_id", req.SnapshotId),
 		zap.Int64("size_bytes", req.SizeBytes),
+	)
+
+	return &proto.DestinationStatusResponse{Ok: true}, nil
+}
+
+// reportRetentionTagStatus handles a DestinationStatusReport for one restic
+// tag's own forget --prune sweep within a standalone retention job
+// (req.RetentionTag != ""). Unlike command sources, every tag a retention job
+// will sweep is known and its job_retention_tags row pre-created at job
+// creation time (mirroring job_destinations for a backup), so this is a plain
+// update — no upsert-on-first-report path needed. A forget never creates a
+// snapshot, so there is no createSnapshotRecord call here.
+func (s *Server) reportRetentionTagStatus(ctx context.Context, req *proto.DestinationStatusReport, jobID, destID uuid.UUID, startedAt, now time.Time) (*proto.DestinationStatusResponse, error) {
+	if err := s.jobRepo.UpdateRetentionTagStatus(ctx, jobID, destID, req.RetentionTag, req.Status, &startedAt, &now, req.Error); err != nil {
+		s.logger.Error("reportRetentionTagStatus: db error updating retention tag status",
+			zap.String("job_id", req.JobId),
+			zap.String("destination_id", req.DestinationId),
+			zap.String("retention_tag", req.RetentionTag),
+			zap.Error(err),
+		)
+		return nil, status.Error(codes.Internal, "failed to update retention tag status")
+	}
+
+	s.logger.Info("retention tag status recorded",
+		zap.String("job_id", req.JobId),
+		zap.String("destination_id", req.DestinationId),
+		zap.String("retention_tag", req.RetentionTag),
+		zap.String("status", req.Status),
 	)
 
 	return &proto.DestinationStatusResponse{Ok: true}, nil

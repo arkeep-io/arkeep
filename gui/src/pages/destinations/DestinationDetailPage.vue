@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -31,14 +31,13 @@ import {
     Trash2,
     Play,
     Loader2,
-    FolderOpen,
-    Container,
-    Terminal,
     CalendarClock,
+    AlertTriangle,
 } from '@lucide/vue'
 import { api } from '@/services/api'
-import type { Policy, Job, ApiResponse } from '@/types'
-import PolicySheet from '@/components/policies/PolicySheet.vue'
+import type { Destination, Job, ApiResponse } from '@/types'
+import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
+import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -49,18 +48,18 @@ defineOptions({ inheritAttrs: false })
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const policyId = route.params.id as string
+const destinationId = route.params.id as string
 
 // ---------------------------------------------------------------------------
-// State — policy
+// State — destination
 // ---------------------------------------------------------------------------
 
-const policy = ref<Policy | null>(null)
+const destination = ref<Destination | null>(null)
 const loading = ref(true)
 const error = ref<string | null>(null)
 
 // ---------------------------------------------------------------------------
-// State — jobs
+// State — jobs (retention runs + backups touching this destination)
 // ---------------------------------------------------------------------------
 
 interface JobListResponse { items: Job[]; total: number }
@@ -81,14 +80,14 @@ const triggerLoading = ref(false)
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchPolicy() {
+async function fetchDestination() {
     loading.value = true
     error.value = null
     try {
-        const res = await api<ApiResponse<Policy>>(`/api/v1/policies/${policyId}`)
-        policy.value = res.data
+        const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
+        destination.value = res.data
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load policy'
+        error.value = e?.message ?? 'Failed to load destination'
     } finally {
         loading.value = false
     }
@@ -98,7 +97,7 @@ async function fetchJobs() {
     jobsLoading.value = true
     try {
         const res = await api<ApiResponse<JobListResponse>>(
-            `/api/v1/policies/${policyId}/jobs?limit=10&offset=0`
+            `/api/v1/jobs?destination_id=${destinationId}&limit=10&offset=0`
         )
         jobs.value = res.data.items
     } catch {
@@ -112,15 +111,14 @@ async function fetchJobs() {
 // Actions
 // ---------------------------------------------------------------------------
 
-async function triggerPolicy() {
+async function triggerRetention() {
     triggerLoading.value = true
     error.value = null
     try {
-        await api(`/api/v1/policies/${policyId}/trigger`, { method: 'POST' })
-        // Refresh jobs after a short delay to pick up the new pending job
+        await api(`/api/v1/destinations/${destinationId}/trigger-retention`, { method: 'POST' })
         setTimeout(fetchJobs, 800)
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to trigger policy'
+        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to trigger retention'
     } finally {
         triggerLoading.value = false
     }
@@ -129,10 +127,10 @@ async function triggerPolicy() {
 async function confirmDelete() {
     deleteLoading.value = true
     try {
-        await api(`/api/v1/policies/${policyId}`, { method: 'DELETE' })
-        router.push('/policies')
+        await api(`/api/v1/destinations/${destinationId}`, { method: 'DELETE' })
+        router.push('/destinations')
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete policy'
+        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to delete destination'
     } finally {
         deleteLoading.value = false
         deleteDialogOpen.value = false
@@ -140,30 +138,15 @@ async function confirmDelete() {
 }
 
 function onSaved() {
-    fetchPolicy()
+    fetchDestination()
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Parses the sources JSON string into an array of source objects.
- * Returns an empty array on parse failure so the UI degrades gracefully.
- */
-const parsedSources = computed(() => {
-    if (!policy.value?.sources) return []
-    try {
-        const raw = typeof policy.value.sources === 'string'
-            ? JSON.parse(policy.value.sources)
-            : policy.value.sources
-        return raw as { type: string; path: string; label?: string }[]
-    } catch {
-        return []
-    }
-})
-
 function scheduleLabel(cron: string): string {
+    if (!cron) return 'Not scheduled'
     const presets: Record<string, string> = {
         '0 * * * *': 'Hourly',
         '0 2 * * *': 'Daily at 02:00',
@@ -171,33 +154,15 @@ function scheduleLabel(cron: string): string {
         '0 2 * * 0': 'Weekly (Sun)',
         '0 2 * * 1': 'Weekly (Mon)',
         '0 2 1 * *': 'Monthly',
-        '@daily': 'Daily',
-        '@weekly': 'Weekly',
-        '@monthly': 'Monthly',
-        '@hourly': 'Hourly',
     }
     return presets[cron] ?? cron
-}
-
-function formatDate(date: string | null | undefined): string {
-    if (!date) return '—'
-    return new Date(date).toLocaleString()
-}
-
-function jobStatusVariant(status: string): 'default' | 'secondary' | 'outline' | 'destructive' {
-    switch (status) {
-        case 'succeeded': return 'default'
-        case 'running': return 'outline'
-        case 'failed': return 'destructive'
-        default: return 'secondary'
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
+onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
 </script>
 
 <template>
@@ -206,7 +171,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
         <!-- ── Header ─────────────────────────────────────────────────────── -->
         <div class="flex items-start justify-between gap-4">
             <div class="flex items-center gap-3">
-                <Button variant="ghost" size="icon" @click="router.push('/policies')">
+                <Button variant="ghost" size="icon" @click="router.push('/destinations')">
                     <ArrowLeft class="w-4 h-4" />
                 </Button>
                 <div>
@@ -214,30 +179,37 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                         <Skeleton class="w-48 h-6" />
                         <Skeleton class="w-32 h-4" />
                     </div>
-                    <template v-else-if="policy">
-                        <div class="flex items-center gap-2.5">
-                            <h1 class="text-2xl font-semibold tracking-tight">{{ policy.name }}</h1>
-                            <Badge :variant="policy.enabled ? 'default' : 'secondary'">
-                                {{ policy.enabled ? 'Enabled' : 'Disabled' }}
+                    <template v-else-if="destination">
+                        <div class="flex items-center gap-2.5 flex-wrap">
+                            <h1 class="text-2xl font-semibold tracking-tight">{{ destination.name }}</h1>
+                            <Badge :variant="destination.enabled ? 'default' : 'secondary'">
+                                {{ destination.enabled ? 'Enabled' : 'Disabled' }}
+                            </Badge>
+                            <Badge v-if="destination.append_only" variant="outline">Append-only</Badge>
+                            <Badge v-if="destination.retention_needs_review" variant="destructive">
+                                Retention needs reconfiguration
                             </Badge>
                         </div>
                         <p class="mt-0.5 text-sm text-muted-foreground">
-                            Agent: <span class="font-medium text-foreground">{{ policy.agent_name || '—' }}</span>
+                            Type: <span class="font-medium text-foreground uppercase">{{ destination.type }}</span>
+                            <span v-if="destination.policy_count > 0">
+                                · Used by {{ destination.policy_count }} polic{{ destination.policy_count === 1 ? 'y' : 'ies' }}
+                            </span>
                         </p>
                     </template>
                 </div>
             </div>
 
             <!-- Actions -->
-            <div v-if="!loading && policy" class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchPolicy(); fetchJobs()">
+            <div v-if="!loading && destination" class="flex items-center gap-2">
+                <Button variant="outline" size="icon" :disabled="loading" @click="fetchDestination(); fetchJobs()">
                     <RefreshCw class="w-4 h-4" />
                 </Button>
-                <Button v-if="authStore.isAdmin" variant="outline" size="sm" :disabled="triggerLoading"
-                    @click="triggerPolicy">
+                <Button v-if="authStore.isAdmin && destination.retention_enabled && !destination.append_only"
+                    variant="outline" size="sm" :disabled="triggerLoading" @click="triggerRetention">
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
                     <Play v-else class="w-4 h-4 mr-1.5" />
-                    Run Now
+                    Run Retention Now
                 </Button>
                 <Button variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
@@ -258,90 +230,97 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
         </Alert>
 
         <!-- ── Info cards ──────────────────────────────────────────────────── -->
-        <div v-if="loading" class="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <div v-for="n in 4" :key="n" class="p-4 border rounded-md">
+        <div v-if="loading" class="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <div v-for="n in 3" :key="n" class="p-4 border rounded-md">
                 <Skeleton class="w-16 h-3 mb-2" />
                 <Skeleton class="w-24 h-4" />
             </div>
         </div>
-        <div v-else-if="policy" class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div v-else-if="destination" class="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <div class="p-4 border rounded-md">
-                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Schedule</p>
-                <p class="text-sm font-mono font-medium">{{ scheduleLabel(policy.schedule) }}</p>
+                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Repo Size</p>
+                <p class="text-sm font-medium">{{ formatBytes(destination.repo_size_bytes) }}</p>
             </div>
             <div class="p-4 border rounded-md">
-                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Last Run</p>
-                <p class="text-sm font-medium">{{ formatDate(policy.last_run_at) }}</p>
-            </div>
-            <div class="p-4 border rounded-md">
-                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Next Run</p>
-                <p class="text-sm font-medium">{{ formatDate(policy.next_run_at) }}</p>
+                <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Retention Schedule</p>
+                <p class="text-sm font-mono font-medium">
+                    {{ destination.append_only || !destination.retention_enabled ? '—' : scheduleLabel(destination.retention_schedule) }}
+                </p>
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Created</p>
-                <p class="text-sm font-medium">{{ formatDate(policy.created_at) }}</p>
+                <p class="text-sm font-medium">{{ formatDate(destination.created_at) }}</p>
             </div>
         </div>
 
-        <!-- ── Sources + Retention + Destinations ─────────────────────────── -->
-        <div v-if="!loading && policy" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <!-- ── Retention ───────────────────────────────────────────────────── -->
+        <div v-if="!loading && destination" class="border rounded-md p-4 flex flex-col gap-3">
+            <h2 class="text-sm font-semibold">Retention</h2>
 
-            <!-- Sources -->
-            <div class="border rounded-md p-4 flex flex-col gap-3">
-                <h2 class="text-sm font-semibold">Sources</h2>
-                <div v-if="parsedSources.length === 0" class="text-sm text-muted-foreground">No sources configured.
-                </div>
-                <div v-else class="flex flex-col gap-2">
-                    <div v-for="(src, idx) in parsedSources" :key="idx"
-                        class="flex items-start gap-2.5 rounded-md bg-muted/50 px-3 py-2">
-                        <Container v-if="src.type === 'docker-volume'"
-                            class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
-                        <Terminal v-else-if="src.type === 'command'"
-                            class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
-                        <FolderOpen v-else class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
-                        <div class="min-w-0">
-                            <p class="text-sm font-mono truncate">{{ src.path }}</p>
-                            <p v-if="src.label" class="text-xs text-muted-foreground">{{ src.label }}</p>
-                            <p v-else class="text-xs text-muted-foreground">{{ src.type }}</p>
-                        </div>
+            <Alert v-if="destination.append_only">
+                <AlertDescription class="text-sm text-muted-foreground">
+                    This destination is append-only — retention cannot run here (`forget --prune`
+                    can never succeed against storage that rejects deletes).
+                </AlertDescription>
+            </Alert>
+
+            <template v-else-if="destination.retention_needs_review">
+                <Alert variant="destructive">
+                    <AlertTriangle class="h-4 w-4" />
+                    <AlertDescription class="text-xs">
+                        This destination was shared by multiple policies with different retention
+                        settings before this update — retention was left disabled. Edit it to
+                        configure retention explicitly.
+                    </AlertDescription>
+                </Alert>
+                <Button variant="outline" size="sm" class="self-start" @click="editSheetOpen = true">
+                    <PencilLine class="w-4 h-4 mr-1.5" />
+                    Configure Retention
+                </Button>
+            </template>
+
+            <template v-else-if="!destination.retention_enabled">
+                <p class="text-sm text-muted-foreground">Retention is not configured for this destination.</p>
+            </template>
+
+            <template v-else>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-muted-foreground">Last</span>
+                        <span class="text-sm font-mono font-medium">{{ destination.retention_last }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-muted-foreground">Hourly</span>
+                        <span class="text-sm font-mono font-medium">{{ destination.retention_hourly }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-muted-foreground">Daily</span>
+                        <span class="text-sm font-mono font-medium">{{ destination.retention_daily }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-muted-foreground">Weekly</span>
+                        <span class="text-sm font-mono font-medium">{{ destination.retention_weekly }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-muted-foreground">Monthly</span>
+                        <span class="text-sm font-mono font-medium">{{ destination.retention_monthly }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs text-muted-foreground">Yearly</span>
+                        <span class="text-sm font-mono font-medium">{{ destination.retention_yearly }}</span>
                     </div>
                 </div>
-            </div>
-
-            <!-- Destinations — retention moved to the destination itself
-                 (issue #130): a Destination now has one retention
-                 configuration, shared by every policy that writes to it, on
-                 its own independent schedule. See the destination's own
-                 detail page for its retention config and history. -->
-            <div class="border rounded-md p-4 flex flex-col gap-3">
-                <h2 class="text-sm font-semibold">Destinations</h2>
-                <div v-if="!policy.destinations || policy.destinations.length === 0"
-                    class="text-sm text-muted-foreground">No
-                    destinations configured.</div>
-                <div v-else class="flex flex-col gap-1.5">
-                    <div v-for="dest in policy.destinations" :key="dest.destination_id"
-                        class="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-1.5">
-                        <span class="text-xs font-mono text-muted-foreground w-5 shrink-0">
-                            {{ dest.priority }}.
-                        </span>
-                        <span class="text-sm flex-1 truncate">
-                            {{ dest.destination_name || dest.destination_id }}
-                        </span>
-                    </div>
-                </div>
-            </div>
+                <p class="text-xs text-muted-foreground">
+                    Agent: <span class="font-medium text-foreground">{{ destination.retention_agent_name || '—' }}</span>
+                </p>
+            </template>
+        </div>
+        <div v-else-if="loading" class="border rounded-md p-4 flex flex-col gap-3">
+            <Skeleton class="w-24 h-4" />
+            <Skeleton class="w-full h-8" />
         </div>
 
-        <!-- Skeletons for sources/retention while loading -->
-        <div v-else-if="loading" class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div v-for="n in 2" :key="n" class="border rounded-md p-4 flex flex-col gap-3">
-                <Skeleton class="w-24 h-4" />
-                <Skeleton class="w-full h-8" />
-                <Skeleton class="w-full h-8" />
-            </div>
-        </div>
-
-        <!-- ── Recent Jobs ─────────────────────────────────────────────────── -->
+        <!-- ── Recent Jobs (backups + retention runs) ─────────────────────── -->
         <div class="flex flex-col gap-3">
             <div class="flex items-center justify-between">
                 <h2 class="text-sm font-semibold">Recent Jobs</h2>
@@ -354,6 +333,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                 <Table>
                     <TableHeader>
                         <TableRow>
+                            <TableHead>Type</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead>Started</TableHead>
                             <TableHead>Finished</TableHead>
@@ -380,7 +360,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                                         <div>
                                             <p class="font-medium text-sm">No jobs yet</p>
                                             <p class="mt-1 text-xs text-muted-foreground">
-                                                Run the policy manually or wait for the next scheduled run.
+                                                Backups and retention sweeps against this destination will appear here.
                                             </p>
                                         </div>
                                     </div>
@@ -392,9 +372,10 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                         <template v-else>
                             <TableRow v-for="job in jobs" :key="job.id" class="cursor-pointer"
                                 @click="router.push(`/jobs/${job.id}`)">
+                                <TableCell class="text-sm text-muted-foreground capitalize">{{ job.type }}</TableCell>
                                 <TableCell>
-                                    <Badge :variant="jobStatusVariant(job.status)">
-                                        {{ job.status }}
+                                    <Badge :variant="statusVariant(job.status)" :class="statusClass(job.status)">
+                                        {{ statusLabel(job.status) }}
                                     </Badge>
                                 </TableCell>
                                 <TableCell class="text-sm text-muted-foreground">
@@ -409,7 +390,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                 </Table>
                 <div class="flex justify-end px-4 py-2 border-t">
                     <RouterLink
-                        :to="{ name: 'jobs', query: { policy_id: policyId } }"
+                        :to="{ name: 'jobs', query: { destination_id: destinationId } }"
                         class="text-sm text-muted-foreground hover:text-foreground transition-colors"
                     >
                         View all jobs →
@@ -421,18 +402,18 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
     </div>
 
     <!-- Edit sheet -->
-    <PolicySheet v-if="policy" :policy="policy" :open="editSheetOpen" @update:open="editSheetOpen = $event"
-        @saved="onSaved" />
+    <DestinationSheet v-if="destination" :destination="destination" :open="editSheetOpen"
+        @update:open="editSheetOpen = $event" @saved="onSaved" />
 
     <!-- Delete dialog -->
     <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
         <AlertDialogContent>
             <AlertDialogHeader>
-                <AlertDialogTitle>Delete policy?</AlertDialogTitle>
+                <AlertDialogTitle>Delete destination?</AlertDialogTitle>
                 <AlertDialogDescription>
-                    <span v-if="policy">
-                        <strong>{{ policy.name }}</strong> will be permanently deleted.
-                        All scheduled runs for this policy will be removed.
+                    <span v-if="destination">
+                        <strong>{{ destination.name }}</strong> will be permanently deleted.
+                        This does not delete the underlying repository data.
                         This action cannot be undone.
                     </span>
                 </AlertDialogDescription>
