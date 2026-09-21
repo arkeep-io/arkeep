@@ -80,7 +80,10 @@ const configSchemas: Record<DestType, z.ZodObject<any>> = {
     }),
     s3: z.object({
         bucket: z.string().min(1, 'Bucket is required'),
-        endpoint: z.string().optional(),
+        // No implicit default — a blank endpoint used to silently resolve to
+        // AWS (server/internal/destutil/destutil.go), which is wrong for
+        // Backblaze B2 and other S3-compatible providers.
+        endpoint: z.string().min(1, 'Endpoint is required'),
         region: z.string().optional(),
         prefix: z.string().optional(),
     }),
@@ -211,7 +214,11 @@ function populateFromDestination(dest: Destination, asClone = false) {
             break
         case 's3':
             s3Bucket.value = config.bucket ?? ''
-            s3Endpoint.value = config.endpoint ?? ''
+            // Legacy destinations saved before Endpoint was required silently
+            // resolved to AWS server-side (destutil.BuildRepoURL) — surface
+            // that real value explicitly instead of leaving the field blank
+            // and failing the now-required validation.
+            s3Endpoint.value = config.endpoint || 's3.amazonaws.com'
             s3Region.value = config.region ?? ''
             s3Prefix.value = config.prefix ?? ''
             break
@@ -529,11 +536,15 @@ function onOpenChange(value: boolean) {
                             <FieldError v-if="fieldErrors.bucket">{{ fieldErrors.bucket }}</FieldError>
                         </Field>
                         <Field>
-                            <FieldLabel for="s3-endpoint">
-                                Endpoint <span class="text-muted-foreground font-normal">(optional)</span>
-                            </FieldLabel>
+                            <FieldLabel for="s3-endpoint">Endpoint</FieldLabel>
                             <Input id="s3-endpoint" v-model="s3Endpoint" autocomplete="off"
-                                placeholder="https://s3.us-east-1.amazonaws.com" />
+                                placeholder="s3.amazonaws.com or s3.us-west-002.backblazeb2.com"
+                                :class="fieldErrors.endpoint ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.endpoint">{{ fieldErrors.endpoint }}</FieldError>
+                            <p class="text-muted-foreground text-xs">
+                                Required — the S3-compatible endpoint for this provider (AWS, Backblaze B2, MinIO, etc.).
+                                Leaving this blank does not mean "use AWS".
+                            </p>
                         </Field>
                         <div class="grid grid-cols-2 gap-3">
                             <Field>

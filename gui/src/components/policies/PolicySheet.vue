@@ -469,6 +469,58 @@ watch(canUseDestinationPassword, (can) => {
   if (!can) useDestinationPasswordValue.value = false
 })
 
+// Live "does this destination already have a repository, and does this
+// password unlock it?" check. Reuses the read-only check-repo endpoint
+// (restic snapshots/stats only — nothing is written) so a wrong manually
+// entered password is caught immediately instead of at the first scheduled
+// backup. Only runs on the manual-password path — when the reuse switch
+// above is on, the DB-backed value is already correct and needs no agent
+// round-trip.
+type RepoCheckStatus = 'checking' | 'no_repo' | 'ok' | 'wrong_password' | 'unknown'
+const repoCheckByDest = ref<Record<string, { status: RepoCheckStatus; message: string }>>({})
+
+function repoCheckStatusLabel(destId: string): string {
+  const check = repoCheckByDest.value[destId]
+  if (!check) return ''
+  switch (check.status) {
+    case 'checking': return 'checking for an existing repository…'
+    case 'no_repo': return 'no existing repository — one will be created'
+    case 'ok': return 'existing repository found, password verified'
+    case 'wrong_password': return check.message || 'a repository already exists here with a different password'
+    case 'unknown': return check.message || 'could not verify (agent unreachable)'
+  }
+}
+
+async function runRepoChecks() {
+  const ids = orderedDestIds.value ?? []
+  const pwd = repoPassValue.value
+  if (ids.length === 0 || !pwd || pwd.length < 8 || !agentValue.value) {
+    repoCheckByDest.value = {}
+    return
+  }
+  for (const id of ids) repoCheckByDest.value[id] = { status: 'checking', message: '' }
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const res = await api<ApiResponse<{ status: RepoCheckStatus; message: string }>>(
+        `/api/v1/destinations/${id}/check-repo`,
+        { method: 'POST', body: { agent_id: agentValue.value, repo_password: pwd } },
+      )
+      repoCheckByDest.value = { ...repoCheckByDest.value, [id]: { status: res.data.status, message: res.data.message } }
+    } catch (e: any) {
+      repoCheckByDest.value = { ...repoCheckByDest.value, [id]: { status: 'unknown', message: e?.data?.error?.message ?? 'could not verify' } }
+    }
+  }))
+}
+
+const debouncedRepoCheck = useDebounceFn(runRepoChecks, 500)
+watch([orderedDestIds, repoPassValue, useDestinationPasswordValue], () => {
+  if (isEdit.value || useDestinationPasswordValue.value) {
+    repoCheckByDest.value = {}
+    return
+  }
+  debouncedRepoCheck()
+})
+
 // Hooks
 const { value: hookPreEnabled } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName } = useField<string>('hook_pre.name')
@@ -544,6 +596,7 @@ watch(
       selectedVolumes.value = {}
       selectedAgent.value = null
       destSearch.value = ''
+      repoCheckByDest.value = {}
       return
     }
 
@@ -742,6 +795,14 @@ const onSubmit = handleSubmit(async (values) => {
     }
   }
 
+  if (!isEdit.value && !values.use_destination_password) {
+    const hasWrongPassword = Object.values(repoCheckByDest.value).some(c => c.status === 'wrong_password')
+    if (hasWrongPassword) {
+      submitError.value = 'One or more selected destinations already have a repository with a different password. Fix the password above before creating this policy.'
+      return
+    }
+  }
+
   submitting.value = true
   submitError.value = null
 
@@ -879,60 +940,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         2. REPOSITORY PASSWORD (create only)
-                    ══════════════════════════════════════════════════ -->
-          <template v-if="!isEdit">
-            <p class="text-sm font-medium">Repository Password</p>
-            <p class="text-muted-foreground text-xs -mt-3">
-              Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
-            </p>
-
-            <!-- Selected destination(s) already have a password on file (imported
-                 from a pre-existing repository) — offer to reuse it instead of
-                 asking the user to retype a secret the server already has. -->
-            <div v-if="canUseDestinationPassword" class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Use the destination's existing password</p>
-                <p class="text-muted-foreground text-xs">
-                  The selected destination already has a repository password on file from when it was imported.
-                </p>
-              </div>
-              <Switch :model-value="useDestinationPasswordValue"
-                @update:model-value="useDestinationPasswordValue = $event" />
-            </div>
-
-            <template v-if="!useDestinationPasswordValue">
-            <Field>
-              <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
-              <div class="relative">
-                <Input id="repo_password" v-model="repoPassValue" :type="showPassword ? 'text' : 'password'"
-                  autocomplete="new-password" placeholder="min. 8 characters"
-                  :class="['pr-10', repoPassError ? 'border-destructive focus-visible:ring-destructive/30' : '']" />
-                <button type="button"
-                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                  @click="showPassword = !showPassword">
-                  <EyeOff v-if="showPassword" class="size-4" />
-                  <Eye v-else class="size-4" />
-                </button>
-              </div>
-              <FieldError v-if="repoPassError">{{ repoPassError }}</FieldError>
-            </Field>
-
-            <Field>
-              <FieldLabel for="repo_password_confirm">Confirm Password <span class="text-destructive">*</span>
-              </FieldLabel>
-              <Input id="repo_password_confirm" v-model="repoPassConfirmValue"
-                :type="showPassword ? 'text' : 'password'" autocomplete="new-password" placeholder="repeat password"
-                :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
-            </Field>
-            </template>
-
-            <Separator />
-          </template>
-
-          <!-- ══════════════════════════════════════════════════
-                         3. SOURCES
+                         2. SOURCES
                     ══════════════════════════════════════════════════ -->
           <div class="flex items-center justify-between">
             <p class="text-sm font-medium">Sources</p>
@@ -1105,7 +1113,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         4. SCHEDULE
+                         3. SCHEDULE
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Schedule</p>
 
@@ -1129,7 +1137,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         5. RETENTION
+                         4. RETENTION
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Retention</p>
           <p class="text-muted-foreground text-xs -mt-3">
@@ -1230,7 +1238,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         6. DESTINATIONS
+                         5. DESTINATIONS
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Destinations</p>
           <p class="text-muted-foreground text-xs -mt-3">
@@ -1296,6 +1304,78 @@ function onOpenChange(value: boolean) {
           <p v-if="orderedDestIdsError" class="text-sm text-destructive">{{ orderedDestIdsError }}</p>
 
           <Separator />
+
+          <!-- ══════════════════════════════════════════════════
+                         6. REPOSITORY PASSWORD (create only)
+                    ══════════════════════════════════════════════════ -->
+          <template v-if="!isEdit">
+            <p class="text-sm font-medium">Repository Password</p>
+            <p class="text-muted-foreground text-xs -mt-3">
+              Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
+            </p>
+
+            <!-- Selected destination(s) already have a password on file (imported
+                 from a pre-existing repository) — offer to reuse it instead of
+                 asking the user to retype a secret the server already has. -->
+            <div v-if="canUseDestinationPassword" class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Use the destination's existing password</p>
+                <p class="text-muted-foreground text-xs">
+                  The selected destination already has a repository password on file from when it was imported.
+                </p>
+              </div>
+              <Switch :model-value="useDestinationPasswordValue"
+                @update:model-value="useDestinationPasswordValue = $event" />
+            </div>
+
+            <template v-if="!useDestinationPasswordValue">
+            <Field>
+              <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
+              <div class="relative">
+                <Input id="repo_password" v-model="repoPassValue" :type="showPassword ? 'text' : 'password'"
+                  autocomplete="new-password" placeholder="min. 8 characters"
+                  :class="['pr-10', repoPassError ? 'border-destructive focus-visible:ring-destructive/30' : '']" />
+                <button type="button"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  @click="showPassword = !showPassword">
+                  <EyeOff v-if="showPassword" class="size-4" />
+                  <Eye v-else class="size-4" />
+                </button>
+              </div>
+              <FieldError v-if="repoPassError">{{ repoPassError }}</FieldError>
+            </Field>
+
+            <Field>
+              <FieldLabel for="repo_password_confirm">Confirm Password <span class="text-destructive">*</span>
+              </FieldLabel>
+              <Input id="repo_password_confirm" v-model="repoPassConfirmValue"
+                :type="showPassword ? 'text' : 'password'" autocomplete="new-password" placeholder="repeat password"
+                :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+              <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
+            </Field>
+            </template>
+
+            <!-- Live existing-repository check (manual password entry only) —
+                 catches a wrong password at create time instead of at the
+                 first scheduled backup. -->
+            <div v-if="!useDestinationPasswordValue && Object.keys(repoCheckByDest).length" class="flex flex-col gap-1">
+              <template v-for="destId in orderedDestIds" :key="destId">
+                <p v-if="repoCheckByDest[destId]" class="text-xs flex items-center gap-1.5" :class="{
+                  'text-muted-foreground': repoCheckByDest[destId].status === 'checking' || repoCheckByDest[destId].status === 'no_repo',
+                  'text-emerald-600 dark:text-emerald-400': repoCheckByDest[destId].status === 'ok',
+                  'text-destructive': repoCheckByDest[destId].status === 'wrong_password',
+                  'text-amber-600 dark:text-amber-400': repoCheckByDest[destId].status === 'unknown',
+                }">
+                  <Loader2 v-if="repoCheckByDest[destId].status === 'checking'" class="size-3 animate-spin shrink-0" />
+                  <AlertCircle v-else-if="repoCheckByDest[destId].status === 'wrong_password'" class="size-3 shrink-0" />
+                  <AlertTriangle v-else-if="repoCheckByDest[destId].status === 'unknown'" class="size-3 shrink-0" />
+                  <span>{{ destByIdName(destId) }}: {{ repoCheckStatusLabel(destId) }}</span>
+                </p>
+              </template>
+            </div>
+
+            <Separator />
+          </template>
 
           <!-- ══════════════════════════════════════════════════
                          7. HOOKS (collapsible)

@@ -198,6 +198,128 @@ func TestDestinationHandler_GetByID(t *testing.T) {
 			t.Error("has_repo_password = false after setting a password, want true")
 		}
 	})
+
+	t.Run("has_repo_password reflects the stored password for an s3 destination too", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "s3-no-password", "s3")
+
+		var withoutPassword struct {
+			HasRepoPassword bool `json:"has_repo_password"`
+		}
+		decodeData(t, e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t)), &withoutPassword)
+		if withoutPassword.HasRepoPassword {
+			t.Error("has_repo_password = true for an s3 destination with no stored password")
+		}
+
+		dest.RepoPassword = "imported-repo-secret"
+		if err := e.deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		var withPassword struct {
+			HasRepoPassword bool `json:"has_repo_password"`
+		}
+		decodeData(t, e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t)), &withPassword)
+		if !withPassword.HasRepoPassword {
+			t.Error("has_repo_password = false after setting a password on an s3 destination, want true")
+		}
+	})
+}
+
+func TestDestinationHandler_CheckRepo(t *testing.T) {
+	t.Run("returns 401 without token", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "s3-dest", "s3")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/check-repo", "", map[string]string{
+			"agent_id":      uuid.NewString(),
+			"repo_password": "secret",
+		})
+		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+
+	t.Run("returns 404 for unknown destination", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations/00000000-0000-0000-0000-000000000001/check-repo", e.adminToken(t), map[string]string{
+			"agent_id":      uuid.NewString(),
+			"repo_password": "secret",
+		})
+		assertStatus(t, resp, http.StatusNotFound)
+	})
+
+	t.Run("returns 400 when agent_id missing", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "s3-dest", "s3")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/check-repo", e.adminToken(t), map[string]string{
+			"repo_password": "secret",
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 when repo_password missing", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "s3-dest", "s3")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/check-repo", e.adminToken(t), map[string]string{
+			"agent_id": uuid.NewString(),
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 for invalid agent_id", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "s3-dest", "s3")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/check-repo", e.adminToken(t), map[string]string{
+			"agent_id":      "not-a-uuid",
+			"repo_password": "secret",
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 409 when agent is not connected", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "s3-dest", "s3")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/check-repo", e.adminToken(t), map[string]string{
+			"agent_id":      uuid.NewString(),
+			"repo_password": "secret",
+		})
+		assertStatus(t, resp, http.StatusConflict)
+	})
+}
+
+func TestClassifyRepoCheckError(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		wantStatus string
+	}{
+		{
+			name:       "exit code 10 — no repository yet",
+			raw:        "restic: command failed: exit status 10\n" + `{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file"}`,
+			wantStatus: "no_repo",
+		},
+		{
+			name:       "exit code 12 — wrong password",
+			raw:        "restic: command failed: exit status 12\n" + `{"message_type":"exit_error","code":12,"message":"Fatal: wrong password or no key found"}`,
+			wantStatus: "wrong_password",
+		},
+		{
+			name:       "exit code 12 without a json body still recognized via the regex fallback",
+			raw:        "restic: command failed: exit status 12",
+			wantStatus: "wrong_password",
+		},
+		{
+			name:       "unrelated error",
+			raw:        "restic: command failed: exit status 1\nFatal: unable to open repo: connection refused",
+			wantStatus: "unknown",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, _ := classifyRepoCheckError(tt.raw)
+			if status != tt.wantStatus {
+				t.Errorf("classifyRepoCheckError(%q) status = %q, want %q", tt.raw, status, tt.wantStatus)
+			}
+		})
+	}
 }
 
 func TestDestinationHandler_Update(t *testing.T) {

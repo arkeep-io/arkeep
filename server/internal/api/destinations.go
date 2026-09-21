@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -498,6 +500,146 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 		"failed":   out.Failed,
 	})
 	Ok(w, newImportDestinationResponse(len(result.Snapshots), out))
+}
+
+// checkRepoRequest is the body for POST /api/v1/destinations/{id}/check-repo.
+type checkRepoRequest struct {
+	AgentID      string `json:"agent_id"`
+	RepoPassword string `json:"repo_password"`
+}
+
+// checkRepoResponse reports whether a repository already exists at this
+// destination and, if so, whether the given password unlocks it.
+type checkRepoResponse struct {
+	// Status is one of "no_repo", "ok", "wrong_password", "unknown".
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// CheckRepo handles POST /api/v1/destinations/{id}/check-repo. It is a
+// read-only probe — unlike Import, it never persists anything (no stored
+// password, no snapshot records) — used by the policy creation form to warn
+// about a wrong manually-entered repository password before the policy is
+// created, instead of only failing at the first scheduled backup.
+func (h *DestinationHandler) CheckRepo(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var req checkRepoRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.AgentID == "" {
+		ErrBadRequest(w, "agent_id is required")
+		return
+	}
+	if req.RepoPassword == "" {
+		ErrBadRequest(w, "repo_password is required")
+		return
+	}
+	if _, err := uuid.Parse(req.AgentID); err != nil {
+		ErrBadRequest(w, "invalid agent_id: must be a valid UUID")
+		return
+	}
+
+	ctx := r.Context()
+
+	dest, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get destination for check-repo", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	env := destutil.BuildEnv(dest)
+	env["RESTIC_PASSWORD"] = req.RepoPassword
+
+	payload := snapshotImportPayload{
+		Type:    dest.Type,
+		RepoURL: destutil.BuildRepoURL(dest),
+		Env:     env,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("failed to marshal check-repo payload", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	// Same rationale as Import: listing snapshots on a cold remote repository
+	// can exceed the server's default 30s write timeout.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(6 * time.Minute)); err != nil {
+		h.logger.Debug("check-repo: could not extend write deadline", zap.Error(err))
+	}
+	correlationID := uuid.New().String()
+	result, err := h.agentMgr.RequestSnapshotImport(ctx, req.AgentID, correlationID, payloadBytes)
+	if err != nil {
+		if errors.Is(err, agentmanager.ErrAgentNotConnected) {
+			ErrConflict(w, "agent is not connected")
+			return
+		}
+		if errors.Is(err, agentmanager.ErrSnapshotImportTimeout) {
+			ErrServiceUnavailable(w, "agent did not respond in time")
+			return
+		}
+		h.logger.Error("check-repo request failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if result.Err == "" {
+		Ok(w, checkRepoResponse{Status: "ok", Message: "A repository already exists here and this password unlocks it."})
+		return
+	}
+
+	status, msg := classifyRepoCheckError(result.Err)
+	Ok(w, checkRepoResponse{Status: status, Message: msg})
+}
+
+// resticExitCodeRe extracts the numeric exit code from a wrapped error string
+// such as "restic: command failed: exit status 12\n{...}" when no JSON "code"
+// field is present.
+var resticExitCodeRe = regexp.MustCompile(`exit status (\d+)`)
+
+// classifyRepoCheckError turns a raw restic error string (from
+// SnapshotImportResult.Err) into a check-repo status and human message.
+// Restic's documented exit codes (see wrapper.go's lockConflictExitCode=11
+// for the existing precedent, verified against the embedded restic binary)
+// are 10 = repository does not exist and 12 = wrong password. Matching on the
+// numeric code rather than restic's human-readable message text is
+// deliberate: the code is the stable contract, the wording is not.
+func classifyRepoCheckError(raw string) (status string, message string) {
+	code := -1
+	if i := strings.Index(raw, "{"); i >= 0 {
+		var v struct {
+			Code int `json:"code"`
+		}
+		if err := json.Unmarshal([]byte(raw[i:]), &v); err == nil && v.Code != 0 {
+			code = v.Code
+		}
+	}
+	if code == -1 {
+		if m := resticExitCodeRe.FindStringSubmatch(raw); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				code = n
+			}
+		}
+	}
+
+	switch code {
+	case 10:
+		return "no_repo", "No repository found at this destination yet — one will be created on the first backup."
+	case 12:
+		return "wrong_password", "A repository already exists at this destination, but this password does not unlock it."
+	default:
+		return "unknown", extractResticMessage(raw)
+	}
 }
 
 // importOutcome breaks down what happened to the snapshots the agent reported,

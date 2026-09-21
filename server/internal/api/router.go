@@ -200,6 +200,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Patch("/destinations/{id}", destinationHandler.Update)
 			r.Delete("/destinations/{id}", destinationHandler.Delete)
 			r.Post("/destinations/{id}/import", destinationHandler.Import)
+			r.Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
