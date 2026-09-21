@@ -141,7 +141,7 @@ func TestListDestinationCommandsByJob_ResolvesDestinationName(t *testing.T) {
 	}
 
 	// GetByIDWithDetails must surface the same row.
-	_, _, commandResults, _, err := repo.GetByIDWithDetails(ctx, jobID)
+	_, _, commandResults, _, _, err := repo.GetByIDWithDetails(ctx, jobID)
 	if err != nil {
 		t.Fatalf("GetByIDWithDetails: %v", err)
 	}
@@ -459,6 +459,53 @@ func TestMarkRunningJobsInterrupted(t *testing.T) {
 	}
 	if untouched.Status != "succeeded" {
 		t.Errorf("finished job status = %q, want it left at \"succeeded\"", untouched.Status)
+	}
+}
+
+// TestMarkRunningJobsInterrupted_ReleasesDestinationBusyGate verifies that an
+// agent vanishing mid-operation does not leave a destination permanently
+// locked out of future backups/retention (issue #130): the busy gate a
+// running job held must be released in the same sweep that marks the job
+// interrupted.
+func TestMarkRunningJobsInterrupted_ReleasesDestinationBusyGate(t *testing.T) {
+	gormDB := newTestDB(t)
+	jobRepo := NewJobRepository(gormDB)
+	destRepo := NewDestinationRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	running := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "running"}
+	if err := jobRepo.Create(ctx, running); err != nil {
+		t.Fatalf("Create running job: %v", err)
+	}
+	acquired, err := destRepo.TryAcquireBusy(ctx, f.destID, running.ID)
+	if err != nil || !acquired {
+		t.Fatalf("TryAcquireBusy: acquired=%v err=%v", acquired, err)
+	}
+
+	if _, err := jobRepo.MarkRunningJobsInterrupted(ctx, "server restarted"); err != nil {
+		t.Fatalf("MarkRunningJobsInterrupted: %v", err)
+	}
+
+	dest, err := destRepo.GetByID(ctx, f.destID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if dest.BusyJobID != nil {
+		t.Errorf("destination BusyJobID = %v after MarkRunningJobsInterrupted, want nil (gate must be released)", dest.BusyJobID)
+	}
+
+	// The now-free destination must be acquirable by a different job.
+	other := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "pending"}
+	if err := jobRepo.Create(ctx, other); err != nil {
+		t.Fatalf("Create other job: %v", err)
+	}
+	acquired, err = destRepo.TryAcquireBusy(ctx, f.destID, other.ID)
+	if err != nil {
+		t.Fatalf("TryAcquireBusy (other): %v", err)
+	}
+	if !acquired {
+		t.Error("TryAcquireBusy (other) = false, want true — the gate should have been released")
 	}
 }
 

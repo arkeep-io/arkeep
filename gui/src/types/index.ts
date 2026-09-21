@@ -38,6 +38,7 @@ export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus]
 export const JobType = {
   Backup: 'backup',
   Restore: 'restore',
+  Retention: 'retention',
 } as const
 export type JobType = (typeof JobType)[keyof typeof JobType]
 
@@ -155,6 +156,31 @@ export interface Destination {
   // on file, captured when it was imported from a pre-existing repository.
   // Never the password itself — credentials are write-only.
   has_repo_password: boolean
+
+  // Retention (issue #130) — one configuration per destination, applied
+  // uniformly to every policy's own snapshot-tag pool here.
+  retention_last: number
+  retention_hourly: number
+  retention_daily: number
+  retention_weekly: number
+  retention_monthly: number
+  retention_yearly: number
+  retention_schedule: string // cron expression; '' = unconfigured
+  retention_enabled: boolean
+  retention_agent_id: string // '' = unset
+  retention_agent_name: string
+  // append_only: repositories that can never support restic forget --prune
+  // (e.g. WORM/object-lock storage) — retention is never scheduled for these.
+  append_only: boolean
+  // retention_needs_review: set by the migration backfill when this
+  // destination was shared by 2+ policies with no single retention
+  // configuration to inherit unambiguously. Cleared once an admin explicitly
+  // saves retention config for this destination.
+  retention_needs_review: boolean
+  // policy_count: how many live policies write to this destination — backs
+  // the "already used by N other policies" notice in the policy editor's
+  // destination picker.
+  policy_count: number
 }
 
 // ─── Policy ───────────────────────────────────────────────────────────────────
@@ -162,15 +188,6 @@ export interface Destination {
 export interface PolicySource {
   type: SourceType
   path: string // filesystem path or docker volume name
-}
-
-export interface RetentionConfig {
-  keep_last: number
-  keep_hourly: number
-  keep_daily: number
-  keep_weekly: number
-  keep_monthly: number
-  keep_yearly: number
 }
 
 export interface HookConfig {
@@ -192,12 +209,6 @@ export interface Policy {
   agent_name: string
   sources: string           // JSON string — parse client-side when needed
   schedule: string
-  retention_last: number
-  retention_hourly: number
-  retention_daily: number
-  retention_weekly: number
-  retention_monthly: number
-  retention_yearly: number
   hook_pre_backup: string   // JSON string or empty
   hook_post_backup: string  // JSON string or empty
   exclude_patterns: string  // JSON array string or empty
@@ -247,6 +258,19 @@ export interface JobDestinationCommand {
   error: string
 }
 
+// JobRetentionTag is the result of one restic tag's own forget --prune sweep
+// within a standalone retention job (type "retention"). A job can have
+// several of these — one per policy attached to the destination, plus one
+// per that policy's command sources.
+export interface JobRetentionTag {
+  id: string
+  tag: string
+  status: JobStatus
+  started_at: string | null
+  ended_at: string | null
+  error: string
+}
+
 export interface JobLog {
   id: string
   level: 'debug' | 'info' | 'warn' | 'error'
@@ -269,10 +293,11 @@ export interface Job {
   // Populated only on GetByID (detail endpoint)
   destinations?: JobDestination[]
   command_sources?: JobDestinationCommand[]
+  retention_tags?: JobRetentionTag[]
 }
 
 // JobListItem is the leaner shape returned by the list endpoint.
-export type JobListItem = Omit<Job, 'destinations' | 'command_sources'>
+export type JobListItem = Omit<Job, 'destinations' | 'command_sources' | 'retention_tags'>
 
 // ─── Snapshot Browse ──────────────────────────────────────────────────────────
 
@@ -450,6 +475,16 @@ export interface CreateDestinationRequest {
   type: DestinationType
   config: string
   repository_password: string
+  append_only?: boolean
+  retention_enabled?: boolean
+  retention_agent_id?: string
+  retention_schedule?: string
+  retention_last?: number
+  retention_hourly?: number
+  retention_daily?: number
+  retention_weekly?: number
+  retention_monthly?: number
+  retention_yearly?: number
 }
 
 export type UpdateDestinationRequest = Partial<CreateDestinationRequest>
@@ -460,7 +495,6 @@ export interface CreatePolicyRequest {
   agent_id: string
   sources: PolicySource[]
   schedule: string
-  retention: RetentionConfig
   hooks?: HookConfig
   enabled: boolean
   destination_ids: { destination_id: string; priority: number }[]

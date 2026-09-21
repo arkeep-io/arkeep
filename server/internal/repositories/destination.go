@@ -139,6 +139,123 @@ func (r *gormDestinationRepository) ListFiltered(ctx context.Context, filter Des
 	return destinations, total, nil
 }
 
+// ListPoliciesByDestination returns every live policy attached to a
+// destination via policy_destinations, ordered by attachment time (earliest
+// first) — used both by the retention scheduler (to know which restic tags
+// to sweep) and by the one-time migration backfill (which treats the
+// earliest-attached policy as the source of truth when a destination is
+// shared).
+func (r *gormDestinationRepository) ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error) {
+	var policies []db.Policy
+	err := r.db.WithContext(ctx).
+		Table("policies p").
+		Select("p.*").
+		Joins("INNER JOIN policy_destinations pd ON pd.policy_id = p.id").
+		Where("pd.destination_id = ? AND p.deleted_at IS NULL", destinationID).
+		Order("pd.created_at ASC").
+		Scan(&policies).Error
+	if err != nil {
+		return nil, fmt.Errorf("destinations: list policies by destination: %w", err)
+	}
+	return policies, nil
+}
+
+// PolicyCountsByDestination returns, for every destination with at least one
+// live policy attached, how many such policies there are.
+func (r *gormDestinationRepository) PolicyCountsByDestination(ctx context.Context) (map[uuid.UUID]int64, error) {
+	var rows []struct {
+		DestinationID uuid.UUID
+		Count         int64
+	}
+	err := r.db.WithContext(ctx).
+		Table("policy_destinations pd").
+		Select("pd.destination_id AS destination_id, COUNT(DISTINCT pd.policy_id) AS count").
+		Joins("INNER JOIN policies p ON p.id = pd.policy_id").
+		Where("p.deleted_at IS NULL").
+		Group("pd.destination_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("destinations: policy counts by destination: %w", err)
+	}
+	counts := make(map[uuid.UUID]int64, len(rows))
+	for _, row := range rows {
+		counts[row.DestinationID] = row.Count
+	}
+	return counts, nil
+}
+
+// ListWithRetentionSchedule returns every enabled, non-append-only
+// destination with a configured retention schedule — the set the retention
+// scheduler registers a gocron job for on Start.
+func (r *gormDestinationRepository) ListWithRetentionSchedule(ctx context.Context) ([]db.Destination, error) {
+	var destinations []db.Destination
+	err := r.db.WithContext(ctx).
+		Where("retention_enabled = ? AND append_only = ? AND retention_schedule != ''", true, false).
+		Find(&destinations).Error
+	if err != nil {
+		return nil, fmt.Errorf("destinations: list with retention schedule: %w", err)
+	}
+	return destinations, nil
+}
+
+// TryAcquireBusy atomically claims the destination for jobID if it is not
+// already busy. A false, nil-error return means another job already holds
+// it — the caller should skip or defer this dispatch, not treat it as an
+// error. Idempotent for the same jobID (matches if already held by jobID
+// itself), so retrying a dispatch that previously acquired the gate — e.g.
+// DispatchPending resending to an agent that just reconnected — never
+// mistakes its own hold for contention.
+func (r *gormDestinationRepository) TryAcquireBusy(ctx context.Context, destinationID, jobID uuid.UUID) (bool, error) {
+	now := time.Now().UTC()
+	result := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("id = ? AND (busy_job_id IS NULL OR busy_job_id = ?)", destinationID, jobID).
+		Updates(map[string]any{
+			"busy_job_id": jobID,
+			"busy_since":  now,
+		})
+	if result.Error != nil {
+		return false, fmt.Errorf("destinations: try acquire busy: %w", result.Error)
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ReleaseBusy clears the busy gate only if jobID is still the current
+// holder, so a stale or duplicate release can never clear a newer lock.
+func (r *gormDestinationRepository) ReleaseBusy(ctx context.Context, destinationID, jobID uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("id = ? AND busy_job_id = ?", destinationID, jobID).
+		Updates(map[string]any{
+			"busy_job_id": nil,
+			"busy_since":  nil,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("destinations: release busy: %w", result.Error)
+	}
+	return nil
+}
+
+// ReleaseBusyForJobs bulk-releases the busy gate for a set of jobs, used by
+// orphan recovery (an agent disconnected or the server restarted while a
+// busy-holding job was running) so the gate can never get stuck.
+func (r *gormDestinationRepository) ReleaseBusyForJobs(ctx context.Context, jobIDs []uuid.UUID) error {
+	if len(jobIDs) == 0 {
+		return nil
+	}
+	result := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("busy_job_id IN ?", jobIDs).
+		Updates(map[string]any{
+			"busy_job_id": nil,
+			"busy_since":  nil,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("destinations: release busy for jobs: %w", result.Error)
+	}
+	return nil
+}
+
 // List returns a paginated list of destinations and the total count.
 func (r *gormDestinationRepository) List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error) {
 	var destinations []db.Destination

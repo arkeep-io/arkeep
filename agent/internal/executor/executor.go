@@ -56,6 +56,11 @@ type StatusReporter interface {
 	// post-prune repository size is still reported once, by
 	// ReportSnapshotReconcile.
 	ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string)
+	// ReportRetentionTagResult reports the outcome of one restic tag's own
+	// forget --prune sweep within a standalone retention job (JOB_TYPE_FORGET,
+	// issue #130). Called once per tag. No snapshot/size: a forget never
+	// creates a snapshot.
+	ReportRetentionTagResult(jobID, destinationID, tag, status string, startedAt time.Time, errMsg string)
 	// ReportSnapshotReconcile sends the authoritative set of snapshot IDs still
 	// present in a destination's repository so the server can evict cached
 	// records for snapshots the backup engine has pruned. liveIDs must come from
@@ -84,12 +89,26 @@ type backupPayload struct {
 	Sources         string                 `json:"sources"`
 	RepoPassword    string                 `json:"repo_password"`
 	Destinations    []destinationPayload   `json:"destinations"`
-	Retention       retentionPayload       `json:"retention"`
 	HookPreBackup   string                 `json:"hook_pre_backup"`
 	HookPostBackup  string                 `json:"hook_post_backup"`
 	Tags            []string               `json:"tags"`
 	ExcludePatterns []string               `json:"exclude_patterns"`
 	CommandSources  []commandSourcePayload `json:"command_sources"`
+}
+
+// retentionSweepPayload is the JSON payload for a standalone JOB_TYPE_FORGET
+// job (issue #130): one destination, swept independently of any backup job.
+// Tags is one entry per policy attached to the destination (its bare
+// "policy:<id>" tag) plus one per that policy's command sources
+// ("policy:<id>:command:<name>") — built server-side exactly like a backup
+// job's Tags/CommandSources, so each pool is pruned with the same
+// destination-level keep-* values but never mixed with another pool's
+// snapshots (see wrapper.go's buildForgetArgs, unchanged).
+type retentionSweepPayload struct {
+	Destination  destinationPayload `json:"destination"`
+	RepoPassword string             `json:"repo_password"`
+	Retention    retentionPayload   `json:"retention"`
+	Tags         []string           `json:"tags"`
 }
 
 // restorePayload mirrors the struct serialized by the server snapshot handler.
@@ -338,6 +357,8 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 	switch job.Type {
 	case proto.JobType_JOB_TYPE_RESTORE:
 		e.executeRestore(jobCtx, job, sink, reporter)
+	case proto.JobType_JOB_TYPE_FORGET:
+		e.executeRetention(jobCtx, job, sink, reporter)
 	default:
 		// JOB_TYPE_BACKUP and unspecified types all run the backup handler.
 		e.executeBackup(jobCtx, job, sink, reporter)
@@ -372,7 +393,7 @@ func (e *Executor) Cancel(jobID string) {
 //  2. Report status "running"
 //  3. Resolve docker-volume:// sources to host mountpoints
 //  4. Run pre-backup hook (abort on failure)
-//  5. For each destination: run restic backup, stream progress, run forget
+//  5. For each destination: run restic backup, stream progress
 //  6. Run post-backup hook (non-fatal, always runs)
 //  7. Report status "succeeded" or "failed"
 func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
@@ -512,18 +533,6 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			return nil
 		}
 
-		// Apply retention policy — non-fatal if it fails (backup data is safe).
-		// Built once and reused by both the regular backup below and each
-		// command source's own Forget call.
-		retention := restic.RetentionPolicy{
-			Last:    payload.Retention.Last,
-			Hourly:  payload.Retention.Hourly,
-			Daily:   payload.Retention.Daily,
-			Weekly:  payload.Retention.Weekly,
-			Monthly: payload.Retention.Monthly,
-			Yearly:  payload.Retention.Yearly,
-		}
-
 		if len(sources) > 0 {
 			opts := restic.BackupOptions{
 				Sources:         sources,
@@ -551,12 +560,11 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
 					dest.DestinationID, result.SnapshotID, addedBytes))
 
-				// Report the destination result before retention runs. Pruning a large
-				// repository takes minutes, and the GUI would show the destination as
-				// still running for all of it; worse, an agent crash mid-prune would
-				// lose the record of a backup that actually succeeded. The repository
-				// size is left at 0 here and reported after the prune instead, so the
-				// figure reflects the pruned repository rather than the one before it.
+				// Repository size is left at 0 here and reported after the Stats
+				// call at the end of this destination's processing instead (see
+				// below), which reflects whatever the standalone retention
+				// scheduler has pruned by the time it runs — retention is no
+				// longer tied to this backup (issue #130).
 				reporter.ReportDestinationResult(
 					job.JobID,
 					dest.DestinationID,
@@ -567,20 +575,14 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 					0,
 					"",
 				)
-
-				// Scoped to this policy's tags so it never prunes snapshots
-				// belonging to another policy sharing the same destination.
-				if err := e.wrapper.Forget(ctx, d, retention, payload.Tags); err != nil {
-					log("warn", fmt.Sprintf("retention policy failed for destination %s: %v", dest.DestinationID, err))
-				}
 			}
 		}
 
 		// Each command source is its own restic invocation: restic executes
 		// the command itself and streams its stdout straight into the
 		// repository, so nothing is ever written to a temp file on this
-		// host. One snapshot each, with its own retention pool (cs.Tags) so
-		// "keep last N" applies independently to each source.
+		// host. One snapshot each, under its own tag (cs.Tags) — the
+		// standalone retention scheduler sweeps it independently (issue #130).
 		cmdFailed := false
 		for _, cs := range payload.CommandSources {
 			if ctx.Err() != nil {
@@ -610,10 +612,6 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			log("info", fmt.Sprintf("command source %q to destination %s completed (snapshot: %s, added: %d bytes)",
 				cs.Name, dest.DestinationID, res.SnapshotID, addedBytes))
 			reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "succeeded", res.SnapshotID, cmdStartedAt, addedBytes, "")
-
-			if err := e.wrapper.Forget(ctx, d, retention, cs.Tags); err != nil {
-				log("warn", fmt.Sprintf("retention policy failed for command source %q on destination %s: %v", cs.Name, dest.DestinationID, err))
-			}
 		}
 
 		// With no regular sources, nothing above reports this destination, so
@@ -629,9 +627,8 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		// Capture the repository's real deduplicated size for per-destination
-		// usage reporting, now that retention has freed whatever it was going to
-		// free. Non-fatal: the backup already succeeded, so a stats failure just
-		// leaves the size unreported (0).
+		// usage reporting. Non-fatal: the backup already succeeded, so a stats
+		// failure just leaves the size unreported (0).
 		var repoSizeBytes int64
 		if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
 			log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", dest.DestinationID, statsErr))
@@ -640,15 +637,14 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		// Reconcile the server's cached snapshot list against the repository, so
-		// records for snapshots retention just pruned stop being offered as
-		// restore points. Runs whether or not this policy has retention enabled:
-		// the repository may also be pruned by another policy, another server,
-		// or by hand.
+		// records for snapshots pruned elsewhere stop being offered as restore
+		// points — retention is no longer tied to this backup (issue #130), it
+		// runs independently via the standalone retention scheduler; the
+		// repository may also be pruned by hand.
 		//
 		// The listing MUST stay unfiltered — no --tag/--host/--path. The server
 		// treats it as authoritative for EVERY snapshot in this repository, so a
 		// filtered listing here would make it evict other policies' valid rows.
-		// Note the deliberate asymmetry with Forget above, which IS tag-scoped.
 		//
 		// Non-fatal: the backup already succeeded, so a listing failure just
 		// leaves stale records for the next run to clear.
@@ -697,6 +693,130 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 
 	log("info", "backup completed successfully")
 	reporter.ReportStatus(job.JobID, "succeeded", "backup completed")
+}
+
+// executeRetention runs a standalone retention sweep for one destination
+// (JOB_TYPE_FORGET, issue #130): one `restic forget --prune --tag <tag>` per
+// tag in the payload, fully independent of any backup job. Dispatched by the
+// server's retention scheduler on the destination's own schedule, never as a
+// side effect of a backup completing.
+//
+// Execution sequence:
+//  1. Deserialize payload
+//  2. Report status "running"
+//  3. For each tag: run restic forget --prune, report the per-tag result,
+//     continuing past a single tag's failure rather than aborting the sweep
+//  4. Report repo size and reconcile the snapshot list (same as a backup's
+//     tail — this is exactly the operation that invalidates those cached
+//     values)
+//  5. Report one aggregate destination result, then the final job status
+func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	log := func(level, msg string) {
+		sink.SendLog(job.JobID, level, msg)
+		switch level {
+		case "error":
+			e.logger.Error(msg, zap.String("job_id", job.JobID))
+		case "warn":
+			e.logger.Warn(msg, zap.String("job_id", job.JobID))
+		default:
+			e.logger.Info(msg, zap.String("job_id", job.JobID))
+		}
+	}
+
+	fail := func(msg string) {
+		log("error", msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+	}
+
+	var payload retentionSweepPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		fail(fmt.Sprintf("failed to deserialize retention job payload: %v", err))
+		return
+	}
+
+	reporter.ReportStatus(job.JobID, "running", "starting retention sweep")
+	log("info", fmt.Sprintf("retention sweep started for destination %s (%d tag(s))",
+		payload.Destination.DestinationID, len(payload.Tags)))
+
+	repoURL := payload.Destination.RepoURL
+	if restic.DestinationType(payload.Destination.Type) == restic.DestLocal {
+		repoURL = translateLocalPath(repoURL, e.dockerHostRoot)
+	}
+	d := restic.Destination{
+		Type:     restic.DestinationType(payload.Destination.Type),
+		RepoURL:  repoURL,
+		Password: payload.RepoPassword,
+		Env:      payload.Destination.Env,
+	}
+	retention := restic.RetentionPolicy{
+		Last:    payload.Retention.Last,
+		Hourly:  payload.Retention.Hourly,
+		Daily:   payload.Retention.Daily,
+		Weekly:  payload.Retention.Weekly,
+		Monthly: payload.Retention.Monthly,
+		Yearly:  payload.Retention.Yearly,
+	}
+
+	sweepFailed := false
+	for _, tag := range payload.Tags {
+		if ctx.Err() != nil {
+			break
+		}
+		tagStartedAt := time.Now().UTC()
+		if err := e.wrapper.Forget(ctx, d, retention, []string{tag}); err != nil {
+			errMsg := fmt.Sprintf("retention sweep for tag %q on destination %s failed: %v", tag, payload.Destination.DestinationID, err)
+			log("error", errMsg)
+			reporter.ReportRetentionTagResult(job.JobID, payload.Destination.DestinationID, tag, "failed", tagStartedAt, err.Error())
+			sweepFailed = true
+			continue
+		}
+		log("info", fmt.Sprintf("retention sweep for tag %q on destination %s completed", tag, payload.Destination.DestinationID))
+		reporter.ReportRetentionTagResult(job.JobID, payload.Destination.DestinationID, tag, "succeeded", tagStartedAt, "")
+	}
+
+	// Capture the repository's real deduplicated size now that this sweep has
+	// freed whatever it was going to free. Non-fatal — a stats failure just
+	// leaves the size unreported (0).
+	var repoSizeBytes int64
+	if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
+		log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", payload.Destination.DestinationID, statsErr))
+	} else {
+		repoSizeBytes = int64(stats.TotalSize)
+	}
+
+	// Reconcile the server's cached snapshot list, same rationale as a
+	// backup's tail: this sweep is precisely what invalidates it. The listing
+	// MUST stay unfiltered — see executeBackup's identical comment.
+	listedAt := time.Now().UTC()
+	if snaps, listErr := e.wrapper.Snapshots(ctx, d); listErr != nil {
+		log("warn", fmt.Sprintf("could not list snapshots for destination %s: %v", payload.Destination.DestinationID, listErr))
+	} else if liveIDs := liveSnapshotIDs(snaps); len(liveIDs) > 0 {
+		removed := reporter.ReportSnapshotReconcile(job.JobID, payload.Destination.DestinationID, liveIDs, listedAt, repoSizeBytes)
+		if removed > 0 {
+			log("info", fmt.Sprintf("removed %d stale snapshot record(s) for destination %s "+
+				"(no longer present in the repository)", removed, payload.Destination.DestinationID))
+		}
+	}
+
+	destStatus, destErrMsg := "succeeded", ""
+	if sweepFailed {
+		destStatus, destErrMsg = "failed", "one or more retention tags failed"
+	}
+	reporter.ReportDestinationResult(job.JobID, payload.Destination.DestinationID, destStatus, "", time.Now().UTC(), 0, repoSizeBytes, destErrMsg)
+
+	if ctx.Err() != nil {
+		log("warn", "retention sweep cancelled: agent shutting down")
+		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+		return
+	}
+
+	if sweepFailed {
+		fail("one or more retention tags failed")
+		return
+	}
+
+	log("info", "retention sweep completed successfully")
+	reporter.ReportStatus(job.JobID, "succeeded", "retention sweep completed")
 }
 
 // executeRestore runs a single restore job to completion.

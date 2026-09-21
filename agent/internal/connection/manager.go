@@ -1030,6 +1030,48 @@ func (m *Manager) ReportCommandSourceResult(jobID, destinationID, sourceName, st
 	}
 }
 
+// ReportRetentionTagResult implements executor.StatusReporter. It reports the
+// outcome of one restic tag's own forget --prune sweep within a standalone
+// retention job (JOB_TYPE_FORGET, issue #130) — the same RPC as
+// ReportDestinationResult/ReportCommandSourceResult, distinguished by a
+// non-empty RetentionTag so the server routes it to job_retention_tags.
+// SnapshotId/SizeBytes are left zero: a forget never creates a snapshot.
+func (m *Manager) ReportRetentionTagResult(jobID, destinationID, tag, status string, startedAt time.Time, errMsg string) {
+	m.mu.RLock()
+	client := m.client
+	agentID := m.agentID
+	m.mu.RUnlock()
+
+	if client == nil {
+		m.logger.Warn("ReportRetentionTagResult: no active client, result lost",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.String("retention_tag", tag),
+			zap.String("status", status),
+		)
+		return
+	}
+
+	_, err := client.ReportDestinationStatus(m.sessionCtx, &proto.DestinationStatusReport{
+		JobId:         jobID,
+		AgentId:       agentID,
+		DestinationId: destinationID,
+		Status:        status,
+		Error:         errMsg,
+		StartedAt:     timestamppb.New(startedAt),
+		RetentionTag:  tag,
+	})
+	if err != nil {
+		m.logger.Warn("ReportRetentionTagResult: RPC failed",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.String("retention_tag", tag),
+			zap.String("status", status),
+			zap.Error(err),
+		)
+	}
+}
+
 // ReportSnapshotReconcile implements executor.StatusReporter. It calls
 // ReportSnapshotReconcile via gRPC so the server can evict cached snapshot
 // records for snapshots the retention policy pruned from the repository, and

@@ -214,7 +214,9 @@ enum JobType {
   JOB_TYPE_VERIFY      = 2;
   // JOB_TYPE_RESTORE extracts files from a snapshot to a target directory.
   JOB_TYPE_RESTORE     = 3;
-  // JOB_TYPE_FORGET applies the retention policy via restic forget --prune.
+  // JOB_TYPE_FORGET runs a standalone retention sweep for one destination
+  // (restic forget --prune, once per restic tag — see the retention
+  // scheduler), independent of and never triggered by a backup job.
   JOB_TYPE_FORGET      = 4;
   // JOB_TYPE_LIST_VOLUMES is a synthetic, non-persisted job type used to ask
   // the agent to enumerate Docker volumes on its host. The job_id field in
@@ -314,6 +316,13 @@ message DestinationStatusReport {
   // job_destination_commands, because a command source is its own restic
   // invocation with its own snapshot.
   string command_source_name = 10;
+  // retention_tag identifies which restic tag's forget --prune sweep this
+  // report is for, when it is part of a standalone retention job
+  // (JOB_TYPE_FORGET). Empty for every other job type. Routes to
+  // job_retention_tags instead of job_destinations/job_destination_commands.
+  // A forget never creates a snapshot, so snapshot_id/size_bytes are unused
+  // on these reports.
+  string retention_tag = 11;
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.

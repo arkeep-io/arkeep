@@ -1,0 +1,14 @@
+DROP INDEX IF EXISTS idx_destinations_retention_agent_id;
+ALTER TABLE destinations DROP COLUMN busy_since;
+ALTER TABLE destinations DROP COLUMN busy_job_id;
+ALTER TABLE destinations DROP COLUMN retention_needs_review;
+ALTER TABLE destinations DROP COLUMN append_only;
+ALTER TABLE destinations DROP COLUMN retention_agent_id;
+ALTER TABLE destinations DROP COLUMN retention_enabled;
+ALTER TABLE destinations DROP COLUMN retention_schedule;
+ALTER TABLE destinations DROP COLUMN retention_yearly;
+ALTER TABLE destinations DROP COLUMN retention_monthly;
+ALTER TABLE destinations DROP COLUMN retention_weekly;
+ALTER TABLE destinations DROP COLUMN retention_daily;
+ALTER TABLE destinations DROP COLUMN retention_hourly;
+ALTER TABLE destinations DROP COLUMN retention_last;
