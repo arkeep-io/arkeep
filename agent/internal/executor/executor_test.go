@@ -24,9 +24,17 @@ type destResult struct {
 	errMsg string
 }
 
+type commandResult struct {
+	destinationID string
+	sourceName    string
+	status        string
+	errMsg        string
+}
+
 type fakeReporter struct {
-	statuses    []string
-	destResults map[string]destResult
+	statuses       []string
+	destResults    map[string]destResult
+	commandResults []commandResult
 }
 
 func (r *fakeReporter) ReportStatus(jobID, status, message string) {
@@ -38,6 +46,15 @@ func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, sna
 		r.destResults = make(map[string]destResult)
 	}
 	r.destResults[destinationID] = destResult{status: status, errMsg: errMsg}
+}
+
+func (r *fakeReporter) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+	r.commandResults = append(r.commandResults, commandResult{
+		destinationID: destinationID,
+		sourceName:    sourceName,
+		status:        status,
+		errMsg:        errMsg,
+	})
 }
 
 func (r *fakeReporter) ReportSnapshotReconcile(jobID, destinationID string, liveIDs []string, listedAt time.Time, repoSizeBytes int64) int64 {
@@ -104,6 +121,44 @@ func TestResolveSources_AcceptsNormalPaths(t *testing.T) {
 	want := []string{"/data", `C:\Users`}
 	if !slices.Equal(got, want) {
 		t.Errorf("resolveSources() = %v, want %v", got, want)
+	}
+}
+
+// TestExecuteBackup_CommandOnlyPolicyDoesNotFailOnEmptySources verifies that
+// a policy with zero regular sources but at least one command source is not
+// rejected by the "no accessible backup sources" guard — that guard must
+// only fire when there are neither regular nor command sources at all.
+func TestExecuteBackup_CommandOnlyPolicyDoesNotFailOnEmptySources(t *testing.T) {
+	payload := backupPayload{
+		Sources:      `[]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{
+			{DestinationID: "dest-1", Type: "sftp", RepoURL: ""},
+		},
+		CommandSources: []commandSourcePayload{
+			{Name: "pgdump", Command: "pg_dump mydb", Tags: []string{"policy:abc:command:pgdump"}},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+	e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+	// The empty-sources guard reports failure via fail() before ever reaching
+	// the destination loop, so no destResults entry would exist if it had
+	// fired. Reaching (and failing on) the empty repo_url instead proves we
+	// got past the guard.
+	if _, ok := reporter.destResults["dest-1"]; !ok {
+		t.Fatal("expected a destination result to be recorded — the empty-sources guard should not have fired")
+	}
+	if got := reporter.destResults["dest-1"].status; got != "failed" {
+		t.Errorf("destination status = %q, want %q (empty repo_url)", got, "failed")
 	}
 }
 

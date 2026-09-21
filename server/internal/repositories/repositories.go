@@ -231,7 +231,7 @@ type JobFilter struct {
 type JobRepository interface {
     Create(ctx context.Context, job *db.Job) error
     GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
-    GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
+    GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobLog, error)
     Update(ctx context.Context, job *db.Job) error
     UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
     MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
@@ -250,6 +250,10 @@ type JobRepository interface {
     CreateDestination(ctx context.Context, jd *db.JobDestination) error
     ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
     UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+
+    // JobDestinationCommand
+    UpsertDestinationCommandResult(ctx context.Context, jobID, destID uuid.UUID, sourceName, status string, startedAt, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+    ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationCommandWithName, error)
 
     // JobLog
     BulkCreateLogs(ctx context.Context, logs []db.JobLog) error

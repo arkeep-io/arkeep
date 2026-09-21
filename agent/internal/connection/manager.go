@@ -984,6 +984,52 @@ func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshot
 	}
 }
 
+// ReportCommandSourceResult implements executor.StatusReporter. It reports
+// the outcome of one command source's own restic invocation for one
+// destination — the same RPC as ReportDestinationResult, distinguished by a
+// non-empty CommandSourceName so the server routes it to
+// job_destination_commands instead of overwriting the destination's regular
+// job_destinations row. RepoSizeBytes is left at 0: the destination's
+// post-prune repository size is still reported once, by
+// ReportSnapshotReconcile.
+func (m *Manager) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+	m.mu.RLock()
+	client := m.client
+	agentID := m.agentID
+	m.mu.RUnlock()
+
+	if client == nil {
+		m.logger.Warn("ReportCommandSourceResult: no active client, result lost",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.String("command_source_name", sourceName),
+			zap.String("status", status),
+		)
+		return
+	}
+
+	_, err := client.ReportDestinationStatus(m.sessionCtx, &proto.DestinationStatusReport{
+		JobId:             jobID,
+		AgentId:           agentID,
+		DestinationId:     destinationID,
+		Status:            status,
+		SnapshotId:        snapshotID,
+		SizeBytes:         sizeBytes,
+		Error:             errMsg,
+		StartedAt:         timestamppb.New(startedAt),
+		CommandSourceName: sourceName,
+	})
+	if err != nil {
+		m.logger.Warn("ReportCommandSourceResult: RPC failed",
+			zap.String("job_id", jobID),
+			zap.String("destination_id", destinationID),
+			zap.String("command_source_name", sourceName),
+			zap.String("status", status),
+			zap.Error(err),
+		)
+	}
+}
+
 // ReportSnapshotReconcile implements executor.StatusReporter. It calls
 // ReportSnapshotReconcile via gRPC so the server can evict cached snapshot
 // records for snapshots the retention policy pruned from the repository, and
