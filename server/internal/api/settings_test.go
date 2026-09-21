@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"testing"
+
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 )
 
 func TestSettingsHandler_ListOIDC(t *testing.T) {
@@ -335,6 +338,129 @@ func TestSettingsHandler_UpsertSMTP(t *testing.T) {
 	t.Run("returns 401 without token", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.doJSON(t, "PUT", "/api/v1/settings/smtp", "", validSMTP)
+		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+func TestSettingsHandler_GetWebhook(t *testing.T) {
+	t.Run("returns 404 when no webhook configured", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/webhook", e.adminToken(t))
+		assertStatus(t, resp, http.StatusNotFound)
+	})
+
+	t.Run("returns 403 for non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/webhook", e.userToken(t))
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 401 without token", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/webhook", "")
+		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+func TestSettingsHandler_UpsertWebhook(t *testing.T) {
+	validWebhook := map[string]any{
+		"url":     "https://hooks.example.com/arkeep",
+		"secret":  "hmac-secret",
+		"enabled": true,
+	}
+
+	t.Run("admin can upsert webhook settings", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.adminToken(t), validWebhook)
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			URL     string `json:"url"`
+			Secret  string `json:"secret"`
+			Enabled bool   `json:"enabled"`
+		}
+		decodeData(t, resp, &data)
+		if data.URL != "https://hooks.example.com/arkeep" {
+			t.Errorf("url = %q, want https://hooks.example.com/arkeep", data.URL)
+		}
+		if !data.Enabled {
+			t.Error("enabled = false, want true")
+		}
+		// Secret must be masked.
+		if data.Secret != "***" {
+			t.Errorf("secret = %q, want ***", data.Secret)
+		}
+	})
+
+	t.Run("persists url and returns it via GET", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.adminToken(t), validWebhook)
+		assertStatus(t, resp, http.StatusOK)
+
+		resp = e.get(t, "/api/v1/settings/webhook", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data struct {
+			URL     string `json:"url"`
+			Enabled bool   `json:"enabled"`
+		}
+		decodeData(t, resp, &data)
+		if data.URL != "https://hooks.example.com/arkeep" {
+			t.Errorf("url = %q, want https://hooks.example.com/arkeep", data.URL)
+		}
+		if !data.Enabled {
+			t.Error("enabled = false, want true")
+		}
+	})
+
+	t.Run("blank secret keeps the existing one", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.adminToken(t), validWebhook)
+		assertStatus(t, resp, http.StatusOK)
+
+		resp = e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.adminToken(t), map[string]any{
+			"url":     "https://hooks.example.com/arkeep",
+			"secret":  "",
+			"enabled": true,
+		})
+		assertStatus(t, resp, http.StatusOK)
+
+		settings, err := e.deps.settings.GetMany(context.Background(), "webhook.")
+		if err != nil {
+			t.Fatalf("GetMany: %v", err)
+		}
+		idx := settingsToMap(settings)
+		if idx[notification.KeyWebhookSecret] != "hmac-secret" {
+			t.Errorf("stored secret = %q, want it unchanged (hmac-secret)", idx[notification.KeyWebhookSecret])
+		}
+	})
+
+	t.Run("returns 400 when enabled with a blank url", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.adminToken(t), map[string]any{
+			"url":     "",
+			"enabled": true,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 for a malformed url", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.adminToken(t), map[string]any{
+			"url":     "not-a-url",
+			"enabled": true,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 403 for non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", e.userToken(t), validWebhook)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 401 without token", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", "", validWebhook)
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
 }
