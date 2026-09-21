@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -421,6 +422,105 @@ func validateUpsertSMTP(req *upsertSMTPRequest) error {
 	}
 	if req.From == "" {
 		return errors.New("from is required")
+	}
+	return nil
+}
+
+// =============================================================================
+// Webhook
+// =============================================================================
+
+type webhookResponse struct {
+	URL     string `json:"url"`
+	Secret  string `json:"secret"` // always "***" on read
+	Enabled bool   `json:"enabled"`
+}
+
+// GetWebhook handles GET /api/v1/settings/webhook (admin only).
+func (h *SettingsHandler) GetWebhook(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.settingsRepo.GetMany(r.Context(), "webhook.")
+	if err != nil {
+		h.logger.Error("failed to load webhook settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if len(settings) == 0 {
+		ErrNotFound(w)
+		return
+	}
+
+	idx := settingsToMap(settings)
+	Ok(w, webhookResponse{
+		URL:     idx[notification.KeyWebhookURL],
+		Secret:  "***",
+		Enabled: idx[notification.KeyWebhookEnabled] == "true",
+	})
+}
+
+type upsertWebhookRequest struct {
+	URL     string `json:"url"`
+	Secret  string `json:"secret"`
+	Enabled bool   `json:"enabled"`
+}
+
+// UpsertWebhook handles PUT /api/v1/settings/webhook (admin only).
+func (h *SettingsHandler) UpsertWebhook(w http.ResponseWriter, r *http.Request) {
+	var req upsertWebhookRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	if err := validateUpsertWebhook(&req); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+
+	ctx := r.Context()
+
+	pairs := []struct {
+		key   string
+		value string
+	}{
+		{notification.KeyWebhookURL, req.URL},
+		{notification.KeyWebhookEnabled, strconv.FormatBool(req.Enabled)},
+	}
+	if req.Secret != "" {
+		// Blank secret means "keep the existing one" — it is write-only and
+		// never echoed back to the client (see webhookResponse.Secret).
+		pairs = append(pairs, struct{ key, value string }{notification.KeyWebhookSecret, req.Secret})
+	}
+
+	for _, p := range pairs {
+		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
+			h.logger.Error("failed to save webhook setting",
+				zap.String("key", p.key),
+				zap.Error(err),
+			)
+			ErrInternal(w)
+			return
+		}
+	}
+
+	h.logger.Info("webhook settings updated")
+
+	logAudit(r, h.auditRepo, h.logger, "settings.webhook.update", "settings", "", map[string]any{"enabled": req.Enabled})
+	Ok(w, webhookResponse{
+		URL:     req.URL,
+		Secret:  "***",
+		Enabled: req.Enabled,
+	})
+}
+
+func validateUpsertWebhook(req *upsertWebhookRequest) error {
+	if req.Enabled && req.URL == "" {
+		return errors.New("url is required when webhook is enabled")
+	}
+	if req.URL != "" {
+		u, err := url.Parse(req.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return errors.New("url must be a valid http(s) URL")
+		}
 	}
 	return nil
 }

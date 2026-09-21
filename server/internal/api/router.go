@@ -252,6 +252,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/smtp", settingsHandler.GetSMTP)
 				r.Put("/settings/smtp", settingsHandler.UpsertSMTP)
 
+				// Webhook configuration
+				r.Get("/settings/webhook", settingsHandler.GetWebhook)
+				r.Put("/settings/webhook", settingsHandler.UpsertWebhook)
+
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
 				r.Put("/settings/notifications", settingsHandler.UpsertNotificationSettings)
