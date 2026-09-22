@@ -809,6 +809,7 @@ Supported hook patterns:
 pg_dump mydb > /var/backups/mydb.sql
 
 # Stop a container before backup, restart it after
+# (requires the agent's Docker socket mount to be :rw — see docker-compose.agent.yml)
 docker stop my-container
 docker start my-container
 

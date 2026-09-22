@@ -75,7 +75,10 @@ services:
       # Windows (Docker Desktop) — one entry per drive (replace the line above):
       #   - C:/:/hostfs/c:ro
       #   - D:/:/hostfs/d:ro
-      # Docker socket — read-only, for automatic container and volume discovery.
+      # Docker socket — :ro is enough for automatic container/volume discovery.
+      # If you use pre/post-backup hooks that run `docker stop`/`docker start`/
+      # `docker compose ...` to control other containers, change this to :rw —
+      # those commands make write Docker API calls that :ro will block.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Docker volumes root — required to back up Docker named volumes.
       # The agent resolves volume paths via the Docker API (host paths), so the

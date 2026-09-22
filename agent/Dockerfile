@@ -51,7 +51,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
 FROM alpine:3.24
 
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates tzdata su-exec && \
+    apk add --no-cache ca-certificates tzdata su-exec docker-cli docker-cli-compose && \
     addgroup -S arkeep && \
     adduser  -S -G arkeep arkeep
 
