@@ -659,7 +659,7 @@ All event fields are available as `{{ $json.payload.policy_name }}`, `{{ $json.p
 
 | Tool | Version | Install |
 |---|---|---|
-| Go | 1.26+ | [go.dev](https://go.dev/dl/) |
+| Go | 1.27+ | [go.dev](https://go.dev/dl/) |
 | Node.js | 22+ | [nodejs.org](https://nodejs.org/) |
 | pnpm | 9+ | `corepack enable` |
 | Docker | any | [docker.com](https://www.docker.com/) |

@@ -1,6 +1,6 @@
 module github.com/arkeep-io/arkeep/agent
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/arkeep-io/arkeep/shared v0.0.0-20260701160001-8d3d8c4f1d0e

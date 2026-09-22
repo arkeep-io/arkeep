@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version: "1.27"
           cache-dependency-path: |
             server/go.sum
             agent/go.sum
@@ -68,7 +68,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version: "1.27"
 
       - name: Download agent deps (restic + rclone) for agent module
         if: matrix.module == 'agent'
@@ -96,7 +96,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26"
+          go-version: "1.27"
 
       - name: Download agent deps (restic + rclone) for all release platforms
         run: cd agent && go run ./scripts/download_deps.go --all-platforms
