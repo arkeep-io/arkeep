@@ -86,6 +86,70 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 	}
 }
 
+// TestListDestinationCommandsByJob_ResolvesDestinationName verifies that
+// ListDestinationCommandsByJob resolves the destination's display name via
+// LEFT JOIN, mirroring ListDestinationsByJob, and that GetByIDWithDetails
+// surfaces the same rows.
+func TestListDestinationCommandsByJob_ResolvesDestinationName(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	agentRepo := NewAgentRepository(gormDB)
+	policyRepo := NewPolicyRepository(gormDB)
+	ctx := context.Background()
+
+	destID := uuid.New()
+	jobID := uuid.New()
+	now := time.Now().UTC()
+
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	if err := agentRepo.Create(ctx, agent); err != nil {
+		t.Fatalf("Create agent: %v", err)
+	}
+	dest := &db.Destination{SoftDelete: db.SoftDelete{Base: db.Base{ID: destID}}, Name: "my-destination", Type: "local"}
+	if err := gormDB.WithContext(ctx).Create(dest).Error; err != nil {
+		t.Fatalf("Create destination: %v", err)
+	}
+	policy := &db.Policy{AgentID: agent.ID, Name: "p", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := policyRepo.Create(ctx, policy); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+	job := &db.Job{Base: db.Base{ID: jobID}, PolicyID: &policy.ID, AgentID: agent.ID, Status: "pending"}
+	if err := gormDB.WithContext(ctx).Create(job).Error; err != nil {
+		t.Fatalf("Create job: %v", err)
+	}
+
+	if err := repo.UpsertDestinationCommandResult(ctx, jobID, destID, "pgdump", "succeeded", &now, &now, "snap-xyz", 12345, ""); err != nil {
+		t.Fatalf("UpsertDestinationCommandResult: %v", err)
+	}
+
+	results, err := repo.ListDestinationCommandsByJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("ListDestinationCommandsByJob: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1: %+v", len(results), results)
+	}
+	got := results[0]
+	if got.SourceName != "pgdump" {
+		t.Errorf("SourceName = %q, want %q", got.SourceName, "pgdump")
+	}
+	if got.DestinationName != "my-destination" {
+		t.Errorf("DestinationName = %q, want %q (should be resolved via LEFT JOIN)", got.DestinationName, "my-destination")
+	}
+	if got.Status != "succeeded" || got.SnapshotID != "snap-xyz" || got.SizeBytes != 12345 {
+		t.Errorf("unexpected result fields: %+v", got)
+	}
+
+	// GetByIDWithDetails must surface the same row.
+	_, _, commandResults, _, _, err := repo.GetByIDWithDetails(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetByIDWithDetails: %v", err)
+	}
+	if len(commandResults) != 1 || commandResults[0].DestinationName != "my-destination" {
+		t.Errorf("GetByIDWithDetails command results = %+v, want 1 row with DestinationName=my-destination", commandResults)
+	}
+}
+
 // TestUpdateDestinationStatus_Idempotent verifies that calling
 // UpdateDestinationStatus twice for the same (job_id, destination_id) pair
 // returns nil on the second call instead of ErrNotFound. This matters when an
@@ -395,6 +459,53 @@ func TestMarkRunningJobsInterrupted(t *testing.T) {
 	}
 	if untouched.Status != "succeeded" {
 		t.Errorf("finished job status = %q, want it left at \"succeeded\"", untouched.Status)
+	}
+}
+
+// TestMarkRunningJobsInterrupted_ReleasesDestinationBusyGate verifies that an
+// agent vanishing mid-operation does not leave a destination permanently
+// locked out of future backups/retention (issue #130): the busy gate a
+// running job held must be released in the same sweep that marks the job
+// interrupted.
+func TestMarkRunningJobsInterrupted_ReleasesDestinationBusyGate(t *testing.T) {
+	gormDB := newTestDB(t)
+	jobRepo := NewJobRepository(gormDB)
+	destRepo := NewDestinationRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	running := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "running"}
+	if err := jobRepo.Create(ctx, running); err != nil {
+		t.Fatalf("Create running job: %v", err)
+	}
+	acquired, err := destRepo.TryAcquireBusy(ctx, f.destID, running.ID)
+	if err != nil || !acquired {
+		t.Fatalf("TryAcquireBusy: acquired=%v err=%v", acquired, err)
+	}
+
+	if _, err := jobRepo.MarkRunningJobsInterrupted(ctx, "server restarted"); err != nil {
+		t.Fatalf("MarkRunningJobsInterrupted: %v", err)
+	}
+
+	dest, err := destRepo.GetByID(ctx, f.destID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if dest.BusyJobID != nil {
+		t.Errorf("destination BusyJobID = %v after MarkRunningJobsInterrupted, want nil (gate must be released)", dest.BusyJobID)
+	}
+
+	// The now-free destination must be acquirable by a different job.
+	other := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "pending"}
+	if err := jobRepo.Create(ctx, other); err != nil {
+		t.Fatalf("Create other job: %v", err)
+	}
+	acquired, err = destRepo.TryAcquireBusy(ctx, f.destID, other.ID)
+	if err != nil {
+		t.Fatalf("TryAcquireBusy (other): %v", err)
+	}
+	if !acquired {
+		t.Error("TryAcquireBusy (other) = false, want true — the gate should have been released")
 	}
 }
 

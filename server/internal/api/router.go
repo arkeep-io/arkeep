@@ -13,17 +13,22 @@ import (
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
 // RouterConfig holds all dependencies needed to build the HTTP router.
 type RouterConfig struct {
-	AuthService  *auth.AuthService
-	Scheduler    *scheduler.Scheduler
-	AgentManager *agentmanager.Manager
-	Logger       *zap.Logger
-	Hub          *websocket.Hub
+	AuthService *auth.AuthService
+	Scheduler   *scheduler.Scheduler
+	// RetentionScheduler runs each destination's retention sweep on its own
+	// schedule (issue #130). Optional — if nil, retention config is still
+	// stored but never dispatched (only relevant for tests).
+	RetentionScheduler *retentionscheduler.RetentionScheduler
+	AgentManager       *agentmanager.Manager
+	Logger             *zap.Logger
+	Hub                *websocket.Hub
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
 	Users         repositories.UserRepository
@@ -102,7 +107,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.Audit, cfg.Logger)
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
@@ -200,6 +205,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Patch("/destinations/{id}", destinationHandler.Update)
 			r.Delete("/destinations/{id}", destinationHandler.Delete)
 			r.Post("/destinations/{id}/import", destinationHandler.Import)
+			r.Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
@@ -250,6 +257,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// SMTP configuration
 				r.Get("/settings/smtp", settingsHandler.GetSMTP)
 				r.Put("/settings/smtp", settingsHandler.UpsertSMTP)
+
+				// Webhook configuration
+				r.Get("/settings/webhook", settingsHandler.GetWebhook)
+				r.Put("/settings/webhook", settingsHandler.UpsertWebhook)
 
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)

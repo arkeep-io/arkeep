@@ -50,10 +50,10 @@ type User struct {
 	Email        string          `gorm:"uniqueIndex;not null"`
 	Password     EncryptedString `gorm:"type:text"` // empty for OIDC users
 	DisplayName  string          `gorm:"not null"`
-	Role         string          `gorm:"not null;default:'user'"` // "admin" or "user"
-	IsActive     bool            `gorm:"not null;default:true"`   // false = account disabled
-	OIDCProvider string `gorm:"column:oidc_provider;default:''"` // provider ID if OIDC user
-    OIDCSub      string `gorm:"column:oidc_sub;default:''"` // subject claim from OIDC token
+	Role         string          `gorm:"not null;default:'user'"`         // "admin" or "user"
+	IsActive     bool            `gorm:"not null;default:true"`           // false = account disabled
+	OIDCProvider string          `gorm:"column:oidc_provider;default:''"` // provider ID if OIDC user
+	OIDCSub      string          `gorm:"column:oidc_sub;default:''"`      // subject claim from OIDC token
 	LastLoginAt  *time.Time
 	// TOTPSecret is the base32 TOTP shared secret, encrypted at rest. Empty
 	// means no secret. A non-empty secret with TwoFactorEnabled false is a
@@ -140,15 +140,15 @@ func (OIDCProvider) TableName() string { return "oidc_providers" }
 // handshake and is cleared after successful registration.
 type Agent struct {
 	SoftDelete
-	Name            string     `gorm:"not null"`
-	Hostname        string     `gorm:"not null"`
-	IPAddress       string     `gorm:"not null;default:''"`
-	OS              string     `gorm:"not null;default:''"`
-	Arch            string     `gorm:"not null;default:''"`
-	Version         string     `gorm:"not null;default:''"`
-	Status          string     `gorm:"not null;default:'offline'"` // "online", "offline", "error"
-	LastSeenAt      *time.Time
-	Labels          string `gorm:"type:text;default:'{}'"` // JSON key-value pairs for filtering
+	Name       string `gorm:"not null"`
+	Hostname   string `gorm:"not null"`
+	IPAddress  string `gorm:"not null;default:''"`
+	OS         string `gorm:"not null;default:''"`
+	Arch       string `gorm:"not null;default:''"`
+	Version    string `gorm:"not null;default:''"`
+	Status     string `gorm:"not null;default:'offline'"` // "online", "offline", "error"
+	LastSeenAt *time.Time
+	Labels     string `gorm:"type:text;default:'{}'"` // JSON key-value pairs for filtering
 	// DockerAvailable is true when the agent can reach the Docker daemon on its host.
 	// Advertised by the agent in the Register RPC via AgentCapabilities.docker.
 	// Used by the GUI to show or hide the Docker volume source option in the policy form.
@@ -165,8 +165,8 @@ type Agent struct {
 type Destination struct {
 	SoftDelete
 	Name        string          `gorm:"not null"`
-	Type        string          `gorm:"not null"` // "local", "s3", "sftp", "rest", "rclone"
-	Credentials EncryptedString `gorm:"type:text"` // JSON, encrypted
+	Type        string          `gorm:"not null"`               // "local", "s3", "sftp", "rest", "rclone"
+	Credentials EncryptedString `gorm:"type:text"`              // JSON, encrypted
 	Config      string          `gorm:"type:text;default:'{}'"` // JSON, not sensitive
 	Enabled     bool            `gorm:"not null;default:true"`
 	// RepoSizeBytes is the real deduplicated on-disk size of this destination's
@@ -174,11 +174,52 @@ type Destination struct {
 	// each backup. Zero until the first backup or import completes.
 	RepoSizeBytes     int64      `gorm:"not null;default:0"`
 	RepoSizeUpdatedAt *time.Time `gorm:""`
-	// RepoPassword is the Restic repository password, stored only for
-	// destinations whose snapshots were imported from a pre-existing
-	// repository. Those snapshots have no policy to take the password from,
-	// so browse and restore rely on this field. Empty otherwise.
+	// RepoPassword is the Restic repository password. Originally populated
+	// only for destinations whose snapshots were imported from a pre-existing
+	// repository (browse/restore of those has no policy to take the password
+	// from); now also the password the retention agent uses to unlock this
+	// destination's repository for a standalone retention sweep, backfilled
+	// from whichever policy was attached to this destination at the time
+	// retention moved here (see the one-time migration backfill in
+	// cmd/server/main.go). Any policy attached to a given destination shares
+	// the same physical repository, so any one of their passwords is correct.
 	RepoPassword EncryptedString `gorm:"type:text"`
+
+	// Retention — one configuration per destination, applied uniformly to
+	// every policy's own snapshot-tag pool here (see policy_destinations and
+	// the "policy:<id>" restic tag convention). Moved off Policy so retention
+	// runs on its own schedule, detached from any single backup job — see
+	// server/internal/retentionscheduler.
+	RetentionLast     int    `gorm:"not null;default:0"`
+	RetentionHourly   int    `gorm:"not null;default:0"`
+	RetentionDaily    int    `gorm:"not null;default:0"`
+	RetentionWeekly   int    `gorm:"not null;default:0"`
+	RetentionMonthly  int    `gorm:"not null;default:0"`
+	RetentionYearly   int    `gorm:"not null;default:0"`
+	RetentionSchedule string `gorm:"not null;default:''"` // cron expression; "" = unconfigured
+	RetentionEnabled  bool   `gorm:"not null;default:false"`
+	// RetentionAgentID is the connected agent responsible for running this
+	// destination's retention sweeps. Explicit and admin-chosen — a
+	// destination has no other owning agent (any number of policies, on any
+	// agents, can write here). nil = not yet assigned.
+	RetentionAgentID *uuid.UUID `gorm:"type:text"`
+	// AppendOnly marks a repository that can never support `restic forget
+	// --prune` (e.g. WORM/object-lock storage). The retention scheduler must
+	// never even attempt a sweep here.
+	AppendOnly bool `gorm:"not null;default:false"`
+	// RetentionNeedsReview is set by the one-time migration backfill when this
+	// destination was shared by 2+ policies with no single retention
+	// configuration to inherit unambiguously. Cleared the first time an admin
+	// explicitly saves retention config for this destination.
+	RetentionNeedsReview bool `gorm:"not null;default:false"`
+
+	// Busy gate: which job (backup or retention, on any agent) currently holds
+	// this destination's repository, so a second dispatch can be skipped
+	// server-side instead of racing restic's own lock file. No FK — the
+	// holding job may be deleted by job-log retention after it completes, at
+	// which point the gate has already been released anyway.
+	BusyJobID *uuid.UUID `gorm:"type:text"`
+	BusySince *time.Time
 }
 
 // -----------------------------------------------------------------------------
@@ -195,21 +236,15 @@ type Destination struct {
 // (see repository/policy.go: GetByIDWithDestinations).
 type Policy struct {
 	SoftDelete
-	Name             string          `gorm:"not null"`
-	AgentID          uuid.UUID       `gorm:"type:text;not null;index"`
-	Schedule         string          `gorm:"not null"` // cron expression
-	Enabled          bool            `gorm:"not null;default:true"`
-	Sources          string          `gorm:"type:text;not null"` // JSON array of source paths
-	RetentionLast    int             `gorm:"not null;default:0"`
-	RetentionHourly  int             `gorm:"not null;default:0"`
-	RetentionDaily   int             `gorm:"not null;default:0"`
-	RetentionWeekly  int             `gorm:"not null;default:0"`
-	RetentionMonthly int             `gorm:"not null;default:0"`
-	RetentionYearly  int             `gorm:"not null;default:0"`
-	RepoPassword     EncryptedString `gorm:"type:text;not null"` // Restic repository password
-	HookPreBackup    string          `gorm:"type:text;default:''"` // shell command, optional
-	HookPostBackup   string          `gorm:"type:text;default:''"` // shell command, optional
-	ExcludePatterns  string          `gorm:"type:text;default:'[]'"` // JSON array of --exclude patterns
+	Name            string          `gorm:"not null"`
+	AgentID         uuid.UUID       `gorm:"type:text;not null;index"`
+	Schedule        string          `gorm:"not null"` // cron expression
+	Enabled         bool            `gorm:"not null;default:true"`
+	Sources         string          `gorm:"type:text;not null"`     // JSON array of source paths
+	RepoPassword    EncryptedString `gorm:"type:text;not null"`     // Restic repository password
+	HookPreBackup   string          `gorm:"type:text;default:''"`   // shell command, optional
+	HookPostBackup  string          `gorm:"type:text;default:''"`   // shell command, optional
+	ExcludePatterns string          `gorm:"type:text;default:'[]'"` // JSON array of --exclude patterns
 	// ResumeInterrupted enables automatic resume of a backup whose agent
 	// disconnected mid-run. New policies default to true — restic reuses the
 	// packs already uploaded, so resuming only transfers what is missing.
@@ -260,7 +295,7 @@ type Job struct {
 	// such a snapshot belongs to no policy.
 	PolicyID  *uuid.UUID `gorm:"type:text;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
-	Type      string     `gorm:"not null;default:'backup'"` // "backup", "restore"
+	Type      string     `gorm:"not null;default:'backup'"`  // "backup", "restore"
 	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled", "interrupted"
 	StartedAt *time.Time
 	EndedAt   *time.Time
@@ -282,14 +317,54 @@ type Job struct {
 // destination. A job can partially succeed if some destinations fail.
 type JobDestination struct {
 	Base
-	JobID         uuid.UUID  `gorm:"type:text;not null;index"`
-	DestinationID uuid.UUID  `gorm:"type:text;not null;index"`
-	Status        string     `gorm:"not null;default:'pending'"` // mirrors Job.Status
-	SnapshotID    string     `gorm:"default:''"` // opaque ID returned by the backup engine
-	SizeBytes     int64      `gorm:"default:0"`
+	JobID         uuid.UUID `gorm:"type:text;not null;index"`
+	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
+	Status        string    `gorm:"not null;default:'pending'"` // mirrors Job.Status
+	SnapshotID    string    `gorm:"default:''"`                 // opaque ID returned by the backup engine
+	SizeBytes     int64     `gorm:"default:0"`
 	StartedAt     *time.Time
 	EndedAt       *time.Time
 	Error         string `gorm:"type:text;default:''"`
+}
+
+// JobDestinationCommand tracks the result of one command-type source backed
+// up to one destination. A command source is its own restic invocation and
+// its own snapshot, so a job can have several of these per destination —
+// which is why they cannot live in JobDestination (UNIQUE(job_id,
+// destination_id), one scalar snapshot_id).
+type JobDestinationCommand struct {
+	Base
+	JobID         uuid.UUID `gorm:"type:text;not null;index"`
+	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
+	// SourceName is the policy source's name — also the restic
+	// --stdin-filename and the suffix of its retention tag.
+	SourceName string `gorm:"not null"`
+	Status     string `gorm:"not null;default:'pending'"`
+	SnapshotID string `gorm:"default:''"`
+	SizeBytes  int64  `gorm:"default:0"`
+	StartedAt  *time.Time
+	EndedAt    *time.Time
+	Error      string `gorm:"type:text;default:''"`
+}
+
+// JobRetentionTag tracks the result of one restic `forget --prune --tag`
+// sweep within a standalone retention job (JOB_TYPE_FORGET). A retention job
+// covers one Destination but must sweep every policy's own tag pool there
+// independently (see agent/internal/restic/wrapper.go's Forget, which
+// refuses to run unscoped), so a job can have several of these per
+// destination — no snapshot/size fields, unlike JobDestinationCommand: a
+// forget never creates a snapshot.
+type JobRetentionTag struct {
+	Base
+	JobID         uuid.UUID `gorm:"type:text;not null;index"`
+	DestinationID uuid.UUID `gorm:"type:text;not null;index"`
+	// Tag is the restic --tag value swept, e.g. "policy:<id>" or
+	// "policy:<id>:command:<name>".
+	Tag       string `gorm:"not null"`
+	Status    string `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "skipped"
+	StartedAt *time.Time
+	EndedAt   *time.Time
+	Error     string `gorm:"type:text;default:''"`
 }
 
 // JobLog stores structured log lines emitted during a job execution.
@@ -323,13 +398,13 @@ type Snapshot struct {
 	// (restic data_added_packed), not the logical source size — so it reconciles
 	// with the destination's real repo size and never double-counts. Zero when
 	// the backup added nothing new (e.g. re-backup of unchanged data).
-	SizeBytes     int64     `gorm:"default:0"`
-	FileCount     int64     `gorm:"default:0"`
-	Tags          string    `gorm:"type:text;default:'[]'"`  // JSON array
-	Sources       string    `gorm:"type:text;default:'[]'"`  // JSON array of paths backed up
-	Hostname      string    `gorm:"not null;default:''"`
-	IsImported    bool      `gorm:"not null;default:false"`
-	SnapshotAt    time.Time `gorm:"not null;index"`
+	SizeBytes  int64     `gorm:"default:0"`
+	FileCount  int64     `gorm:"default:0"`
+	Tags       string    `gorm:"type:text;default:'[]'"` // JSON array
+	Sources    string    `gorm:"type:text;default:'[]'"` // JSON array of paths backed up
+	Hostname   string    `gorm:"not null;default:''"`
+	IsImported bool      `gorm:"not null;default:false"`
+	SnapshotAt time.Time `gorm:"not null;index"`
 }
 
 // -----------------------------------------------------------------------------
@@ -363,7 +438,7 @@ type Notification struct {
 type NotificationDelivery struct {
 	Base
 	NotificationID uuid.UUID  `gorm:"type:text;not null;index"`
-	Type           string     `gorm:"not null"`          // "email" | "webhook"
+	Type           string     `gorm:"not null"`                   // "email" | "webhook"
 	Status         string     `gorm:"not null;default:'pending'"` // "pending" | "sent" | "exhausted"
 	Attempts       int        `gorm:"not null;default:0"`
 	LastError      string     `gorm:"type:text;not null;default:''"`

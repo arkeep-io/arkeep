@@ -28,6 +28,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 	"github.com/arkeep-io/arkeep/server/internal/telemetry"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -90,7 +91,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
 	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
 	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Recommended in production to prevent Host header injection")
-root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
+	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 
@@ -235,6 +236,14 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Info("recovered jobs left running by a previous run", zap.Int64("count", n))
 	}
 
+	// --- Retention migration backfill (issue #130) ---
+	// One-time: populates each destination's new retention fields from
+	// whichever policy used to own that value. Must run before the retention
+	// scheduler starts, so its first tick already sees correct schedules.
+	if err := backfillDestinationRetention(ctx, gormDB, destinationRepo, settingsRepo, logger); err != nil {
+		logger.Warn("destination retention backfill failed", zap.Error(err))
+	}
+
 	// --- Scheduler ---
 	sched, err := scheduler.New(policyRepo, jobRepo, destinationRepo, agentMgr, logger)
 	if err != nil {
@@ -246,6 +255,22 @@ func run(ctx context.Context, cfg *config) error {
 	defer func() {
 		if err := sched.Stop(); err != nil {
 			logger.Warn("scheduler shutdown error", zap.Error(err))
+		}
+	}()
+
+	// --- Retention scheduler ---
+	// Runs each destination's retention sweep on its own independent
+	// schedule, fully detached from backup jobs (issue #130).
+	retentionSched, err := retentionscheduler.New(destinationRepo, jobRepo, agentMgr, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create retention scheduler: %w", err)
+	}
+	if err := retentionSched.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start retention scheduler: %w", err)
+	}
+	defer func() {
+		if err := retentionSched.Stop(); err != nil {
+			logger.Warn("retention scheduler shutdown error", zap.Error(err))
 		}
 	}()
 
@@ -322,35 +347,36 @@ func run(ctx context.Context, cfg *config) error {
 
 	// --- HTTP router ---
 	router := api.NewRouter(api.RouterConfig{
-		Metrics: m,
-		DB:      sqlDB,
-		AuthService:   authService,
-		Scheduler:     sched,
-		AgentManager:  agentMgr,
-		Logger:        logger,
-		Hub:           wsHub,
-		Users:         userRepo,
-		Agents:        agentRepo,
-		Destinations:  destinationRepo,
-		Policies:      policyRepo,
-		Jobs:          jobRepo,
-		Snapshots:     snapshotRepo,
-		Notifications: notificationRepo,
-		OIDCProviders: oidcProviderRepo,
-		Settings:      settingsRepo,
-		LogRetention:  logRetentionSvc,
-		Secure:        cfg.secureCookies,
-		Dashboard:     dashboardRepo,
-		Audit:         auditRepo,
-		ResetTokens:   resetTokenRepo,
-		RefreshTokens: refreshTokenRepo,
-		Challenges:    challengeRepo,
-		RecoveryCodes: recoveryCodeRepo,
-		Mailer:        notifService,
-		PublicBaseURL: cfg.baseURL,
-		AutoCerts:     autoCerts,
-		AgentSecret:   cfg.agentSecret,
-		ServerVersion: version,
+		Metrics:            m,
+		DB:                 sqlDB,
+		AuthService:        authService,
+		Scheduler:          sched,
+		RetentionScheduler: retentionSched,
+		AgentManager:       agentMgr,
+		Logger:             logger,
+		Hub:                wsHub,
+		Users:              userRepo,
+		Agents:             agentRepo,
+		Destinations:       destinationRepo,
+		Policies:           policyRepo,
+		Jobs:               jobRepo,
+		Snapshots:          snapshotRepo,
+		Notifications:      notificationRepo,
+		OIDCProviders:      oidcProviderRepo,
+		Settings:           settingsRepo,
+		LogRetention:       logRetentionSvc,
+		Secure:             cfg.secureCookies,
+		Dashboard:          dashboardRepo,
+		Audit:              auditRepo,
+		ResetTokens:        resetTokenRepo,
+		RefreshTokens:      refreshTokenRepo,
+		Challenges:         challengeRepo,
+		RecoveryCodes:      recoveryCodeRepo,
+		Mailer:             notifService,
+		PublicBaseURL:      cfg.baseURL,
+		AutoCerts:          autoCerts,
+		AgentSecret:        cfg.agentSecret,
+		ServerVersion:      version,
 	})
 	api.MountGUI(router, guiFS())
 

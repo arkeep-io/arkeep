@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,16 +17,19 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 )
 
 // DestinationHandler groups all destination-related HTTP handlers.
 type DestinationHandler struct {
-	repo         repositories.DestinationRepository
-	snapshotRepo repositories.SnapshotRepository
-	policyRepo   repositories.PolicyRepository
-	agentMgr     *agentmanager.Manager
-	auditRepo    repositories.AuditRepository
-	logger       *zap.Logger
+	repo           repositories.DestinationRepository
+	snapshotRepo   repositories.SnapshotRepository
+	policyRepo     repositories.PolicyRepository
+	agentRepo      repositories.AgentRepository
+	agentMgr       *agentmanager.Manager
+	retentionSched *retentionscheduler.RetentionScheduler
+	auditRepo      repositories.AuditRepository
+	logger         *zap.Logger
 }
 
 // NewDestinationHandler creates a new DestinationHandler.
@@ -32,17 +37,21 @@ func NewDestinationHandler(
 	repo repositories.DestinationRepository,
 	snapshotRepo repositories.SnapshotRepository,
 	policyRepo repositories.PolicyRepository,
+	agentRepo repositories.AgentRepository,
 	agentMgr *agentmanager.Manager,
+	retentionSched *retentionscheduler.RetentionScheduler,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
 ) *DestinationHandler {
 	return &DestinationHandler{
-		repo:         repo,
-		snapshotRepo: snapshotRepo,
-		policyRepo:   policyRepo,
-		agentMgr:     agentMgr,
-		auditRepo:    auditRepo,
-		logger:       logger.Named("destination_handler"),
+		repo:           repo,
+		snapshotRepo:   snapshotRepo,
+		policyRepo:     policyRepo,
+		agentRepo:      agentRepo,
+		agentMgr:       agentMgr,
+		retentionSched: retentionSched,
+		auditRepo:      auditRepo,
+		logger:         logger.Named("destination_handler"),
 	}
 }
 
@@ -67,11 +76,50 @@ type destinationResponse struct {
 	// password itself — credentials are write-only, like everywhere else in
 	// this API.
 	HasRepoPassword bool `json:"has_repo_password"`
+
+	// Retention — issue #130: one configuration per destination, applied
+	// uniformly to every policy's own snapshot-tag pool here.
+	RetentionLast        int    `json:"retention_last"`
+	RetentionHourly      int    `json:"retention_hourly"`
+	RetentionDaily       int    `json:"retention_daily"`
+	RetentionWeekly      int    `json:"retention_weekly"`
+	RetentionMonthly     int    `json:"retention_monthly"`
+	RetentionYearly      int    `json:"retention_yearly"`
+	RetentionSchedule    string `json:"retention_schedule"`
+	RetentionEnabled     bool   `json:"retention_enabled"`
+	RetentionAgentID     string `json:"retention_agent_id"` // "" if unset
+	RetentionAgentName   string `json:"retention_agent_name"`
+	AppendOnly           bool   `json:"append_only"`
+	RetentionNeedsReview bool   `json:"retention_needs_review"`
+	// PolicyCount is how many live policies write to this destination —
+	// backs the "already used by N other policies" notice in the policy
+	// editor's destination picker.
+	PolicyCount int64 `json:"policy_count"`
+}
+
+// singleDestinationResponse builds a destinationResponse for a single
+// destination, resolving its policy count and retention agent name — the
+// non-batched counterpart to List's dedup loop, used by Create/GetByID/Update
+// where there's only ever one destination to resolve.
+func (h *DestinationHandler) singleDestinationResponse(ctx context.Context, d *db.Destination) destinationResponse {
+	var policyCount int64
+	if counts, err := h.repo.PolicyCountsByDestination(ctx); err == nil {
+		policyCount = counts[d.ID]
+	}
+	agentName := ""
+	if d.RetentionAgentID != nil {
+		if agent, err := h.agentRepo.GetByID(ctx, *d.RetentionAgentID); err == nil {
+			agentName = agent.Name
+		}
+	}
+	return destinationToResponse(d, policyCount, agentName)
 }
 
 // destinationToResponse converts a db.Destination to a destinationResponse.
-func destinationToResponse(d *db.Destination) destinationResponse {
-	return destinationResponse{
+// policyCount and retentionAgentName are resolved by the caller (List/GetByID)
+// to avoid this pure conversion function needing repository access.
+func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentName string) destinationResponse {
+	resp := destinationResponse{
 		ID:            d.ID.String(),
 		Name:          d.Name,
 		Type:          d.Type,
@@ -86,8 +134,24 @@ func destinationToResponse(d *db.Destination) destinationResponse {
 			}
 			return d.RepoSizeUpdatedAt.UTC().Format(time.RFC3339)
 		}(),
-		HasRepoPassword: d.RepoPassword != "",
+		HasRepoPassword:      d.RepoPassword != "",
+		RetentionLast:        d.RetentionLast,
+		RetentionHourly:      d.RetentionHourly,
+		RetentionDaily:       d.RetentionDaily,
+		RetentionWeekly:      d.RetentionWeekly,
+		RetentionMonthly:     d.RetentionMonthly,
+		RetentionYearly:      d.RetentionYearly,
+		RetentionSchedule:    d.RetentionSchedule,
+		RetentionEnabled:     d.RetentionEnabled,
+		RetentionAgentName:   retentionAgentName,
+		AppendOnly:           d.AppendOnly,
+		RetentionNeedsReview: d.RetentionNeedsReview,
+		PolicyCount:          policyCount,
 	}
+	if d.RetentionAgentID != nil {
+		resp.RetentionAgentID = d.RetentionAgentID.String()
+	}
+	return resp
 }
 
 // listDestinationsResponse wraps a paginated list of destinations.
@@ -130,9 +194,33 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	policyCounts, err := h.repo.PolicyCountsByDestination(r.Context())
+	if err != nil {
+		h.logger.Warn("failed to load policy counts for destinations list", zap.Error(err))
+		policyCounts = map[uuid.UUID]int64{}
+	}
+
+	// Dedup retention agent IDs before resolving names, same technique as
+	// PolicyHandler.List's agent-name batching, to avoid N+1 lookups.
+	agentNameByID := make(map[uuid.UUID]string)
+	for i := range destinations {
+		if destinations[i].RetentionAgentID != nil {
+			agentNameByID[*destinations[i].RetentionAgentID] = ""
+		}
+	}
+	for agentID := range agentNameByID {
+		if agent, err := h.agentRepo.GetByID(r.Context(), agentID); err == nil {
+			agentNameByID[agentID] = agent.Name
+		}
+	}
+
 	items := make([]destinationResponse, len(destinations))
 	for i := range destinations {
-		items[i] = destinationToResponse(&destinations[i])
+		agentName := ""
+		if destinations[i].RetentionAgentID != nil {
+			agentName = agentNameByID[*destinations[i].RetentionAgentID]
+		}
+		items[i] = destinationToResponse(&destinations[i], policyCounts[destinations[i].ID], agentName)
 	}
 
 	Ok(w, listDestinationsResponse{Items: items, Total: total})
@@ -150,6 +238,18 @@ type createDestinationRequest struct {
 	Config             string `json:"config"`      // JSON, not sensitive
 	ImportAgentID      string `json:"import_agent_id,omitempty"`
 	ImportRepoPassword string `json:"import_repo_password,omitempty"`
+
+	// Retention — issue #130, all optional at creation (defaults: disabled).
+	RetentionLast     int    `json:"retention_last"`
+	RetentionHourly   int    `json:"retention_hourly"`
+	RetentionDaily    int    `json:"retention_daily"`
+	RetentionWeekly   int    `json:"retention_weekly"`
+	RetentionMonthly  int    `json:"retention_monthly"`
+	RetentionYearly   int    `json:"retention_yearly"`
+	RetentionSchedule string `json:"retention_schedule"`
+	RetentionEnabled  bool   `json:"retention_enabled"`
+	RetentionAgentID  string `json:"retention_agent_id"`
+	AppendOnly        bool   `json:"append_only"`
 }
 
 type createDestinationResponse struct {
@@ -175,13 +275,51 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Config == "" {
 		req.Config = "{}"
 	}
+	if req.RetentionEnabled && req.AppendOnly {
+		ErrBadRequest(w, "retention cannot be enabled on an append-only destination")
+		return
+	}
+	if req.RetentionSchedule != "" {
+		if err := validateSchedule(req.RetentionSchedule); err != nil {
+			ErrBadRequest(w, err.Error())
+			return
+		}
+	}
+	var retentionAgentID *uuid.UUID
+	if req.RetentionAgentID != "" {
+		agentID, err := uuid.Parse(req.RetentionAgentID)
+		if err != nil {
+			ErrBadRequest(w, "retention_agent_id must be a valid UUID")
+			return
+		}
+		if _, err := h.agentRepo.GetByID(r.Context(), agentID); err != nil {
+			if errors.Is(err, repositories.ErrNotFound) {
+				ErrBadRequest(w, "retention agent not found")
+				return
+			}
+			h.logger.Error("failed to look up retention agent", zap.String("agent_id", agentID.String()), zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		retentionAgentID = &agentID
+	}
 
 	dest := &db.Destination{
-		Name:        req.Name,
-		Type:        req.Type,
-		Credentials: db.EncryptedString(req.Credentials),
-		Config:      req.Config,
-		Enabled:     true,
+		Name:              req.Name,
+		Type:              req.Type,
+		Credentials:       db.EncryptedString(req.Credentials),
+		Config:            req.Config,
+		Enabled:           true,
+		RetentionLast:     req.RetentionLast,
+		RetentionHourly:   req.RetentionHourly,
+		RetentionDaily:    req.RetentionDaily,
+		RetentionWeekly:   req.RetentionWeekly,
+		RetentionMonthly:  req.RetentionMonthly,
+		RetentionYearly:   req.RetentionYearly,
+		RetentionSchedule: req.RetentionSchedule,
+		RetentionEnabled:  req.RetentionEnabled,
+		RetentionAgentID:  retentionAgentID,
+		AppendOnly:        req.AppendOnly,
 	}
 
 	ctx := r.Context()
@@ -242,7 +380,13 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := createDestinationResponse{destinationResponse: destinationToResponse(dest)}
+	if h.retentionSched != nil {
+		if err := h.retentionSched.AddDestination(dest); err != nil {
+			h.logger.Warn("failed to add destination to retention scheduler", zap.String("id", dest.ID.String()), zap.Error(err))
+		}
+	}
+
+	resp := createDestinationResponse{destinationResponse: h.singleDestinationResponse(ctx, dest)}
 
 	if importResult != nil {
 		out := h.persistImportedSnapshots(ctx, dest, importResult)
@@ -278,7 +422,7 @@ func (h *DestinationHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, destinationToResponse(dest))
+	Ok(w, h.singleDestinationResponse(r.Context(), dest))
 }
 
 // updateDestinationRequest is the JSON body for PATCH /api/v1/destinations/{id}.
@@ -288,6 +432,19 @@ type updateDestinationRequest struct {
 	Credentials *string `json:"credentials"`
 	Config      *string `json:"config"`
 	Enabled     *bool   `json:"enabled"`
+
+	// Retention — issue #130. All optional; only non-nil values are applied.
+	RetentionLast     *int    `json:"retention_last"`
+	RetentionHourly   *int    `json:"retention_hourly"`
+	RetentionDaily    *int    `json:"retention_daily"`
+	RetentionWeekly   *int    `json:"retention_weekly"`
+	RetentionMonthly  *int    `json:"retention_monthly"`
+	RetentionYearly   *int    `json:"retention_yearly"`
+	RetentionSchedule *string `json:"retention_schedule"`
+	RetentionEnabled  *bool   `json:"retention_enabled"`
+	// RetentionAgentID: "" clears the assignment.
+	RetentionAgentID *string `json:"retention_agent_id"`
+	AppendOnly       *bool   `json:"append_only"`
 }
 
 // Update handles PATCH /api/v1/destinations/{id}.
@@ -329,14 +486,96 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		dest.Enabled = *req.Enabled
 	}
+
+	// Retention (issue #130). retentionTouched gates the "admin explicitly
+	// reconfigured this" signal that clears RetentionNeedsReview — a plain
+	// Enabled/Name/Credentials edit must not silently clear a review flag the
+	// admin never actually looked at.
+	retentionTouched := req.RetentionLast != nil || req.RetentionHourly != nil || req.RetentionDaily != nil ||
+		req.RetentionWeekly != nil || req.RetentionMonthly != nil || req.RetentionYearly != nil ||
+		req.RetentionSchedule != nil || req.RetentionEnabled != nil || req.RetentionAgentID != nil
+
+	if req.AppendOnly != nil {
+		dest.AppendOnly = *req.AppendOnly
+	}
+	effectiveRetentionEnabled := dest.RetentionEnabled
+	if req.RetentionEnabled != nil {
+		effectiveRetentionEnabled = *req.RetentionEnabled
+	}
+	if effectiveRetentionEnabled && dest.AppendOnly {
+		ErrBadRequest(w, "retention cannot be enabled on an append-only destination")
+		return
+	}
+	if req.RetentionSchedule != nil {
+		if *req.RetentionSchedule != "" {
+			if err := validateSchedule(*req.RetentionSchedule); err != nil {
+				ErrBadRequest(w, err.Error())
+				return
+			}
+		}
+		dest.RetentionSchedule = *req.RetentionSchedule
+	}
+	if req.RetentionAgentID != nil {
+		if *req.RetentionAgentID == "" {
+			dest.RetentionAgentID = nil
+		} else {
+			agentID, err := uuid.Parse(*req.RetentionAgentID)
+			if err != nil {
+				ErrBadRequest(w, "retention_agent_id must be a valid UUID")
+				return
+			}
+			if _, err := h.agentRepo.GetByID(r.Context(), agentID); err != nil {
+				if errors.Is(err, repositories.ErrNotFound) {
+					ErrBadRequest(w, "retention agent not found")
+					return
+				}
+				h.logger.Error("failed to look up retention agent", zap.String("agent_id", agentID.String()), zap.Error(err))
+				ErrInternal(w)
+				return
+			}
+			dest.RetentionAgentID = &agentID
+		}
+	}
+	if req.RetentionLast != nil {
+		dest.RetentionLast = *req.RetentionLast
+	}
+	if req.RetentionHourly != nil {
+		dest.RetentionHourly = *req.RetentionHourly
+	}
+	if req.RetentionDaily != nil {
+		dest.RetentionDaily = *req.RetentionDaily
+	}
+	if req.RetentionWeekly != nil {
+		dest.RetentionWeekly = *req.RetentionWeekly
+	}
+	if req.RetentionMonthly != nil {
+		dest.RetentionMonthly = *req.RetentionMonthly
+	}
+	if req.RetentionYearly != nil {
+		dest.RetentionYearly = *req.RetentionYearly
+	}
+	dest.RetentionEnabled = effectiveRetentionEnabled
+	if retentionTouched {
+		// The admin explicitly saved retention config for this destination —
+		// whatever ambiguity the migration backfill flagged has now been
+		// resolved one way or another.
+		dest.RetentionNeedsReview = false
+	}
+
 	if err := h.repo.Update(r.Context(), dest); err != nil {
 		h.logger.Error("failed to update destination", zap.String("id", id.String()), zap.Error(err))
 		ErrInternal(w)
 		return
 	}
 
-	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name})
-	Ok(w, destinationToResponse(dest))
+	if h.retentionSched != nil {
+		if err := h.retentionSched.UpdateDestination(dest); err != nil {
+			h.logger.Warn("failed to update retention scheduler for destination", zap.String("id", id.String()), zap.Error(err))
+		}
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched})
+	Ok(w, h.singleDestinationResponse(r.Context(), dest))
 }
 
 // hasNonEmptyCredential reports whether the credentials JSON carries at least
@@ -500,6 +739,146 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 	Ok(w, newImportDestinationResponse(len(result.Snapshots), out))
 }
 
+// checkRepoRequest is the body for POST /api/v1/destinations/{id}/check-repo.
+type checkRepoRequest struct {
+	AgentID      string `json:"agent_id"`
+	RepoPassword string `json:"repo_password"`
+}
+
+// checkRepoResponse reports whether a repository already exists at this
+// destination and, if so, whether the given password unlocks it.
+type checkRepoResponse struct {
+	// Status is one of "no_repo", "ok", "wrong_password", "unknown".
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// CheckRepo handles POST /api/v1/destinations/{id}/check-repo. It is a
+// read-only probe — unlike Import, it never persists anything (no stored
+// password, no snapshot records) — used by the policy creation form to warn
+// about a wrong manually-entered repository password before the policy is
+// created, instead of only failing at the first scheduled backup.
+func (h *DestinationHandler) CheckRepo(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	var req checkRepoRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.AgentID == "" {
+		ErrBadRequest(w, "agent_id is required")
+		return
+	}
+	if req.RepoPassword == "" {
+		ErrBadRequest(w, "repo_password is required")
+		return
+	}
+	if _, err := uuid.Parse(req.AgentID); err != nil {
+		ErrBadRequest(w, "invalid agent_id: must be a valid UUID")
+		return
+	}
+
+	ctx := r.Context()
+
+	dest, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get destination for check-repo", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	env := destutil.BuildEnv(dest)
+	env["RESTIC_PASSWORD"] = req.RepoPassword
+
+	payload := snapshotImportPayload{
+		Type:    dest.Type,
+		RepoURL: destutil.BuildRepoURL(dest),
+		Env:     env,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		h.logger.Error("failed to marshal check-repo payload", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	// Same rationale as Import: listing snapshots on a cold remote repository
+	// can exceed the server's default 30s write timeout.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(6 * time.Minute)); err != nil {
+		h.logger.Debug("check-repo: could not extend write deadline", zap.Error(err))
+	}
+	correlationID := uuid.New().String()
+	result, err := h.agentMgr.RequestSnapshotImport(ctx, req.AgentID, correlationID, payloadBytes)
+	if err != nil {
+		if errors.Is(err, agentmanager.ErrAgentNotConnected) {
+			ErrConflict(w, "agent is not connected")
+			return
+		}
+		if errors.Is(err, agentmanager.ErrSnapshotImportTimeout) {
+			ErrServiceUnavailable(w, "agent did not respond in time")
+			return
+		}
+		h.logger.Error("check-repo request failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	if result.Err == "" {
+		Ok(w, checkRepoResponse{Status: "ok", Message: "A repository already exists here and this password unlocks it."})
+		return
+	}
+
+	status, msg := classifyRepoCheckError(result.Err)
+	Ok(w, checkRepoResponse{Status: status, Message: msg})
+}
+
+// resticExitCodeRe extracts the numeric exit code from a wrapped error string
+// such as "restic: command failed: exit status 12\n{...}" when no JSON "code"
+// field is present.
+var resticExitCodeRe = regexp.MustCompile(`exit status (\d+)`)
+
+// classifyRepoCheckError turns a raw restic error string (from
+// SnapshotImportResult.Err) into a check-repo status and human message.
+// Restic's documented exit codes (see wrapper.go's lockConflictExitCode=11
+// for the existing precedent, verified against the embedded restic binary)
+// are 10 = repository does not exist and 12 = wrong password. Matching on the
+// numeric code rather than restic's human-readable message text is
+// deliberate: the code is the stable contract, the wording is not.
+func classifyRepoCheckError(raw string) (status string, message string) {
+	code := -1
+	if i := strings.Index(raw, "{"); i >= 0 {
+		var v struct {
+			Code int `json:"code"`
+		}
+		if err := json.Unmarshal([]byte(raw[i:]), &v); err == nil && v.Code != 0 {
+			code = v.Code
+		}
+	}
+	if code == -1 {
+		if m := resticExitCodeRe.FindStringSubmatch(raw); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				code = n
+			}
+		}
+	}
+
+	switch code {
+	case 10:
+		return "no_repo", "No repository found at this destination yet — one will be created on the first backup."
+	case 12:
+		return "wrong_password", "A repository already exists at this destination, but this password does not unlock it."
+	default:
+		return "unknown", extractResticMessage(raw)
+	}
+}
+
 // importOutcome breaks down what happened to the snapshots the agent reported,
 // so a caller can tell "nothing new to import" apart from "the import failed".
 type importOutcome struct {
@@ -607,8 +986,41 @@ func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("failed to clean up policy associations after destination delete", zap.String("id", id.String()), zap.Error(err))
 	}
 
+	if h.retentionSched != nil {
+		if err := h.retentionSched.RemoveDestination(id); err != nil {
+			h.logger.Warn("failed to remove destination from retention scheduler", zap.String("id", id.String()), zap.Error(err))
+		}
+	}
+
 	logAudit(r, h.auditRepo, h.logger, "destination.delete", "destination", id.String(), map[string]any{})
 	NoContent(w)
+}
+
+// TriggerRetention handles POST /api/v1/destinations/{id}/trigger-retention
+// (admin only). Manually runs a destination's retention sweep immediately,
+// bypassing its cron schedule — mirrors PolicyHandler.Trigger.
+func (h *DestinationHandler) TriggerRetention(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if h.retentionSched == nil {
+		ErrServiceUnavailable(w, "retention scheduler is not available")
+		return
+	}
+
+	job, err := h.retentionSched.TriggerNow(r.Context(), id)
+	if err != nil {
+		h.logger.Warn("failed to trigger retention",
+			zap.String("destination_id", id.String()),
+			zap.Error(err),
+		)
+		ErrConflict(w, err.Error())
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "destination.trigger_retention", "destination", id.String(), map[string]any{"job_id": job.ID.String()})
+	Ok(w, map[string]string{"job_id": job.ID.String()})
 }
 
 // extractResticMessage parses a restic error string and returns only the

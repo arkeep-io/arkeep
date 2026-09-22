@@ -107,6 +107,7 @@ func TestBuildBackupArgs_Windows(t *testing.T) {
 	if !slices.Contains(args, "--use-fs-snapshot") {
 		t.Errorf("expected --use-fs-snapshot in args on windows, got %v", args)
 	}
+	assertSourcesAfterEndOfOptions(t, args, opts.Sources)
 }
 
 func TestBuildBackupArgs_Linux(t *testing.T) {
@@ -118,6 +119,121 @@ func TestBuildBackupArgs_Linux(t *testing.T) {
 
 	if slices.Contains(args, "--use-fs-snapshot") {
 		t.Errorf("unexpected --use-fs-snapshot in args on linux, got %v", args)
+	}
+	assertSourcesAfterEndOfOptions(t, args, opts.Sources)
+}
+
+// assertSourcesAfterEndOfOptions verifies that wantSources are exactly the
+// tail of args, immediately after a "--" end-of-options marker. This is the
+// property that prevents a source beginning with "-" (e.g.
+// "--password-command=...") from ever being parsed by restic as a flag.
+func assertSourcesAfterEndOfOptions(t *testing.T, args []string, wantSources []string) {
+	t.Helper()
+	idx := slices.Index(args, "--")
+	if idx == -1 {
+		t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
+	}
+	got := args[idx+1:]
+	if !slices.Equal(got, wantSources) {
+		t.Errorf("args after \"--\" = %v, want %v", got, wantSources)
+	}
+}
+
+// TestBuildBackupArgs_SourcesAfterEndOfOptions is a regression test for
+// GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: a source entry that looks like a
+// restic flag must still end up strictly after "--", proving it cannot be
+// reinterpreted by restic as e.g. --password-command, even if validation
+// upstream were ever bypassed.
+func TestBuildBackupArgs_SourcesAfterEndOfOptions(t *testing.T) {
+	opts := BackupOptions{
+		Tags:    []string{"weekly"},
+		Sources: []string{"--password-command=touch /tmp/pwned", "/data"},
+	}
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			args := buildBackupArgs(opts, goos)
+			assertSourcesAfterEndOfOptions(t, args, opts.Sources)
+		})
+	}
+}
+
+// TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions is a defense-in-depth
+// regression test: snapshotID must be the final element, after "--", so it
+// can never be parsed as a restic flag even though today's callers only ever
+// pass restic-generated snapshot hashes.
+func TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions(t *testing.T) {
+	args := buildRestoreArgs("--password-command=touch /tmp/pwned", "/restore/target", []string{"/inc"}, []string{"/exc"})
+
+	idx := slices.Index(args, "--")
+	if idx == -1 {
+		t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
+	}
+	if idx != len(args)-2 {
+		t.Errorf("expected \"--\" immediately before the final element, got %v", args)
+	}
+	if got := args[len(args)-1]; got != "--password-command=touch /tmp/pwned" {
+		t.Errorf("snapshotID = %q, want it as the final positional arg", got)
+	}
+}
+
+func TestBuildStdinBackupArgs_Linux(t *testing.T) {
+	opts := StdinBackupOptions{
+		Command:  "pg_dump -U postgres mydb | gzip",
+		Filename: "pgdump",
+		Tags:     []string{"policy:abc:command:pgdump"},
+	}
+	args := buildStdinBackupArgs(opts, "linux")
+
+	want := []string{
+		"backup", "--json", "--stdin-from-command",
+		"--stdin-filename", "pgdump",
+		"--tag", "policy:abc:command:pgdump",
+		"--", "/bin/sh", "-c", "pg_dump -U postgres mydb | gzip",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("buildStdinBackupArgs() = %v, want %v", args, want)
+	}
+	if slices.Contains(args, "--use-fs-snapshot") {
+		t.Error("unexpected --use-fs-snapshot: there is no filesystem to snapshot for a stdin backup")
+	}
+}
+
+func TestBuildStdinBackupArgs_Windows(t *testing.T) {
+	opts := StdinBackupOptions{
+		Command:  "pg_dump mydb",
+		Filename: "pgdump",
+		Tags:     []string{"policy:abc:command:pgdump"},
+	}
+	args := buildStdinBackupArgs(opts, "windows")
+
+	want := []string{
+		"backup", "--json", "--stdin-from-command",
+		"--stdin-filename", "pgdump",
+		"--tag", "policy:abc:command:pgdump",
+		"--", "cmd", "/C", "pg_dump mydb",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("buildStdinBackupArgs() = %v, want %v", args, want)
+	}
+}
+
+// TestBuildStdinBackupArgs_CommandAfterEndOfOptions is a regression test
+// mirroring TestBuildBackupArgs_SourcesAfterEndOfOptions: a command
+// beginning with "-" must still land strictly after "--", so it can never be
+// reinterpreted by restic as one of its own flags (e.g. --password-command).
+func TestBuildStdinBackupArgs_CommandAfterEndOfOptions(t *testing.T) {
+	opts := StdinBackupOptions{Command: "--password-command=touch /tmp/pwned", Filename: "x"}
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			args := buildStdinBackupArgs(opts, goos)
+			idx := slices.Index(args, "--")
+			if idx == -1 {
+				t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
+			}
+			if got := args[len(args)-1]; got != opts.Command {
+				t.Errorf("command = %q, want it as the final positional arg", got)
+			}
+		})
 	}
 }
 
@@ -274,6 +390,20 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy:  RetentionPolicy{Daily: 7},
 			tags:    nil,
 			wantErr: true,
+		},
+		{
+			// A command source's own retention pool (see buildStdinBackupArgs):
+			// it must be the ONLY tag, never combined with the bare
+			// "policy:<id>" tag also used by the regular pool, or forgetting
+			// one pool would sweep the other's snapshots too.
+			name:   "command source retention tag is passed through verbatim",
+			policy: RetentionPolicy{Last: 7},
+			tags:   []string{"policy:abc:command:pgdump"},
+			want: []string{
+				"forget", "--prune", "--json",
+				"--tag", "policy:abc:command:pgdump",
+				"--keep-last", "7",
+			},
 		},
 	}
 

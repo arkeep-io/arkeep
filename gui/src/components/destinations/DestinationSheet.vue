@@ -31,7 +31,8 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Archive, CheckCircle2, Loader2 } from '@lucide/vue'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { AlertCircle, AlertTriangle, Archive, CheckCircle2, Loader2 } from '@lucide/vue'
 
 // ---------------------------------------------------------------------------
 // Props / emits
@@ -80,7 +81,10 @@ const configSchemas: Record<DestType, z.ZodObject<any>> = {
     }),
     s3: z.object({
         bucket: z.string().min(1, 'Bucket is required'),
-        endpoint: z.string().optional(),
+        // No implicit default — a blank endpoint used to silently resolve to
+        // AWS (server/internal/destutil/destutil.go), which is wrong for
+        // Backblaze B2 and other S3-compatible providers.
+        endpoint: z.string().min(1, 'Endpoint is required'),
         region: z.string().optional(),
         prefix: z.string().optional(),
     }),
@@ -168,6 +172,35 @@ const rclonePath = ref('')
 const fieldErrors = ref<Record<string, string>>({})
 
 // ---------------------------------------------------------------------------
+// Retention (issue #130) — one configuration per destination, applied
+// uniformly to every policy's own snapshot-tag pool here, on its own
+// schedule fully detached from any backup job.
+// ---------------------------------------------------------------------------
+
+const appendOnly = ref(false)
+const retentionEnabled = ref(false)
+const retentionAgentId = ref('')
+const retentionAgentError = ref('')
+const retentionSchedule = ref('0 2 * * *')
+const retentionScheduleError = ref('')
+const retentionLast = ref(0)
+const retentionHourly = ref(0)
+const retentionDaily = ref(7)
+const retentionWeekly = ref(4)
+const retentionMonthly = ref(6)
+const retentionYearly = ref(1)
+const retentionNeedsReview = ref(false)
+
+const RETENTION_SCHEDULE_PRESETS = [
+    { label: 'Every hour', value: '0 * * * *' },
+    { label: 'Daily at 02:00', value: '0 2 * * *' },
+    { label: 'Daily at midnight', value: '0 0 * * *' },
+    { label: 'Weekly (Sunday)', value: '0 2 * * 0' },
+    { label: 'Weekly (Monday)', value: '0 2 * * 1' },
+    { label: 'Monthly', value: '0 2 1 * *' },
+]
+
+// ---------------------------------------------------------------------------
 // Reset / populate
 // ---------------------------------------------------------------------------
 
@@ -192,6 +225,19 @@ function resetFields() {
     importError.value = null
     importResult.value = null
     creationDone.value = false
+    appendOnly.value = false
+    retentionEnabled.value = false
+    retentionAgentId.value = ''
+    retentionAgentError.value = ''
+    retentionSchedule.value = '0 2 * * *'
+    retentionScheduleError.value = ''
+    retentionLast.value = 0
+    retentionHourly.value = 0
+    retentionDaily.value = 7
+    retentionWeekly.value = 4
+    retentionMonthly.value = 6
+    retentionYearly.value = 1
+    retentionNeedsReview.value = false
 }
 
 function populateFromDestination(dest: Destination, asClone = false) {
@@ -200,6 +246,20 @@ function populateFromDestination(dest: Destination, asClone = false) {
     // copied (the form never echoes secrets), so the user must re-enter them.
     name.value = asClone ? `Copy of ${dest.name}` : dest.name
     enabled.value = dest.enabled
+
+    appendOnly.value = dest.append_only
+    retentionEnabled.value = dest.retention_enabled
+    retentionAgentId.value = dest.retention_agent_id
+    retentionSchedule.value = dest.retention_schedule || '0 2 * * *'
+    retentionLast.value = dest.retention_last
+    retentionHourly.value = dest.retention_hourly
+    retentionDaily.value = dest.retention_daily
+    retentionWeekly.value = dest.retention_weekly
+    retentionMonthly.value = dest.retention_monthly
+    retentionYearly.value = dest.retention_yearly
+    // Cloning starts a fresh destination — any "needs review" flag belongs to
+    // the original row, not the copy.
+    retentionNeedsReview.value = asClone ? false : dest.retention_needs_review
 
     // Parse config JSON — credentials are write-only and never populated
     let config: Record<string, string> = {}
@@ -211,7 +271,11 @@ function populateFromDestination(dest: Destination, asClone = false) {
             break
         case 's3':
             s3Bucket.value = config.bucket ?? ''
-            s3Endpoint.value = config.endpoint ?? ''
+            // Legacy destinations saved before Endpoint was required silently
+            // resolved to AWS server-side (destutil.BuildRepoURL) — surface
+            // that real value explicitly instead of leaving the field blank
+            // and failing the now-required validation.
+            s3Endpoint.value = config.endpoint || 's3.amazonaws.com'
             s3Region.value = config.region ?? ''
             s3Prefix.value = config.prefix ?? ''
             break
@@ -307,11 +371,29 @@ function hasEnteredCredentials(creds: Record<string, string>): boolean {
 function validate(): boolean {
     fieldErrors.value = {}
     nameError.value = ''
+    retentionAgentError.value = ''
+    retentionScheduleError.value = ''
     let valid = true
 
     if (!name.value.trim()) {
         nameError.value = 'Name is required'
         valid = false
+    }
+
+    if (retentionEnabled.value) {
+        if (appendOnly.value) {
+            // Should not be reachable — the retention section is hidden
+            // entirely when append-only is on — but guard anyway.
+            valid = false
+        }
+        if (!retentionAgentId.value) {
+            retentionAgentError.value = 'An agent is required to run retention sweeps.'
+            valid = false
+        }
+        if (!retentionSchedule.value.trim()) {
+            retentionScheduleError.value = 'A schedule is required.'
+            valid = false
+        }
     }
 
     const { config, creds } = buildConfigAndCreds()
@@ -368,6 +450,16 @@ async function onSubmit() {
                 name: name.value,
                 config: JSON.stringify(config),
                 enabled: enabled.value,
+                append_only: appendOnly.value,
+                retention_enabled: retentionEnabled.value,
+                retention_agent_id: retentionAgentId.value,
+                retention_schedule: retentionSchedule.value,
+                retention_last: retentionLast.value,
+                retention_hourly: retentionHourly.value,
+                retention_daily: retentionDaily.value,
+                retention_weekly: retentionWeekly.value,
+                retention_monthly: retentionMonthly.value,
+                retention_yearly: retentionYearly.value,
             }
             if (hasEnteredCredentials(creds)) {
                 body.credentials = JSON.stringify(creds)
@@ -384,6 +476,16 @@ async function onSubmit() {
                 type: selectedType.value,
                 config: JSON.stringify(config),
                 credentials: JSON.stringify(creds),
+                append_only: appendOnly.value,
+                retention_enabled: retentionEnabled.value,
+                retention_agent_id: retentionAgentId.value,
+                retention_schedule: retentionSchedule.value,
+                retention_last: retentionLast.value,
+                retention_hourly: retentionHourly.value,
+                retention_daily: retentionDaily.value,
+                retention_weekly: retentionWeekly.value,
+                retention_monthly: retentionMonthly.value,
+                retention_yearly: retentionYearly.value,
             }
             if (importEnabled.value && importAgentId.value && importRepoPassword.value) {
                 body.import_agent_id = importAgentId.value
@@ -529,11 +631,15 @@ function onOpenChange(value: boolean) {
                             <FieldError v-if="fieldErrors.bucket">{{ fieldErrors.bucket }}</FieldError>
                         </Field>
                         <Field>
-                            <FieldLabel for="s3-endpoint">
-                                Endpoint <span class="text-muted-foreground font-normal">(optional)</span>
-                            </FieldLabel>
+                            <FieldLabel for="s3-endpoint">Endpoint</FieldLabel>
                             <Input id="s3-endpoint" v-model="s3Endpoint" autocomplete="off"
-                                placeholder="https://s3.us-east-1.amazonaws.com" />
+                                placeholder="s3.amazonaws.com or s3.us-west-002.backblazeb2.com"
+                                :class="fieldErrors.endpoint ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="fieldErrors.endpoint">{{ fieldErrors.endpoint }}</FieldError>
+                            <p class="text-muted-foreground text-xs">
+                                Required — the S3-compatible endpoint for this provider (AWS, Backblaze B2, MinIO, etc.).
+                                Leaving this blank does not mean "use AWS".
+                            </p>
                         </Field>
                         <div class="grid grid-cols-2 gap-3">
                             <Field>
@@ -671,6 +777,168 @@ function onOpenChange(value: boolean) {
                                 :class="fieldErrors.path ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="fieldErrors.path">{{ fieldErrors.path }}</FieldError>
                         </Field>
+                    </template>
+
+                    <!-- ── Retention (issue #130) ──────────────────────────────────────
+                         One retention configuration per destination, applied uniformly
+                         to every policy's own snapshot-tag pool here, on its own
+                         schedule fully detached from any backup job. -->
+                    <Separator />
+
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium">Append-only destination</p>
+                            <p class="text-muted-foreground text-xs">
+                                Snapshots here can only be added, never deleted or pruned
+                                (e.g. object-lock / WORM storage). Retention cannot run —
+                                configure deletion outside Arkeep if needed.
+                            </p>
+                        </div>
+                        <Switch :model-value="appendOnly" @update:model-value="appendOnly = $event; if ($event) retentionEnabled = false" />
+                    </div>
+
+                    <Alert v-if="appendOnly" variant="default" class="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+                        <AlertCircle class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                        <AlertDescription class="text-amber-800 dark:text-amber-300 text-xs">
+                            Retention is disabled for append-only destinations. `forget --prune`
+                            can never succeed against storage that rejects deletes, so no
+                            scheduling controls are shown.
+                        </AlertDescription>
+                    </Alert>
+
+                    <template v-else>
+                        <Alert v-if="retentionNeedsReview" variant="destructive">
+                            <AlertTriangle class="h-4 w-4" />
+                            <AlertDescription class="text-xs">
+                                This destination was shared by multiple policies with different
+                                retention settings before this update — retention was left
+                                disabled. Configure it explicitly below to resolve this.
+                            </AlertDescription>
+                        </Alert>
+
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium">Enable retention</p>
+                                <p class="text-muted-foreground text-xs">
+                                    Run a scheduled `restic forget --prune` sweep for this
+                                    destination, independent of any policy's backup schedule.
+                                </p>
+                            </div>
+                            <Switch :model-value="retentionEnabled" @update:model-value="retentionEnabled = $event" />
+                        </div>
+
+                        <template v-if="retentionEnabled">
+                            <Field>
+                                <FieldLabel for="retention-agent">Retention Agent</FieldLabel>
+                                <AsyncCombobox
+                                    endpoint="/api/v1/agents"
+                                    :model-value="retentionAgentId"
+                                    :initial-label="props.destination?.retention_agent_name"
+                                    placeholder="Select an agent"
+                                    :class="retentionAgentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
+                                    @update:model-value="retentionAgentId = $event; retentionAgentError = ''"
+                                />
+                                <p class="text-muted-foreground text-xs">Which connected agent runs the retention sweep for this destination.</p>
+                                <FieldError v-if="retentionAgentError">{{ retentionAgentError }}</FieldError>
+                            </Field>
+
+                            <p class="text-sm font-medium">Schedule</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <button v-for="preset in RETENTION_SCHEDULE_PRESETS" :key="preset.value" type="button"
+                                    class="rounded-full border px-2.5 py-0.5 text-xs transition-colors"
+                                    :class="retentionSchedule === preset.value
+                                        ? 'border-primary bg-primary text-primary-foreground'
+                                        : 'border-border hover:border-primary/50 hover:bg-muted'"
+                                    @click="retentionSchedule = preset.value">
+                                    {{ preset.label }}
+                                </button>
+                            </div>
+                            <Field>
+                                <FieldLabel for="retention-schedule">Cron Expression</FieldLabel>
+                                <Input id="retention-schedule" v-model="retentionSchedule" class="font-mono" placeholder="0 2 * * *"
+                                    :class="retentionScheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                <FieldError v-if="retentionScheduleError">{{ retentionScheduleError }}</FieldError>
+                            </Field>
+
+                            <p class="text-sm font-medium">Retention</p>
+                            <p class="text-muted-foreground text-xs -mt-2">
+                                Number of snapshots to keep per rule. Set to 0 to disable that rule.
+                            </p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <Field>
+                                    <FieldLabel for="ret-last" class="flex items-center gap-1">
+                                        Last
+                                        <Tooltip>
+                                            <TooltipTrigger class="text-muted-foreground hover:text-foreground">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                            </TooltipTrigger>
+                                            <TooltipContent class="max-w-60">Keep the N most recent snapshots regardless of when they were taken. Useful to ensure at least N backups are always available.</TooltipContent>
+                                        </Tooltip>
+                                    </FieldLabel>
+                                    <Input id="ret-last" v-model="retentionLast" type="number" min="0" />
+                                </Field>
+                                <Field>
+                                    <FieldLabel for="ret-hourly" class="flex items-center gap-1">
+                                        Hourly
+                                        <Tooltip>
+                                            <TooltipTrigger class="text-muted-foreground hover:text-foreground">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                            </TooltipTrigger>
+                                            <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N hours that contain a snapshot.</TooltipContent>
+                                        </Tooltip>
+                                    </FieldLabel>
+                                    <Input id="ret-hourly" v-model="retentionHourly" type="number" min="0" />
+                                </Field>
+                                <Field>
+                                    <FieldLabel for="ret-daily" class="flex items-center gap-1">
+                                        Daily
+                                        <Tooltip>
+                                            <TooltipTrigger class="text-muted-foreground hover:text-foreground">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                            </TooltipTrigger>
+                                            <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N days that contain a snapshot.</TooltipContent>
+                                        </Tooltip>
+                                    </FieldLabel>
+                                    <Input id="ret-daily" v-model="retentionDaily" type="number" min="0" />
+                                </Field>
+                                <Field>
+                                    <FieldLabel for="ret-weekly" class="flex items-center gap-1">
+                                        Weekly
+                                        <Tooltip>
+                                            <TooltipTrigger class="text-muted-foreground hover:text-foreground">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                            </TooltipTrigger>
+                                            <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N weeks.</TooltipContent>
+                                        </Tooltip>
+                                    </FieldLabel>
+                                    <Input id="ret-weekly" v-model="retentionWeekly" type="number" min="0" />
+                                </Field>
+                                <Field>
+                                    <FieldLabel for="ret-monthly" class="flex items-center gap-1">
+                                        Monthly
+                                        <Tooltip>
+                                            <TooltipTrigger class="text-muted-foreground hover:text-foreground">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                            </TooltipTrigger>
+                                            <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N months.</TooltipContent>
+                                        </Tooltip>
+                                    </FieldLabel>
+                                    <Input id="ret-monthly" v-model="retentionMonthly" type="number" min="0" />
+                                </Field>
+                                <Field>
+                                    <FieldLabel for="ret-yearly" class="flex items-center gap-1">
+                                        Yearly
+                                        <Tooltip>
+                                            <TooltipTrigger class="text-muted-foreground hover:text-foreground">
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                            </TooltipTrigger>
+                                            <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N years.</TooltipContent>
+                                        </Tooltip>
+                                    </FieldLabel>
+                                    <Input id="ret-yearly" v-model="retentionYearly" type="number" min="0" />
+                                </Field>
+                            </div>
+                        </template>
                     </template>
 
                     <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->

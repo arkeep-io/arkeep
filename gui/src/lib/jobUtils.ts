@@ -9,6 +9,7 @@ import {
     Clock,
     Loader,
     PlugZap,
+    SkipForward,
     XCircle,
 } from '@lucide/vue'
 
@@ -22,6 +23,7 @@ export function statusVariant(status: string): 'default' | 'secondary' | 'destru
         case 'pending': return 'outline'
         case 'cancelled': return 'outline'
         case 'interrupted': return 'outline'
+        case 'skipped': return 'outline'
         default: return 'secondary'
     }
 }
@@ -35,6 +37,10 @@ export function statusClass(status: string): string {
         // Amber rather than red: the backup was cut off, not broken, and it is
         // normally picked up again when the agent reconnects.
         case 'interrupted': return 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+        // Slate rather than red: a destination deferred because another
+        // backup/retention sweep was already in progress against the same
+        // repository (issue #130) — expected contention, not a failure.
+        case 'skipped': return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
         default: return ''
     }
 }
@@ -51,6 +57,7 @@ export function statusIcon(status: string) {
         case 'failed': return XCircle
         case 'cancelled': return Ban
         case 'interrupted': return PlugZap
+        case 'skipped': return SkipForward
         case 'pending':
         default: return Clock
     }

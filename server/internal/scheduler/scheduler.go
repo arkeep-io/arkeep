@@ -32,9 +32,10 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
-	"github.com/arkeep-io/arkeep/server/internal/notification"
-	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
+	"github.com/arkeep-io/arkeep/server/internal/policyutil"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -46,14 +47,14 @@ import (
 // before dispatch. The gRPC channel provides transport security.
 // The agent must never log or expose these values.
 type backupPayload struct {
-	Sources         string               `json:"sources"`
-	RepoPassword    string               `json:"repo_password"`
-	Destinations    []destinationPayload `json:"destinations"`
-	Retention       retentionPayload     `json:"retention"`
-	HookPreBackup   string               `json:"hook_pre_backup"`
-	HookPostBackup  string               `json:"hook_post_backup"`
-	Tags            []string             `json:"tags"`
-	ExcludePatterns []string             `json:"exclude_patterns"`
+	Sources         string                 `json:"sources"`
+	RepoPassword    string                 `json:"repo_password"`
+	Destinations    []destinationPayload   `json:"destinations"`
+	HookPreBackup   string                 `json:"hook_pre_backup"`
+	HookPostBackup  string                 `json:"hook_post_backup"`
+	Tags            []string               `json:"tags"`
+	ExcludePatterns []string               `json:"exclude_patterns"`
+	CommandSources  []commandSourcePayload `json:"command_sources"`
 }
 
 // destinationPayload carries the resolved details of a single backup target.
@@ -69,14 +70,17 @@ type destinationPayload struct {
 	Priority      int               `json:"priority"`
 }
 
-// retentionPayload mirrors the keep_* fields from db.Policy.
-type retentionPayload struct {
-	Last    int `json:"last"`
-	Hourly  int `json:"hourly"`
-	Daily   int `json:"daily"`
-	Weekly  int `json:"weekly"`
-	Monthly int `json:"monthly"`
-	Yearly  int `json:"yearly"`
+// commandSourcePayload is one command-type source: the agent runs it as its
+// own restic backup --stdin-from-command invocation, producing its own
+// snapshot.
+type commandSourcePayload struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+	// Tags is this source's own retention pool. It deliberately does NOT
+	// include the bare policy:<id> tag: restic's forget --tag filter matches
+	// snapshots *containing* the tag, so a shared tag would let the regular
+	// pool's forget sweep this source's snapshots (and vice versa).
+	Tags []string `json:"tags"`
 }
 
 // ErrPolicyDisabled is returned by TriggerNow when the target policy is disabled.
@@ -576,6 +580,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 	defer cancel()
 
 	destPayloads := make([]destinationPayload, 0, len(policyDests))
+	acquiredDestIDs := make([]uuid.UUID, 0, len(policyDests))
 	for _, pd := range policyDests {
 		dest, err := s.dests.GetByID(ctx, pd.DestinationID)
 		if err != nil {
@@ -585,6 +590,40 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 			)
 			continue
 		}
+
+		// Busy gate (issue #130): a destination already held by another
+		// in-flight backup or retention sweep (any agent) is excluded from
+		// this run rather than the whole job — a policy backing up to 3
+		// destinations where 1 is mid-retention-sweep still backs up to the
+		// other 2. The pre-created JobDestination row (see createAndDispatch)
+		// is marked 'skipped', not 'failed': this is an expected deferral,
+		// not an error, and will be retried on the destination's next
+		// scheduled backup.
+		acquired, err := s.dests.TryAcquireBusy(ctx, pd.DestinationID, job.ID)
+		if err != nil {
+			s.logger.Error("failed to acquire destination busy gate",
+				zap.String("destination_id", pd.DestinationID.String()),
+				zap.Error(err),
+			)
+			continue
+		}
+		if !acquired {
+			now := time.Now().UTC()
+			s.logger.Info("destination busy, skipping for this run",
+				zap.String("job_id", job.ID.String()),
+				zap.String("destination_id", pd.DestinationID.String()),
+			)
+			if err := s.jobs.UpdateDestinationStatus(ctx, job.ID, pd.DestinationID, "skipped", nil, &now, "", 0,
+				"destination busy: another backup or retention sweep is already in progress against this repository"); err != nil {
+				s.logger.Error("failed to mark destination skipped",
+					zap.String("destination_id", pd.DestinationID.String()),
+					zap.Error(err),
+				)
+			}
+			continue
+		}
+
+		acquiredDestIDs = append(acquiredDestIDs, pd.DestinationID)
 		destPayloads = append(destPayloads, destinationPayload{
 			DestinationID: dest.ID.String(),
 			Type:          dest.Type,
@@ -596,9 +635,27 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		})
 	}
 
-	sourcesFlat, err := buildSourcesList(policy.Sources)
+	sourcePaths, err := policyutil.SourcePaths(policy.Sources)
 	if err != nil {
 		return fmt.Errorf("failed to build sources list: %w", err)
+	}
+	sourcesFlatBytes, err := json.Marshal(sourcePaths)
+	if err != nil {
+		return fmt.Errorf("failed to marshal sources list: %w", err)
+	}
+	sourcesFlat := string(sourcesFlatBytes)
+
+	commandSources, err := policyutil.CommandSources(policy.Sources)
+	if err != nil {
+		return fmt.Errorf("failed to build command sources list: %w", err)
+	}
+	cmdPayloads := make([]commandSourcePayload, 0, len(commandSources))
+	for _, cs := range commandSources {
+		cmdPayloads = append(cmdPayloads, commandSourcePayload{
+			Name:    cs.Name,
+			Command: cs.Command,
+			Tags:    []string{fmt.Sprintf("policy:%s:command:%s", policy.ID.String(), cs.Name)},
+		})
 	}
 
 	var excludePatterns []string
@@ -612,21 +669,14 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 	}
 
 	payload := backupPayload{
-		Sources:      sourcesFlat,
-		RepoPassword: string(policy.RepoPassword), // decrypted
-		Destinations: destPayloads,
-		Retention: retentionPayload{
-			Last:    policy.RetentionLast,
-			Hourly:  policy.RetentionHourly,
-			Daily:   policy.RetentionDaily,
-			Weekly:  policy.RetentionWeekly,
-			Monthly: policy.RetentionMonthly,
-			Yearly:  policy.RetentionYearly,
-		},
+		Sources:         sourcesFlat,
+		RepoPassword:    string(policy.RepoPassword), // decrypted
+		Destinations:    destPayloads,
 		HookPreBackup:   policy.HookPreBackup,
 		HookPostBackup:  policy.HookPostBackup,
 		Tags:            []string{fmt.Sprintf("policy:%s", policy.ID.String())},
 		ExcludePatterns: excludePatterns,
+		CommandSources:  cmdPayloads,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -643,6 +693,17 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 	}
 
 	if err := s.agentMgr.Dispatch(job.AgentID.String(), assignment); err != nil {
+		// The agent never received this job — release the busy gates we just
+		// acquired so they don't sit locked until DispatchPending's eventual
+		// retry (or, worse, until orphan recovery mistakes this for a crash).
+		for _, destID := range acquiredDestIDs {
+			if relErr := s.dests.ReleaseBusy(ctx, destID, job.ID); relErr != nil {
+				s.logger.Error("failed to release destination busy gate after dispatch failure",
+					zap.String("destination_id", destID.String()),
+					zap.Error(relErr),
+				)
+			}
+		}
 		return fmt.Errorf("agentmanager dispatch error: %w", err)
 	}
 
@@ -652,35 +713,4 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		zap.Int("destinations", len(destPayloads)),
 	)
 	return nil
-}
-
-// buildSourcesList converts the policy sources JSON (array of source objects
-// saved by the GUI) into the flat string array the agent executor expects.
-// Directory sources become plain paths; docker-volume sources become
-// "docker-volume://<volume-name>" URIs.
-func buildSourcesList(sourcesJSON string) (string, error) {
-	var sources []struct {
-		Type string `json:"type"`
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal([]byte(sourcesJSON), &sources); err != nil {
-		return "", fmt.Errorf("invalid sources JSON: %w", err)
-	}
-	paths := make([]string, 0, len(sources))
-	for _, s := range sources {
-		if s.Type == "docker-volume" {
-			if s.Path == "" {
-				// skip malformed entries to avoid dispatching docker-volume:// with no name
-				continue
-			}
-			paths = append(paths, "docker-volume://"+s.Path)
-		} else {
-			paths = append(paths, s.Path)
-		}
-	}
-	out, err := json.Marshal(paths)
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }

@@ -51,7 +51,7 @@ func (r *gormJobRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Job,
 //
 // Logs are ordered by timestamp ascending so the caller can replay execution
 // order without additional sorting.
-func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error) {
+func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobRetentionTag, []db.JobLog, error) {
 	var row JobWithNames
 	err := r.db.WithContext(ctx).
 		Model(&db.Job{}).
@@ -61,11 +61,11 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		Where("jobs.id = ?", id).
 		Scan(&row).Error
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
 	}
 	// GORM Scan does not set ErrRecordNotFound — detect a missing row via zero UUID.
 	if row.ID == (uuid.UUID{}) {
-		return nil, nil, nil, ErrNotFound
+		return nil, nil, nil, nil, nil, ErrNotFound
 	}
 
 	var destinations []JobDestinationWithName
@@ -75,7 +75,17 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		Joins("LEFT JOIN destinations ON destinations.id = job_destinations.destination_id").
 		Where("job_id = ?", id).
 		Scan(&destinations).Error; err != nil {
-		return nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
+	}
+
+	commandResults, err := r.ListDestinationCommandsByJob(ctx, id)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get destination commands for job %s: %w", id, err)
+	}
+
+	retentionTags, err := r.ListRetentionTagsByJob(ctx, id)
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get retention tags for job %s: %w", id, err)
 	}
 
 	var logs []db.JobLog
@@ -83,10 +93,10 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		Where("job_id = ?", id).
 		Order("timestamp ASC").
 		Find(&logs).Error; err != nil {
-		return nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
 	}
 
-	return &row, destinations, logs, nil
+	return &row, destinations, commandResults, retentionTags, logs, nil
 }
 
 // Update persists all fields of an existing job record.
@@ -204,6 +214,17 @@ func (r *gormJobRepository) MarkRunningJobsInterruptedForAgent(ctx context.Conte
 			}).Error; err != nil {
 			return fmt.Errorf("update job destinations: %w", err)
 		}
+		// Release any destination busy gate these jobs held — an agent that
+		// vanished mid-operation must never leave a destination permanently
+		// locked out of future backups/retention (issue #130).
+		if err := tx.Model(&db.Destination{}).
+			Where("busy_job_id IN ?", jobIDs).
+			Updates(map[string]interface{}{
+				"busy_job_id": nil,
+				"busy_since":  nil,
+			}).Error; err != nil {
+			return fmt.Errorf("release destination busy gate: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
@@ -278,6 +299,16 @@ func (r *gormJobRepository) MarkRunningJobsInterrupted(ctx context.Context, errM
 			}).Error; err != nil {
 			return fmt.Errorf("update job destinations: %w", err)
 		}
+		// See MarkRunningJobsInterruptedForAgent — same busy-gate release,
+		// here for the server-restart-wide sweep.
+		if err := tx.Model(&db.Destination{}).
+			Where("busy_job_id IN ?", jobIDs).
+			Updates(map[string]interface{}{
+				"busy_job_id": nil,
+				"busy_since":  nil,
+			}).Error; err != nil {
+			return fmt.Errorf("release destination busy gate: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
@@ -304,9 +335,24 @@ type JobDestinationWithName struct {
 	DestinationName string
 }
 
+// JobDestinationCommandWithName extends db.JobDestinationCommand with the
+// destination's display name, resolved via LEFT JOIN in
+// ListDestinationCommandsByJob. LEFT JOIN ensures rows survive even if the
+// destination was deleted.
+type JobDestinationCommandWithName struct {
+	db.JobDestinationCommand
+	DestinationName string
+}
+
 // listDestinationsJoin is the shared SELECT fragment for destination queries.
 const listDestinationsJoin = `job_destinations.*,
 	COALESCE(destinations.name, '') AS destination_name`
+
+// listDestinationCommandsJoin is the shared SELECT fragment for
+// job_destination_commands queries.
+const listDestinationCommandsJoin = `job_destination_commands.*,
+	COALESCE(destinations.name, '') AS destination_name`
+
 // Extracted as a constant to avoid repetition and keep the join clause in sync.
 const listJobsJoin = `jobs.*,
 	COALESCE(policies.name, '') AS policy_name,
@@ -356,6 +402,38 @@ func (r *gormJobRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID
 		Order("jobs.created_at DESC").
 		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list by policy: %w", err)
+	}
+
+	return rows, total, nil
+}
+
+// ListByDestination returns a paginated list of jobs that touched a given
+// destination (via job_destinations), ordered by creation time descending.
+// Used by the destination detail page's "Recent Retention Runs"/job history,
+// and applies equally to backup jobs that included this destination.
+func (r *gormJobRepository) ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
+	var total int64
+	if err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Joins("INNER JOIN job_destinations jd ON jd.job_id = jobs.id").
+		Where("jd.destination_id = ?", destinationID).
+		Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("jobs: list by destination count: %w", err)
+	}
+
+	var rows []JobWithNames
+	if err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("INNER JOIN job_destinations jd ON jd.job_id = jobs.id").
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Where("jd.destination_id = ?", destinationID).
+		Limit(opts.Limit).
+		Offset(opts.Offset).
+		Order("jobs.created_at DESC").
+		Scan(&rows).Error; err != nil {
+		return nil, 0, fmt.Errorf("jobs: list by destination: %w", err)
 	}
 
 	return rows, total, nil
@@ -543,6 +621,116 @@ func (r *gormJobRepository) UpdateDestinationStatus(ctx context.Context, jobID u
 }
 
 // -----------------------------------------------------------------------------
+// JobDestinationCommand
+// -----------------------------------------------------------------------------
+
+// UpsertDestinationCommandResult records the outcome of one command source's
+// backup to one destination. Upsert rather than update-only: unlike
+// JobDestination rows, these are not pre-created at job creation time — the
+// server does not know in advance how many command sources a job will
+// report, so the agent's first report for a given (job, destination,
+// source) creates the row.
+func (r *gormJobRepository) UpsertDestinationCommandResult(ctx context.Context, jobID, destID uuid.UUID, sourceName, status string, startedAt, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.JobDestinationCommand{}).
+		Where("job_id = ? AND destination_id = ? AND source_name = ?", jobID, destID, sourceName).
+		Updates(map[string]interface{}{
+			"status":      status,
+			"started_at":  startedAt,
+			"ended_at":    endedAt,
+			"snapshot_id": snapshotID,
+			"size_bytes":  sizeBytes,
+			"error":       errMsg,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("jobs: upsert destination command result: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	row := &db.JobDestinationCommand{
+		JobID:         jobID,
+		DestinationID: destID,
+		SourceName:    sourceName,
+		Status:        status,
+		StartedAt:     startedAt,
+		EndedAt:       endedAt,
+		SnapshotID:    snapshotID,
+		SizeBytes:     sizeBytes,
+		Error:         errMsg,
+	}
+	if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
+		return fmt.Errorf("jobs: create destination command result: %w", err)
+	}
+	return nil
+}
+
+// ListDestinationCommandsByJob returns all JobDestinationCommand records for
+// a given job, with the destination display name resolved via LEFT JOIN.
+func (r *gormJobRepository) ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationCommandWithName, error) {
+	var results []JobDestinationCommandWithName
+	if err := r.db.WithContext(ctx).
+		Model(&db.JobDestinationCommand{}).
+		Select(listDestinationCommandsJoin).
+		Joins("LEFT JOIN destinations ON destinations.id = job_destination_commands.destination_id").
+		Where("job_id = ?", jobID).
+		Scan(&results).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list destination commands by job: %w", err)
+	}
+	return results, nil
+}
+
+// -----------------------------------------------------------------------------
+// JobRetentionTag
+// -----------------------------------------------------------------------------
+
+// CreateRetentionTag inserts a new job_retention_tags row. One is created per
+// restic tag a standalone retention job (JOB_TYPE_FORGET) will sweep, at job
+// creation time — unlike JobDestinationCommand, the full tag list is known
+// server-side in advance (see policyutil.CommandSources), so there is no
+// upsert-on-first-report path needed here.
+func (r *gormJobRepository) CreateRetentionTag(ctx context.Context, t *db.JobRetentionTag) error {
+	if err := r.db.WithContext(ctx).Create(t).Error; err != nil {
+		return fmt.Errorf("jobs: create retention tag: %w", err)
+	}
+	return nil
+}
+
+// UpdateRetentionTagStatus records the outcome of one tag's forget --prune
+// sweep. The row is identified by (jobID, destID, tag) rather than the
+// surrogate PK, same rationale as UpdateDestinationStatus.
+func (r *gormJobRepository) UpdateRetentionTagStatus(ctx context.Context, jobID, destID uuid.UUID, tag, status string, startedAt, endedAt *time.Time, errMsg string) error {
+	result := r.db.WithContext(ctx).
+		Model(&db.JobRetentionTag{}).
+		Where("job_id = ? AND destination_id = ? AND tag = ?", jobID, destID, tag).
+		Updates(map[string]interface{}{
+			"status":     status,
+			"started_at": startedAt,
+			"ended_at":   endedAt,
+			"error":      errMsg,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("jobs: update retention tag status: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListRetentionTagsByJob returns all JobRetentionTag records for a given job.
+func (r *gormJobRepository) ListRetentionTagsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobRetentionTag, error) {
+	var results []db.JobRetentionTag
+	if err := r.db.WithContext(ctx).
+		Where("job_id = ?", jobID).
+		Order("tag ASC").
+		Find(&results).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list retention tags by job: %w", err)
+	}
+	return results, nil
+}
+
+// -----------------------------------------------------------------------------
 // JobLog
 // -----------------------------------------------------------------------------
 
@@ -645,4 +833,3 @@ func (r *gormJobRepository) ReclaimLogSpace(ctx context.Context) error {
 	}
 	return nil
 }
-

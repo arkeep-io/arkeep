@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   Table,
   TableBody,
@@ -60,6 +61,8 @@ interface DestinationListResponse {
 // State
 // ---------------------------------------------------------------------------
 
+const router = useRouter()
+
 const destinations = ref<Destination[]>([])
 const total = ref(0)
 const loading = ref(true)
@@ -69,6 +72,12 @@ const page = ref(1)
 const pageSize = 50
 const offset = computed(() => (page.value - 1) * pageSize)
 const totalPages = computed(() => Math.ceil(total.value / pageSize))
+
+// How many destinations on the current page need retention reconfiguration
+// after the migration backfill (issue #130). An approximation across large
+// installs with more than one page of destinations, but exact for the vast
+// majority — good enough for a "go look at this" nudge.
+const needsReviewCount = computed(() => destinations.value.filter(d => d.retention_needs_review).length)
 
 // Usage-column sort, applied server-side so ordering is global across pages.
 // Cycles: none → desc → asc → none.
@@ -247,6 +256,17 @@ onMounted(fetchDestinations)
       <AlertDescription>{{ error }}</AlertDescription>
     </Alert>
 
+    <!-- Post-upgrade retention reconfiguration banner (issue #130) — these
+         destinations were shared by multiple policies with different
+         retention settings before retention moved here, so it was left
+         disabled rather than guessed. -->
+    <Alert v-if="needsReviewCount > 0" variant="destructive">
+      <AlertDescription>
+        {{ needsReviewCount }} destination{{ needsReviewCount === 1 ? '' : 's' }} need{{ needsReviewCount === 1 ? 's' : '' }}
+        retention reconfigured after the upgrade — open one below to review.
+      </AlertDescription>
+    </Alert>
+
     <!-- Table -->
     <div class="border rounded-md">
       <Table>
@@ -305,12 +325,29 @@ onMounted(fetchDestinations)
 
           <!-- Data rows -->
           <template v-else>
-            <TableRow v-for="dest in destinations" :key="dest.id">
+            <TableRow v-for="dest in destinations" :key="dest.id"
+              class="cursor-pointer hover:bg-muted/50"
+              tabindex="0"
+              role="link"
+              :aria-label="`View destination ${dest.name}`"
+              @click="router.push(`/destinations/${dest.id}`)"
+              @keyup.enter="router.push(`/destinations/${dest.id}`)">
               <TableCell class="font-medium">
                 <div class="flex items-center gap-2">
                   {{ dest.name }}
                   <Badge v-if="dest.has_repo_password" variant="outline" class="text-xs font-normal">
                     Existing repo
+                  </Badge>
+                  <!-- Retention badges (issue #130) — priority: needs review
+                       > append-only > no retention configured. -->
+                  <Badge v-if="dest.retention_needs_review" variant="destructive" class="text-xs font-normal">
+                    Retention needs reconfiguration
+                  </Badge>
+                  <Badge v-else-if="dest.append_only" variant="outline" class="text-xs font-normal">
+                    Append-only
+                  </Badge>
+                  <Badge v-else-if="!dest.retention_enabled" variant="secondary" class="text-xs font-normal">
+                    No retention
                   </Badge>
                 </div>
               </TableCell>
@@ -333,7 +370,7 @@ onMounted(fetchDestinations)
               </TableCell>
 
               <!-- Actions dropdown -->
-              <TableCell>
+              <TableCell @click.stop>
                 <DropdownMenu>
                   <DropdownMenuTrigger as-child>
                     <Button variant="ghost" size="icon" class="w-8 h-8">

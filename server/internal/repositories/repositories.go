@@ -178,6 +178,40 @@ type DestinationRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error)
 	ListFiltered(ctx context.Context, filter DestinationFilter, opts ListOptions) ([]db.Destination, int64, error)
+
+	// ListPoliciesByDestination returns every live (non-deleted) policy
+	// attached to a destination via policy_destinations. Used by the
+	// retention scheduler to know which restic tags to sweep, and by the
+	// one-time migration backfill.
+	ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error)
+
+	// PolicyCountsByDestination returns, for every destination with at least
+	// one live policy attached, how many such policies there are. Used to
+	// surface "shared by N policies" in the GUI.
+	PolicyCountsByDestination(ctx context.Context) (map[uuid.UUID]int64, error)
+
+	// ListWithRetentionSchedule returns every enabled, non-append-only
+	// destination with a non-empty RetentionSchedule — the set the
+	// retention scheduler registers a gocron job for on Start.
+	ListWithRetentionSchedule(ctx context.Context) ([]db.Destination, error)
+
+	// Busy gate (issue #130): serializes backup/retention operations against
+	// a shared destination's repository server-side, instead of relying only
+	// on restic's own lock file (see agent/internal/restic/wrapper.go's
+	// withLockRetry, which only recovers a stale lock from a dead process).
+	//
+	// TryAcquireBusy claims the destination for jobID if not already busy.
+	// A false, nil-error return means another job already holds it — callers
+	// treat that as "skip/defer this dispatch", not a failure.
+	TryAcquireBusy(ctx context.Context, destinationID, jobID uuid.UUID) (bool, error)
+	// ReleaseBusy clears the gate only if jobID is still the current holder,
+	// so a stale/duplicate release can never clear a newer lock.
+	ReleaseBusy(ctx context.Context, destinationID, jobID uuid.UUID) error
+	// ReleaseBusyForJobs bulk-releases the gate for a set of jobs whose owning
+	// agent just vanished — called from the same transaction as the existing
+	// orphan-recovery methods (JobRepository.MarkRunningJobsInterrupted*), so
+	// the gate can never get stuck on a crashed/disconnected agent.
+	ReleaseBusyForJobs(ctx context.Context, jobIDs []uuid.UUID) error
 }
 
 // -----------------------------------------------------------------------------
@@ -229,38 +263,51 @@ type JobFilter struct {
 }
 
 type JobRepository interface {
-    Create(ctx context.Context, job *db.Job) error
-    GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
-    GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []db.JobLog, error)
-    Update(ctx context.Context, job *db.Job) error
-    UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
-    MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
-    MarkRunningJobsInterrupted(ctx context.Context, errMsg string) (int64, error)
-    MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error
-    List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
-    ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
-    ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
-    ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
-    ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
-    ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
-    HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
-    HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
+	Create(ctx context.Context, job *db.Job) error
+	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
+	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobRetentionTag, []db.JobLog, error)
+	Update(ctx context.Context, job *db.Job) error
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
+	MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
+	MarkRunningJobsInterrupted(ctx context.Context, errMsg string) (int64, error)
+	MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error
+	List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
+	ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
+	ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
+	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+	ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+	ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
+	HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
+	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
 
-    // JobDestination
-    CreateDestination(ctx context.Context, jd *db.JobDestination) error
-    ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
-    UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+	// JobDestination
+	CreateDestination(ctx context.Context, jd *db.JobDestination) error
+	ListDestinationsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationWithName, error)
+	UpdateDestinationStatus(ctx context.Context, jobID uuid.UUID, destID uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
 
-    // JobLog
-    BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
-    GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)
+	// JobDestinationCommand
+	UpsertDestinationCommandResult(ctx context.Context, jobID, destID uuid.UUID, sourceName, status string, startedAt, endedAt *time.Time, snapshotID string, sizeBytes int64, errMsg string) error
+	ListDestinationCommandsByJob(ctx context.Context, jobID uuid.UUID) ([]JobDestinationCommandWithName, error)
 
-    // Log retention. PruneLogsByLevel deletes job_logs rows whose level is in
-    // levels and whose timestamp is before the cutoff, in batches of batchSize
-    // so a large first cleanup does not hold a long write lock. ReclaimLogSpace
-    // returns freed disk space to the filesystem (driver-aware).
-    PruneLogsByLevel(ctx context.Context, levels []string, before time.Time, batchSize int) (int64, error)
-    ReclaimLogSpace(ctx context.Context) error
+	// JobRetentionTag — one row per restic tag swept within a standalone
+	// retention job (JOB_TYPE_FORGET), one per policy attached to the
+	// destination (see policyutil.CommandSources for the command-source tags
+	// included alongside each policy's bare tag).
+	CreateRetentionTag(ctx context.Context, t *db.JobRetentionTag) error
+	UpdateRetentionTagStatus(ctx context.Context, jobID, destID uuid.UUID, tag, status string, startedAt, endedAt *time.Time, errMsg string) error
+	ListRetentionTagsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobRetentionTag, error)
+	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
+
+	// JobLog
+	BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
+	GetLogs(ctx context.Context, jobID uuid.UUID) ([]db.JobLog, error)
+
+	// Log retention. PruneLogsByLevel deletes job_logs rows whose level is in
+	// levels and whose timestamp is before the cutoff, in batches of batchSize
+	// so a large first cleanup does not hold a long write lock. ReclaimLogSpace
+	// returns freed disk space to the filesystem (driver-aware).
+	PruneLogsByLevel(ctx context.Context, levels []string, before time.Time, batchSize int) (int64, error)
+	ReclaimLogSpace(ctx context.Context) error
 }
 
 // -----------------------------------------------------------------------------
@@ -325,7 +372,7 @@ type AuditRepository interface {
 // Zero values mean "no filter" for that field.
 type AuditFilter struct {
 	UserID       *uuid.UUID
-	Action       string     // prefix match: "policy." matches all policy events
+	Action       string // prefix match: "policy." matches all policy events
 	ResourceType string
 	From         *time.Time
 	To           *time.Time

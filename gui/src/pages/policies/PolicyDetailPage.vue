@@ -24,7 +24,6 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Separator } from '@/components/ui/separator'
 import {
     ArrowLeft,
     RefreshCw,
@@ -34,6 +33,7 @@ import {
     Loader2,
     FolderOpen,
     Container,
+    Terminal,
     CalendarClock,
 } from '@lucide/vue'
 import { api } from '@/services/api'
@@ -296,6 +296,8 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                         class="flex items-start gap-2.5 rounded-md bg-muted/50 px-3 py-2">
                         <Container v-if="src.type === 'docker-volume'"
                             class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+                        <Terminal v-else-if="src.type === 'command'"
+                            class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
                         <FolderOpen v-else class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
                         <div class="min-w-0">
                             <p class="text-sm font-mono truncate">{{ src.path }}</p>
@@ -306,31 +308,12 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                 </div>
             </div>
 
-            <!-- Retention -->
+            <!-- Destinations — retention moved to the destination itself
+                 (issue #130): a Destination now has one retention
+                 configuration, shared by every policy that writes to it, on
+                 its own independent schedule. See the destination's own
+                 detail page for its retention config and history. -->
             <div class="border rounded-md p-4 flex flex-col gap-3">
-                <h2 class="text-sm font-semibold">Retention</h2>
-                <div class="grid grid-cols-2 gap-x-4 gap-y-2">
-                    <div class="flex items-center justify-between">
-                        <span class="text-xs text-muted-foreground">Daily</span>
-                        <span class="text-sm font-mono font-medium">{{ policy.retention_daily }}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span class="text-xs text-muted-foreground">Weekly</span>
-                        <span class="text-sm font-mono font-medium">{{ policy.retention_weekly }}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span class="text-xs text-muted-foreground">Monthly</span>
-                        <span class="text-sm font-mono font-medium">{{ policy.retention_monthly }}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span class="text-xs text-muted-foreground">Yearly</span>
-                        <span class="text-sm font-mono font-medium">{{ policy.retention_yearly }}</span>
-                    </div>
-                </div>
-
-                <Separator />
-
-                <!-- Destinations -->
                 <h2 class="text-sm font-semibold">Destinations</h2>
                 <div v-if="!policy.destinations || policy.destinations.length === 0"
                     class="text-sm text-muted-foreground">No

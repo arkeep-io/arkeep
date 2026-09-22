@@ -46,6 +46,13 @@ func BuildRepoURL(dest *db.Destination) string {
 		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil && cfg.Bucket != "" {
 			endpoint := cfg.Endpoint
 			if endpoint == "" {
+				// Legacy compatibility only: destinations created before the
+				// GUI required Endpoint (DestinationSheet.vue) may still have
+				// it blank. New/edited destinations always send an explicit
+				// value, so this fallback should only ever fire for
+				// untouched pre-existing rows — it is not an intended
+				// default for new S3-compatible destinations (e.g. Backblaze
+				// B2), which would otherwise silently point at AWS.
 				endpoint = "s3.amazonaws.com"
 			}
 			path := cfg.Path

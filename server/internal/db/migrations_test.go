@@ -139,6 +139,81 @@ func TestSQLiteMigrationsDownUp_NullablePolicyJob(t *testing.T) {
 	}
 }
 
+// TestSQLiteMigrationsDownUp_SkippedStatus walks every SQLite migration all
+// the way down and back up with a 'skipped' job_destinations row present
+// (issue #130's busy-gate deferral status), so the 000026 table rebuild is
+// exercised in both directions rather than assumed.
+func TestSQLiteMigrationsDownUp_SkippedStatus(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/down.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	if err := gdb.Create(agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	policy := &Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `["/data"]`, RepoPassword: EncryptedString("x")}
+	if err := gdb.Create(policy).Error; err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	dest := &Destination{Name: "d", Type: "local", Config: `{"path":"/tmp/r"}`, Enabled: true}
+	if err := gdb.Create(dest).Error; err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	job := &Job{PolicyID: &policy.ID, AgentID: agent.ID, Type: "backup", Status: "pending"}
+	if err := gdb.Create(job).Error; err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := gdb.Create(&JobDestination{JobID: job.ID, DestinationID: dest.ID, Status: "skipped"}).Error; err != nil {
+		t.Fatalf("create skipped job destination: %v", err)
+	}
+
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Down(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Down: %v", err)
+	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Up after Down: %v", err)
+	}
+
+	// The down migration's narrower CHECK constraint cannot hold 'skipped', so
+	// it must have folded the row back into 'failed'. Unlike job_destinations
+	// (present since the initial schema), job_destination_commands is dropped
+	// unconditionally by 000023's own down migration once Down() walks that
+	// far back — its data cannot survive a full round trip to version 1 by
+	// design (same as every other table introduced after the initial schema),
+	// so that table is checked for usability only, below.
+	var destStatus string
+	if err := gdb.Raw(`SELECT status FROM job_destinations WHERE job_id = ?`, job.ID).Scan(&destStatus).Error; err != nil {
+		t.Fatalf("query job destination after down/up: %v", err)
+	}
+	if destStatus != "failed" {
+		t.Errorf("job destination status after down/up = %q, want %q: the down migration did not fold 'skipped'", destStatus, "failed")
+	}
+
+	// The re-migrated schema is usable, accepting 'skipped' again on both
+	// tables the 000026 migration widens.
+	if err := gdb.Model(&JobDestination{}).Where("job_id = ?", job.ID).Update("status", "skipped").Error; err != nil {
+		t.Errorf("cannot set 'skipped' on job_destinations after down/up: %v", err)
+	}
+	if err := gdb.Create(&JobDestinationCommand{JobID: job.ID, DestinationID: dest.ID, SourceName: "dump", Status: "skipped"}).Error; err != nil {
+		t.Errorf("cannot create a 'skipped' job destination command after down/up: %v", err)
+	}
+}
+
 // TestInterruptedStatusIsAccepted pins the migrated CHECK constraints: both the
 // job and its destination rows must accept 'interrupted'.
 func TestInterruptedStatusIsAccepted(t *testing.T) {

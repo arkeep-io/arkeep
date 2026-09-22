@@ -393,6 +393,76 @@ onMounted(fetchJob)
             </div>
         </div>
 
+        <!-- ── Command Sources ──────────────────────────────────────────────── -->
+        <!-- Only shown when the policy actually has command-type sources — most
+             jobs have none, so unlike Destinations there is no empty state. -->
+        <div v-if="job?.command_sources?.length" class="flex flex-col gap-3">
+            <p class="text-sm font-medium">Command Sources</p>
+            <div class="border rounded-md overflow-x-auto">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Destination</TableHead>
+                            <TableHead>Source</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Added</TableHead>
+                            <TableHead>Duration</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        <TableRow v-for="cmd in job.command_sources" :key="cmd.id">
+                            <TableCell class="font-medium">{{ cmd.destination_name }}</TableCell>
+                            <TableCell class="font-mono text-sm">{{ cmd.source_name }}</TableCell>
+                            <TableCell>
+                                <Badge :variant="statusVariant(cmd.status)" :class="statusClass(cmd.status)">
+                                    {{ statusLabel(cmd.status) }}
+                                </Badge>
+                            </TableCell>
+                            <TableCell class="text-sm font-mono text-muted-foreground">
+                                {{ formatBytes(cmd.size_bytes) }}
+                            </TableCell>
+                            <TableCell class="text-sm font-mono text-muted-foreground">
+                                {{ formatDuration(cmd.started_at, cmd.ended_at) }}
+                            </TableCell>
+                        </TableRow>
+                    </TableBody>
+                </Table>
+            </div>
+        </div>
+
+        <!-- ── Retention Tags ──────────────────────────────────────────────── -->
+        <!-- Only present on a standalone retention job (type "retention",
+             issue #130): one row per restic tag swept — one per policy
+             attached to this job's destination, plus one per that policy's
+             command sources. -->
+        <div v-if="job?.retention_tags?.length" class="flex flex-col gap-3">
+            <p class="text-sm font-medium">Retention Tags</p>
+            <div class="border rounded-md overflow-x-auto">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>Tag</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Duration</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        <TableRow v-for="tag in job.retention_tags" :key="tag.id">
+                            <TableCell class="font-mono text-sm">{{ tag.tag }}</TableCell>
+                            <TableCell>
+                                <Badge :variant="statusVariant(tag.status)" :class="statusClass(tag.status)">
+                                    {{ statusLabel(tag.status) }}
+                                </Badge>
+                            </TableCell>
+                            <TableCell class="text-sm font-mono text-muted-foreground">
+                                {{ formatDuration(tag.started_at, tag.ended_at) }}
+                            </TableCell>
+                        </TableRow>
+                    </TableBody>
+                </Table>
+            </div>
+        </div>
+
         <!-- ── Progress (shown during execution) ─────────────────────────── -->
         <div v-if="!loading && isRunning" class="flex flex-col gap-3">
             <div class="flex items-center justify-between">

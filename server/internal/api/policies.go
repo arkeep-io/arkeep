@@ -53,22 +53,16 @@ type policyDestinationResponse struct {
 // policyResponse is the JSON representation of a policy.
 // RepoPassword is intentionally omitted — it is write-only.
 type policyResponse struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	AgentID          string `json:"agent_id"`
-	AgentName        string `json:"agent_name"`
-	Schedule         string `json:"schedule"`
-	Enabled          bool   `json:"enabled"`
-	Sources          string `json:"sources"`
-	RetentionLast    int    `json:"retention_last"`
-	RetentionHourly  int    `json:"retention_hourly"`
-	RetentionDaily   int    `json:"retention_daily"`
-	RetentionWeekly  int    `json:"retention_weekly"`
-	RetentionMonthly int    `json:"retention_monthly"`
-	RetentionYearly  int    `json:"retention_yearly"`
-	HookPreBackup    string `json:"hook_pre_backup"`
-	HookPostBackup   string `json:"hook_post_backup"`
-	ExcludePatterns  string `json:"exclude_patterns"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	AgentID         string `json:"agent_id"`
+	AgentName       string `json:"agent_name"`
+	Schedule        string `json:"schedule"`
+	Enabled         bool   `json:"enabled"`
+	Sources         string `json:"sources"`
+	HookPreBackup   string `json:"hook_pre_backup"`
+	HookPostBackup  string `json:"hook_post_backup"`
+	ExcludePatterns string `json:"exclude_patterns"`
 	// ResumeInterrupted: resume a backup automatically when the agent reconnects
 	// after having disconnected mid-run.
 	ResumeInterrupted bool                        `json:"resume_interrupted"`
@@ -91,12 +85,6 @@ func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinatio
 		Schedule:          p.Schedule,
 		Enabled:           p.Enabled,
 		Sources:           p.Sources,
-		RetentionLast:     p.RetentionLast,
-		RetentionHourly:   p.RetentionHourly,
-		RetentionDaily:    p.RetentionDaily,
-		RetentionWeekly:   p.RetentionWeekly,
-		RetentionMonthly:  p.RetentionMonthly,
-		RetentionYearly:   p.RetentionYearly,
 		HookPreBackup:     p.HookPreBackup,
 		HookPostBackup:    p.HookPostBackup,
 		ExcludePatterns:   p.ExcludePatterns,
@@ -187,12 +175,6 @@ type createPolicyRequest struct {
 	// secret the server already has, and avoids ever sending it back to the
 	// browser to pre-fill.
 	UseDestinationPassword bool   `json:"use_destination_password"`
-	RetentionLast          int    `json:"retention_last"`
-	RetentionHourly        int    `json:"retention_hourly"`
-	RetentionDaily         int    `json:"retention_daily"`
-	RetentionWeekly        int    `json:"retention_weekly"`
-	RetentionMonthly       int    `json:"retention_monthly"`
-	RetentionYearly        int    `json:"retention_yearly"`
 	HookPreBackup          string `json:"hook_pre_backup"`
 	HookPostBackup         string `json:"hook_post_backup"`
 	ExcludePatterns        string `json:"exclude_patterns"` // JSON array
@@ -228,6 +210,20 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sources also execute with agent privileges (restic's --password-command
+	// can be smuggled in via an unvalidated source entry), but unlike hooks,
+	// setting backup source paths is core non-admin functionality. So sources
+	// are not admin-gated — instead validateCreatePolicy rejects flag-like
+	// entries for every caller, admin included.
+	//
+	// A "command" source is the one exception: it runs an arbitrary shell
+	// command with agent privileges, the same trust class as a hook, so it
+	// gets the same gate.
+	if policyHasCommandSource(req.Sources) && !isAdmin(r) {
+		ErrForbidden(w)
+		return
+	}
+
 	agentID, err := uuid.Parse(req.AgentID)
 	if err != nil {
 		ErrBadRequest(w, "agent_id must be a valid UUID")
@@ -251,12 +247,6 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Enabled:           true,
 		Sources:           req.Sources,
 		RepoPassword:      db.EncryptedString(repoPassword),
-		RetentionLast:     req.RetentionLast,
-		RetentionHourly:   req.RetentionHourly,
-		RetentionDaily:    req.RetentionDaily,
-		RetentionWeekly:   req.RetentionWeekly,
-		RetentionMonthly:  req.RetentionMonthly,
-		RetentionYearly:   req.RetentionYearly,
 		HookPreBackup:     req.HookPreBackup,
 		HookPostBackup:    req.HookPostBackup,
 		ExcludePatterns:   normalizeJSONArray(req.ExcludePatterns),
@@ -386,12 +376,6 @@ type updatePolicyRequest struct {
 	Enabled           *bool                     `json:"enabled"`
 	Sources           *string                   `json:"sources"`
 	RepoPassword      *string                   `json:"repo_password"`
-	RetentionLast     *int                      `json:"retention_last"`
-	RetentionHourly   *int                      `json:"retention_hourly"`
-	RetentionDaily    *int                      `json:"retention_daily"`
-	RetentionWeekly   *int                      `json:"retention_weekly"`
-	RetentionMonthly  *int                      `json:"retention_monthly"`
-	RetentionYearly   *int                      `json:"retention_yearly"`
 	HookPreBackup     *string                   `json:"hook_pre_backup"`
 	HookPostBackup    *string                   `json:"hook_post_backup"`
 	ExcludePatterns   *string                   `json:"exclude_patterns"`
@@ -464,28 +448,23 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		policy.Enabled = *req.Enabled
 	}
 	if req.Sources != nil {
+		if err := validateSourcesJSON(*req.Sources); err != nil {
+			ErrBadRequest(w, "sources: "+err.Error())
+			return
+		}
+		// Command sources execute with agent privileges — only admins may
+		// change them. Compared rather than merely detected, exactly like
+		// the hook gates below, so a non-admin can still edit a policy's
+		// schedule or retention without being blocked by a command source
+		// they are leaving untouched.
+		if commandSourcesChanged(policy.Sources, *req.Sources) && !isAdmin(r) {
+			ErrForbidden(w)
+			return
+		}
 		policy.Sources = *req.Sources
 	}
 	if req.RepoPassword != nil {
 		policy.RepoPassword = db.EncryptedString(*req.RepoPassword)
-	}
-	if req.RetentionLast != nil {
-		policy.RetentionLast = *req.RetentionLast
-	}
-	if req.RetentionHourly != nil {
-		policy.RetentionHourly = *req.RetentionHourly
-	}
-	if req.RetentionDaily != nil {
-		policy.RetentionDaily = *req.RetentionDaily
-	}
-	if req.RetentionWeekly != nil {
-		policy.RetentionWeekly = *req.RetentionWeekly
-	}
-	if req.RetentionMonthly != nil {
-		policy.RetentionMonthly = *req.RetentionMonthly
-	}
-	if req.RetentionYearly != nil {
-		policy.RetentionYearly = *req.RetentionYearly
 	}
 	if req.HookPreBackup != nil {
 		if err := validateHookCommand(*req.HookPreBackup); err != nil {
@@ -645,6 +624,9 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	}
 	if req.Sources == "" {
 		return errors.New("sources is required")
+	}
+	if err := validateSourcesJSON(req.Sources); err != nil {
+		return errors.New("sources: " + err.Error())
 	}
 	if req.RepoPassword == "" && !req.UseDestinationPassword {
 		return errors.New("repo_password is required")

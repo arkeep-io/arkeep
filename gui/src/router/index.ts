@@ -124,9 +124,21 @@ const routes: RouteRecordRaw[] = [
       // Destinations
       {
         path: 'destinations',
-        name: 'destinations',
-        component: () => import('@/pages/destinations/DestinationsPage.vue'),
         meta: { breadcrumb: 'Destinations' },
+        children: [
+          {
+            path: '',
+            name: 'destinations',
+            component: () => import('@/pages/destinations/DestinationsPage.vue'),
+          },
+          {
+            path: ':id',
+            name: 'destination-detail',
+            component: () => import('@/pages/destinations/DestinationDetailPage.vue'),
+            props: true,
+            meta: { breadcrumb: 'Destination Details' },
+          },
+        ],
       },
 
       // Snapshots

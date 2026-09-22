@@ -207,6 +207,63 @@ func TestJobHandler_GetByID(t *testing.T) {
 		assertStatus(t, resp, http.StatusNotFound)
 	})
 
+	t.Run("includes command_sources when the job has command-source results", func(t *testing.T) {
+		e := newTestEnv(t)
+		job := createDBJob(t, e.deps)
+		dest := createDBDestination(t, e.deps, "my-destination", "local")
+
+		if err := e.deps.jobs.UpsertDestinationCommandResult(
+			context.Background(), job.ID, dest.ID, "pgdump", "succeeded",
+			nil, nil, "snap-xyz", 12345, "",
+		); err != nil {
+			t.Fatalf("UpsertDestinationCommandResult: %v", err)
+		}
+
+		resp := e.get(t, "/api/v1/jobs/"+job.ID.String(), e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			CommandSources []struct {
+				DestinationID   string `json:"destination_id"`
+				DestinationName string `json:"destination_name"`
+				SourceName      string `json:"source_name"`
+				Status          string `json:"status"`
+				SnapshotID      string `json:"snapshot_id"`
+				SizeBytes       int64  `json:"size_bytes"`
+			} `json:"command_sources"`
+		}
+		decodeData(t, resp, &data)
+		if len(data.CommandSources) != 1 {
+			t.Fatalf("len(command_sources) = %d, want 1: %+v", len(data.CommandSources), data.CommandSources)
+		}
+		got := data.CommandSources[0]
+		if got.SourceName != "pgdump" {
+			t.Errorf("source_name = %q, want %q", got.SourceName, "pgdump")
+		}
+		if got.DestinationName != "my-destination" {
+			t.Errorf("destination_name = %q, want %q", got.DestinationName, "my-destination")
+		}
+		if got.Status != "succeeded" || got.SnapshotID != "snap-xyz" || got.SizeBytes != 12345 {
+			t.Errorf("unexpected command source fields: %+v", got)
+		}
+	})
+
+	t.Run("omits command_sources for a job with none", func(t *testing.T) {
+		e := newTestEnv(t)
+		job := createDBJob(t, e.deps)
+
+		resp := e.get(t, "/api/v1/jobs/"+job.ID.String(), e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			CommandSources []any `json:"command_sources"`
+		}
+		decodeData(t, resp, &data)
+		if len(data.CommandSources) != 0 {
+			t.Errorf("command_sources = %v, want empty/absent", data.CommandSources)
+		}
+	})
+
 	t.Run("returns 400 for malformed UUID", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.get(t, "/api/v1/jobs/not-a-uuid", e.adminToken(t))

@@ -58,6 +58,9 @@ type platform struct {
 var releasePlatforms = []platform{
 	{"linux", "amd64"},
 	{"linux", "arm64"},
+	{"linux", "arm"},
+	{"linux", "mips"},
+	{"linux", "mipsle"},
 	{"darwin", "amd64"},
 	{"darwin", "arm64"},
 	{"windows", "amd64"},

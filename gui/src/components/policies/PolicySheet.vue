@@ -33,7 +33,6 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Agent, ApiResponse, Destination, Policy, VolumeInfo } from '@/types'
@@ -192,18 +191,44 @@ async function fetchVolumes() {
 // ---------------------------------------------------------------------------
 
 // SourceType uses "docker-volume" (hyphen) to match the frontend SourceType enum.
-const SOURCE_TYPES = ['directory', 'docker-volume'] as const
+// "command" backs up the stdout of a shell command via restic's
+// --stdin-from-command (e.g. a pg_dump), instead of a filesystem path.
+const SOURCE_TYPES = ['directory', 'docker-volume', 'command'] as const
 type SourceTypeValue = typeof SOURCE_TYPES[number]
+
+// commandSourceNameRe mirrors server/internal/api/source_validation.go's
+// commandSourceNameRe: the name is interpolated into a restic retention tag
+// and used as --stdin-filename.
+const commandSourceNameRe = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 const sourceItemSchema = z.object({
   type: z.enum(SOURCE_TYPES),
   // path is required for directory; for docker-volume the selection lives in
-  // selectedVolumes and path stays empty until serialisation.
+  // selectedVolumes and path stays empty until serialisation. For command,
+  // path holds the shell command itself.
   path: z.string().optional().default(''),
+  // label is optional display text for directory/docker-volume, but is the
+  // required source name for command (see commandSourceNameRe above).
   label: z.string().optional(),
 }).superRefine((val, ctx) => {
   if (val.type === 'directory' && (!val.path || val.path.trim() === '')) {
     ctx.addIssue({ code: 'custom', path: ['path'], message: 'Path is required' })
+  }
+  // Cosmetic only — the real enforcement is server- and agent-side (a path
+  // starting with "-" would otherwise be parsed by restic as a flag).
+  if (val.type === 'directory' && val.path.startsWith('-')) {
+    ctx.addIssue({ code: 'custom', path: ['path'], message: 'Path must not start with "-"' })
+  }
+  if (val.type === 'command') {
+    if (!val.path || val.path.trim() === '') {
+      ctx.addIssue({ code: 'custom', path: ['path'], message: 'Command is required' })
+    }
+    // label is the source name: it becomes the restic retention tag suffix
+    // and the filename inside the snapshot, so the server enforces this
+    // charset too.
+    if (!val.label || !commandSourceNameRe.test(val.label)) {
+      ctx.addIssue({ code: 'custom', path: ['label'], message: 'Name is required (letters, digits, ".", "_", "-")' })
+    }
   }
 })
 
@@ -230,13 +255,6 @@ const schema = z.object({
   schedule: z.string().min(1, 'Schedule is required'),
 
   sources: z.array(sourceItemSchema).min(1, 'At least one source is required'),
-
-  retention_keep_last: z.coerce.number().int().min(0),
-  retention_keep_hourly: z.coerce.number().int().min(0),
-  retention_keep_daily: z.coerce.number().int().min(0),
-  retention_keep_weekly: z.coerce.number().int().min(0),
-  retention_keep_monthly: z.coerce.number().int().min(0),
-  retention_keep_yearly: z.coerce.number().int().min(0),
 
   // Destination IDs in priority order (index 0 = priority 1).
   ordered_destination_ids: z.array(z.string()).min(1, 'At least one destination is required'),
@@ -379,14 +397,6 @@ function applyPreset(value: string) {
   selectedPreset.value = value
 }
 
-// Retention
-const { value: retLastValue, errorMessage: retLastError } = useField<number>('retention_keep_last')
-const { value: retHourlyValue, errorMessage: retHourlyError } = useField<number>('retention_keep_hourly')
-const { value: retDailyValue, errorMessage: retDailyError } = useField<number>('retention_keep_daily')
-const { value: retWeeklyValue, errorMessage: retWeeklyError } = useField<number>('retention_keep_weekly')
-const { value: retMonthlyValue, errorMessage: retMonthlyError } = useField<number>('retention_keep_monthly')
-const { value: retYearlyValue, errorMessage: retYearlyError } = useField<number>('retention_keep_yearly')
-
 // Destinations
 const { value: orderedDestIds, errorMessage: orderedDestIdsError } = useField<string[]>('ordered_destination_ids')
 
@@ -443,6 +453,58 @@ watch(canUseDestinationPassword, (can) => {
   if (!can) useDestinationPasswordValue.value = false
 })
 
+// Live "does this destination already have a repository, and does this
+// password unlock it?" check. Reuses the read-only check-repo endpoint
+// (restic snapshots/stats only — nothing is written) so a wrong manually
+// entered password is caught immediately instead of at the first scheduled
+// backup. Only runs on the manual-password path — when the reuse switch
+// above is on, the DB-backed value is already correct and needs no agent
+// round-trip.
+type RepoCheckStatus = 'checking' | 'no_repo' | 'ok' | 'wrong_password' | 'unknown'
+const repoCheckByDest = ref<Record<string, { status: RepoCheckStatus; message: string }>>({})
+
+function repoCheckStatusLabel(destId: string): string {
+  const check = repoCheckByDest.value[destId]
+  if (!check) return ''
+  switch (check.status) {
+    case 'checking': return 'checking for an existing repository…'
+    case 'no_repo': return 'no existing repository — one will be created'
+    case 'ok': return 'existing repository found, password verified'
+    case 'wrong_password': return check.message || 'a repository already exists here with a different password'
+    case 'unknown': return check.message || 'could not verify (agent unreachable)'
+  }
+}
+
+async function runRepoChecks() {
+  const ids = orderedDestIds.value ?? []
+  const pwd = repoPassValue.value
+  if (ids.length === 0 || !pwd || pwd.length < 8 || !agentValue.value) {
+    repoCheckByDest.value = {}
+    return
+  }
+  for (const id of ids) repoCheckByDest.value[id] = { status: 'checking', message: '' }
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const res = await api<ApiResponse<{ status: RepoCheckStatus; message: string }>>(
+        `/api/v1/destinations/${id}/check-repo`,
+        { method: 'POST', body: { agent_id: agentValue.value, repo_password: pwd } },
+      )
+      repoCheckByDest.value = { ...repoCheckByDest.value, [id]: { status: res.data.status, message: res.data.message } }
+    } catch (e: any) {
+      repoCheckByDest.value = { ...repoCheckByDest.value, [id]: { status: 'unknown', message: e?.data?.error?.message ?? 'could not verify' } }
+    }
+  }))
+}
+
+const debouncedRepoCheck = useDebounceFn(runRepoChecks, 500)
+watch([orderedDestIds, repoPassValue, useDestinationPasswordValue], () => {
+  if (isEdit.value || useDestinationPasswordValue.value) {
+    repoCheckByDest.value = {}
+    return
+  }
+  debouncedRepoCheck()
+})
+
 // Hooks
 const { value: hookPreEnabled } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName } = useField<string>('hook_pre.name')
@@ -494,12 +556,6 @@ function defaultValues(): FormValues {
     use_destination_password: false,
     schedule: '0 2 * * *',
     sources: [{ type: 'directory', path: '', label: '' }],
-    retention_keep_last: 0,
-    retention_keep_hourly: 0,
-    retention_keep_daily: 7,
-    retention_keep_weekly: 4,
-    retention_keep_monthly: 6,
-    retention_keep_yearly: 1,
     ordered_destination_ids: [],
     hook_pre: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
@@ -518,6 +574,7 @@ watch(
       selectedVolumes.value = {}
       selectedAgent.value = null
       destSearch.value = ''
+      repoCheckByDest.value = {}
       return
     }
 
@@ -654,12 +711,6 @@ function populateForm(p: Policy, asClone = false) {
     sources: mappedSources.length > 0
       ? mappedSources
       : [{ type: 'directory', path: '', label: '' }],
-    retention_keep_last: p.retention_last ?? 0,
-    retention_keep_hourly: p.retention_hourly ?? 0,
-    retention_keep_daily: p.retention_daily ?? 7,
-    retention_keep_weekly: p.retention_weekly ?? 4,
-    retention_keep_monthly: p.retention_monthly ?? 6,
-    retention_keep_yearly: p.retention_yearly ?? 1,
     ordered_destination_ids: preDestIds,
     hook_pre: parsedPreHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPreHook },
     hook_post: parsedPostHook === null ? { enabled: false, name: '', command: '', args: [], timeout_secs: 30 } : { enabled: true, ...parsedPostHook },
@@ -716,6 +767,14 @@ const onSubmit = handleSubmit(async (values) => {
     }
   }
 
+  if (!isEdit.value && !values.use_destination_password) {
+    const hasWrongPassword = Object.values(repoCheckByDest.value).some(c => c.status === 'wrong_password')
+    if (hasWrongPassword) {
+      submitError.value = 'One or more selected destinations already have a repository with a different password. Fix the password above before creating this policy.'
+      return
+    }
+  }
+
   submitting.value = true
   submitError.value = null
 
@@ -737,12 +796,6 @@ const onSubmit = handleSubmit(async (values) => {
           return Array.from(sel).map(name => ({ type: s.type, path: name, label: s.label ?? '' }))
         })
       ),
-      retention_last: values.retention_keep_last,
-      retention_hourly: values.retention_keep_hourly,
-      retention_daily: values.retention_keep_daily,
-      retention_weekly: values.retention_keep_weekly,
-      retention_monthly: values.retention_keep_monthly,
-      retention_yearly: values.retention_keep_yearly,
       hook_pre_backup: serialiseHook(values.hook_pre),
       hook_post_backup: serialiseHook(values.hook_post),
       exclude_patterns: JSON.stringify(
@@ -853,60 +906,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         2. REPOSITORY PASSWORD (create only)
-                    ══════════════════════════════════════════════════ -->
-          <template v-if="!isEdit">
-            <p class="text-sm font-medium">Repository Password</p>
-            <p class="text-muted-foreground text-xs -mt-3">
-              Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
-            </p>
-
-            <!-- Selected destination(s) already have a password on file (imported
-                 from a pre-existing repository) — offer to reuse it instead of
-                 asking the user to retype a secret the server already has. -->
-            <div v-if="canUseDestinationPassword" class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Use the destination's existing password</p>
-                <p class="text-muted-foreground text-xs">
-                  The selected destination already has a repository password on file from when it was imported.
-                </p>
-              </div>
-              <Switch :model-value="useDestinationPasswordValue"
-                @update:model-value="useDestinationPasswordValue = $event" />
-            </div>
-
-            <template v-if="!useDestinationPasswordValue">
-            <Field>
-              <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
-              <div class="relative">
-                <Input id="repo_password" v-model="repoPassValue" :type="showPassword ? 'text' : 'password'"
-                  autocomplete="new-password" placeholder="min. 8 characters"
-                  :class="['pr-10', repoPassError ? 'border-destructive focus-visible:ring-destructive/30' : '']" />
-                <button type="button"
-                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                  @click="showPassword = !showPassword">
-                  <EyeOff v-if="showPassword" class="size-4" />
-                  <Eye v-else class="size-4" />
-                </button>
-              </div>
-              <FieldError v-if="repoPassError">{{ repoPassError }}</FieldError>
-            </Field>
-
-            <Field>
-              <FieldLabel for="repo_password_confirm">Confirm Password <span class="text-destructive">*</span>
-              </FieldLabel>
-              <Input id="repo_password_confirm" v-model="repoPassConfirmValue"
-                :type="showPassword ? 'text' : 'password'" autocomplete="new-password" placeholder="repeat password"
-                :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
-            </Field>
-            </template>
-
-            <Separator />
-          </template>
-
-          <!-- ══════════════════════════════════════════════════
-                         3. SOURCES
+                         2. SOURCES
                     ══════════════════════════════════════════════════ -->
           <div class="flex items-center justify-between">
             <p class="text-sm font-medium">Sources</p>
@@ -946,25 +946,41 @@ function onOpenChange(value: boolean) {
                     <span v-if="selectedAgent && !selectedAgent.docker_available"
                       class="text-xs text-muted-foreground ml-1">(unavailable)</span>
                   </SelectItem>
+                  <SelectItem value="command" :disabled="!authStore.isAdmin">
+                    Command (stdin)
+                    <span v-if="!authStore.isAdmin" class="text-xs text-muted-foreground ml-1">(admins only)</span>
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
+            <!-- Admin-only warning for command sources -->
+            <Alert v-if="!authStore.isAdmin && (field.value as any).type === 'command'" variant="default"
+              class="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30">
+              <AlertCircle class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              <AlertDescription class="text-amber-800 dark:text-amber-300 text-xs">
+                Command sources run with agent process privileges. Only admins can configure them.
+              </AlertDescription>
+            </Alert>
+
             <!-- Label — full width -->
             <div class="flex flex-col gap-1.5">
               <Label :for="`source-label-${idx}`" class="text-sm">
-                Label
-                <span class="text-muted-foreground font-normal">(optional)</span>
+                {{ (field.value as any).type === 'command' ? 'Name' : 'Label' }}
+                <span v-if="(field.value as any).type !== 'command'" class="text-muted-foreground font-normal">(optional)</span>
               </Label>
               <Input :id="`source-label-${idx}`" :model-value="(field.value as any).label as string" class="w-full"
-                placeholder="e.g. postgres-data" @update:model-value="(field.value as any).label = $event" />
+                :disabled="!authStore.isAdmin && (field.value as any).type === 'command'"
+                :placeholder="(field.value as any).type === 'command' ? 'e.g. postgres-dump' : 'e.g. postgres-data'"
+                @update:model-value="(field.value as any).label = $event" />
             </div>
 
-            <!-- Path / Volumes — full width -->
+            <!-- Path / Volumes / Command — full width -->
             <div class="flex flex-col gap-1.5">
               <div class="flex items-center justify-between">
                 <Label class="text-sm">
-                  {{ (field.value as any).type === 'docker-volume' ? 'Volumes' : 'Path' }}
+                  {{ (field.value as any).type === 'docker-volume' ? 'Volumes'
+                    : (field.value as any).type === 'command' ? 'Command' : 'Path' }}
                 </Label>
                 <button v-if="(field.value as any).type === 'docker-volume' && agentValue" type="button"
                   class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -1039,6 +1055,18 @@ function onOpenChange(value: boolean) {
                 </template>
               </template>
 
+              <!-- command: shell command whose stdout is streamed into restic -->
+              <template v-else-if="(field.value as any).type === 'command'">
+                <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
+                  class="font-mono w-full" placeholder="pg_dump -U postgres mydb | gzip"
+                  :disabled="!authStore.isAdmin"
+                  @update:model-value="(field.value as any).path = $event" />
+                <p class="text-xs text-muted-foreground">
+                  Runs on the agent; its output is streamed directly into the backup — no
+                  temporary file is ever written. A non-zero exit code aborts the backup.
+                </p>
+              </template>
+
               <!-- directory: plain path input -->
               <template v-else>
                 <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
@@ -1051,7 +1079,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         4. SCHEDULE
+                         3. SCHEDULE
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Schedule</p>
 
@@ -1075,108 +1103,7 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         5. RETENTION
-                    ══════════════════════════════════════════════════ -->
-          <p class="text-sm font-medium">Retention</p>
-          <p class="text-muted-foreground text-xs -mt-3">
-            Number of snapshots to keep per rule. Set to 0 to disable that rule.
-          </p>
-
-          <div class="grid grid-cols-2 gap-3">
-            <Field>
-              <FieldLabel for="ret-last" class="flex items-center gap-1">
-                Last
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the N most recent snapshots regardless of when they were taken. Useful to ensure at least N backups are always available.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-last" v-model="retLastValue" type="number" min="0"
-                :class="retLastError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retLastError">{{ retLastError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-hourly" class="flex items-center gap-1">
-                Hourly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N hours that contain a snapshot.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-hourly" v-model="retHourlyValue" type="number" min="0"
-                :class="retHourlyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retHourlyError">{{ retHourlyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-daily" class="flex items-center gap-1">
-                Daily
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N days that contain a snapshot.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-daily" v-model="retDailyValue" type="number" min="0"
-                :class="retDailyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retDailyError">{{ retDailyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-weekly" class="flex items-center gap-1">
-                Weekly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N weeks.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-weekly" v-model="retWeeklyValue" type="number" min="0"
-                :class="retWeeklyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retWeeklyError">{{ retWeeklyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-monthly" class="flex items-center gap-1">
-                Monthly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N months.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-monthly" v-model="retMonthlyValue" type="number" min="0"
-                :class="retMonthlyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retMonthlyError">{{ retMonthlyError }}</FieldError>
-            </Field>
-            <Field>
-              <FieldLabel for="ret-yearly" class="flex items-center gap-1">
-                Yearly
-                <Tooltip>
-                  <TooltipTrigger class="text-muted-foreground hover:text-foreground">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  </TooltipTrigger>
-                  <TooltipContent class="max-w-60">Keep the most recent snapshot for each of the last N years.</TooltipContent>
-                </Tooltip>
-              </FieldLabel>
-              <Input id="ret-yearly" v-model="retYearlyValue" type="number" min="0"
-                :class="retYearlyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-              <FieldError v-if="retYearlyError">{{ retYearlyError }}</FieldError>
-            </Field>
-          </div>
-
-          <p class="text-muted-foreground text-xs">
-            Time-based rules (Daily and above) keep only one snapshot per period. Set <strong>Last</strong> or <strong>Hourly</strong> to preserve more recent history.
-          </p>
-
-          <Separator />
-
-          <!-- ══════════════════════════════════════════════════
-                         6. DESTINATIONS
+                         4. DESTINATIONS
                     ══════════════════════════════════════════════════ -->
           <p class="text-sm font-medium">Destinations</p>
           <p class="text-muted-foreground text-xs -mt-3">
@@ -1212,6 +1139,12 @@ function onOpenChange(value: boolean) {
                 <div>
                   <p class="text-sm font-medium leading-none">{{ dest.name }}</p>
                   <p class="text-xs text-muted-foreground mt-0.5">{{ dest.type }}</p>
+                  <!-- Retention now lives on the destination (issue #130) —
+                       a destination used by other policies shares one
+                       retention configuration with them, informational only. -->
+                  <p v-if="dest.policy_count > 0" class="text-xs text-muted-foreground mt-0.5">
+                    Already used by {{ dest.policy_count }} other polic{{ dest.policy_count === 1 ? 'y' : 'ies' }} — shares one retention configuration.
+                  </p>
                 </div>
               </div>
               <Badge v-if="isDestSelected(dest.id)" variant="outline" class="text-xs tabular-nums">
@@ -1244,7 +1177,79 @@ function onOpenChange(value: boolean) {
           <Separator />
 
           <!-- ══════════════════════════════════════════════════
-                         7. HOOKS (collapsible)
+                         5. REPOSITORY PASSWORD (create only)
+                    ══════════════════════════════════════════════════ -->
+          <template v-if="!isEdit">
+            <p class="text-sm font-medium">Repository Password</p>
+            <p class="text-muted-foreground text-xs -mt-3">
+              Required. Restic uses this to encrypt the repository. Store it safely — it cannot be recovered.
+            </p>
+
+            <!-- Selected destination(s) already have a password on file (imported
+                 from a pre-existing repository) — offer to reuse it instead of
+                 asking the user to retype a secret the server already has. -->
+            <div v-if="canUseDestinationPassword" class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Use the destination's existing password</p>
+                <p class="text-muted-foreground text-xs">
+                  The selected destination already has a repository password on file from when it was imported.
+                </p>
+              </div>
+              <Switch :model-value="useDestinationPasswordValue"
+                @update:model-value="useDestinationPasswordValue = $event" />
+            </div>
+
+            <template v-if="!useDestinationPasswordValue">
+            <Field>
+              <FieldLabel for="repo_password">Password <span class="text-destructive">*</span></FieldLabel>
+              <div class="relative">
+                <Input id="repo_password" v-model="repoPassValue" :type="showPassword ? 'text' : 'password'"
+                  autocomplete="new-password" placeholder="min. 8 characters"
+                  :class="['pr-10', repoPassError ? 'border-destructive focus-visible:ring-destructive/30' : '']" />
+                <button type="button"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  @click="showPassword = !showPassword">
+                  <EyeOff v-if="showPassword" class="size-4" />
+                  <Eye v-else class="size-4" />
+                </button>
+              </div>
+              <FieldError v-if="repoPassError">{{ repoPassError }}</FieldError>
+            </Field>
+
+            <Field>
+              <FieldLabel for="repo_password_confirm">Confirm Password <span class="text-destructive">*</span>
+              </FieldLabel>
+              <Input id="repo_password_confirm" v-model="repoPassConfirmValue"
+                :type="showPassword ? 'text' : 'password'" autocomplete="new-password" placeholder="repeat password"
+                :class="repoPassConfirmError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+              <FieldError v-if="repoPassConfirmError">{{ repoPassConfirmError }}</FieldError>
+            </Field>
+            </template>
+
+            <!-- Live existing-repository check (manual password entry only) —
+                 catches a wrong password at create time instead of at the
+                 first scheduled backup. -->
+            <div v-if="!useDestinationPasswordValue && Object.keys(repoCheckByDest).length" class="flex flex-col gap-1">
+              <template v-for="destId in orderedDestIds" :key="destId">
+                <p v-if="repoCheckByDest[destId]" class="text-xs flex items-center gap-1.5" :class="{
+                  'text-muted-foreground': repoCheckByDest[destId].status === 'checking' || repoCheckByDest[destId].status === 'no_repo',
+                  'text-emerald-600 dark:text-emerald-400': repoCheckByDest[destId].status === 'ok',
+                  'text-destructive': repoCheckByDest[destId].status === 'wrong_password',
+                  'text-amber-600 dark:text-amber-400': repoCheckByDest[destId].status === 'unknown',
+                }">
+                  <Loader2 v-if="repoCheckByDest[destId].status === 'checking'" class="size-3 animate-spin shrink-0" />
+                  <AlertCircle v-else-if="repoCheckByDest[destId].status === 'wrong_password'" class="size-3 shrink-0" />
+                  <AlertTriangle v-else-if="repoCheckByDest[destId].status === 'unknown'" class="size-3 shrink-0" />
+                  <span>{{ destByIdName(destId) }}: {{ repoCheckStatusLabel(destId) }}</span>
+                </p>
+              </template>
+            </div>
+
+            <Separator />
+          </template>
+
+          <!-- ══════════════════════════════════════════════════
+                         6. HOOKS (collapsible)
                     ══════════════════════════════════════════════════ -->
           <Collapsible v-model:open="hooksOpen">
             <CollapsibleTrigger as-child>

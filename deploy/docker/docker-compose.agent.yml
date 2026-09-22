@@ -63,9 +63,13 @@ services:
       #   - D:/:/hostfs/d:ro
       # Uncomment to mount a custom CA certificate for self-signed server certs:
       # - /etc/arkeep/tls:/etc/arkeep/tls:ro
-      # Docker socket — read-only, for automatic container and volume discovery.
-      # Remove if you do not need Docker volume backups.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker socket — required for automatic container/volume discovery (:ro is enough
+      # for that) and for pre/post-backup hooks that run `docker stop`/`docker start`/
+      # `docker compose ...` to control other containers (those need :rw — the Docker API
+      # calls they make are writes). Mounted :rw by default since this compose file targets
+      # a standalone agent deployment; change to :ro if you don't use hook-based container
+      # control and only need discovery/volume backups.
+      - /var/run/docker.sock:/var/run/docker.sock:rw
       # Docker volumes root — required to back up Docker named volumes.
       # The agent resolves volume paths via the Docker API (host paths), so the
       # same path must be accessible inside the container. Adjust if your Docker

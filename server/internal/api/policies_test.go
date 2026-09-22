@@ -14,16 +14,12 @@ import (
 func createDBPolicy(t *testing.T, deps *testDeps, name string, agentID uuid.UUID) *db.Policy {
 	t.Helper()
 	p := &db.Policy{
-		Name:             name,
-		AgentID:          agentID,
-		Schedule:         "@daily",
-		Enabled:          true,
-		Sources:          `["/data"]`,
-		RepoPassword:     "secret",
-		RetentionDaily:   7,
-		RetentionWeekly:  4,
-		RetentionMonthly: 6,
-		RetentionYearly:  1,
+		Name:         name,
+		AgentID:      agentID,
+		Schedule:     "@daily",
+		Enabled:      true,
+		Sources:      `[{"type":"directory","path":"/data"}]`,
+		RepoPassword: "secret",
 	}
 	if err := deps.policies.Create(context.Background(), p); err != nil {
 		t.Fatalf("createDBPolicy: %v", err)
@@ -115,7 +111,7 @@ func TestPolicyHandler_Create(t *testing.T) {
 			"name":          "backup-policy",
 			"agent_id":      agentID,
 			"schedule":      "@daily",
-			"sources":       `["/data"]`,
+			"sources":       `[{"type":"directory","path":"/data"}]`,
 			"repo_password": "supersecret",
 		}
 	}
@@ -193,12 +189,57 @@ func TestPolicyHandler_Create(t *testing.T) {
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
+	t.Run("returns 400 when a source is flag-like, even for an admin", func(t *testing.T) {
+		// Regression test for GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: sources
+		// are rejected for looking like a restic flag, not gated by admin
+		// status like hooks are — an admin token must be rejected too, proving
+		// this is a validation rule and not a privilege check.
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 when a source is flag-like for a non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
+		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
 	t.Run("returns 403 when non-admin sets hook_pre_backup", func(t *testing.T) {
 		e := newTestEnv(t)
 		body := validPolicy(uuid.New().String())
 		body["hook_pre_backup"] = "/usr/local/bin/pre-backup.sh"
 		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
 		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 403 when non-admin sets a command source", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 201 when admin sets a command source", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		body := validPolicy(agentID)
+		body["sources"] = `[{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+	})
+
+	t.Run("returns 400 when a command source has an invalid name", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["sources"] = `[{"type":"command","path":"pg_dump mydb","label":"has space"}]`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
 	t.Run("returns 400 when hook_pre_backup contains shell injection", func(t *testing.T) {
@@ -213,44 +254,6 @@ func TestPolicyHandler_Create(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/policies", "", validPolicy(uuid.New().String()))
 		assertStatus(t, resp, http.StatusUnauthorized)
-	})
-
-	t.Run("preserves zero retention values", func(t *testing.T) {
-		e := newTestEnv(t)
-		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
-		body := validPolicy(agentID)
-		body["retention_daily"] = 0
-		body["retention_yearly"] = 0
-
-		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
-		assertStatus(t, resp, http.StatusCreated)
-
-		var created struct {
-			ID             string `json:"id"`
-			RetentionDaily int    `json:"retention_daily"`
-			RetentionYearly int   `json:"retention_yearly"`
-		}
-		decodeData(t, resp, &created)
-		if created.RetentionDaily != 0 {
-			t.Errorf("create: retention_daily = %d, want 0", created.RetentionDaily)
-		}
-		if created.RetentionYearly != 0 {
-			t.Errorf("create: retention_yearly = %d, want 0", created.RetentionYearly)
-		}
-
-		resp2 := e.get(t, "/api/v1/policies/"+created.ID, e.adminToken(t))
-		assertStatus(t, resp2, http.StatusOK)
-		var fetched struct {
-			RetentionDaily  int `json:"retention_daily"`
-			RetentionYearly int `json:"retention_yearly"`
-		}
-		decodeData(t, resp2, &fetched)
-		if fetched.RetentionDaily != 0 {
-			t.Errorf("fetch: retention_daily = %d, want 0", fetched.RetentionDaily)
-		}
-		if fetched.RetentionYearly != 0 {
-			t.Errorf("fetch: retention_yearly = %d, want 0", fetched.RetentionYearly)
-		}
 	})
 
 	t.Run("use_destination_password resolves the password from the destination, never from the request", func(t *testing.T) {
@@ -326,6 +329,66 @@ func TestPolicyHandler_Create(t *testing.T) {
 		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
+
+	t.Run("use_destination_password resolves the password from an s3 destination too", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		dest := createDBDestination(t, e.deps, "imported-s3", "s3")
+		dest.RepoPassword = "captured-at-import"
+		if err := e.deps.dests.Update(context.Background(), dest); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{{"destination_id": dest.ID.String(), "priority": 0}}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var created struct {
+			ID string `json:"id"`
+		}
+		decodeData(t, resp, &created)
+		id, err := uuid.Parse(created.ID)
+		if err != nil {
+			t.Fatalf("parse id: %v", err)
+		}
+		policy, err := e.deps.policies.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if string(policy.RepoPassword) != "captured-at-import" {
+			t.Errorf("RepoPassword = %q, want the destination's stored password", policy.RepoPassword)
+		}
+	})
+
+	t.Run("use_destination_password fails when an s3 and an rclone destination disagree", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		destA := createDBDestination(t, e.deps, "imported-s3", "s3")
+		destA.RepoPassword = "password-a"
+		if err := e.deps.dests.Update(context.Background(), destA); err != nil {
+			t.Fatalf("Update destA: %v", err)
+		}
+		destB := createDBDestination(t, e.deps, "imported-rclone", "rclone")
+		destB.RepoPassword = "password-b"
+		if err := e.deps.dests.Update(context.Background(), destB); err != nil {
+			t.Fatalf("Update destB: %v", err)
+		}
+
+		body := validPolicy(agentID)
+		delete(body, "repo_password")
+		body["use_destination_password"] = true
+		body["destinations"] = []map[string]any{
+			{"destination_id": destA.ID.String(), "priority": 0},
+			{"destination_id": destB.ID.String(), "priority": 1},
+		}
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
 }
 
 func TestPolicyHandler_Update(t *testing.T) {
@@ -340,7 +403,9 @@ func TestPolicyHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ Name string `json:"name"` }
+		var data struct {
+			Name string `json:"name"`
+		}
 		decodeData(t, resp, &data)
 		if data.Name != "updated" {
 			t.Errorf("name = %q, want updated", data.Name)
@@ -391,6 +456,74 @@ func TestPolicyHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
+
+	t.Run("returns 400 when updating with a flag-like source, storage unchanged", func(t *testing.T) {
+		// Regression test for GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g.
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		badSources := `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
+			"sources": &badSources,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		getResp := e.get(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t))
+		assertStatus(t, getResp, http.StatusOK)
+		var data struct {
+			Sources string `json:"sources"`
+		}
+		decodeData(t, getResp, &data)
+		if data.Sources != policy.Sources {
+			t.Errorf("sources = %q, want unchanged %q", data.Sources, policy.Sources)
+		}
+	})
+
+	t.Run("non-admin can update sources with a normal path", func(t *testing.T) {
+		// Guards against over-restricting: sources are validated, not
+		// admin-gated like hooks.
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		newSources := `[{"type":"directory","path":"/var/backups"}]`
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
+			"sources": &newSources,
+		})
+		assertStatus(t, resp, http.StatusOK)
+	})
+
+	t.Run("returns 403 when non-admin adds a command source", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		newSources := `[{"type":"directory","path":"/data"},{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
+			"sources": &newSources,
+		})
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("allows a non-admin to edit other fields of a policy that has an unchanged command source", func(t *testing.T) {
+		// Regression guard for commandSourcesChanged: a non-admin must not be
+		// blocked from editing a policy just because it already has a
+		// command source they are leaving untouched.
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+		policy.Sources = `[{"type":"directory","path":"/data"},{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
+		if err := e.deps.policies.Update(context.Background(), policy); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+
+		name := "renamed-by-non-admin"
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
+			"name": &name,
+		})
+		assertStatus(t, resp, http.StatusOK)
+	})
 }
 
 func TestPolicyHandler_Delete(t *testing.T) {
@@ -433,7 +566,7 @@ func TestPolicyHandler_ResumeInterrupted(t *testing.T) {
 			"name":          "laptop-policy",
 			"agent_id":      agentID,
 			"schedule":      "@daily",
-			"sources":       `["/data"]`,
+			"sources":       `[{"type":"directory","path":"/data"}]`,
 			"repo_password": "supersecret",
 		}
 	}

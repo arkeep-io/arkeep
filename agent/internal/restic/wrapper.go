@@ -75,6 +75,22 @@ type BackupOptions struct {
 	ExcludePatterns []string
 }
 
+// StdinBackupOptions carries the parameters for a backup whose content is the
+// standard output of a command restic executes itself
+// (--stdin-from-command), so nothing is ever written to a temporary file on
+// the agent.
+type StdinBackupOptions struct {
+	// Command is the user-supplied command line. It is run through the host
+	// shell so pipes and redirects work (e.g. "pg_dump db | gzip").
+	Command string
+	// Filename is the name the stream is stored under inside the snapshot.
+	Filename string
+	// Tags are attached to the resulting snapshot. This source's own tag is
+	// the only one set, so its retention pool never overlaps the policy's
+	// regular snapshots (see Forget).
+	Tags []string
+}
+
 // LsEntry represents a single file or directory returned by `restic ls --json`.
 type LsEntry struct {
 	Path  string `json:"path"`
@@ -217,16 +233,15 @@ func (w *Wrapper) Init(ctx context.Context, dest Destination) error {
 	return err
 }
 
-// Backup runs a restic backup for the given destination and sources.
-// Progress events are forwarded to onProgress as they arrive on stdout.
-// onProgress may be nil if the caller does not need live progress.
-//
-// Returns a BackupResult with snapshot metadata extracted from the restic
-// summary event, and an error if the backup fails. A non-zero restic exit
-// code is always wrapped in the returned error with stderr included.
 // buildBackupArgs constructs the restic backup argument slice for the given
 // options. goos mirrors runtime.GOOS and is a parameter so the function can
 // be tested without cross-compiling.
+//
+// Sources are appended after a "--" end-of-options marker so that a source
+// path beginning with "-" (e.g. "--password-command=...") can never be
+// interpreted by restic as a flag: without the marker, restic accepts global
+// flags after the backup subcommand, and --password-command in particular
+// runs an arbitrary shell command to obtain the repository password.
 func buildBackupArgs(opts BackupOptions, goos string) []string {
 	args := []string{"backup", "--json"}
 	if goos == "windows" {
@@ -240,10 +255,18 @@ func buildBackupArgs(opts BackupOptions, goos string) []string {
 	for _, ex := range opts.ExcludePatterns {
 		args = append(args, "--exclude", ex)
 	}
+	args = append(args, "--")
 	args = append(args, opts.Sources...)
 	return args
 }
 
+// Backup runs a restic backup for the given destination and sources.
+// Progress events are forwarded to onProgress as they arrive on stdout.
+// onProgress may be nil if the caller does not need live progress.
+//
+// Returns a BackupResult with snapshot metadata extracted from the restic
+// summary event, and an error if the backup fails. A non-zero restic exit
+// code is always wrapped in the returned error with stderr included.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
 	if err := w.Init(ctx, dest); err != nil {
 		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
@@ -252,11 +275,18 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 	args := buildBackupArgs(opts, runtime.GOOS)
 
 	var result BackupResult
+	if err := w.runWithProgress(ctx, dest, args, summaryInterceptor(&result, onProgress)); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
 
-	// Wrap the caller's onProgress to intercept the summary event and extract
-	// snapshot metadata. The summary event is the last event emitted by restic
-	// on successful completion — it carries snapshot_id and byte counts.
-	intercepted := func(ev ProgressEvent) error {
+// summaryInterceptor wraps onProgress to intercept the restic summary event
+// and extract snapshot metadata into result. The summary event is the last
+// event emitted by restic on successful completion — it carries snapshot_id
+// and byte counts. Shared by Backup and BackupFromCommand.
+func summaryInterceptor(result *BackupResult, onProgress ProgressFunc) ProgressFunc {
+	return func(ev ProgressEvent) error {
 		if ev.MessageType == "summary" {
 			result.SnapshotID = ev.SnapshotID
 			result.TotalBytesProcessed = ev.TotalBytesProcessed
@@ -268,8 +298,55 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 		}
 		return nil
 	}
+}
 
-	if err := w.runWithProgress(ctx, dest, args, intercepted); err != nil {
+// buildStdinBackupArgs constructs the restic argument slice for a backup that
+// reads its content from a command's stdout. goos mirrors runtime.GOOS and is
+// a parameter so the function can be tested without cross-compiling.
+//
+// The command is appended after a "--" end-of-options marker for the same
+// reason source paths are in buildBackupArgs: without it restic would parse a
+// leading "-" as one of its own global flags (--password-command in
+// particular runs an arbitrary command to obtain the repository password).
+//
+// Deliberately absent: --use-fs-snapshot (there is no filesystem to
+// snapshot) and --exclude (there is a single stream, nothing to exclude).
+func buildStdinBackupArgs(opts StdinBackupOptions, goos string) []string {
+	args := []string{"backup", "--json", "--stdin-from-command"}
+	if opts.Filename != "" {
+		args = append(args, "--stdin-filename", opts.Filename)
+	}
+	for _, tag := range opts.Tags {
+		args = append(args, "--tag", tag)
+	}
+	args = append(args, "--")
+	return append(args, shellArgv(opts.Command, goos)...)
+}
+
+// shellArgv wraps a command string in the host shell, matching how hooks are
+// executed (agent/internal/hooks/runner.go) so a command source and a hook
+// behave identically for the same string.
+func shellArgv(command, goos string) []string {
+	if goos == "windows" {
+		return []string{"cmd", "/C", command}
+	}
+	return []string{"/bin/sh", "-c", command}
+}
+
+// BackupFromCommand runs a restic backup whose content is produced by
+// executing opts.Command and reading its standard output — restic runs the
+// command itself (--stdin-from-command), so nothing is ever written to a
+// temporary file on the agent. Progress events are forwarded to onProgress
+// exactly like Backup. A non-zero exit from the command cancels the backup.
+func (w *Wrapper) BackupFromCommand(ctx context.Context, dest Destination, opts StdinBackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
+	if err := w.Init(ctx, dest); err != nil {
+		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
+	}
+
+	args := buildStdinBackupArgs(opts, runtime.GOOS)
+
+	var result BackupResult
+	if err := w.runWithProgress(ctx, dest, args, summaryInterceptor(&result, onProgress)); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -364,14 +441,24 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 // file data is restored correctly. When empty (native Linux/Windows deployments),
 // all errors are propagated as-is.
 func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePaths []string, excludePaths []string, hostRoot string) error {
-	args := []string{"restore", snapshotID, "--target", targetDir, "--json"}
+	args := buildRestoreArgs(snapshotID, targetDir, includePaths, excludePaths)
+	return w.runRestoreJSON(ctx, dest, args, hostRoot)
+}
+
+// buildRestoreArgs constructs the restic restore argument slice. snapshotID
+// is appended last, after a "--" end-of-options marker, so a snapshot ID (or
+// "latest") can never be interpreted by restic as a flag — see
+// buildBackupArgs for why this matters.
+func buildRestoreArgs(snapshotID, targetDir string, includePaths []string, excludePaths []string) []string {
+	args := []string{"restore", "--target", targetDir, "--json"}
 	for _, p := range includePaths {
 		args = append(args, "--include", p)
 	}
 	for _, ex := range excludePaths {
 		args = append(args, "--exclude", ex)
 	}
-	return w.runRestoreJSON(ctx, dest, args, hostRoot)
+	args = append(args, "--", snapshotID)
+	return args
 }
 
 // Ls returns the direct children of dir within snapshotID (non-recursive).

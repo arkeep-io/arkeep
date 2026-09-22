@@ -3,7 +3,7 @@
 #   docker build -f agent/Dockerfile -t arkeep-agent .
 
 # ─── Stage 1: download restic + rclone ────────────────────────────────────────
-FROM golang:1.26-alpine AS downloader
+FROM golang:1.27-alpine AS downloader
 
 RUN apk add --no-cache ca-certificates git
 
@@ -18,7 +18,7 @@ WORKDIR /src/agent
 RUN GOWORK=off go run ./scripts/download_deps.go
 
 # ─── Stage 2: compile ─────────────────────────────────────────────────────────
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 RUN apk add --no-cache git
 
@@ -51,7 +51,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
 FROM alpine:3.24
 
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates tzdata su-exec && \
+    apk add --no-cache ca-certificates tzdata su-exec docker-cli docker-cli-compose && \
     addgroup -S arkeep && \
     adduser  -S -G arkeep arkeep
 

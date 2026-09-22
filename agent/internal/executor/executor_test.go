@@ -24,9 +24,25 @@ type destResult struct {
 	errMsg string
 }
 
+type commandResult struct {
+	destinationID string
+	sourceName    string
+	status        string
+	errMsg        string
+}
+
+type retentionTagResult struct {
+	destinationID string
+	tag           string
+	status        string
+	errMsg        string
+}
+
 type fakeReporter struct {
-	statuses    []string
-	destResults map[string]destResult
+	statuses         []string
+	destResults      map[string]destResult
+	commandResults   []commandResult
+	retentionResults []retentionTagResult
 }
 
 func (r *fakeReporter) ReportStatus(jobID, status, message string) {
@@ -38,6 +54,24 @@ func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, sna
 		r.destResults = make(map[string]destResult)
 	}
 	r.destResults[destinationID] = destResult{status: status, errMsg: errMsg}
+}
+
+func (r *fakeReporter) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+	r.commandResults = append(r.commandResults, commandResult{
+		destinationID: destinationID,
+		sourceName:    sourceName,
+		status:        status,
+		errMsg:        errMsg,
+	})
+}
+
+func (r *fakeReporter) ReportRetentionTagResult(jobID, destinationID, tag, status string, startedAt time.Time, errMsg string) {
+	r.retentionResults = append(r.retentionResults, retentionTagResult{
+		destinationID: destinationID,
+		tag:           tag,
+		status:        status,
+		errMsg:        errMsg,
+	})
 }
 
 func (r *fakeReporter) ReportSnapshotReconcile(jobID, destinationID string, liveIDs []string, listedAt time.Time, repoSizeBytes int64) int64 {
@@ -74,6 +108,95 @@ func TestExecuteBackupEmptyRepoURL(t *testing.T) {
 	}
 	if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
 		t.Errorf("final job status = %q, want %q (all statuses: %v)", final, "failed", reporter.statuses)
+	}
+}
+
+// TestExecuteRetention_MalformedPayloadFails verifies that a retention job
+// (JOB_TYPE_FORGET) with an undeserializable payload is reported as failed,
+// mirroring TestExecuteBackupEmptyRepoURL's shape for the backup path. This
+// is the deepest executeRetention path testable without a real restic
+// wrapper (unlike backup, retention has no destination/repo_url validation
+// gate before its first wrapper call — every other path touches e.wrapper).
+func TestExecuteRetention_MalformedPayloadFails(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_FORGET, Payload: []byte("not json")}
+
+	e.executeRetention(context.Background(), job, fakeSink{}, reporter)
+
+	if len(reporter.statuses) == 0 {
+		t.Fatal("no job status reported")
+	}
+	if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
+		t.Errorf("final job status = %q, want %q (all statuses: %v)", final, "failed", reporter.statuses)
+	}
+}
+
+// TestResolveSources_RejectsFlagLikeEntries is a regression test for
+// GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: resolveSources is the agent-side
+// defense-in-depth gate that must still reject a flag-like source even if a
+// malicious policy predates server-side validation.
+func TestResolveSources_RejectsFlagLikeEntries(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	noopLog := func(level, msg string) {}
+
+	_, err := e.resolveSources(context.Background(), `["--password-command=touch /tmp/pwned"]`, noopLog)
+	if err == nil {
+		t.Fatal("expected an error rejecting a flag-like source, got nil")
+	}
+}
+
+// TestResolveSources_AcceptsNormalPaths guards against over-restricting: the
+// flag-like check must not reject legitimate source paths.
+func TestResolveSources_AcceptsNormalPaths(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	noopLog := func(level, msg string) {}
+
+	got, err := e.resolveSources(context.Background(), `["/data", "C:\\Users"]`, noopLog)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"/data", `C:\Users`}
+	if !slices.Equal(got, want) {
+		t.Errorf("resolveSources() = %v, want %v", got, want)
+	}
+}
+
+// TestExecuteBackup_CommandOnlyPolicyDoesNotFailOnEmptySources verifies that
+// a policy with zero regular sources but at least one command source is not
+// rejected by the "no accessible backup sources" guard — that guard must
+// only fire when there are neither regular nor command sources at all.
+func TestExecuteBackup_CommandOnlyPolicyDoesNotFailOnEmptySources(t *testing.T) {
+	payload := backupPayload{
+		Sources:      `[]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{
+			{DestinationID: "dest-1", Type: "sftp", RepoURL: ""},
+		},
+		CommandSources: []commandSourcePayload{
+			{Name: "pgdump", Command: "pg_dump mydb", Tags: []string{"policy:abc:command:pgdump"}},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := New(nil, nil, nil, zap.NewNop(), "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+	e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+	// The empty-sources guard reports failure via fail() before ever reaching
+	// the destination loop, so no destResults entry would exist if it had
+	// fired. Reaching (and failing on) the empty repo_url instead proves we
+	// got past the guard.
+	if _, ok := reporter.destResults["dest-1"]; !ok {
+		t.Fatal("expected a destination result to be recorded — the empty-sources guard should not have fired")
+	}
+	if got := reporter.destResults["dest-1"].status; got != "failed" {
+		t.Errorf("destination status = %q, want %q (empty repo_url)", got, "failed")
 	}
 }
 

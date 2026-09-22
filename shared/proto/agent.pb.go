@@ -34,7 +34,9 @@ const (
 	JobType_JOB_TYPE_VERIFY JobType = 2
 	// JOB_TYPE_RESTORE extracts files from a snapshot to a target directory.
 	JobType_JOB_TYPE_RESTORE JobType = 3
-	// JOB_TYPE_FORGET applies the retention policy via restic forget --prune.
+	// JOB_TYPE_FORGET runs a standalone retention sweep for one destination
+	// (restic forget --prune, once per restic tag — see the retention
+	// scheduler), independent of and never triggered by a backup job.
 	JobType_JOB_TYPE_FORGET JobType = 4
 	// JOB_TYPE_LIST_VOLUMES is a synthetic, non-persisted job type used to ask
 	// the agent to enumerate Docker volumes on its host. The job_id field in
@@ -919,6 +921,20 @@ type DestinationStatusReport struct {
 	// restic repository after this backup (total_size from `restic stats
 	// --mode raw-data`). Zero when unavailable (stats failed or backup failed).
 	RepoSizeBytes int64 `protobuf:"varint,9,opt,name=repo_size_bytes,json=repoSizeBytes,proto3" json:"repo_size_bytes,omitempty"`
+	// command_source_name identifies which "command"-type source this report
+	// belongs to. Empty (the default — every agent built before command
+	// sources existed sends this) means the regular destination backup,
+	// routed to job_destinations. Non-empty routes to
+	// job_destination_commands, because a command source is its own restic
+	// invocation with its own snapshot.
+	CommandSourceName string `protobuf:"bytes,10,opt,name=command_source_name,json=commandSourceName,proto3" json:"command_source_name,omitempty"`
+	// retention_tag identifies which restic tag's forget --prune sweep this
+	// report is for, when it is part of a standalone retention job
+	// (JOB_TYPE_FORGET). Empty for every other job type. Routes to
+	// job_retention_tags instead of job_destinations/job_destination_commands.
+	// A forget never creates a snapshot, so snapshot_id/size_bytes are unused
+	// on these reports.
+	RetentionTag  string `protobuf:"bytes,11,opt,name=retention_tag,json=retentionTag,proto3" json:"retention_tag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1014,6 +1030,20 @@ func (x *DestinationStatusReport) GetRepoSizeBytes() int64 {
 		return x.RepoSizeBytes
 	}
 	return 0
+}
+
+func (x *DestinationStatusReport) GetCommandSourceName() string {
+	if x != nil {
+		return x.CommandSourceName
+	}
+	return ""
+}
+
+func (x *DestinationStatusReport) GetRetentionTag() string {
+	if x != nil {
+		return x.RetentionTag
+	}
+	return ""
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.
@@ -2010,7 +2040,7 @@ const file_agent_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x128\n" +
 	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"#\n" +
 	"\x11JobStatusResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xc3\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x98\x03\n" +
 	"\x17DestinationStatusReport\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12%\n" +
@@ -2023,7 +2053,10 @@ const file_agent_proto_rawDesc = "" +
 	"\x05error\x18\a \x01(\tR\x05error\x129\n" +
 	"\n" +
 	"started_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12&\n" +
-	"\x0frepo_size_bytes\x18\t \x01(\x03R\rrepoSizeBytes\"+\n" +
+	"\x0frepo_size_bytes\x18\t \x01(\x03R\rrepoSizeBytes\x12.\n" +
+	"\x13command_source_name\x18\n" +
+	" \x01(\tR\x11commandSourceName\x12#\n" +
+	"\rretention_tag\x18\v \x01(\tR\fretentionTag\"+\n" +
 	"\x19DestinationStatusResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xb7\x01\n" +
 	"\bLogEntry\x12\x15\n" +
