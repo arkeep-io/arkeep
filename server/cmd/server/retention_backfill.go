@@ -55,7 +55,7 @@ func backfillDestinationRetention(ctx context.Context, gormDB *gorm.DB, destRepo
 		return fmt.Errorf("failed to list destinations for retention backfill: %w", err)
 	}
 
-	updated, needReview := 0, 0
+	updated, needReview, failed := 0, 0, 0
 	for i := range destinations {
 		dest := &destinations[i]
 
@@ -65,12 +65,18 @@ func backfillDestinationRetention(ctx context.Context, gormDB *gorm.DB, destRepo
 				zap.String("destination_id", dest.ID.String()),
 				zap.Error(err),
 			)
+			failed++
 			continue
 		}
 
 		changed := false
-		switch len(policies) {
-		case 1:
+		// A non-empty schedule means this destination was already handled by
+		// an earlier, partially failed run (or configured by an admin since):
+		// don't overwrite it on retry.
+		alreadyConfigured := dest.RetentionSchedule != ""
+		switch {
+		case alreadyConfigured:
+		case len(policies) == 1:
 			p := policies[0]
 			var legacy struct {
 				RetentionLast    int
@@ -90,6 +96,7 @@ func backfillDestinationRetention(ctx context.Context, gormDB *gorm.DB, destRepo
 					zap.String("policy_id", p.ID.String()),
 					zap.Error(err),
 				)
+				failed++
 				break
 			}
 			dest.RetentionLast = legacy.RetentionLast
@@ -103,7 +110,7 @@ func backfillDestinationRetention(ctx context.Context, gormDB *gorm.DB, destRepo
 			dest.RetentionSchedule = "0 2 * * *"
 			dest.RetentionEnabled = true
 			changed = true
-		case 0:
+		case len(policies) == 0:
 			// Nothing to inherit — leave defaults.
 		default:
 			dest.RetentionNeedsReview = true
@@ -123,12 +130,20 @@ func backfillDestinationRetention(ctx context.Context, gormDB *gorm.DB, destRepo
 				zap.String("destination_id", dest.ID.String()),
 				zap.Error(err),
 			)
+			failed++
 			continue
 		}
 		updated++
 		if dest.RetentionNeedsReview {
 			needReview++
 		}
+	}
+
+	// Don't record completion if anything failed (e.g. #267, where every
+	// update was rejected on PostgreSQL): the next start retries instead of
+	// silently leaving destinations without their inherited retention.
+	if failed > 0 {
+		return fmt.Errorf("retention backfill: %d of %d destinations failed, will retry on next start", failed, len(destinations))
 	}
 
 	if err := settingsRepo.Set(ctx, retentionBackfillSettingKey, db.EncryptedString("true")); err != nil {
