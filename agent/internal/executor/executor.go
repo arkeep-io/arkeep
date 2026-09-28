@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -883,9 +884,29 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	// When restoring in-place (target "/"), Docker named-volume paths may be
 	// read-only or in use by running containers. We build an --exclude list
 	// before calling restic so the restore degrades gracefully instead of failing.
+	//
+	// restic rejects --include together with --exclude, so a targeted restore
+	// (IncludePaths set) never passes excludes: selected paths that fall inside
+	// an excluded area are dropped instead. The Docker checks run only when a
+	// selected path touches the Docker volumes root, so its writability does
+	// not affect restores elsewhere on the host.
+	includePaths := payload.IncludePaths
 	var excludePaths []string
 	if payload.TargetPath == "/" {
-		excludePaths = e.buildInPlaceExcludes(ctx, log)
+		switch {
+		case len(includePaths) == 0:
+			excludePaths = e.buildInPlaceExcludes(ctx, log)
+		case anyPathOverlaps(includePaths, dockerVolRoot):
+			kept, skipped, err := reconcileRestoreFilters(includePaths, e.buildInPlaceExcludes(ctx, log))
+			if err != nil {
+				fail(err.Error())
+				return
+			}
+			for _, p := range skipped {
+				log("warn", fmt.Sprintf("skipping %q for in-place restore: it is inside an excluded Docker volume path", p))
+			}
+			includePaths = kept
+		}
 	}
 
 	// --- 4. Run restore ---
@@ -903,7 +924,7 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 		Env:      payload.Destination.Env,
 	}
 
-	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, payload.IncludePaths, excludePaths, e.dockerHostRoot); err != nil {
+	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, includePaths, excludePaths, e.dockerHostRoot); err != nil {
 		if ctx.Err() != nil {
 			log("warn", "restore cancelled: agent shutting down")
 			reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
@@ -926,16 +947,70 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	reporter.ReportStatus(job.JobID, "succeeded", "restore completed")
 }
 
+// dockerVolRoot is where Docker keeps named volumes on the host.
+const dockerVolRoot = "/var/lib/docker/volumes"
+
+// pathWithin reports whether p is root itself or a path below it.
+func pathWithin(p, root string) bool {
+	p, root = path.Clean(p), path.Clean(root)
+	return p == root || strings.HasPrefix(p, strings.TrimSuffix(root, "/")+"/")
+}
+
+// anyPathOverlaps reports whether any of paths is inside root or an ancestor of it.
+func anyPathOverlaps(paths []string, root string) bool {
+	for _, p := range paths {
+		if pathWithin(p, root) || pathWithin(root, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// reconcileRestoreFilters folds excludes into includes, because restic
+// rejects --include and --exclude in the same restore. Includes inside an
+// excluded path are dropped and returned as skipped. An include that is an
+// ancestor of an excluded path cannot be expressed with includes alone, so it
+// is an error, as is dropping every include (restic would then restore the
+// whole snapshot).
+func reconcileRestoreFilters(includes, excludes []string) (kept, skipped []string, err error) {
+	if len(excludes) == 0 {
+		return includes, nil, nil
+	}
+	for _, inc := range includes {
+		excluded := false
+		for _, ex := range excludes {
+			if pathWithin(inc, ex) {
+				excluded = true
+				break
+			}
+			if pathWithin(ex, inc) {
+				return nil, nil, fmt.Errorf(
+					"cannot restore %q in place: it contains %q, which must be excluded from in-place restore — "+
+						"select more specific paths or restore to a custom target path", inc, ex)
+			}
+		}
+		if excluded {
+			skipped = append(skipped, inc)
+		} else {
+			kept = append(kept, inc)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, nil, fmt.Errorf(
+			"nothing to restore in place: all selected paths are inside excluded Docker volume paths (%s)",
+			strings.Join(excludes, ", "))
+	}
+	return kept, skipped, nil
+}
+
 // buildInPlaceExcludes returns the --exclude paths for an in-place restore.
 //
 // Docker named-volume paths under /var/lib/docker/volumes may be:
-//   - read-only (mounted :ro for backup safety) → exclude the whole root
-//   - in use by a running container           → exclude per-volume paths with a warning
+//   - not writable (mounted :ro, or read-only under systemd) → exclude the whole root
+//   - in use by a running container                          → exclude per-volume paths with a warning
 //
 // Local filesystem paths are never excluded.
 func (e *Executor) buildInPlaceExcludes(ctx context.Context, log func(level, msg string)) []string {
-	const dockerVolRoot = "/var/lib/docker/volumes"
-
 	// Check if the Docker volumes root is accessible at all. If Docker is not
 	// in use (native agent, no volume mount) there is nothing to exclude.
 	if _, err := os.Stat(dockerVolRoot); err != nil {
@@ -946,11 +1021,13 @@ func (e *Executor) buildInPlaceExcludes(ctx context.Context, log func(level, msg
 	// A read-only bind-mount (:ro) makes this fail with EROFS.
 	tmp, err := os.CreateTemp(dockerVolRoot, ".arkeep-write-test-*")
 	if err != nil {
-		// Mount is read-only — exclude the entire Docker volumes root.
+		// Not writable — exclude the entire Docker volumes root.
 		log("warn", "docker volume paths excluded from in-place restore: "+
-			dockerVolRoot+" is mounted read-only. "+
-			"Change :ro to :rw in the docker-compose volume entry to enable "+
-			"in-place restore of Docker volumes (stop affected containers first).")
+			dockerVolRoot+" is not writable by the agent (read-only mount or insufficient permissions). "+
+			"To enable in-place restore of Docker volumes (stop affected containers first): "+
+			"in a Docker deployment change :ro to :rw in the docker-compose volume entry; "+
+			"for a native systemd agent, ProtectSystem=strict makes it read-only — add "+
+			"ReadWritePaths="+dockerVolRoot+" to the unit.")
 		return []string{dockerVolRoot}
 	}
 	tmp.Close()                //nolint:errcheck
