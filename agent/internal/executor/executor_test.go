@@ -355,3 +355,93 @@ func TestLiveSnapshotIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestAnyPathOverlaps(t *testing.T) {
+	tests := []struct {
+		name  string
+		paths []string
+		want  bool
+	}{
+		{"unrelated host path", []string{"/opt/apps/example-web/data/content"}, false},
+		{"sibling with shared prefix", []string{"/var/lib/docker/volumes-old/x"}, false},
+		{"inside root", []string{"/opt/a", "/var/lib/docker/volumes/x/_data"}, true},
+		{"root itself", []string{"/var/lib/docker/volumes/"}, true},
+		{"ancestor", []string{"/var/lib/docker"}, true},
+		{"filesystem root", []string{"/"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := anyPathOverlaps(tt.paths, dockerVolRoot); got != tt.want {
+				t.Errorf("anyPathOverlaps(%v) = %v, want %v", tt.paths, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileRestoreFilters(t *testing.T) {
+	const vol = "/var/lib/docker/volumes/x/_data"
+	tests := []struct {
+		name        string
+		includes    []string
+		excludes    []string
+		wantKept    []string
+		wantSkipped []string
+		wantErr     bool
+	}{
+		{
+			name:     "no excludes — includes unchanged",
+			includes: []string{"/opt/a", dockerVolRoot + "/x/_data"},
+			wantKept: []string{"/opt/a", dockerVolRoot + "/x/_data"},
+		},
+		{
+			name:     "include outside excluded root is kept",
+			includes: []string{"/opt/apps/example-web/data/content"},
+			excludes: []string{dockerVolRoot},
+			wantKept: []string{"/opt/apps/example-web/data/content"},
+		},
+		{
+			name:     "shared prefix is not inside",
+			includes: []string{"/var/lib/docker/volumes-old/x"},
+			excludes: []string{dockerVolRoot},
+			wantKept: []string{"/var/lib/docker/volumes-old/x"},
+		},
+		{
+			name:        "mix of inside and outside",
+			includes:    []string{"/opt/a", vol + "/file", "/opt/b"},
+			excludes:    []string{dockerVolRoot},
+			wantKept:    []string{"/opt/a", "/opt/b"},
+			wantSkipped: []string{vol + "/file"},
+		},
+		{
+			name:        "per-volume exclude skips only that volume",
+			includes:    []string{vol + "/file", "/var/lib/docker/volumes/y/_data"},
+			excludes:    []string{vol},
+			wantKept:    []string{"/var/lib/docker/volumes/y/_data"},
+			wantSkipped: []string{vol + "/file"},
+		},
+		{
+			name:     "all includes inside excluded paths",
+			includes: []string{vol, vol + "/file"},
+			excludes: []string{dockerVolRoot},
+			wantErr:  true,
+		},
+		{"ancestor /var", []string{"/var"}, []string{dockerVolRoot}, nil, nil, true},
+		{"ancestor /var/lib/docker", []string{"/opt/a", "/var/lib/docker"}, []string{dockerVolRoot}, nil, nil, true},
+		{"ancestor of per-volume exclude", []string{dockerVolRoot}, []string{vol}, nil, nil, true},
+		{"filesystem root", []string{"/"}, []string{dockerVolRoot}, nil, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kept, skipped, err := reconcileRestoreFilters(tt.includes, tt.excludes)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !slices.Equal(kept, tt.wantKept) {
+				t.Errorf("kept = %v, want %v", kept, tt.wantKept)
+			}
+			if !slices.Equal(skipped, tt.wantSkipped) {
+				t.Errorf("skipped = %v, want %v", skipped, tt.wantSkipped)
+			}
+		})
+	}
+}
