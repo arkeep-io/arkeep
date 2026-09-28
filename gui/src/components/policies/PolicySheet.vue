@@ -883,7 +883,7 @@ function onOpenChange(value: boolean) {
           <Field>
             <FieldLabel for="policy-name">Name</FieldLabel>
             <Input id="policy-name" v-model="nameValue" placeholder="e.g. Daily Database Backup"
-              autocomplete="new-password"
+              autocomplete="off" data-bwignore data-1p-ignore data-lpignore="true"
               :class="nameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
             <FieldError v-if="nameError">{{ nameError }}</FieldError>
           </Field>
@@ -1113,7 +1113,8 @@ function onOpenChange(value: boolean) {
           <!-- Destination search -->
           <div class="relative">
             <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
-            <Input v-model="destSearch" class="pl-8 h-8 text-sm" placeholder="Search destinations…" />
+            <Input v-model="destSearch" class="pl-8 h-8 text-sm" placeholder="Search destinations…"
+              autocomplete="off" data-bwignore data-1p-ignore data-lpignore="true" />
           </div>
 
           <div v-if="availableDestinations.length === 0 && !loadingData"
