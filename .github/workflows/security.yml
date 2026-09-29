@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
 
@@ -28,7 +28,7 @@ jobs:
         run: cd agent && go run ./scripts/download_deps.go
 
       - name: Run gosec on ${{ matrix.module }}
-        uses: securego/gosec@master
+        uses: securego/gosec@v2.29.0
         with:
           args: ./${{ matrix.module }}/...
 
@@ -70,6 +70,7 @@ jobs:
           format: table
           exit-code: "1"
           severity: CRITICAL,HIGH
+          version: v0.74.0
 
       - name: Scan agent image
         uses: aquasecurity/trivy-action@v0.36.0
@@ -78,3 +79,4 @@ jobs:
           format: table
           exit-code: "1"
           severity: CRITICAL,HIGH
+          version: v0.74.0

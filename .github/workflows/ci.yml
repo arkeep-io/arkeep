@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
           cache-dependency-path: |
@@ -66,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
 
@@ -94,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.27"
 
@@ -115,12 +115,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Enable Corepack (pnpm)
-        run: corepack enable
-
-      - uses: actions/setup-node@v6
+      # Node >= 25 no longer bundles corepack. pnpm/action-setup installs the
+      # version pinned by packageManager in gui/package.json, and must run
+      # before setup-node so its pnpm cache lookup can find the binary.
+      - uses: pnpm/action-setup@v6
         with:
-          node-version: "24"
+          package_json_file: gui/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
           cache: "pnpm"
           cache-dependency-path: gui/pnpm-lock.yaml
 
