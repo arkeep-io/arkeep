@@ -61,15 +61,19 @@ func TestPasswordReset_Status(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var data struct {
-			SMTPConfigured bool `json:"smtp_configured"`
+			SMTPConfigured    bool `json:"smtp_configured"`
+			BaseURLConfigured bool `json:"base_url_configured"`
 		}
 		decodeData(t, resp, &data)
 		if !data.SMTPConfigured {
 			t.Error("smtp_configured = false, want true")
 		}
+		if !data.BaseURLConfigured {
+			t.Error("base_url_configured = false, want true")
+		}
 	})
 
-	t.Run("reports not configured when base url is missing", func(t *testing.T) {
+	t.Run("reports base url not configured", func(t *testing.T) {
 		e := newTestEnv(t)
 		e.mailer.configured = true
 
@@ -77,11 +81,15 @@ func TestPasswordReset_Status(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var data struct {
-			SMTPConfigured bool `json:"smtp_configured"`
+			SMTPConfigured    bool `json:"smtp_configured"`
+			BaseURLConfigured bool `json:"base_url_configured"`
 		}
 		decodeData(t, resp, &data)
-		if data.SMTPConfigured {
-			t.Error("smtp_configured = true without base URL, want false")
+		if !data.SMTPConfigured {
+			t.Error("smtp_configured = false, want true")
+		}
+		if data.BaseURLConfigured {
+			t.Error("base_url_configured = true without base URL, want false")
 		}
 	})
 

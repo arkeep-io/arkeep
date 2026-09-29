@@ -79,16 +79,21 @@ func NewPasswordResetHandler(
 }
 
 type passwordResetStatusResponse struct {
-	// SMTPConfigured tells the frontend whether the email-based reset can work:
-	// it requires both a usable SMTP configuration and a configured base URL.
-	// When false, the forgot-password page shows a "contact your administrator"
-	// message instead of the request form.
-	SMTPConfigured bool `json:"smtp_configured"`
+	// SMTPConfigured and BaseURLConfigured tell the frontend whether the
+	// email-based reset can work: it requires both a usable SMTP configuration
+	// and a configured base URL. When either is false, the forgot-password page
+	// shows a "contact your administrator" message (specific to the missing
+	// piece) instead of the request form.
+	SMTPConfigured    bool `json:"smtp_configured"`
+	BaseURLConfigured bool `json:"base_url_configured"`
 }
 
 // Status handles GET /api/v1/auth/password-reset/status (public).
 func (h *PasswordResetHandler) Status(w http.ResponseWriter, r *http.Request) {
-	Ok(w, passwordResetStatusResponse{SMTPConfigured: h.baseURL != "" && h.mailer.SMTPConfigured(r.Context())})
+	Ok(w, passwordResetStatusResponse{
+		SMTPConfigured:    h.mailer.SMTPConfigured(r.Context()),
+		BaseURLConfigured: h.baseURL != "",
+	})
 }
 
 type passwordResetRequest struct {
