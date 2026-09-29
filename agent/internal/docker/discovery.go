@@ -19,10 +19,8 @@ import (
 	"strings"
 
 	"github.com/containerd/errdefs"
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	volumetypes "github.com/docker/docker/api/types/volume"
-	dockerclient "github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/mount"
+	dockerclient "github.com/moby/moby/client"
 )
 
 // ErrDockerUnavailable is returned when the Docker daemon cannot be reached.
@@ -61,9 +59,7 @@ type Client struct {
 // Returns ErrDockerUnavailable if the socket does not exist or the daemon
 // is not responding.
 func NewClient(socketPath string) (*Client, error) {
-	opts := []dockerclient.Opt{
-		dockerclient.WithAPIVersionNegotiation(),
-	}
+	var opts []dockerclient.Opt
 
 	if socketPath != "" {
 		opts = append(opts, dockerclient.WithHost(hostURI(socketPath)))
@@ -71,7 +67,7 @@ func NewClient(socketPath string) (*Client, error) {
 		opts = append(opts, dockerclient.WithHost("npipe:////./pipe/docker_engine"))
 	}
 
-	dc, err := dockerclient.NewClientWithOpts(opts...)
+	dc, err := dockerclient.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
 	}
@@ -82,7 +78,7 @@ func NewClient(socketPath string) (*Client, error) {
 // Ping checks that the Docker daemon is reachable.
 // Call this at startup to detect early whether Docker is available.
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.docker.Ping(ctx)
+	_, err := c.docker.Ping(ctx, dockerclient.PingOptions{})
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
 	}
@@ -95,9 +91,9 @@ func (c *Client) Ping(ctx context.Context) error {
 //
 // Returns ErrDockerUnavailable if the daemon is not reachable.
 func (c *Client) ListVolumes(ctx context.Context, labelFilter string) ([]VolumeInfo, error) {
-	opts := volumetypes.ListOptions{}
+	opts := dockerclient.VolumeListOptions{}
 	if labelFilter != "" {
-		opts.Filters.Add("label", labelFilter)
+		opts.Filters = make(dockerclient.Filters).Add("label", labelFilter)
 	}
 
 	list, err := c.docker.VolumeList(ctx, opts)
@@ -105,8 +101,8 @@ func (c *Client) ListVolumes(ctx context.Context, labelFilter string) ([]VolumeI
 		return nil, fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
 	}
 
-	volumes := make([]VolumeInfo, 0, len(list.Volumes))
-	for _, v := range list.Volumes {
+	volumes := make([]VolumeInfo, 0, len(list.Items))
+	for _, v := range list.Items {
 		volumes = append(volumes, VolumeInfo{
 			Name:       v.Name,
 			Mountpoint: v.Mountpoint,
@@ -120,7 +116,7 @@ func (c *Client) ListVolumes(ctx context.Context, labelFilter string) ([]VolumeI
 // InspectVolume returns the metadata of a single volume by name.
 // Returns ErrVolumeNotFound if the volume does not exist.
 func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInfo, error) {
-	v, err := c.docker.VolumeInspect(ctx, name)
+	res, err := c.docker.VolumeInspect(ctx, name, dockerclient.VolumeInspectOptions{})
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return nil, ErrVolumeNotFound
@@ -128,6 +124,7 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInfo, e
 		return nil, fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
 	}
 
+	v := res.Volume
 	return &VolumeInfo{
 		Name:       v.Name,
 		Mountpoint: v.Mountpoint,
@@ -154,13 +151,13 @@ type RunningContainerVolumes struct {
 // If a volume's Source path is empty in the ContainerList response (the daemon
 // may omit it), the path is resolved via VolumeInspect.
 func (c *Client) ListRunningContainerVolumes(ctx context.Context) ([]RunningContainerVolumes, error) {
-	containers, err := c.docker.ContainerList(ctx, containertypes.ListOptions{All: false})
+	containers, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{All: false})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
 	}
 
 	var result []RunningContainerVolumes
-	for _, ctr := range containers {
+	for _, ctr := range containers.Items {
 		name := ctr.ID[:12]
 		if len(ctr.Names) > 0 {
 			name = strings.TrimPrefix(ctr.Names[0], "/")

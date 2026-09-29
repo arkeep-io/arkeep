@@ -5,7 +5,9 @@
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
 FROM node:26-alpine AS gui-builder
 
-RUN npm install -g pnpm
+# Node >= 25 no longer bundles corepack; install it to get the pnpm version
+# pinned by the packageManager field in gui/package.json.
+RUN npm install -g corepack && corepack enable
 
 WORKDIR /src/gui
 

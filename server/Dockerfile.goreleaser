@@ -14,9 +14,10 @@ RUN apk upgrade --no-cache && \
     addgroup -S arkeep && \
     adduser  -S -G arkeep arkeep
 
-# GoReleaser places the compiled binary at the root of the build context
-# with the name matching the `binary` field in .goreleaser.yml.
-COPY arkeep-server /usr/local/bin/arkeep-server
+# GoReleaser (dockers_v2) places each platform's compiled binary under
+# $TARGETPLATFORM/ in the build context (e.g. linux/amd64/arkeep-server).
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/arkeep-server /usr/local/bin/arkeep-server
 
 RUN mkdir -p /var/lib/arkeep/data && \
     chown -R arkeep:arkeep /var/lib/arkeep
