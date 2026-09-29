@@ -47,14 +47,17 @@ type PasswordResetHandler struct {
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
 	// baseURL is the trusted external base URL (scheme://host) used to build the
-	// reset link embedded in outbound email. When empty it falls back to the
-	// request-derived host — see resetLinkBase for the security rationale.
+	// reset link embedded in outbound email. When empty, reset emails are
+	// disabled: deriving the host from request headers (Host / X-Forwarded-Host)
+	// would enable "password reset poisoning", where an attacker triggers a reset
+	// for a victim with a forged Host header so the victim receives a genuine
+	// email carrying a valid token that points at the attacker's domain.
 	baseURL string
 }
 
 // NewPasswordResetHandler creates a PasswordResetHandler. baseURL is the
-// server-configured external URL (e.g. https://arkeep.example.com); pass an
-// empty string to derive it from the request.
+// server-configured external URL (e.g. https://arkeep.example.com); an empty
+// string disables self-service reset emails.
 func NewPasswordResetHandler(
 	users repositories.UserRepository,
 	tokens repositories.PasswordResetTokenRepository,
@@ -75,31 +78,22 @@ func NewPasswordResetHandler(
 	}
 }
 
-// resetLinkBase returns the base URL used to build the reset link. A
-// server-configured baseURL always wins: deriving the host from request headers
-// (Host / X-Forwarded-Host) for an emailed link enables "password reset
-// poisoning", where an attacker triggers a reset for a victim with a forged
-// Host header so the victim receives a genuine email pointing at the attacker's
-// domain. Only when no base URL is configured do we fall back to the request —
-// matching the OIDC callback behaviour and the documented reverse-proxy
-// assumption (the proxy must strip client-supplied X-Forwarded-* headers).
-func (h *PasswordResetHandler) resetLinkBase(r *http.Request) string {
-	if h.baseURL != "" {
-		return h.baseURL
-	}
-	return requestBaseURL(r)
-}
-
 type passwordResetStatusResponse struct {
-	// SMTPConfigured tells the frontend whether the email-based reset can work.
-	// When false, the forgot-password page shows a "contact your administrator"
-	// message instead of the request form.
-	SMTPConfigured bool `json:"smtp_configured"`
+	// SMTPConfigured and BaseURLConfigured tell the frontend whether the
+	// email-based reset can work: it requires both a usable SMTP configuration
+	// and a configured base URL. When either is false, the forgot-password page
+	// shows a "contact your administrator" message (specific to the missing
+	// piece) instead of the request form.
+	SMTPConfigured    bool `json:"smtp_configured"`
+	BaseURLConfigured bool `json:"base_url_configured"`
 }
 
 // Status handles GET /api/v1/auth/password-reset/status (public).
 func (h *PasswordResetHandler) Status(w http.ResponseWriter, r *http.Request) {
-	Ok(w, passwordResetStatusResponse{SMTPConfigured: h.mailer.SMTPConfigured(r.Context())})
+	Ok(w, passwordResetStatusResponse{
+		SMTPConfigured:    h.mailer.SMTPConfigured(r.Context()),
+		BaseURLConfigured: h.baseURL != "",
+	})
 }
 
 type passwordResetRequest struct {
@@ -130,6 +124,11 @@ func (h *PasswordResetHandler) Request(w http.ResponseWriter, r *http.Request) {
 // nothing: callers always reply with the generic message.
 func (h *PasswordResetHandler) processRequest(r *http.Request, email string) {
 	ctx := r.Context()
+
+	if h.baseURL == "" {
+		h.logger.Warn("password reset: request ignored, base-url not configured (set ARKEEP_BASE_URL)")
+		return
+	}
 
 	user, err := h.users.GetByEmail(ctx, email)
 	if err != nil {
@@ -166,7 +165,7 @@ func (h *PasswordResetHandler) processRequest(r *http.Request, email string) {
 		return
 	}
 
-	link := fmt.Sprintf("%s/auth/reset-password?token=%s", h.resetLinkBase(r), raw)
+	link := fmt.Sprintf("%s/auth/reset-password?token=%s", h.baseURL, raw)
 	subject := "Reset your Arkeep password"
 	body := fmt.Sprintf(
 		"A password reset was requested for your Arkeep account.\r\n\r\n"+

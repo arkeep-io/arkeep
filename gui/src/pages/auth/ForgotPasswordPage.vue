@@ -43,8 +43,11 @@ const { value: emailValue, errorMessage: emailError } = useField<string>('email'
 
 const { isDark, cycle, modeLabel } = useTheme()
 
-// null = still loading the SMTP status; true/false once known.
+// null = still loading the reset status; true/false once known.
 const smtpConfigured = ref<boolean | null>(null)
+// Reset links are built only from the server's configured base URL
+// (ARKEEP_BASE_URL); without it reset emails are disabled even with SMTP.
+const baseUrlConfigured = ref<boolean | null>(null)
 const submitted = ref(false)
 const serverError = ref<string | null>(null)
 
@@ -52,14 +55,16 @@ const serverError = ref<string | null>(null)
 
 async function fetchStatus(): Promise<void> {
     try {
-        const res = await api<{ data: { smtp_configured: boolean } }>(
+        const res = await api<{ data: { smtp_configured: boolean; base_url_configured: boolean } }>(
             '/api/v1/auth/password-reset/status',
         )
         smtpConfigured.value = res.data.smtp_configured
+        baseUrlConfigured.value = res.data.base_url_configured
     } catch {
         // If the status check fails, assume SMTP is unavailable so the user is
         // pointed to their administrator rather than a form that cannot work.
         smtpConfigured.value = false
+        baseUrlConfigured.value = false
     }
 }
 
@@ -124,6 +129,16 @@ onMounted(fetchStatus)
                                 This instance does not have an SMTP server configured, so password
                                 reset emails cannot be sent. Please contact your system administrator
                                 to reset your password.
+                            </AlertDescription>
+                        </Alert>
+
+                        <!-- SMTP configured but no base URL — reset links cannot be built safely -->
+                        <Alert v-else-if="baseUrlConfigured === false">
+                            <MailWarning class="size-4" />
+                            <AlertDescription>
+                                Password reset emails are disabled because this instance does not have
+                                its external URL configured (ARKEEP_BASE_URL). Please contact your
+                                system administrator to reset your password.
                             </AlertDescription>
                         </Alert>
 
