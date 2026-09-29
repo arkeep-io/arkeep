@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -56,12 +57,12 @@ type JWTManager struct {
 //
 // Use this in production where keys are mounted as secrets (Docker, Kubernetes).
 func NewJWTManagerFromFiles(privateKeyPath, publicKeyPath, issuer string) (*JWTManager, error) {
-	privBytes, err := os.ReadFile(privateKeyPath)
+	privBytes, err := os.ReadFile(filepath.Clean(privateKeyPath))
 	if err != nil {
 		return nil, fmt.Errorf("auth: reading private key file: %w", err)
 	}
 
-	pubBytes, err := os.ReadFile(publicKeyPath)
+	pubBytes, err := os.ReadFile(filepath.Clean(publicKeyPath))
 	if err != nil {
 		return nil, fmt.Errorf("auth: reading public key file: %w", err)
 	}

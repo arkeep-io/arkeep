@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"io"
 )
 
 // cryptKey is rclone's well-known static key used to "obscure" passwords in its
@@ -30,12 +29,11 @@ func obscure(plaintext string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("destutil: failed to create cipher: %w", err)
 	}
-	buf := make([]byte, aes.BlockSize+len(plaintext))
-	iv := buf[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+	iv := make([]byte, aes.BlockSize)
+	if _, err := rand.Read(iv); err != nil {
 		return "", fmt.Errorf("destutil: failed to read random iv: %w", err)
 	}
-	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(buf[aes.BlockSize:], []byte(plaintext))
-	return base64.RawURLEncoding.EncodeToString(buf), nil
+	ciphertext := make([]byte, len(plaintext))
+	cipher.NewCTR(block, iv).XORKeyStream(ciphertext, []byte(plaintext))
+	return base64.RawURLEncoding.EncodeToString(append(iv, ciphertext...)), nil
 }

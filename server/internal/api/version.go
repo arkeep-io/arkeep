@@ -117,12 +117,9 @@ func parseSemverParts(v string) [3]int {
 	v = strings.TrimPrefix(v, "v")
 	parts := strings.SplitN(v, ".", 3)
 	var out [3]int
-	for i, p := range parts {
-		if i >= 3 {
-			break
-		}
+	for i := 0; i < len(parts) && i < len(out); i++ {
 		// Strip pre-release suffix (e.g. "1-rc1" → "1").
-		p = strings.SplitN(p, "-", 2)[0]
+		p := strings.SplitN(parts[i], "-", 2)[0]
 		out[i], _ = strconv.Atoi(p)
 	}
 	return out

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"sync"
@@ -612,12 +613,12 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 	// Fire notifications for terminal job states. Non-fatal: run in a
 	// goroutine so a slow notification path never delays the gRPC response.
 	if s.notifSvc != nil && (req.Status == proto.JobStatus_JOB_STATUS_COMPLETED || req.Status == proto.JobStatus_JOB_STATUS_FAILED) {
-		go s.notifyJobTerminal(jobID, req.Status, req.Message)
+		go s.notifyJobTerminal(context.WithoutCancel(ctx), jobID, req.Status, req.Message)
 	}
 
 	// Record Prometheus metrics for terminal states. Non-fatal: goroutine.
 	if s.metrics != nil && dbStatus != "running" {
-		go s.recordJobMetrics(jobID, dbStatus)
+		go s.recordJobMetrics(context.WithoutCancel(ctx), jobID, dbStatus)
 	}
 
 	s.logger.Info("job status updated",
@@ -631,8 +632,8 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 
 // notifyJobTerminal fetches the job details and fires the appropriate
 // notification. Runs in a goroutine — errors are logged, never propagated.
-func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (s *Server) notifyJobTerminal(ctx context.Context, jobID uuid.UUID, st proto.JobStatus, errMsg string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	job, _, _, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
@@ -665,8 +666,8 @@ func (s *Server) notifyJobTerminal(jobID uuid.UUID, st proto.JobStatus, errMsg s
 
 // recordJobMetrics fetches the minimal job fields needed to record Prometheus
 // metrics and calls Metrics.RecordJob. Runs in a goroutine — non-fatal.
-func (s *Server) recordJobMetrics(jobID uuid.UUID, dbStatus string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (s *Server) recordJobMetrics(ctx context.Context, jobID uuid.UUID, dbStatus string) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	job, err := s.jobRepo.GetByID(ctx, jobID)
@@ -809,8 +810,20 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 	)
 
 	return stream.SendAndClose(&proto.LogStreamResponse{
-		EntriesReceived: uint32(len(entries)),
+		EntriesReceived: clampUint32(len(entries)),
 	})
+}
+
+// clampUint32 converts a count to uint32, saturating at the type bounds
+// instead of wrapping.
+func clampUint32(n int) uint32 {
+	if n < 0 {
+		return 0
+	}
+	if n > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(n)
 }
 
 // ReportDestinationStatus handles per-destination result reports from agents.

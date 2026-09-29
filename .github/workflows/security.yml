@@ -27,10 +27,26 @@ jobs:
         if: matrix.module == 'agent'
         run: cd agent && go run ./scripts/download_deps.go
 
+      # Installed via `go install` instead of the securego/gosec Docker action:
+      # the action's image bundles its own Go (with GOTOOLCHAIN=local) and
+      # cannot load packages when go.work requires a newer Go version.
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+
+      # Run from inside the module: `gosec ./<module>/...` from the workspace
+      # root resolves the packages but analyzes 0 files.
+      #
+      # Path-scoped exclusions (by design, kept here instead of #nosec):
+      #   hooks/runner.go  G204     — pre/post hooks run admin-configured shell commands
+      #   restic/wrapper.go G204    — invokes the extracted restic binary by path
+      #   api/auth.go      G124     — Secure flag follows --secure-cookies (off for plain-HTTP LAN installs)
+      #   api/auth.go      G710     — OIDC login redirects to the configured IdP authorization URL
       - name: Run gosec on ${{ matrix.module }}
-        uses: securego/gosec@v2.29.0
-        with:
-          args: ./${{ matrix.module }}/...
+        working-directory: ${{ matrix.module }}
+        run: >-
+          gosec -exclude-generated
+          -exclude-rules='internal/hooks/runner\.go:G204;internal/restic/wrapper\.go:G204;internal/api/auth\.go:G124,G710'
+          ./...
 
   # ─── Container vulnerability scan ───────────────────────────────────────────
   trivy:

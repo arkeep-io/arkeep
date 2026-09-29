@@ -135,7 +135,7 @@ func (r *Reporter) ping(ctx context.Context) {
 // a new UUID v4 is generated and written. Returns the ID and whether it was
 // freshly created.
 func loadOrCreateID(path string) (id string, created bool, err error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err == nil {
 		if id = strings.TrimSpace(string(data)); id != "" {
 			return id, false, nil
