@@ -14,9 +14,11 @@ RUN apk upgrade --no-cache && \
     addgroup -S arkeep && \
     adduser  -S -G arkeep arkeep
 
-# GoReleaser places the compiled binary and extra_files at the root of the
-# build context with the name matching the `binary` field in .goreleaser.yml.
-COPY arkeep-agent /usr/local/bin/arkeep-agent
+# GoReleaser (dockers_v2) places each platform's compiled binary under
+# $TARGETPLATFORM/ in the build context (e.g. linux/amd64/arkeep-agent), and
+# extra_files at the context root.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/arkeep-agent /usr/local/bin/arkeep-agent
 COPY agent/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
