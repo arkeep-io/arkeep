@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -540,6 +541,15 @@ type StatsResult struct {
 	// repository (total_size from `restic stats --mode raw-data`), i.e. the
 	// actual disk usage — not the logical size of the backed-up files.
 	TotalSize uint64
+}
+
+// ClampInt64 converts a restic byte count to int64 (the type used by the gRPC
+// and DB layers), saturating at math.MaxInt64 instead of wrapping negative.
+func ClampInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }
 
 // Stats returns the repository's real on-disk size via

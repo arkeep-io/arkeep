@@ -260,7 +260,13 @@ func verifyPassword(password, stored string) bool {
 		return false
 	}
 
-	actual := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, uint32(len(expectedHash)))
+	// HashPassword always produces argon2KeyLen-byte hashes; anything else is
+	// a malformed stored value.
+	if len(expectedHash) != argon2KeyLen {
+		return false
+	}
+
+	actual := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 
 	return constantTimeEqual(actual, expectedHash)
 }

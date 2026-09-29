@@ -42,7 +42,7 @@ type healthResponse struct {
 func (h *healthHandler) Live(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok")) //nolint:errcheck
+	_, _ = w.Write([]byte("ok"))
 }
 
 // Ready handles GET /health/ready.
@@ -82,7 +82,7 @@ func (h *healthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // checkDatabase pings the database with a 2-second timeout and reports the

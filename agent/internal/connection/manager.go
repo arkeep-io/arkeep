@@ -19,12 +19,13 @@ package connection
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -250,10 +251,10 @@ func (m *Manager) Enroll(ctx context.Context) error {
 	certFile := filepath.Join(m.cfg.StateDir, "grpc-client.crt")
 	keyFile := filepath.Join(m.cfg.StateDir, "grpc-client.key")
 
-	if err := os.WriteFile(caFile, []byte(result.CACert), 0644); err != nil {
+	if err := os.WriteFile(caFile, []byte(result.CACert), 0600); err != nil {
 		return fmt.Errorf("enroll: failed to write CA cert: %w", err)
 	}
-	if err := os.WriteFile(certFile, []byte(result.ClientCert), 0644); err != nil {
+	if err := os.WriteFile(certFile, []byte(result.ClientCert), 0600); err != nil {
 		return fmt.Errorf("enroll: failed to write client cert: %w", err)
 	}
 	if err := os.WriteFile(keyFile, []byte(result.ClientKey), 0600); err != nil {
@@ -812,7 +813,7 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 				zap.Error(statsErr),
 			)
 		} else {
-			report.RepoSizeBytes = int64(stats.TotalSize)
+			report.RepoSizeBytes = restic.ClampInt64(stats.TotalSize)
 		}
 	}
 
@@ -1192,6 +1193,15 @@ func nextBackoff(current time.Duration) time.Duration {
 // thundering herd on reconnect.
 func jitter(d time.Duration) time.Duration {
 	delta := float64(d) * jitterFraction
-	offset := (rand.Float64()*2 - 1) * delta
+	offset := (randFloat64()*2 - 1) * delta
 	return time.Duration(float64(d) + offset)
+}
+
+// randFloat64 returns a uniformly distributed float64 in [0, 1) drawn from
+// crypto/rand, using the top 53 bits of a random uint64 as the mantissa.
+func randFloat64() float64 {
+	var b [8]byte
+	// crypto/rand.Read never returns an error since Go 1.24.
+	_, _ = rand.Read(b[:])
+	return float64(binary.BigEndian.Uint64(b[:])>>11) / (1 << 53)
 }

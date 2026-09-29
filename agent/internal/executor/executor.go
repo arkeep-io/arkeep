@@ -282,7 +282,7 @@ func liveSnapshotIDs(snapshots []restic.SnapshotInfo) []string {
 // temporary file on the leaf directory itself.
 func ensureWritableDir(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0750); err != nil {
 			return err
 		}
 	}
@@ -290,8 +290,8 @@ func ensureWritableDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	tmp.Close()           //nolint:errcheck
-	os.Remove(tmp.Name()) //nolint:errcheck
+	_ = tmp.Close()
+	_ = os.Remove(tmp.Name())
 	return nil
 }
 
@@ -553,9 +553,9 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				// Stored as the snapshot's size so per-snapshot and per-day figures reconcile
 				// with the destination's real repo size — total_bytes_processed is the logical
 				// source size and would inflate/double-count across snapshots.
-				addedBytes := int64(result.DataAddedPacked)
+				addedBytes := restic.ClampInt64(result.DataAddedPacked)
 				if addedBytes == 0 {
-					addedBytes = int64(result.DataAdded)
+					addedBytes = restic.ClampInt64(result.DataAdded)
 				}
 
 				log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
@@ -606,9 +606,9 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				continue
 			}
 
-			addedBytes := int64(res.DataAddedPacked)
+			addedBytes := restic.ClampInt64(res.DataAddedPacked)
 			if addedBytes == 0 {
-				addedBytes = int64(res.DataAdded)
+				addedBytes = restic.ClampInt64(res.DataAdded)
 			}
 			log("info", fmt.Sprintf("command source %q to destination %s completed (snapshot: %s, added: %d bytes)",
 				cs.Name, dest.DestinationID, res.SnapshotID, addedBytes))
@@ -634,7 +634,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
 			log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", dest.DestinationID, statsErr))
 		} else {
-			repoSizeBytes = int64(stats.TotalSize)
+			repoSizeBytes = restic.ClampInt64(stats.TotalSize)
 		}
 
 		// Reconcile the server's cached snapshot list against the repository, so
@@ -782,7 +782,7 @@ func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink
 	if stats, statsErr := e.wrapper.Stats(ctx, d); statsErr != nil {
 		log("warn", fmt.Sprintf("could not read repository size for destination %s: %v", payload.Destination.DestinationID, statsErr))
 	} else {
-		repoSizeBytes = int64(stats.TotalSize)
+		repoSizeBytes = restic.ClampInt64(stats.TotalSize)
 	}
 
 	// Reconcile the server's cached snapshot list, same rationale as a
@@ -1030,8 +1030,8 @@ func (e *Executor) buildInPlaceExcludes(ctx context.Context, log func(level, msg
 			"ReadWritePaths="+dockerVolRoot+" to the unit.")
 		return []string{dockerVolRoot}
 	}
-	tmp.Close()                //nolint:errcheck
-	os.Remove(tmp.Name())      //nolint:errcheck
+	_ = tmp.Close()
+	_ = os.Remove(tmp.Name())
 
 	// Mount is writable — exclude only volumes whose containers are running.
 	if e.docker == nil {

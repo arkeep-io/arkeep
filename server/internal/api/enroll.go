@@ -70,7 +70,7 @@ func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("agent enrolled", zap.String("cn", cn), zap.String("ip", ip))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"ca_cert":     string(h.autoCerts.CACertPEM),
 		"client_cert": string(certPEM),
 		"client_key":  string(keyPEM),

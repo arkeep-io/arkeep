@@ -250,11 +250,11 @@ func (ac *AutoCerts) TLSConfig() (*tls.Config, error) {
 
 // loadCerts reads existing PEM files from disk and reconstructs an AutoCerts.
 func loadCerts(caCertFile, caKeyFile, serverCertFile, serverKeyFile string) (*AutoCerts, error) {
-	caCertPEM, err := os.ReadFile(caCertFile)
+	caCertPEM, err := os.ReadFile(filepath.Clean(caCertFile))
 	if err != nil {
 		return nil, fmt.Errorf("grpccerts: failed to read CA cert: %w", err)
 	}
-	caKeyPEM, err := os.ReadFile(caKeyFile)
+	caKeyPEM, err := os.ReadFile(filepath.Clean(caKeyFile))
 	if err != nil {
 		return nil, fmt.Errorf("grpccerts: failed to read CA key: %w", err)
 	}
