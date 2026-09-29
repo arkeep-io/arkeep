@@ -90,7 +90,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
 	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
-	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Recommended in production to prevent Host header injection")
+	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Required for self-service password reset emails (disabled when unset)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
@@ -123,6 +123,12 @@ func run(ctx context.Context, cfg *config) error {
 	// connections from any agent. Always set ARKEEP_AGENT_SECRET in production.
 	if cfg.agentSecret == "" {
 		logger.Warn("agent-secret not configured — gRPC port is open to any agent (set ARKEEP_AGENT_SECRET in production)")
+	}
+
+	// Password reset links are only ever built from the configured base URL,
+	// never from request headers, so without it reset emails are disabled.
+	if cfg.baseURL == "" {
+		logger.Warn("base-url not configured — self-service password reset emails are disabled (set ARKEEP_BASE_URL)")
 	}
 
 	logger.Info("starting arkeep server",

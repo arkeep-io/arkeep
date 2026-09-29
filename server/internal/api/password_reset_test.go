@@ -12,6 +12,10 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
+// testBaseURL is the trusted base URL used by tests that expect a reset email
+// to be sent: without it the handler refuses to send reset links.
+const testBaseURL = "https://arkeep.example.com"
+
 // tokenFromEmail extracts the raw reset token from the ?token= query parameter
 // embedded in a sent email body.
 func tokenFromEmail(t *testing.T, body string) string {
@@ -50,7 +54,7 @@ func createOIDCUser(t *testing.T, deps *testDeps, email string) {
 // TestPasswordReset_Status exercises GET /api/v1/auth/password-reset/status.
 func TestPasswordReset_Status(t *testing.T) {
 	t.Run("reports smtp configured", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		e.mailer.configured = true
 
 		resp := e.get(t, "/api/v1/auth/password-reset/status", "")
@@ -65,8 +69,24 @@ func TestPasswordReset_Status(t *testing.T) {
 		}
 	})
 
-	t.Run("reports smtp not configured", func(t *testing.T) {
+	t.Run("reports not configured when base url is missing", func(t *testing.T) {
 		e := newTestEnv(t)
+		e.mailer.configured = true
+
+		resp := e.get(t, "/api/v1/auth/password-reset/status", "")
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			SMTPConfigured bool `json:"smtp_configured"`
+		}
+		decodeData(t, resp, &data)
+		if data.SMTPConfigured {
+			t.Error("smtp_configured = true without base URL, want false")
+		}
+	})
+
+	t.Run("reports smtp not configured", func(t *testing.T) {
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		e.mailer.configured = false
 
 		resp := e.get(t, "/api/v1/auth/password-reset/status", "")
@@ -87,7 +107,7 @@ func TestPasswordReset_Status(t *testing.T) {
 // emails are registered.
 func TestPasswordReset_Request(t *testing.T) {
 	t.Run("local user receives an email", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		createDBUser(t, e.deps, "local@example.com", "user")
 
 		resp := e.post(t, "/api/v1/auth/password-reset/request", "", map[string]string{
@@ -104,7 +124,7 @@ func TestPasswordReset_Request(t *testing.T) {
 	})
 
 	t.Run("oidc user receives no email", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		createOIDCUser(t, e.deps, "sso@example.com")
 
 		resp := e.post(t, "/api/v1/auth/password-reset/request", "", map[string]string{
@@ -118,7 +138,7 @@ func TestPasswordReset_Request(t *testing.T) {
 	})
 
 	t.Run("unknown email sends nothing but returns 200", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 
 		resp := e.post(t, "/api/v1/auth/password-reset/request", "", map[string]string{
 			"email": "nobody@example.com",
@@ -131,15 +151,35 @@ func TestPasswordReset_Request(t *testing.T) {
 	})
 
 	t.Run("returns 400 when email is empty", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		resp := e.post(t, "/api/v1/auth/password-reset/request", "", map[string]string{
 			"email": "",
 		})
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
+	t.Run("no email without base url even with forged host headers", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBUser(t, e.deps, "victim@example.com", "user")
+
+		req, _ := http.NewRequest(http.MethodPost, e.URL+"/api/v1/auth/password-reset/request",
+			strings.NewReader(`{"email":"victim@example.com"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-Host", "evil.example.com")
+		req.Header.Set("X-Forwarded-Proto", "https")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST password-reset/request: %v", err)
+		}
+		assertStatus(t, resp, http.StatusOK)
+
+		if len(e.mailer.sent) != 0 {
+			t.Fatalf("sent %d emails without base URL, want 0:\n%s", len(e.mailer.sent), e.mailer.sent[0].body)
+		}
+	})
+
 	t.Run("link uses the configured base URL", func(t *testing.T) {
-		e := newTestEnvWithBaseURL(t, "https://arkeep.example.com")
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		createDBUser(t, e.deps, "based@example.com", "user")
 
 		resp := e.post(t, "/api/v1/auth/password-reset/request", "", map[string]string{
@@ -172,7 +212,7 @@ func TestPasswordReset_Confirm(t *testing.T) {
 	}
 
 	t.Run("valid token sets a new password", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		createDBUser(t, e.deps, "reset@example.com", "user")
 		token := requestToken(t, e, "reset@example.com")
 
@@ -191,7 +231,7 @@ func TestPasswordReset_Confirm(t *testing.T) {
 	})
 
 	t.Run("token cannot be reused", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		createDBUser(t, e.deps, "reuse@example.com", "user")
 		token := requestToken(t, e, "reuse@example.com")
 
@@ -209,7 +249,7 @@ func TestPasswordReset_Confirm(t *testing.T) {
 	})
 
 	t.Run("invalid token returns 400", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		resp := e.post(t, "/api/v1/auth/password-reset/confirm", "", map[string]string{
 			"token":    "not-a-real-token",
 			"password": "some-new-password",
@@ -218,7 +258,7 @@ func TestPasswordReset_Confirm(t *testing.T) {
 	})
 
 	t.Run("short password returns 400", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		createDBUser(t, e.deps, "short@example.com", "user")
 		token := requestToken(t, e, "short@example.com")
 
@@ -230,7 +270,7 @@ func TestPasswordReset_Confirm(t *testing.T) {
 	})
 
 	t.Run("expired token returns 400", func(t *testing.T) {
-		e := newTestEnv(t)
+		e := newTestEnvWithBaseURL(t, testBaseURL)
 		userID := createDBUser(t, e.deps, "expired@example.com", "user")
 
 		// Insert an already-expired token directly.
