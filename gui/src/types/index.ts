@@ -202,6 +202,8 @@ export interface PolicyDestination {
   priority: number // lower = higher priority; used for 3-2-1 ordering
 }
 
+export type NotifyOverride = 'inherit' | 'always' | 'never'
+
 export interface Policy {
   id: string
   name: string
@@ -216,6 +218,10 @@ export interface Policy {
   // resume_interrupted: re-run a backup automatically when the agent reconnects
   // after having disconnected mid-run.
   resume_interrupted: boolean
+  // Per-policy override of the global job_success / job_failure email and
+  // webhook toggles.
+  notify_on_success: NotifyOverride
+  notify_on_failure: NotifyOverride
   destinations: PolicyDestination[]
   last_run_at: string | null
   next_run_at: string | null

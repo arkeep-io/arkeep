@@ -35,7 +35,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
-import type { Agent, ApiResponse, Destination, Policy, VolumeInfo } from '@/types'
+import type { Agent, ApiResponse, Destination, NotifyOverride, Policy, VolumeInfo } from '@/types'
 import { toTypedSchema } from '@vee-validate/zod'
 import {
   AlertCircle,
@@ -264,6 +264,8 @@ const schema = z.object({
   exclude_patterns_text: z.string().optional(),
 
   resume_interrupted: z.boolean(),
+  notify_on_success: z.enum(['inherit', 'always', 'never']),
+  notify_on_failure: z.enum(['inherit', 'always', 'never']),
 }).superRefine((data, ctx) => {
   if (!isEdit.value) {
     if (data.use_destination_password) {
@@ -542,6 +544,15 @@ const { value: excludePatternsText } = useField<string>('exclude_patterns_text')
 // Resume of backups interrupted by an agent disconnection.
 const { value: resumeInterrupted } = useField<boolean>('resume_interrupted')
 
+// Per-policy override of the global notification toggles.
+const { value: notifyOnSuccess } = useField<NotifyOverride>('notify_on_success')
+const { value: notifyOnFailure } = useField<NotifyOverride>('notify_on_failure')
+const NOTIFY_OVERRIDE_OPTIONS: { value: NotifyOverride; label: string }[] = [
+  { value: 'inherit', label: 'Use global setting' },
+  { value: 'always', label: 'Always' },
+  { value: 'never', label: 'Never' },
+]
+
 // ---------------------------------------------------------------------------
 // Reset / populate
 // ---------------------------------------------------------------------------
@@ -561,6 +572,8 @@ function defaultValues(): FormValues {
     hook_post: { enabled: false, name: '', command: '', args: [], timeout_secs: 30 },
     exclude_patterns_text: '',
     resume_interrupted: true,
+    notify_on_success: 'inherit',
+    notify_on_failure: 'inherit',
   }
 }
 
@@ -722,6 +735,8 @@ function populateForm(p: Policy, asClone = false) {
     })(),
     // Policies created before this option existed report it as enabled.
     resume_interrupted: p.resume_interrupted ?? true,
+    notify_on_success: p.notify_on_success,
+    notify_on_failure: p.notify_on_failure,
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
@@ -805,6 +820,8 @@ const onSubmit = handleSubmit(async (values) => {
           .filter(l => l.length > 0 && !l.startsWith('#'))
       ),
       resume_interrupted: values.resume_interrupted,
+      notify_on_success: values.notify_on_success,
+      notify_on_failure: values.notify_on_failure,
     }
 
     if (isEdit.value) {
@@ -1416,6 +1433,44 @@ function onOpenChange(value: boolean) {
             </div>
             <Switch :model-value="resumeInterrupted ?? true"
               @update:model-value="resumeInterrupted = $event" />
+          </div>
+
+          <!-- Per-policy notification override -->
+          <Separator />
+          <div class="space-y-3">
+            <div>
+              <p class="text-sm font-medium">Notifications</p>
+              <p class="text-muted-foreground text-xs">
+                Overrides the email and webhook toggles in Settings → Notifications for this
+                policy's jobs.
+              </p>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <p class="text-sm">On success</p>
+              <Select :model-value="notifyOnSuccess" @update:model-value="notifyOnSuccess = $event as NotifyOverride">
+                <SelectTrigger class="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="o in NOTIFY_OVERRIDE_OPTIONS" :key="o.value" :value="o.value">
+                    {{ o.label }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <p class="text-sm">On failure</p>
+              <Select :model-value="notifyOnFailure" @update:model-value="notifyOnFailure = $event as NotifyOverride">
+                <SelectTrigger class="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="o in NOTIFY_OVERRIDE_OPTIONS" :key="o.value" :value="o.value">
+                    {{ o.label }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->
