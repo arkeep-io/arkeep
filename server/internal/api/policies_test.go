@@ -637,6 +637,100 @@ func TestPolicyHandler_ResumeInterrupted(t *testing.T) {
 	})
 }
 
+// TestPolicyHandler_NotifyOverride locks the create/update contract for the
+// per-policy notification override.
+func TestPolicyHandler_NotifyOverride(t *testing.T) {
+	body := func(agentID string) map[string]any {
+		return map[string]any{
+			"name":          "notify-policy",
+			"agent_id":      agentID,
+			"schedule":      "@daily",
+			"sources":       `[{"type":"directory","path":"/data"}]`,
+			"repo_password": "supersecret",
+		}
+	}
+	type policyBody struct {
+		ID              string `json:"id"`
+		NotifyOnSuccess string `json:"notify_on_success"`
+		NotifyOnFailure string `json:"notify_on_failure"`
+	}
+
+	t.Run("defaults to inherit when omitted", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body(agentID))
+		assertStatus(t, resp, http.StatusCreated)
+
+		var data policyBody
+		decodeData(t, resp, &data)
+		if data.NotifyOnSuccess != db.NotifyInherit || data.NotifyOnFailure != db.NotifyInherit {
+			t.Errorf("overrides = %q/%q, want inherit/inherit", data.NotifyOnSuccess, data.NotifyOnFailure)
+		}
+	})
+
+	t.Run("stores explicit values on create", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		b := body(agentID)
+		b["notify_on_success"] = db.NotifyAlways
+		b["notify_on_failure"] = db.NotifyNever
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), b)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var data policyBody
+		decodeData(t, resp, &data)
+		stored, err := e.deps.policies.GetByID(context.Background(), mustParsePolicyUUID(t, data.ID))
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if stored.NotifyOnSuccess != db.NotifyAlways || stored.NotifyOnFailure != db.NotifyNever {
+			t.Errorf("stored overrides = %q/%q, want always/never", stored.NotifyOnSuccess, stored.NotifyOnFailure)
+		}
+	})
+
+	t.Run("can be changed and reset to inherit", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body(agentID))
+		assertStatus(t, resp, http.StatusCreated)
+		var created policyBody
+		decodeData(t, resp, &created)
+
+		for _, want := range []string{db.NotifyNever, db.NotifyInherit} {
+			resp = e.patch(t, "/api/v1/policies/"+created.ID, e.adminToken(t), map[string]any{
+				"notify_on_success": want,
+				"notify_on_failure": want,
+			})
+			assertStatus(t, resp, http.StatusOK)
+
+			var updated policyBody
+			decodeData(t, resp, &updated)
+			if updated.NotifyOnSuccess != want || updated.NotifyOnFailure != want {
+				t.Errorf("overrides = %q/%q after PATCH, want %q", updated.NotifyOnSuccess, updated.NotifyOnFailure, want)
+			}
+		}
+	})
+
+	t.Run("rejects an unknown value", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		b := body(agentID)
+		b["notify_on_success"] = "sometimes"
+		assertStatus(t, e.post(t, "/api/v1/policies", e.adminToken(t), b), http.StatusBadRequest)
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body(agentID))
+		assertStatus(t, resp, http.StatusCreated)
+		var created policyBody
+		decodeData(t, resp, &created)
+		resp = e.patch(t, "/api/v1/policies/"+created.ID, e.adminToken(t), map[string]any{
+			"notify_on_failure": "",
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+}
+
 func mustParsePolicyUUID(t *testing.T, s string) uuid.UUID {
 	t.Helper()
 	id, err := uuid.Parse(s)
