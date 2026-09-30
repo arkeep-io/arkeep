@@ -124,6 +124,13 @@ type OIDCProvider struct {
 	ClientSecret EncryptedString `gorm:"type:text;not null"`
 	Scopes       string          `gorm:"not null;default:'openid email profile'"` // space-separated
 	Enabled      bool            `gorm:"not null;default:false"`
+	// GroupsClaim names the claim carrying the user's groups. AllowedGroups and
+	// AdminGroups are comma-separated: when AllowedGroups is set only its
+	// members may sign in; when AdminGroups is set the role is synced on every
+	// login (admin for its members, user otherwise).
+	GroupsClaim   string `gorm:"not null"`
+	AllowedGroups string `gorm:"not null"`
+	AdminGroups   string `gorm:"not null"`
 }
 
 // TableName overrides GORM's default naming convention, which would produce

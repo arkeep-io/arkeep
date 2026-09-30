@@ -33,19 +33,13 @@ const (
 func Authenticate(validator auth.TokenValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			header := r.Header.Get("Authorization")
-			if header == "" {
+			token, ok := bearerToken(r)
+			if !ok {
 				ErrUnauthorized(w)
 				return
 			}
 
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-				ErrUnauthorized(w)
-				return
-			}
-
-			claims, err := validator.ValidateAccessToken(parts[1])
+			claims, err := validator.ValidateAccessToken(token)
 			if err != nil {
 				ErrUnauthorized(w)
 				return
@@ -55,6 +49,15 @@ func Authenticate(validator auth.TokenValidator) func(http.Handler) http.Handler
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// bearerToken returns the token of an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) (string, bool) {
+	parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", false
+	}
+	return parts[1], true
 }
 
 // RequireRole returns a middleware that allows the request to proceed only if

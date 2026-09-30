@@ -39,6 +39,20 @@ var (
 	// absent from the session during the callback phase.
 	ErrOIDCCodeVerifierMissing = errors.New("auth: oidc code verifier missing")
 
+	// ErrOIDCAccessDenied is returned when the provider restricts sign-in to
+	// allowed groups and the user belongs to none of them (or the groups claim
+	// is missing).
+	ErrOIDCAccessDenied = errors.New("auth: oidc user is not in an allowed group")
+
+	// ErrOIDCAccountExists is returned when an OIDC login carries the email of
+	// an existing account that is not linked to this identity. Accounts are
+	// never linked by email: the owner links them from their profile.
+	ErrOIDCAccountExists = errors.New("auth: an account with this email already exists")
+
+	// ErrOIDCIdentityInUse is returned when linking an OIDC identity that is
+	// already linked to another account.
+	ErrOIDCIdentityInUse = errors.New("auth: oidc identity is linked to another account")
+
 	// ErrTokenRevoked is returned when a syntactically valid access token has
 	// been explicitly revoked via the denylist (e.g. after logout).
 	ErrTokenRevoked = errors.New("auth: token has been revoked")

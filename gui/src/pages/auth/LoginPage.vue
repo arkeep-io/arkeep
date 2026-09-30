@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input'
 import { PinInput, PinInputGroup, PinInputSlot } from '@/components/ui/pin-input'
 import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, Moon, Sun } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
+import { oidcErrorMessage } from '@/lib/oidcErrors'
 import type { OIDCProviderSummary } from '@/types'
 
 // Respect the user's OS "reduce motion" preference for the decorative login video.
@@ -52,7 +53,8 @@ const router = useRouter()
 const route = useRoute()
 const { isDark, cycle, modeLabel } = useTheme()
 
-const serverError = ref<string | null>(null)
+// A failed OIDC sign-in comes back here with an oidc_error code.
+const serverError = ref<string | null>(oidcErrorMessage(route.query.oidc_error))
 const showPassword = ref(false)
 const oidcLoadingId = ref<string | null>(null)
 

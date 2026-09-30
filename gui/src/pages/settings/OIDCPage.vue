@@ -75,6 +75,9 @@ const formClientId = ref('')
 const formClientSecret = ref('')
 const formScopes = ref('openid email profile')
 const formEnabled = ref(true)
+const formGroupsClaim = ref('groups')
+const formAllowedGroups = ref('')
+const formAdminGroups = ref('')
 const formErrors = ref<Record<string, string>>({})
 const formSubmitting = ref(false)
 const formError = ref<string | null>(null)
@@ -99,6 +102,9 @@ function resetForm() {
     formClientSecret.value = ''
     formScopes.value = 'openid email profile'
     formEnabled.value = true
+    formGroupsClaim.value = 'groups'
+    formAllowedGroups.value = ''
+    formAdminGroups.value = ''
     formErrors.value = {}
     formError.value = null
 }
@@ -119,6 +125,9 @@ function openEditSheet(provider: OIDCProvider) {
     formClientSecret.value = ''
     formScopes.value = provider.scopes || 'openid email profile'
     formEnabled.value = provider.enabled
+    formGroupsClaim.value = provider.groups_claim
+    formAllowedGroups.value = provider.allowed_groups
+    formAdminGroups.value = provider.admin_groups
     formErrors.value = {}
     formError.value = null
     sheetOpen.value = true
@@ -160,6 +169,9 @@ async function submitForm() {
             client_id: formClientId.value,
             scopes: formScopes.value || 'openid email profile',
             enabled: formEnabled.value,
+            groups_claim: formGroupsClaim.value,
+            allowed_groups: formAllowedGroups.value,
+            admin_groups: formAdminGroups.value,
         }
 
         if (formClientSecret.value) {
@@ -376,13 +388,48 @@ onMounted(fetchOIDC)
                         </p>
                     </Field>
 
+                    <Field>
+                        <FieldLabel for="form-groups-claim">Groups claim</FieldLabel>
+                        <Input id="form-groups-claim" v-model="formGroupsClaim" placeholder="groups"
+                            autocomplete="off" />
+                        <p class="text-xs text-muted-foreground">
+                            Claim carrying the user's groups, read from the ID token or UserInfo. Some
+                            providers only send it when a scope such as <span class="font-mono">groups</span>
+                            is requested.
+                        </p>
+                    </Field>
+
+                    <Field>
+                        <FieldLabel for="form-allowed-groups">
+                            Allowed groups <span class="text-muted-foreground font-normal">(optional)</span>
+                        </FieldLabel>
+                        <Input id="form-allowed-groups" v-model="formAllowedGroups" placeholder="backup-users, ops"
+                            autocomplete="off" />
+                        <p class="text-xs text-muted-foreground">
+                            Comma-separated. Only members of these groups can sign in. Leave empty to let every
+                            user of this provider sign in.
+                        </p>
+                    </Field>
+
+                    <Field>
+                        <FieldLabel for="form-admin-groups">
+                            Admin groups <span class="text-muted-foreground font-normal">(optional)</span>
+                        </FieldLabel>
+                        <Input id="form-admin-groups" v-model="formAdminGroups" placeholder="backup-admins"
+                            autocomplete="off" />
+                        <p class="text-xs text-muted-foreground">
+                            Comma-separated. When set, the role is synced on every sign-in: members become
+                            admins, everyone else a regular user.
+                        </p>
+                    </Field>
+
                     <Separator />
 
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-sm font-medium">Enabled</p>
                             <p class="text-xs text-muted-foreground">
-                                Show this provider's button on the login page.
+                                Allow signing in with this provider.
                             </p>
                         </div>
                         <Switch :model-value="formEnabled" @update:model-value="formEnabled = $event" />

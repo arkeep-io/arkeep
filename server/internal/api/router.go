@@ -190,6 +190,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/auth/2fa/disable", twoFactorHandler.Disable)
 			r.Post("/auth/2fa/recovery-codes/regenerate", twoFactorHandler.RegenerateRecoveryCodes)
 
+			// Link the calling local account to an OIDC identity.
+			r.Post("/auth/oidc/link", authHandler.OIDCLink)
+
 			// Agents
 			r.Get("/agents", agentHandler.List)
 			r.Post("/agents", agentHandler.Create)

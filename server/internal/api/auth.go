@@ -28,6 +28,10 @@ const (
 	oidcVerifierCookie = "arkeep_oidc_verifier"
 	oidcProviderCookie = "arkeep_oidc_provider"
 
+	// oidcLinkCookie marks a flow started by OIDCLink: it carries the access
+	// token of the local account the identity is being linked to.
+	oidcLinkCookie = "arkeep_oidc_link"
+
 	// oidcCookieTTL is how long the OIDC session cookies are valid.
 	oidcCookieTTL = 10 * time.Minute
 
@@ -222,8 +226,7 @@ func (h *AuthHandler) ListOIDCProviders(w http.ResponseWriter, r *http.Request) 
 
 // OIDCLogin handles GET /api/v1/auth/oidc/login?provider_id={id}.
 // Generates the authorization URL for the given provider and redirects the
-// user to the identity provider. Stores state, code verifier, and provider ID
-// in short-lived httpOnly cookies for CSRF protection and PKCE.
+// user to the identity provider.
 func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	providerIDStr := r.URL.Query().Get("provider_id")
 	providerID, err := uuid.Parse(providerIDStr)
@@ -232,85 +235,162 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	redirectURL, ok := h.startOIDCFlow(w, r, providerID)
+	if !ok {
+		return
+	}
+	// Drop the marker of an abandoned link flow, or the callback would link
+	// instead of signing in.
+	h.setOIDCCookie(w, oidcLinkCookie, "", time.Unix(0, 0))
+	http.Redirect(w, r, redirectURL, http.StatusFound)
+}
+
+type oidcLinkRequest struct {
+	ProviderID string `json:"provider_id"`
+}
+
+type oidcLinkResponse struct {
+	URL string `json:"url"`
+}
+
+// OIDCLink handles POST /api/v1/auth/oidc/link (authenticated).
+// Starts an OIDC flow that links the identity to the calling local account
+// instead of signing in: accounts are never linked by email, so this is how an
+// existing user moves to single sign-on. The link cookie carries the caller's
+// access token so the callback knows which account to link; it cannot be
+// forged for another account without that account's token. The client
+// navigates to the returned URL.
+func (h *AuthHandler) OIDCLink(w http.ResponseWriter, r *http.Request) {
+	var req oidcLinkRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	providerID, err := uuid.Parse(req.ProviderID)
+	if err != nil {
+		ErrBadRequest(w, "missing or invalid provider_id")
+		return
+	}
+
+	user, ok := currentUser(w, r, h.users, h.logger)
+	if !ok {
+		return
+	}
+	if !isLocalAccount(user) {
+		ErrBadRequest(w, "this account already signs in through single sign-on")
+		return
+	}
+
+	redirectURL, ok := h.startOIDCFlow(w, r, providerID)
+	if !ok {
+		return
+	}
+	token, _ := bearerToken(r) // present: Authenticate already accepted it
+	h.setOIDCCookie(w, oidcLinkCookie, token, time.Now().Add(oidcCookieTTL))
+
+	Ok(w, oidcLinkResponse{URL: redirectURL})
+}
+
+// startOIDCFlow generates the authorization URL for the given provider and
+// stores state, code verifier, and provider ID in short-lived httpOnly cookies
+// for CSRF protection and PKCE. On failure it writes the error response and
+// reports ok=false.
+func (h *AuthHandler) startOIDCFlow(w http.ResponseWriter, r *http.Request, providerID uuid.UUID) (string, bool) {
 	redirectURL, state, codeVerifier, err := h.svc.AuthorizationURL(r.Context(), providerID, requestCallbackURL(r))
 	if err != nil {
 		if errors.Is(err, auth.ErrProviderNotFound) {
 			ErrBadRequest(w, "OIDC provider not found")
-			return
+			return "", false
 		}
 		h.logger.Error("failed to generate OIDC authorization URL", zap.Error(err))
 		ErrInternal(w)
-		return
+		return "", false
 	}
 
 	expires := time.Now().Add(oidcCookieTTL)
-
-	for _, c := range []struct{ name, value string }{
-		{oidcStateCookie, state},
-		{oidcVerifierCookie, codeVerifier},
-		{oidcProviderCookie, providerID.String()},
-	} {
-		http.SetCookie(w, &http.Cookie{
-			Name:     c.name,
-			Value:    c.value,
-			Expires:  expires,
-			HttpOnly: true,
-			Secure:   h.secure,
-			SameSite: http.SameSiteLaxMode,
-			Path:     "/",
-		})
-	}
-
-	http.Redirect(w, r, redirectURL, http.StatusFound)
+	h.setOIDCCookie(w, oidcStateCookie, state, expires)
+	h.setOIDCCookie(w, oidcVerifierCookie, codeVerifier, expires)
+	h.setOIDCCookie(w, oidcProviderCookie, providerID.String(), expires)
+	return redirectURL, true
 }
 
-// OIDCCallback handles GET /api/v1/auth/oidc/callback.
+// OIDCCallback handles GET /auth/oidc/callback.
 // Completes the Authorization Code + PKCE flow using the provider ID, state,
-// and verifier stored in the session cookies set by OIDCLogin.
+// and verifier stored in the session cookies set by startOIDCFlow. A sign-in
+// ends on the GUI callback page; a link started by OIDCLink returns to the
+// profile page. Failures redirect to the page the flow started from with an
+// oidc_error code the GUI turns into a message.
 func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
-	stateCookie, err := r.Cookie(oidcStateCookie)
-	if err != nil {
-		ErrBadRequest(w, "missing OIDC state cookie")
-		return
+	linkCookie, linkErr := r.Cookie(oidcLinkCookie)
+	isLink := linkErr == nil
+	fail := func(code string, err error) {
+		h.logger.Warn("OIDC callback failed", zap.String("code", code), zap.Bool("link", isLink), zap.Error(err))
+		page := "/login"
+		if isLink {
+			page = "/profile"
+		}
+		http.Redirect(w, r, page+"?oidc_error="+code, http.StatusFound)
 	}
 
-	verifierCookie, err := r.Cookie(oidcVerifierCookie)
-	if err != nil {
-		ErrBadRequest(w, "missing OIDC verifier cookie")
-		return
-	}
-
-	providerCookie, err := r.Cookie(oidcProviderCookie)
-	if err != nil {
-		ErrBadRequest(w, "missing OIDC provider cookie")
-		return
-	}
+	stateCookie, stateErr := r.Cookie(oidcStateCookie)
+	verifierCookie, verifierErr := r.Cookie(oidcVerifierCookie)
+	providerCookie, providerErr := r.Cookie(oidcProviderCookie)
 
 	h.clearOIDCCookies(w)
+
+	if err := errors.Join(stateErr, verifierErr, providerErr); err != nil {
+		fail("expired", err)
+		return
+	}
 
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 
 	if code == "" || state == "" {
-		ErrBadRequest(w, "missing code or state parameter")
+		// The identity provider reports refusals (e.g. the user cancelled) in
+		// the error parameter instead of sending a code.
+		fail("failed", fmt.Errorf("missing code or state parameter (error=%q)", r.URL.Query().Get("error")))
 		return
 	}
 
-	pair, err := h.svc.ExchangeCode(r.Context(), auth.OIDCCallbackRequest{
+	req := auth.OIDCCallbackRequest{
 		ProviderID:   providerCookie.Value,
 		CallbackURL:  requestCallbackURL(r),
 		Code:         code,
 		State:        state,
 		SessionState: stateCookie.Value,
 		CodeVerifier: verifierCookie.Value,
-	})
-	if err != nil {
-		if errors.Is(err, auth.ErrInvalidCredentials) {
-			ErrUnauthorized(w)
+	}
+
+	if isLink {
+		claims, err := h.svc.ValidateAccessToken(linkCookie.Value)
+		if err != nil {
+			fail("expired", err)
 			return
 		}
-		h.logger.Error("OIDC code exchange failed", zap.Error(err))
-		ErrInternal(w)
+		userID, err := uuid.Parse(claims.UserID)
+		if err != nil {
+			fail("failed", err)
+			return
+		}
+		user, err := h.svc.LinkIdentity(r.Context(), req, userID)
+		if err != nil {
+			fail(oidcErrorCode(err), err)
+			return
+		}
+		// The account is linked; leftover two-factor state is only stale data
+		// from here on, so a failure to clear it does not undo the link.
+		if err := clearTwoFactor(r.Context(), h.users, h.recoveryCodes, h.challenges, user); err != nil {
+			h.logger.Error("failed to clear two-factor state after OIDC link", zap.Error(err))
+		}
+		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+			"auth.oidc.link", "user", user.ID.String(), map[string]any{"provider_id": req.ProviderID})
+		http.Redirect(w, r, "/profile?sso=linked", http.StatusFound)
+		return
+	}
+
+	pair, err := h.svc.ExchangeCode(r.Context(), req)
+	if err != nil {
+		fail(oidcErrorCode(err), err)
 		return
 	}
 
@@ -319,6 +399,24 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	expiresIn := int(time.Until(pair.AccessTokenExpiresAt).Seconds())
 	redirectURL := fmt.Sprintf("/auth/callback?token=%s&expires_in=%d", pair.AccessToken, expiresIn)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
+}
+
+// oidcErrorCode maps an OIDC callback failure to the oidc_error code shown by
+// the GUI. Unexpected failures share the generic "failed" code; their detail
+// stays in the server log.
+func oidcErrorCode(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrOIDCAccessDenied):
+		return "access_denied"
+	case errors.Is(err, auth.ErrOIDCAccountExists):
+		return "account_exists"
+	case errors.Is(err, auth.ErrOIDCIdentityInUse):
+		return "identity_in_use"
+	case errors.Is(err, auth.ErrUserDisabled):
+		return "disabled"
+	default:
+		return "failed"
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -515,17 +613,22 @@ func (h *AuthHandler) clearRefreshCookie(w http.ResponseWriter) {
 	})
 }
 
+// setOIDCCookie sets one of the short-lived cookies that carry the OIDC
+// session from the authorization redirect to the callback.
+func (h *AuthHandler) setOIDCCookie(w http.ResponseWriter, name, value string, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Expires:  expires,
+		HttpOnly: true,
+		Secure:   h.secure,
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+	})
+}
+
 func (h *AuthHandler) clearOIDCCookies(w http.ResponseWriter) {
-	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcProviderCookie} {
-		http.SetCookie(w, &http.Cookie{
-			Name:     name,
-			Value:    "",
-			Expires:  time.Unix(0, 0),
-			MaxAge:   -1,
-			HttpOnly: true,
-			Secure:   h.secure,
-			SameSite: http.SameSiteLaxMode,
-			Path:     "/",
-		})
+	for _, name := range []string{oidcStateCookie, oidcVerifierCookie, oidcProviderCookie, oidcLinkCookie} {
+		h.setOIDCCookie(w, name, "", time.Unix(0, 0))
 	}
 }

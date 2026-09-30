@@ -146,6 +146,29 @@ on, login asks for the code after a correct password. An administrator can
 reset a user's two-factor authentication from the Users page if they lose
 access to both the app and their recovery codes.
 
+### Single sign-on (OIDC)
+
+Any OpenID Connect provider can be added under Settings → OIDC. New users are
+created on their first sign-in. Each provider can restrict and map access by
+group:
+
+- **Groups claim** — the claim carrying the user's groups (`groups` by default),
+  read from the ID token or the UserInfo endpoint. It may be a list, a single
+  name, or an object whose keys are the names (Zitadel project roles).
+- **Allowed groups** — only members of these groups can sign in. If the claim is
+  missing or empty, the sign-in is denied.
+- **Admin groups** — when set, the role is synced on every sign-in: members
+  become admins, everyone else a regular user.
+
+Arkeep never links an SSO sign-in to an existing account by email, since that
+would let whoever controls the address at the identity provider take the
+account over. An existing local user connects SSO from their profile page
+instead, after signing in with their password. From then on the account signs
+in through the identity provider only: its password and two-factor
+authentication are removed, and multi-factor authentication is the identity
+provider's job. Keep at least one local admin account for when the identity
+provider is unreachable.
+
 ---
 
 ## Supported Destinations

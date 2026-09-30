@@ -77,6 +77,12 @@ func (s *AuthService) ExchangeCode(ctx context.Context, req OIDCCallbackRequest)
 	return s.oidc.ExchangeCode(ctx, req)
 }
 
+// LinkIdentity links the OIDC identity of a completed flow to the given local
+// account, which becomes SSO-only.
+func (s *AuthService) LinkIdentity(ctx context.Context, req OIDCCallbackRequest, userID uuid.UUID) (*db.User, error) {
+	return s.oidc.LinkIdentity(ctx, req, userID)
+}
+
 // ListEnabledProviders returns all enabled OIDC provider configurations.
 // Used by the public login endpoint to build the per-provider SSO button list.
 func (s *AuthService) ListEnabledProviders(ctx context.Context) ([]*db.OIDCProvider, error) {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { z } from 'zod'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,8 @@ import { AlertCircle, Loader2 } from '@lucide/vue'
 import { api } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import TwoFactorSection from '@/components/users/TwoFactorSection.vue'
-import type { ApiResponse, User } from '@/types'
+import { oidcErrorMessage } from '@/lib/oidcErrors'
+import type { ApiResponse, OIDCProviderSummary, User } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Auth store — source of truth for current user
@@ -135,6 +137,47 @@ async function submitPassword() {
         passwordSubmitting.value = false
     }
 }
+
+// ---------------------------------------------------------------------------
+// Single sign-on (connecting a local account to an OIDC identity)
+// ---------------------------------------------------------------------------
+
+const route = useRoute()
+const ssoProviders = ref<OIDCProviderSummary[]>([])
+const ssoConnectingId = ref<string | null>(null)
+// The OIDC callback returns here after a link attempt, with sso=linked or an
+// oidc_error code.
+const ssoLinked = route.query.sso === 'linked'
+const ssoError = ref<string | null>(oidcErrorMessage(route.query.oidc_error))
+
+async function fetchSSOProviders() {
+    if (isOIDC.value) return
+    try {
+        const res = await api<ApiResponse<OIDCProviderSummary[]>>('/api/v1/auth/oidc/providers')
+        ssoProviders.value = res.data
+    } catch (e: any) {
+        ssoError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to load single sign-on providers.'
+    }
+}
+
+// connectSSO starts the link flow; the browser leaves for the identity
+// provider and the callback brings it back to this page.
+async function connectSSO(providerId: string) {
+    ssoConnectingId.value = providerId
+    ssoError.value = null
+    try {
+        const res = await api<ApiResponse<{ url: string }>>('/api/v1/auth/oidc/link', {
+            method: 'POST',
+            body: { provider_id: providerId },
+        })
+        window.location.href = res.data.url
+    } catch (e: any) {
+        ssoError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to start single sign-on.'
+        ssoConnectingId.value = null
+    }
+}
+
+onMounted(fetchSSOProviders)
 </script>
 
 <template>
@@ -282,6 +325,41 @@ async function submitPassword() {
 
                 </FieldGroup>
             </form>
+        </div>
+
+        <!-- ── Single sign-on section ───────────────────────────────────────── -->
+        <div v-if="ssoLinked || ssoError || (!isOIDC && ssoProviders.length > 0)"
+            class="grid grid-cols-[280px_1fr] gap-12 py-8 border-b">
+            <div>
+                <h2 class="text-sm font-semibold">Single Sign-On</h2>
+                <p class="mt-1 text-sm text-muted-foreground">
+                    Connect this account to your identity provider to sign in through it. Your password and
+                    two-factor authentication are then removed: the identity provider manages your sign-in.
+                </p>
+            </div>
+
+            <div class="flex flex-col gap-4">
+                <Alert v-if="ssoError" variant="destructive">
+                    <AlertCircle class="size-4" />
+                    <AlertDescription>{{ ssoError }}</AlertDescription>
+                </Alert>
+
+                <Alert v-if="ssoLinked"
+                    class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+                    <AlertDescription>
+                        Your account is now connected to single sign-on. Sign in through your identity provider
+                        from now on.
+                    </AlertDescription>
+                </Alert>
+
+                <div v-if="!isOIDC" class="flex flex-wrap gap-2">
+                    <Button v-for="provider in ssoProviders" :key="provider.id" variant="outline"
+                        :disabled="ssoConnectingId !== null" @click="connectSSO(provider.id)">
+                        <Loader2 v-if="ssoConnectingId === provider.id" class="size-4 animate-spin" />
+                        Connect {{ provider.name }}
+                    </Button>
+                </div>
+            </div>
         </div>
 
         <TwoFactorSection />

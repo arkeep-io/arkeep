@@ -63,6 +63,26 @@ func TestSettingsHandler_CreateOIDC(t *testing.T) {
 		}
 	})
 
+	t.Run("stores group settings and defaults the groups claim", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := map[string]any{"allowed_groups": "backup, ops", "admin_groups": "admins"}
+		for k, v := range validOIDC {
+			body[k] = v
+		}
+		resp := e.post(t, "/api/v1/settings/oidc", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var data struct {
+			GroupsClaim   string `json:"groups_claim"`
+			AllowedGroups string `json:"allowed_groups"`
+			AdminGroups   string `json:"admin_groups"`
+		}
+		decodeData(t, resp, &data)
+		if data.GroupsClaim != "groups" || data.AllowedGroups != "backup, ops" || data.AdminGroups != "admins" {
+			t.Errorf("group settings = %q/%q/%q, want groups/backup, ops/admins", data.GroupsClaim, data.AllowedGroups, data.AdminGroups)
+		}
+	})
+
 	t.Run("returns 400 when name is missing", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/settings/oidc", e.adminToken(t), map[string]any{

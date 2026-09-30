@@ -47,7 +47,7 @@ func NewTwoFactorHandler(
 
 // currentUser loads the authenticated user from claims, or writes an error
 // response and reports ok=false.
-func (h *TwoFactorHandler) currentUser(w http.ResponseWriter, r *http.Request) (*db.User, bool) {
+func currentUser(w http.ResponseWriter, r *http.Request, users repositories.UserRepository, logger *zap.Logger) (*db.User, bool) {
 	claims := claimsFromCtx(r.Context())
 	if claims == nil {
 		ErrUnauthorized(w)
@@ -58,13 +58,13 @@ func (h *TwoFactorHandler) currentUser(w http.ResponseWriter, r *http.Request) (
 		ErrInternal(w)
 		return nil, false
 	}
-	user, err := h.users.GetByID(r.Context(), id)
+	user, err := users.GetByID(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
 			return nil, false
 		}
-		h.logger.Error("failed to load current user", zap.Error(err))
+		logger.Error("failed to load current user", zap.Error(err))
 		ErrInternal(w)
 		return nil, false
 	}
@@ -75,11 +75,17 @@ func (h *TwoFactorHandler) currentUser(w http.ResponseWriter, r *http.Request) (
 // via OIDC — two-factor is managed by the identity provider for those
 // accounts, matching the same gate password reset uses.
 func requireLocalAccount(w http.ResponseWriter, user *db.User) bool {
-	if user.OIDCProvider != "" || user.Password == "" {
+	if !isLocalAccount(user) {
 		ErrBadRequest(w, "two-factor authentication is managed by your identity provider")
 		return false
 	}
 	return true
+}
+
+// isLocalAccount reports whether the user signs in with a local password rather
+// than through an OIDC provider.
+func isLocalAccount(user *db.User) bool {
+	return user.OIDCProvider == "" && user.Password != ""
 }
 
 // -----------------------------------------------------------------------------
@@ -94,7 +100,7 @@ type twoFactorStatusResponse struct {
 
 // Status handles GET /api/v1/auth/2fa/status.
 func (h *TwoFactorHandler) Status(w http.ResponseWriter, r *http.Request) {
-	user, ok := h.currentUser(w, r)
+	user, ok := currentUser(w, r, h.users, h.logger)
 	if !ok {
 		return
 	}
@@ -129,7 +135,7 @@ type twoFactorSetupResponse struct {
 // succeeds. Calling it again before Verify overwrites the pending secret, so a
 // user who scans the wrong QR code can just start over.
 func (h *TwoFactorHandler) Setup(w http.ResponseWriter, r *http.Request) {
-	user, ok := h.currentUser(w, r)
+	user, ok := currentUser(w, r, h.users, h.logger)
 	if !ok {
 		return
 	}
@@ -176,7 +182,7 @@ type twoFactorRecoveryCodesResponse struct {
 // access token before 2FA was enabled loses access, while the session that
 // just enrolled stays logged in.
 func (h *TwoFactorHandler) Verify(w http.ResponseWriter, r *http.Request) {
-	user, ok := h.currentUser(w, r)
+	user, ok := currentUser(w, r, h.users, h.logger)
 	if !ok {
 		return
 	}
@@ -237,7 +243,7 @@ type twoFactorDisableRequest struct {
 // password so a hijacked, still-valid access token cannot turn off two-factor
 // on its own.
 func (h *TwoFactorHandler) Disable(w http.ResponseWriter, r *http.Request) {
-	user, ok := h.currentUser(w, r)
+	user, ok := currentUser(w, r, h.users, h.logger)
 	if !ok {
 		return
 	}
@@ -254,7 +260,7 @@ func (h *TwoFactorHandler) Disable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.clearTwoFactor(r.Context(), user); err != nil {
+	if err := clearTwoFactor(r.Context(), h.users, h.recoveryCodes, h.challenges, user); err != nil {
 		h.logger.Error("failed to disable two-factor", zap.Error(err))
 		ErrInternal(w)
 		return
@@ -266,17 +272,23 @@ func (h *TwoFactorHandler) Disable(w http.ResponseWriter, r *http.Request) {
 
 // clearTwoFactor resets a user's two-factor state: the secret, the enabled
 // flag, every recovery code, and any outstanding login challenge. Shared by
-// Disable and AdminReset.
-func (h *TwoFactorHandler) clearTwoFactor(ctx context.Context, user *db.User) error {
+// Disable, AdminReset and linking an account to an OIDC identity.
+func clearTwoFactor(
+	ctx context.Context,
+	users repositories.UserRepository,
+	recoveryCodes repositories.RecoveryCodeRepository,
+	challenges repositories.TwoFactorChallengeRepository,
+	user *db.User,
+) error {
 	user.TOTPSecret = ""
 	user.TwoFactorEnabled = false
-	if err := h.users.Update(ctx, user); err != nil {
+	if err := users.Update(ctx, user); err != nil {
 		return err
 	}
-	if err := h.recoveryCodes.DeleteByUserID(ctx, user.ID); err != nil {
+	if err := recoveryCodes.DeleteByUserID(ctx, user.ID); err != nil {
 		return err
 	}
-	return h.challenges.DeleteByUserID(ctx, user.ID)
+	return challenges.DeleteByUserID(ctx, user.ID)
 }
 
 // -----------------------------------------------------------------------------
@@ -292,7 +304,7 @@ type twoFactorRegenerateRequest struct {
 // of recovery codes, invalidating every old one, and requires the current
 // password for the same reason Disable does.
 func (h *TwoFactorHandler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
-	user, ok := h.currentUser(w, r)
+	user, ok := currentUser(w, r, h.users, h.logger)
 	if !ok {
 		return
 	}
@@ -373,7 +385,7 @@ func (h *TwoFactorHandler) AdminReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.clearTwoFactor(r.Context(), user); err != nil {
+	if err := clearTwoFactor(r.Context(), h.users, h.recoveryCodes, h.challenges, user); err != nil {
 		h.logger.Error("failed to reset two-factor", zap.Error(err))
 		ErrInternal(w)
 		return

@@ -399,6 +399,11 @@ export interface OIDCProvider {
   callback_url: string // read-only, computed by the server
   scopes: string
   enabled: boolean
+  // Group-based access: the groups lists are comma-separated, empty meaning
+  // no restriction (allowed_groups) or no role mapping (admin_groups).
+  groups_claim: string
+  allowed_groups: string
+  admin_groups: string
   created_at: string
   updated_at: string
 }

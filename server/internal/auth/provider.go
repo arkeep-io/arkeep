@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
 // AuthProvider is the interface that every authentication backend must implement.
@@ -50,6 +52,10 @@ type OIDCFlowProvider interface {
 	// ExchangeCode completes the OIDC flow by exchanging the authorization code
 	// for tokens. state and codeVerifier must match the values from AuthorizationURL.
 	ExchangeCode(ctx context.Context, req OIDCCallbackRequest) (*TokenPair, error)
+
+	// LinkIdentity completes a flow started by an authenticated local user and
+	// links the verified OIDC identity to that user's account.
+	LinkIdentity(ctx context.Context, req OIDCCallbackRequest, userID uuid.UUID) (*db.User, error)
 }
 
 // LoginRequest carries credentials for a local email/password login attempt.

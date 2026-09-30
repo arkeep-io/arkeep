@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -70,21 +71,29 @@ type oidcProviderResponse struct {
 	CallbackURL string `json:"callback_url"` // read-only, computed from base_url
 	Scopes      string `json:"scopes"`
 	Enabled     bool   `json:"enabled"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// GroupsClaim, AllowedGroups and AdminGroups configure group-based access:
+	// the groups lists are comma-separated, empty meaning no restriction.
+	GroupsClaim   string `json:"groups_claim"`
+	AllowedGroups string `json:"allowed_groups"`
+	AdminGroups   string `json:"admin_groups"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
 }
 
 func (h *SettingsHandler) oidcToResponse(p *db.OIDCProvider, callbackURL string) oidcProviderResponse {
 	return oidcProviderResponse{
-		ID:          p.ID.String(),
-		Name:        p.Name,
-		Issuer:      p.Issuer,
-		ClientID:    p.ClientID,
-		CallbackURL: callbackURL,
-		Scopes:      p.Scopes,
-		Enabled:     p.Enabled,
-		CreatedAt:   p.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:   p.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:            p.ID.String(),
+		Name:          p.Name,
+		Issuer:        p.Issuer,
+		ClientID:      p.ClientID,
+		CallbackURL:   callbackURL,
+		Scopes:        p.Scopes,
+		Enabled:       p.Enabled,
+		GroupsClaim:   p.GroupsClaim,
+		AllowedGroups: p.AllowedGroups,
+		AdminGroups:   p.AdminGroups,
+		CreatedAt:     p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     p.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -116,6 +125,10 @@ type createOIDCRequest struct {
 	ClientSecret string `json:"client_secret"`
 	Scopes       string `json:"scopes"`
 	Enabled      bool   `json:"enabled"`
+	// GroupsClaim is optional: empty means "groups".
+	GroupsClaim   string `json:"groups_claim"`
+	AllowedGroups string `json:"allowed_groups"`
+	AdminGroups   string `json:"admin_groups"`
 }
 
 // CreateOIDC handles POST /api/v1/settings/oidc (admin only).
@@ -145,14 +158,18 @@ func (h *SettingsHandler) CreateOIDC(w http.ResponseWriter, r *http.Request) {
 	if req.Scopes == "" {
 		req.Scopes = "openid email profile"
 	}
+	req.GroupsClaim = cmp.Or(req.GroupsClaim, "groups")
 
 	provider := &db.OIDCProvider{
-		Name:         req.Name,
-		Issuer:       req.Issuer,
-		ClientID:     req.ClientID,
-		ClientSecret: db.EncryptedString(req.ClientSecret),
-		Scopes:       req.Scopes,
-		Enabled:      req.Enabled,
+		Name:          req.Name,
+		Issuer:        req.Issuer,
+		ClientID:      req.ClientID,
+		ClientSecret:  db.EncryptedString(req.ClientSecret),
+		Scopes:        req.Scopes,
+		Enabled:       req.Enabled,
+		GroupsClaim:   req.GroupsClaim,
+		AllowedGroups: req.AllowedGroups,
+		AdminGroups:   req.AdminGroups,
 	}
 
 	if err := h.oidcRepo.Create(r.Context(), provider); err != nil {
@@ -195,6 +212,10 @@ type updateOIDCRequest struct {
 	ClientSecret string `json:"client_secret"` // optional: empty = keep existing
 	Scopes       string `json:"scopes"`
 	Enabled      bool   `json:"enabled"`
+	// GroupsClaim is optional: empty means "groups".
+	GroupsClaim   string `json:"groups_claim"`
+	AllowedGroups string `json:"allowed_groups"`
+	AdminGroups   string `json:"admin_groups"`
 }
 
 // UpdateOIDC handles PUT /api/v1/settings/oidc/{id} (admin only).
@@ -226,6 +247,7 @@ func (h *SettingsHandler) UpdateOIDC(w http.ResponseWriter, r *http.Request) {
 	if req.Scopes == "" {
 		req.Scopes = "openid email profile"
 	}
+	req.GroupsClaim = cmp.Or(req.GroupsClaim, "groups")
 
 	existing, err := h.oidcRepo.GetByID(r.Context(), id)
 	if err != nil {
@@ -243,6 +265,9 @@ func (h *SettingsHandler) UpdateOIDC(w http.ResponseWriter, r *http.Request) {
 	existing.ClientID = req.ClientID
 	existing.Scopes = req.Scopes
 	existing.Enabled = req.Enabled
+	existing.GroupsClaim = req.GroupsClaim
+	existing.AllowedGroups = req.AllowedGroups
+	existing.AdminGroups = req.AdminGroups
 
 	// Only overwrite the stored secret if a new one was provided.
 	if req.ClientSecret != "" {
@@ -286,7 +311,6 @@ func (h *SettingsHandler) DeleteOIDC(w http.ResponseWriter, r *http.Request) {
 	logAudit(r, h.auditRepo, h.logger, "settings.oidc.delete", "settings", id.String(), map[string]any{"name": name})
 	NoContent(w)
 }
-
 
 // =============================================================================
 // SMTP
