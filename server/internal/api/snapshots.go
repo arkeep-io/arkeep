@@ -31,6 +31,8 @@ type SnapshotHandler struct {
 	agentMgr  *agentmanager.Manager
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
+	// tickets holds the pending download tickets: see CreateDownload.
+	tickets *downloadTickets
 }
 
 // NewSnapshotHandler creates a new SnapshotHandler.
@@ -51,6 +53,7 @@ func NewSnapshotHandler(
 		agentMgr:  agentMgr,
 		auditRepo: auditRepo,
 		logger:    logger.Named("snapshot_handler"),
+		tickets:   newDownloadTickets(),
 	}
 }
 
@@ -104,13 +107,20 @@ type restorePayload struct {
 	Destination      destinationFields `json:"destination"`
 }
 
+// snapshotRepoAccess is the part of the browse and download payloads that
+// tells the agent how to open the snapshot's repository. Mirrors
+// snapshotAccess in the agent's connection manager.
+type snapshotRepoAccess struct {
+	ResticSnapshotID string            `json:"restic_snapshot_id"`
+	RepoPassword     string            `json:"repo_password"`
+	Destination      destinationFields `json:"destination"`
+}
+
 // snapshotBrowsePayload is the JSON-encoded payload for JOB_TYPE_LIST_SNAPSHOT_FILES.
 // Sent inline (not persisted) via the StreamJobs stream as a correlation request.
 type snapshotBrowsePayload struct {
-	ResticSnapshotID string            `json:"restic_snapshot_id"`
-	RepoPassword     string            `json:"repo_password"`
-	Path             string            `json:"path"` // directory to list; empty means the snapshot root
-	Destination      destinationFields `json:"destination"`
+	snapshotRepoAccess
+	Path string `json:"path"` // directory to list; empty means the snapshot root
 }
 
 // snapshotFileEntryResponse is a single file or directory within a snapshot.
@@ -228,7 +238,7 @@ func (h *SnapshotHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, err := h.repo.GetByID(r.Context(), id)
+	snapshot, err := h.repo.GetByIDWithNames(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrNotFound(w)
@@ -239,27 +249,7 @@ func (h *SnapshotHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policyID := uuidString(snapshot.PolicyID)
-	jobID := uuidString(snapshot.JobID)
-	policyName := ""
-	if snapshot.IsImported {
-		policyID = ""
-		jobID = ""
-		policyName = "(imported)"
-	}
-	Ok(w, snapshotResponse{
-		ID:               snapshot.ID.String(),
-		PolicyID:         policyID,
-		PolicyName:       policyName,
-		DestinationID:    snapshot.DestinationID.String(),
-		JobID:            jobID,
-		ResticSnapshotID: snapshot.SnapshotID,
-		SizeBytes:        snapshot.SizeBytes,
-		Tags:             snapshot.Tags,
-		Hostname:         snapshot.Hostname,
-		IsImported:       snapshot.IsImported,
-		CreatedAt:        snapshot.SnapshotAt.UTC().Format(time.RFC3339),
-	})
+	Ok(w, snapshotWithNamesToResponse(*snapshot))
 }
 
 // Delete handles DELETE /api/v1/snapshots/{id}.
@@ -485,86 +475,26 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	Ok(w, restoreResponse{JobID: job.ID.String()})
 }
 
-// Browse handles GET /api/v1/snapshots/{id}/browse[?path=<dir>].
+// Browse handles GET /api/v1/snapshots/{id}/browse[?path=<dir>][&agent_id=<id>].
 // Returns the direct children of one directory within the snapshot by
-// dispatching a JOB_TYPE_LIST_SNAPSHOT_FILES request to the policy's agent via
-// the existing StreamJobs stream (same pattern as JOB_TYPE_LIST_VOLUMES).
+// dispatching a JOB_TYPE_LIST_SNAPSHOT_FILES request to the agent chosen by
+// openSnapshot via the existing StreamJobs stream (same pattern as
+// JOB_TYPE_LIST_VOLUMES), blocking until the result or a timeout.
 //
 // The listing is non-recursive: the GUI expands one directory level at a time
 // (lazy loading), so each response stays small and fast even on snapshots with
 // millions of files. An empty path lists the snapshot root.
-//
-// Flow:
-//  1. Load snapshot → restic_snapshot_id, destination_id, policy_id
-//  2. Load policy → agent_id, repo_password
-//  3. Load destination → repo URL and env
-//  4. Dispatch browse request to agent; block until result or timeout
-//  5. Return the directory's direct children as a flat list of SnapshotFileEntry
 func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 	snapshotID, ok := parseUUID(w, r, "id")
 	if !ok {
 		return
 	}
 
-	ctx := r.Context()
-	path := r.URL.Query().Get("path")
-
-	// --- 1. Load snapshot ---
-	snapshot, err := h.repo.GetByID(ctx, snapshotID)
-	if err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			ErrNotFound(w)
-			return
-		}
-		h.logger.Error("failed to load snapshot for browse", zap.Error(err))
-		ErrInternal(w)
+	access, agentID, ok := h.openSnapshot(w, r, snapshotID, r.URL.Query().Get("agent_id"), "browse")
+	if !ok {
 		return
 	}
-
-	// --- 2. Load destination ---
-	dest, err := h.dests.GetByID(ctx, snapshot.DestinationID)
-	if err != nil {
-		if errors.Is(err, repositories.ErrNotFound) {
-			ErrBadRequest(w, "destination not found")
-			return
-		}
-		h.logger.Error("failed to load destination for browse", zap.Error(err))
-		ErrInternal(w)
-		return
-	}
-
-	// --- 3. Resolve repo password and agent ---
-	// An imported snapshot has no policy to name an agent, so the caller picks
-	// one via ?agent_id=.
-	repoPassword, agentID, err := h.resolveRepoAccess(ctx, snapshot, dest)
-	if err != nil {
-		h.writeRepoAccessError(w, err, "browse")
-		return
-	}
-	if agentID == "" {
-		agentID = r.URL.Query().Get("agent_id")
-		if _, err := uuid.Parse(agentID); err != nil {
-			ErrBadRequest(w, "agent_id is required to browse an imported snapshot and must be a valid UUID")
-			return
-		}
-	}
-	if !h.agentMgr.IsConnected(agentID) {
-		ErrServiceUnavailable(w, "agent is not connected — ensure the agent is online and try again")
-		return
-	}
-
-	// --- 4. Build and dispatch browse request ---
-	browsePayload := snapshotBrowsePayload{
-		ResticSnapshotID: snapshot.SnapshotID,
-		RepoPassword:     repoPassword,
-		Path:             path,
-		Destination: destinationFields{
-			DestinationID: dest.ID.String(),
-			Type:          dest.Type,
-			RepoURL:       destutil.BuildRepoURL(dest),
-			Env:           destutil.BuildEnv(dest),
-		},
-	}
+	browsePayload := snapshotBrowsePayload{snapshotRepoAccess: access, Path: r.URL.Query().Get("path")}
 
 	payloadBytes, err := json.Marshal(browsePayload)
 	if err != nil {
@@ -582,7 +512,7 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	correlationID := uuid.NewString()
-	result, err := h.agentMgr.RequestSnapshotBrowse(ctx, agentID, correlationID, payloadBytes)
+	result, err := h.agentMgr.RequestSnapshotBrowse(r.Context(), agentID, correlationID, payloadBytes)
 	if err != nil {
 		switch {
 		case errors.Is(err, agentmanager.ErrAgentNotConnected):
@@ -617,6 +547,66 @@ func (h *SnapshotHandler) Browse(w http.ResponseWriter, r *http.Request) {
 // -----------------------------------------------------------------------------
 // Internal helpers
 // -----------------------------------------------------------------------------
+
+// openSnapshot loads the snapshot and its destination, resolves the repository
+// password, and picks the agent that runs restic against it: agentID when the
+// caller chose one — any agent that can reach the repository will do, e.g.
+// when the machine that took the snapshot is gone — else the snapshot's policy
+// agent. It writes the error response and reports ok=false on failure.
+func (h *SnapshotHandler) openSnapshot(w http.ResponseWriter, r *http.Request, snapshotID uuid.UUID, agentID, action string) (snapshotRepoAccess, string, bool) {
+	ctx := r.Context()
+
+	snapshot, err := h.repo.GetByID(ctx, snapshotID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return snapshotRepoAccess{}, "", false
+		}
+		h.logger.Error("failed to load snapshot", zap.String("action", action), zap.Error(err))
+		ErrInternal(w)
+		return snapshotRepoAccess{}, "", false
+	}
+
+	dest, err := h.dests.GetByID(ctx, snapshot.DestinationID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, "destination not found")
+			return snapshotRepoAccess{}, "", false
+		}
+		h.logger.Error("failed to load destination", zap.String("action", action), zap.Error(err))
+		ErrInternal(w)
+		return snapshotRepoAccess{}, "", false
+	}
+
+	repoPassword, policyAgentID, err := h.resolveRepoAccess(ctx, snapshot, dest)
+	if err != nil {
+		h.writeRepoAccessError(w, err, action)
+		return snapshotRepoAccess{}, "", false
+	}
+	if agentID == "" {
+		// An imported snapshot has no policy to name an agent: the caller must.
+		agentID = policyAgentID
+	}
+	if _, err := uuid.Parse(agentID); err != nil {
+		ErrBadRequest(w, "agent_id is required for an imported snapshot and must be a valid UUID")
+		return snapshotRepoAccess{}, "", false
+	}
+	if !h.agentMgr.IsConnected(agentID) {
+		ErrServiceUnavailable(w, "agent is not connected — ensure the agent is online and try again")
+		return snapshotRepoAccess{}, "", false
+	}
+
+	return snapshotRepoAccess{
+		ResticSnapshotID: snapshot.SnapshotID,
+		RepoPassword:     repoPassword,
+		Destination: destinationFields{
+			DestinationID: dest.ID.String(),
+			Type:          dest.Type,
+			RepoURL:       destutil.BuildRepoURL(dest),
+			Env:           destutil.BuildEnv(dest),
+		},
+	}, agentID, true
+}
 
 func (h *SnapshotHandler) writeSnapshotList(w http.ResponseWriter, snapshots []repositories.SnapshotWithNames, total int64) {
 	items := make([]snapshotResponse, len(snapshots))

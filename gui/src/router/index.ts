@@ -144,9 +144,20 @@ const routes: RouteRecordRaw[] = [
       // Snapshots
       {
         path: 'snapshots',
-        name: 'snapshots',
-        component: () => import('@/pages/snapshots/SnapshotsPage.vue'),
         meta: { breadcrumb: 'Snapshots' },
+        children: [
+          {
+            path: '',
+            name: 'snapshots',
+            component: () => import('@/pages/snapshots/SnapshotsPage.vue'),
+          },
+          {
+            path: ':id',
+            name: 'snapshot-browse',
+            component: () => import('@/pages/snapshots/SnapshotBrowsePage.vue'),
+            meta: { breadcrumb: 'Browse' },
+          },
+        ],
       },
 
       // Jobs

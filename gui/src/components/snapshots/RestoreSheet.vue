@@ -42,6 +42,10 @@ import SnapshotFileTree from '@/components/snapshots/SnapshotFileTree.vue'
 const props = defineProps<{
     open: boolean
     snapshot: Snapshot | null
+    // presetPaths and presetAgent carry a selection made in the snapshot
+    // browser: those paths are restored and the sheet does not browse again.
+    presetPaths?: string[]
+    presetAgent?: { id: string; name: string } | null
 }>()
 
 const emit = defineEmits<{
@@ -135,13 +139,13 @@ watch(
         }
         resetForm()
         setValues({
-            agent_id: props.snapshot?.agent_id ?? '',
+            agent_id: props.presetAgent?.id || props.snapshot?.agent_id || '',
             restore_mode: 'custom',
             target_path: '/tmp/arkeep-restore',
         })
         submitError.value = null
         browseEntries.value = []
-        selectedPaths.value = []
+        selectedPaths.value = props.presetPaths ?? []
         browseError.value = null
     },
 )
@@ -274,7 +278,7 @@ function onOpenChange(value: boolean) {
                         <AsyncCombobox
                             endpoint="/api/v1/agents?status=online"
                             :model-value="agentId ?? ''"
-                            :initial-label="props.snapshot?.agent_name"
+                            :initial-label="props.presetAgent?.name ?? props.snapshot?.agent_name"
                             placeholder="Select an agent…"
                             :disabled="isSubmitting"
                             :class="agentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
@@ -328,7 +332,13 @@ function onOpenChange(value: boolean) {
 
                     <!-- File selection -->
                     <Separator />
-                    <div class="space-y-2">
+                    <div v-if="presetPaths?.length" class="space-y-2">
+                        <p class="text-sm font-medium">Files to restore</p>
+                        <ul class="max-h-64 overflow-y-auto rounded border p-2 font-mono text-xs space-y-0.5">
+                            <li v-for="path in presetPaths" :key="path" class="truncate">{{ path }}</li>
+                        </ul>
+                    </div>
+                    <div v-else class="space-y-2">
                         <p class="text-sm font-medium">Files to restore</p>
                         <p class="text-xs text-muted-foreground">
                             Leave empty to restore the entire snapshot, or browse to select specific files.

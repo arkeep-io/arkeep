@@ -1,19 +1,25 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ChevronRight, ChevronDown, Folder, FolderOpen, File, Loader2 } from '@lucide/vue'
+import { ChevronRight, ChevronDown, Download, Folder, FolderOpen, File, Loader2 } from '@lucide/vue'
+import { formatBytes } from '@/lib/jobUtils'
 import type { SnapshotFileEntry } from '@/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   // entries are the root-level children of the snapshot (its top directories).
   entries: SnapshotFileEntry[]
   modelValue: string[]
   // loadChildren fetches the direct children of a directory on demand. The tree
   // loads one level at a time so huge snapshots stay responsive.
   loadChildren: (path: string) => Promise<SnapshotFileEntry[]>
-}>()
+  // selectable shows the selection checkboxes.
+  selectable?: boolean
+  // downloadable shows a download button on every row, emitting download.
+  downloadable?: boolean
+}>(), { selectable: true, downloadable: false })
 
 const emit = defineEmits<{
   'update:modelValue': [value: string[]]
+  download: [entry: SnapshotFileEntry]
 }>()
 
 // Lazy-loading state, keyed by directory path.
@@ -156,6 +162,7 @@ function toggle(entry: SnapshotFileEntry) {
 
       <!-- checkbox -->
       <input
+        v-if="selectable"
         type="checkbox"
         :checked="isChecked(entry.path)"
         :indeterminate="isIndeterminate(entry)"
@@ -170,7 +177,8 @@ function toggle(entry: SnapshotFileEntry) {
       <File v-else class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 
       <!-- name -->
-      <span class="truncate cursor-pointer" @click="entry.type === 'dir' ? toggleDir(entry) : toggle(entry)">
+      <span class="truncate cursor-pointer"
+        @click="entry.type === 'dir' ? toggleDir(entry) : selectable && toggle(entry)">
         {{ name(entry.path) }}
       </span>
 
@@ -178,6 +186,20 @@ function toggle(entry: SnapshotFileEntry) {
       <span v-if="errors.has(entry.path)" class="ml-2 text-destructive truncate">
         {{ errors.get(entry.path) }}
       </span>
+
+      <span v-if="entry.type === 'file'" class="ml-auto shrink-0 pl-2 text-muted-foreground">
+        {{ formatBytes(entry.size) }}
+      </span>
+      <button
+        v-if="downloadable"
+        type="button"
+        :class="['shrink-0 p-0.5 text-muted-foreground hover:text-foreground', entry.type === 'dir' && 'ml-auto']"
+        :aria-label="entry.type === 'dir' ? `Download ${name(entry.path)} as ZIP` : `Download ${name(entry.path)}`"
+        :title="entry.type === 'dir' ? 'Download as ZIP' : 'Download'"
+        @click.stop="emit('download', entry)"
+      >
+        <Download class="h-3.5 w-3.5" />
+      </button>
     </div>
   </div>
 </template>

@@ -583,3 +583,27 @@ func TestRun_FailsIfSecondAttemptAlsoLocked(t *testing.T) {
 		t.Error("restic unlock should have been attempted once")
 	}
 }
+
+// TestBuildDumpArgs checks the dump arguments for a file and for a directory
+// archive, and that the "--" marker keeps a path beginning with "-" from being
+// read as a flag.
+func TestBuildDumpArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		archive bool
+		want    []string
+	}{
+		{"file", "/etc/hosts", false, []string{"dump", "--", "abc123", "/etc/hosts"}},
+		{"directory as zip", "/etc", true, []string{"dump", "--archive", "zip", "--", "abc123", "/etc"}},
+		{"path looking like a flag", "--password-command=id", false, []string{"dump", "--", "abc123", "--password-command=id"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildDumpArgs("abc123", tt.path, tt.archive)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("buildDumpArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
