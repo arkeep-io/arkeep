@@ -21,26 +21,10 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
 
         // ── Runtime caching ─────────────────────────────────────────────────
+        // API responses are deliberately not cached: they are live state
+        // (job progress, agent status) that would mislead when stale, and
+        // authenticated data that should not persist in the browser.
         runtimeCaching: [
-          {
-            // API calls — network first.
-            // Always try the network; fall back to cache if offline.
-            // This ensures data freshness while allowing stale data display
-            // when the server is unreachable.
-            urlPattern: /^\/api\//,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              networkTimeoutSeconds: 10,
-              cacheableResponse: { statuses: [200] },
-              expiration: {
-                maxEntries: 100,
-                // 5 minute TTL — API data is stale quickly; we cache it only
-                // to provide an offline fallback, not as a performance trick.
-                maxAgeSeconds: 5 * 60,
-              },
-            },
-          },
           {
             // External fonts and stylesheets — cache first, long TTL.
             // fetchOptions: cors ensures the SW never caches an opaque response

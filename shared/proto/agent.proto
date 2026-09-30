@@ -82,6 +82,14 @@ service AgentService {
   // destination and returns all snapshot metadata for the server to persist.
   rpc ReportSnapshotImport(SnapshotImportReport) returns (SnapshotImportResponse);
 
+  // UploadSnapshotDownload is opened by the agent in response to a
+  // JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE assignment and streams the output of
+  // restic dump back to the server, which relays it to the waiting HTTP
+  // download. The first chunk carries only the agent and correlation IDs; an
+  // error chunk ends a failed dump. The server closing the stream (the browser
+  // went away) is the agent's signal to stop dumping.
+  rpc UploadSnapshotDownload(stream SnapshotDownloadChunk) returns (SnapshotDownloadAck);
+
   // ReportSnapshotReconcile is called by the agent after retention has run for
   // a destination. It carries the authoritative set of snapshot IDs still
   // present in that destination's repository, so the server can evict cached
@@ -236,6 +244,11 @@ enum JobType {
   // queued but not yet started, it is marked for cancellation before execution.
   // The agent reports JOB_STATUS_CANCELLED via ReportJobStatus after aborting.
   JOB_TYPE_CANCEL = 8;
+  // JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE is a synthetic, non-persisted job type used
+  // to download a file (or a directory as a ZIP archive) from a Restic snapshot.
+  // The job_id carries a correlation_id; the agent responds by opening
+  // UploadSnapshotDownload.
+  JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE = 9;
 }
 
 // ─── ReportJobStatus ─────────────────────────────────────────────────────────
@@ -432,6 +445,23 @@ message SnapshotBrowseReport {
 message SnapshotBrowseResponse {
   bool ok = 1;
 }
+
+// ─── UploadSnapshotDownload ──────────────────────────────────────────────────
+
+// SnapshotDownloadChunk is one message of the UploadSnapshotDownload stream.
+message SnapshotDownloadChunk {
+  // agent_id and correlation_id are set on the first chunk only. The
+  // correlation_id echoes the job_id from the JobAssignment.
+  string agent_id       = 1;
+  string correlation_id = 2;
+  // data is the next part of the restic dump output.
+  bytes  data           = 3;
+  // error is set on the final chunk of a dump that failed.
+  string error          = 4;
+}
+
+// SnapshotDownloadAck acknowledges the end of an UploadSnapshotDownload stream.
+message SnapshotDownloadAck {}
 
 // ─── ReportSnapshotImport ────────────────────────────────────────────────────
 

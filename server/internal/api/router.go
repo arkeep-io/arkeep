@@ -168,6 +168,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			}
 
 			r.Get("/ws", wsHandler.ServeWS)
+
+			// Snapshot file download — the single-use ticket issued by the
+			// admin-only POST /snapshots/{id}/download is the credential, so a
+			// plain browser download (which cannot send headers) works.
+			r.Get("/downloads/{ticket}", snapshotHandler.Download)
 		})
 
 		// --- Authenticated routes ---
@@ -229,6 +234,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RequireRole("admin")).Delete("/snapshots/{id}", snapshotHandler.Delete)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/restore", snapshotHandler.Restore)
 			r.Get("/snapshots/{id}/browse", snapshotHandler.Browse)
+			r.With(RequireRole("admin")).Post("/snapshots/{id}/download", snapshotHandler.CreateDownload)
 
 			// Notifications
 			r.Get("/notifications", notificationHandler.List)

@@ -123,6 +123,7 @@ can recover if something goes wrong, and every operation leaves an audit trail.
 | Retention policies | ✓ |
 | Email + webhook notifications | ✓ |
 | Restore & restore test | ✓ |
+| Browse & download snapshot files | ✓ |
 | Helm chart | ✓ |
 | Host + container inventory | 🗓 planned |
 | Docker update detection & orchestration | 🗓 planned |
@@ -145,6 +146,17 @@ same time, for signing in if the authenticator app is unavailable. From then
 on, login asks for the code after a correct password. An administrator can
 reset a user's two-factor authentication from the Users page if they lose
 access to both the app and their recovery codes.
+
+### Browse and download snapshot files
+
+Click a snapshot's ID on the Snapshots page to browse its files, one directory
+at a time. The listing is read by an online agent that can reach the
+snapshot's repository: the snapshot's own agent by default, or any other one —
+useful when the machine that was backed up is gone and another agent sees the
+same S3, SFTP or rclone repository. Administrators can download a single file,
+or a directory as a ZIP archive, straight from the browser, and restore a
+selection of files through the usual restore flow. Downloads are streamed from
+the agent through the server, with no temporary files on either side.
 
 ---
 

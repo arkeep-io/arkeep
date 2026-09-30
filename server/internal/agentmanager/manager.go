@@ -53,6 +53,7 @@ const snapshotBrowseTimeout = 5 * time.Minute
 // and a shorter budget makes the request fail while the agent still succeeds —
 // its report then arrives with no waiter left and is discarded.
 const snapshotImportTimeout = 5 * time.Minute
+
 // ConnectedAgent represents an agent that has an active gRPC connection
 // and an open StreamJobs stream through which jobs can be dispatched.
 type ConnectedAgent struct {
@@ -78,8 +79,21 @@ type ConnectedAgent struct {
 	// when the agent disconnects or the context is cancelled.
 	stream proto.AgentService_StreamJobsServer
 
+	// sendMu serialises writes on stream: see send. A pointer so the copies
+	// handed out by ConnectedAgents share it along with the stream.
+	sendMu *sync.Mutex
+
 	// session identifies this connection. See SessionToken.
 	session SessionToken
+}
+
+// send writes a message on the agent's StreamJobs stream. gRPC forbids
+// concurrent SendMsg calls on one stream, while dispatches, cancels and the
+// synthetic browse/download requests all send from their own goroutines.
+func (a *ConnectedAgent) send(msg *proto.JobAssignment) error {
+	a.sendMu.Lock()
+	defer a.sendMu.Unlock()
+	return a.stream.Send(msg)
 }
 
 // SessionToken identifies a single StreamJobs session of an agent.
@@ -126,24 +140,26 @@ type Manager struct {
 	nextSession SessionToken
 	logger      *zap.Logger
 
-	// pendingMu protects both pending maps.
+	// pendingMu protects the pending maps.
 	// When a REST handler calls RequestVolumeList / RequestSnapshotBrowse, it
 	// registers a channel here. The matching Deliver* method sends on the channel
 	// when the agent RPC arrives.
-	pendingMu               sync.Mutex
-	pendingVolumeLists      map[string]chan VolumeListResult     // keyed by correlation ID
-	pendingSnapshotBrowses  map[string]chan SnapshotBrowseResult // keyed by correlation ID
-	pendingSnapshotImports  map[string]chan SnapshotImportResult // keyed by correlation ID
+	pendingMu                sync.Mutex
+	pendingVolumeLists       map[string]chan VolumeListResult     // keyed by correlation ID
+	pendingSnapshotBrowses   map[string]chan SnapshotBrowseResult // keyed by correlation ID
+	pendingSnapshotImports   map[string]chan SnapshotImportResult // keyed by correlation ID
+	pendingSnapshotDownloads map[string]pendingDownload           // keyed by correlation ID
 }
 
 // New creates a new Manager instance.
 func New(logger *zap.Logger) *Manager {
 	return &Manager{
-		agents:                  make(map[string]*ConnectedAgent),
-		pendingVolumeLists:      make(map[string]chan VolumeListResult),
-		pendingSnapshotBrowses:  make(map[string]chan SnapshotBrowseResult),
-		pendingSnapshotImports:  make(map[string]chan SnapshotImportResult),
-		logger:                  logger.Named("agentmanager"),
+		agents:                   make(map[string]*ConnectedAgent),
+		pendingVolumeLists:       make(map[string]chan VolumeListResult),
+		pendingSnapshotBrowses:   make(map[string]chan SnapshotBrowseResult),
+		pendingSnapshotImports:   make(map[string]chan SnapshotImportResult),
+		pendingSnapshotDownloads: make(map[string]pendingDownload),
+		logger:                   logger.Named("agentmanager"),
 	}
 }
 
@@ -176,6 +192,7 @@ func (m *Manager) Register(agentID, hostname string, dockerAvailable bool, strea
 		ConnectedAt:     time.Now().UTC(),
 		DockerAvailable: dockerAvailable,
 		stream:          stream,
+		sendMu:          &sync.Mutex{},
 		session:         session,
 	}
 
@@ -283,7 +300,7 @@ func (m *Manager) Dispatch(agentID string, job *proto.JobAssignment) error {
 		return ErrAgentNotConnected
 	}
 
-	if err := agent.stream.Send(job); err != nil {
+	if err := agent.send(job); err != nil {
 		return fmt.Errorf("failed to send job %s to agent %s: %w", job.JobId, agentID, err)
 	}
 
@@ -308,7 +325,7 @@ func (m *Manager) SendCancel(agentID, jobID string) error {
 		return ErrAgentNotConnected
 	}
 
-	if err := agent.stream.Send(&proto.JobAssignment{
+	if err := agent.send(&proto.JobAssignment{
 		JobId: jobID,
 		Type:  proto.JobType_JOB_TYPE_CANCEL,
 	}); err != nil {
@@ -413,7 +430,7 @@ func (m *Manager) RequestVolumeList(ctx context.Context, agentID, correlationID 
 		JobId: correlationID,
 		Type:  proto.JobType_JOB_TYPE_LIST_VOLUMES,
 	}
-	if err := agent.stream.Send(assignment); err != nil {
+	if err := agent.send(assignment); err != nil {
 		return VolumeListResult{}, fmt.Errorf("failed to send volume list request to agent %s: %w", agentID, err)
 	}
 
@@ -496,7 +513,7 @@ func (m *Manager) RequestSnapshotBrowse(ctx context.Context, agentID, correlatio
 		Type:    proto.JobType_JOB_TYPE_LIST_SNAPSHOT_FILES,
 		Payload: payloadJSON,
 	}
-	if err := agent.stream.Send(assignment); err != nil {
+	if err := agent.send(assignment); err != nil {
 		return SnapshotBrowseResult{}, fmt.Errorf("failed to send snapshot browse request to agent %s: %w", agentID, err)
 	}
 
@@ -575,7 +592,7 @@ func (m *Manager) RequestSnapshotImport(ctx context.Context, agentID, correlatio
 		Type:    proto.JobType_JOB_TYPE_IMPORT_SNAPSHOTS,
 		Payload: payloadJSON,
 	}
-	if err := agent.stream.Send(assignment); err != nil {
+	if err := agent.send(assignment); err != nil {
 		return SnapshotImportResult{}, fmt.Errorf("failed to send snapshot import request to agent %s: %w", agentID, err)
 	}
 

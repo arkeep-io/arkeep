@@ -124,6 +124,29 @@ func TestSnapshotHandler_GetByID(t *testing.T) {
 		}
 	})
 
+	t.Run("resolves policy, destination and agent like the list", func(t *testing.T) {
+		e := newTestEnv(t)
+		s := createDBSnapshot(t, e.deps)
+		policy, err := e.deps.policies.GetByID(context.Background(), *s.PolicyID)
+		if err != nil {
+			t.Fatalf("GetByID policy: %v", err)
+		}
+
+		resp := e.get(t, "/api/v1/snapshots/"+s.ID.String(), e.userToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			PolicyName      string `json:"policy_name"`
+			DestinationName string `json:"destination_name"`
+			AgentID         string `json:"agent_id"`
+			AgentName       string `json:"agent_name"`
+		}
+		decodeData(t, resp, &data)
+		if data.PolicyName != policy.Name || data.DestinationName == "" || data.AgentID != policy.AgentID.String() || data.AgentName == "" {
+			t.Errorf("names = %+v, want the policy %q, its agent %s and the destination resolved", data, policy.Name, policy.AgentID)
+		}
+	})
+
 	t.Run("returns 404 for non-existent snapshot", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.get(t, "/api/v1/snapshots/00000000-0000-0000-0000-000000000001", e.adminToken(t))

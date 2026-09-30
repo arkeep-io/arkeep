@@ -270,7 +270,11 @@ onMounted(fetchSnapshots)
                             <TableCell class="font-medium">{{ snapshot.policy_name }}</TableCell>
                             <TableCell class="text-muted-foreground">{{ snapshot.destination_name }}</TableCell>
                             <TableCell>
-                                <span class="font-mono text-sm">{{ abbreviate(snapshot.restic_snapshot_id) }}</span>
+                                <RouterLink :to="{ name: 'snapshot-browse', params: { id: snapshot.id } }"
+                                    class="font-mono text-sm underline-offset-4 hover:underline"
+                                    :title="`Browse snapshot ${snapshot.restic_snapshot_id}`">
+                                    {{ abbreviate(snapshot.restic_snapshot_id) }}
+                                </RouterLink>
                             </TableCell>
                             <TableCell class="text-sm text-muted-foreground">
                                 {{ formatBytes(snapshot.size_bytes) }}

@@ -56,6 +56,20 @@ func (r *gormSnapshotRepository) GetByID(ctx context.Context, id uuid.UUID) (*db
 	return &snapshot, nil
 }
 
+// GetByIDWithNames retrieves a snapshot with the same resolved names as the
+// list methods. Returns ErrNotFound if no record exists.
+func (r *gormSnapshotRepository) GetByIDWithNames(ctx context.Context, id uuid.UUID) (*SnapshotWithNames, error) {
+	var row SnapshotWithNames
+	if err := r.listWithNamesQuery(ctx).Where("snapshots.id = ?", id).Scan(&row).Error; err != nil {
+		return nil, fmt.Errorf("snapshots: get by id with names: %w", err)
+	}
+	// Scan does not report ErrRecordNotFound — detect a missing row via zero UUID.
+	if row.ID == (uuid.UUID{}) {
+		return nil, ErrNotFound
+	}
+	return &row, nil
+}
+
 // Delete permanently removes a snapshot record by ID.
 // Note: this only removes the cached record from the database — the actual
 // snapshot in the backup engine must be deleted separately via the backup

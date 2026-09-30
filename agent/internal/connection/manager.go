@@ -17,6 +17,7 @@
 package connection
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -568,6 +569,13 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 			continue
 		}
 
+		// DOWNLOAD_SNAPSHOT_FILE is a synthetic request that runs restic dump and
+		// streams the output via UploadSnapshotDownload, without creating a job.
+		if assignment.Type == proto.JobType_JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE {
+			go m.handleSnapshotDownloadRequest(assignment.JobId, agentID, assignment.Payload)
+			continue
+		}
+
 		// IMPORT_SNAPSHOTS is a synthetic request that runs restic snapshots and
 		// returns all snapshot metadata via ReportSnapshotImport, without creating a job.
 		if assignment.Type == proto.JobType_JOB_TYPE_IMPORT_SNAPSHOTS {
@@ -646,19 +654,40 @@ func (m *Manager) handleVolumeListRequest(correlationID, agentID string) {
 	}
 }
 
-// snapshotBrowsePayload is the JSON body sent by the server inside a
-// JOB_TYPE_LIST_SNAPSHOT_FILES JobAssignment.
-type snapshotBrowsePayload struct {
+// snapshotAccess is the part of the snapshot browse and download payloads
+// that tells the agent how to open the repository holding the snapshot.
+type snapshotAccess struct {
 	ResticSnapshotID string `json:"restic_snapshot_id"`
 	RepoPassword     string `json:"repo_password"`
-	// Path is the directory whose direct children should be listed. Empty means
-	// the snapshot root. The GUI sends one path per directory it expands.
-	Path        string `json:"path"`
-	Destination struct {
+	Destination      struct {
 		Type    string            `json:"type"`
 		RepoURL string            `json:"repo_url"`
 		Env     map[string]string `json:"env"`
 	} `json:"destination"`
+}
+
+// resticDestination builds the restic destination for a snapshot access,
+// translating a local repository path to where the host filesystem is mounted.
+func (m *Manager) resticDestination(a snapshotAccess) restic.Destination {
+	repoURL := a.Destination.RepoURL
+	if restic.DestinationType(a.Destination.Type) == restic.DestLocal {
+		repoURL = m.exec.TranslateLocalPath(repoURL)
+	}
+	return restic.Destination{
+		Type:     restic.DestinationType(a.Destination.Type),
+		RepoURL:  repoURL,
+		Password: a.RepoPassword,
+		Env:      a.Destination.Env,
+	}
+}
+
+// snapshotBrowsePayload is the JSON body sent by the server inside a
+// JOB_TYPE_LIST_SNAPSHOT_FILES JobAssignment.
+type snapshotBrowsePayload struct {
+	snapshotAccess
+	// Path is the directory whose direct children should be listed. Empty means
+	// the snapshot root. The GUI sends one path per directory it expands.
+	Path string `json:"path"`
 }
 
 // handleSnapshotBrowseRequest runs restic ls for the requested snapshot and
@@ -698,19 +727,7 @@ func (m *Manager) handleSnapshotBrowseRequest(correlationID, agentID string, pay
 		return
 	}
 
-	repoURL := p.Destination.RepoURL
-	if restic.DestinationType(p.Destination.Type) == restic.DestLocal {
-		repoURL = m.exec.TranslateLocalPath(repoURL)
-	}
-
-	dest := restic.Destination{
-		Type:     restic.DestinationType(p.Destination.Type),
-		RepoURL:  repoURL,
-		Password: p.RepoPassword,
-		Env:      p.Destination.Env,
-	}
-
-	entries, err := m.wrapper.Ls(ctx, dest, p.ResticSnapshotID, p.Path)
+	entries, err := m.wrapper.Ls(ctx, m.resticDestination(p.snapshotAccess), p.ResticSnapshotID, p.Path)
 	if err != nil {
 		report.Error = err.Error()
 	} else {
@@ -731,6 +748,100 @@ func (m *Manager) handleSnapshotBrowseRequest(correlationID, agentID string, pay
 			zap.Error(err),
 		)
 	}
+}
+
+// snapshotDownloadPayload is the JSON body sent by the server inside a
+// JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE JobAssignment.
+type snapshotDownloadPayload struct {
+	snapshotAccess
+	// Path is the file or directory to download.
+	Path string `json:"path"`
+	// Archive is set for a directory, which is downloaded as a ZIP archive.
+	Archive bool `json:"archive"`
+}
+
+// downloadChunkSize bounds each UploadSnapshotDownload message, far below the
+// 16 MB gRPC message limit.
+const downloadChunkSize = 256 * 1024
+
+// handleSnapshotDownloadRequest runs restic dump for the requested path and
+// streams its output to the server over UploadSnapshotDownload. Runs in its own
+// goroutine so it does not block the job stream loop. When the server closes
+// the stream (the browser went away) the next send fails, restic's stdout
+// breaks, and the dump stops.
+func (m *Manager) handleSnapshotDownloadRequest(correlationID, agentID string, payload []byte) {
+	m.mu.RLock()
+	client := m.client
+	ctx := m.sessionCtx
+	m.mu.RUnlock()
+
+	if client == nil {
+		m.logger.Warn("handleSnapshotDownloadRequest: no active gRPC client",
+			zap.String("correlation_id", correlationID))
+		return
+	}
+
+	stream, err := client.UploadSnapshotDownload(ctx)
+	if err == nil {
+		err = stream.Send(&proto.SnapshotDownloadChunk{AgentId: agentID, CorrelationId: correlationID})
+	}
+	if err != nil {
+		m.logger.Warn("handleSnapshotDownloadRequest: opening UploadSnapshotDownload failed",
+			zap.String("correlation_id", correlationID),
+			zap.Error(err),
+		)
+		return
+	}
+
+	if err := m.dumpSnapshot(ctx, payload, stream.Send); err != nil {
+		if sendErr := stream.Send(&proto.SnapshotDownloadChunk{Error: err.Error()}); sendErr != nil {
+			m.logger.Warn("handleSnapshotDownloadRequest: dump failed and could not be reported",
+				zap.String("correlation_id", correlationID),
+				zap.Error(err),
+			)
+		}
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		m.logger.Debug("handleSnapshotDownloadRequest: stream closed by server",
+			zap.String("correlation_id", correlationID),
+			zap.Error(err),
+		)
+	}
+}
+
+// dumpSnapshot runs the dump described by payload, sending its output as data
+// chunks through send.
+func (m *Manager) dumpSnapshot(ctx context.Context, payload []byte, send func(*proto.SnapshotDownloadChunk) error) error {
+	if m.wrapper == nil {
+		return errors.New("restic is unavailable on this agent")
+	}
+	var p snapshotDownloadPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return fmt.Errorf("failed to parse download payload: %w", err)
+	}
+
+	out := bufio.NewWriterSize(chunkWriter(send), downloadChunkSize)
+	if err := m.wrapper.Dump(ctx, m.resticDestination(p.snapshotAccess), p.ResticSnapshotID, p.Path, p.Archive, out); err != nil {
+		return err
+	}
+	return out.Flush()
+}
+
+// chunkWriter sends everything written to it as SnapshotDownloadChunk data,
+// at most downloadChunkSize bytes per message.
+type chunkWriter func(*proto.SnapshotDownloadChunk) error
+
+func (send chunkWriter) Write(p []byte) (int, error) {
+	written := 0
+	for len(p) > 0 {
+		n := min(len(p), downloadChunkSize)
+		if err := send(&proto.SnapshotDownloadChunk{Data: p[:n]}); err != nil {
+			return written, err
+		}
+		written += n
+		p = p[n:]
+	}
+	return written, nil
 }
 
 // snapshotImportPayload is the JSON body sent by the server inside a
