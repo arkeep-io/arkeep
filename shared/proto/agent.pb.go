@@ -56,6 +56,11 @@ const (
 	// queued but not yet started, it is marked for cancellation before execution.
 	// The agent reports JOB_STATUS_CANCELLED via ReportJobStatus after aborting.
 	JobType_JOB_TYPE_CANCEL JobType = 8
+	// JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE is a synthetic, non-persisted job type used
+	// to download a file (or a directory as a ZIP archive) from a Restic snapshot.
+	// The job_id carries a correlation_id; the agent responds by opening
+	// UploadSnapshotDownload.
+	JobType_JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE JobType = 9
 )
 
 // Enum value maps for JobType.
@@ -70,17 +75,19 @@ var (
 		6: "JOB_TYPE_LIST_SNAPSHOT_FILES",
 		7: "JOB_TYPE_IMPORT_SNAPSHOTS",
 		8: "JOB_TYPE_CANCEL",
+		9: "JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE",
 	}
 	JobType_value = map[string]int32{
-		"JOB_TYPE_UNSPECIFIED":         0,
-		"JOB_TYPE_BACKUP":              1,
-		"JOB_TYPE_VERIFY":              2,
-		"JOB_TYPE_RESTORE":             3,
-		"JOB_TYPE_FORGET":              4,
-		"JOB_TYPE_LIST_VOLUMES":        5,
-		"JOB_TYPE_LIST_SNAPSHOT_FILES": 6,
-		"JOB_TYPE_IMPORT_SNAPSHOTS":    7,
-		"JOB_TYPE_CANCEL":              8,
+		"JOB_TYPE_UNSPECIFIED":            0,
+		"JOB_TYPE_BACKUP":                 1,
+		"JOB_TYPE_VERIFY":                 2,
+		"JOB_TYPE_RESTORE":                3,
+		"JOB_TYPE_FORGET":                 4,
+		"JOB_TYPE_LIST_VOLUMES":           5,
+		"JOB_TYPE_LIST_SNAPSHOT_FILES":    6,
+		"JOB_TYPE_IMPORT_SNAPSHOTS":       7,
+		"JOB_TYPE_CANCEL":                 8,
+		"JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE": 9,
 	}
 )
 
@@ -1603,6 +1610,116 @@ func (x *SnapshotBrowseResponse) GetOk() bool {
 	return false
 }
 
+// SnapshotDownloadChunk is one message of the UploadSnapshotDownload stream.
+type SnapshotDownloadChunk struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// agent_id and correlation_id are set on the first chunk only. The
+	// correlation_id echoes the job_id from the JobAssignment.
+	AgentId       string `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	CorrelationId string `protobuf:"bytes,2,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	// data is the next part of the restic dump output.
+	Data []byte `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	// error is set on the final chunk of a dump that failed.
+	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotDownloadChunk) Reset() {
+	*x = SnapshotDownloadChunk{}
+	mi := &file_agent_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotDownloadChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotDownloadChunk) ProtoMessage() {}
+
+func (x *SnapshotDownloadChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotDownloadChunk.ProtoReflect.Descriptor instead.
+func (*SnapshotDownloadChunk) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *SnapshotDownloadChunk) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *SnapshotDownloadChunk) GetCorrelationId() string {
+	if x != nil {
+		return x.CorrelationId
+	}
+	return ""
+}
+
+func (x *SnapshotDownloadChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *SnapshotDownloadChunk) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// SnapshotDownloadAck acknowledges the end of an UploadSnapshotDownload stream.
+type SnapshotDownloadAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotDownloadAck) Reset() {
+	*x = SnapshotDownloadAck{}
+	mi := &file_agent_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotDownloadAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotDownloadAck) ProtoMessage() {}
+
+func (x *SnapshotDownloadAck) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotDownloadAck.ProtoReflect.Descriptor instead.
+func (*SnapshotDownloadAck) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{21}
+}
+
 // ImportedSnapshotInfo holds the metadata of a single snapshot found in an
 // existing Restic repository, as returned by `restic snapshots --json`.
 type ImportedSnapshotInfo struct {
@@ -1631,7 +1748,7 @@ type ImportedSnapshotInfo struct {
 
 func (x *ImportedSnapshotInfo) Reset() {
 	*x = ImportedSnapshotInfo{}
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1643,7 +1760,7 @@ func (x *ImportedSnapshotInfo) String() string {
 func (*ImportedSnapshotInfo) ProtoMessage() {}
 
 func (x *ImportedSnapshotInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1656,7 +1773,7 @@ func (x *ImportedSnapshotInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportedSnapshotInfo.ProtoReflect.Descriptor instead.
 func (*ImportedSnapshotInfo) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{20}
+	return file_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ImportedSnapshotInfo) GetResticSnapshotId() string {
@@ -1733,7 +1850,7 @@ type SnapshotImportReport struct {
 
 func (x *SnapshotImportReport) Reset() {
 	*x = SnapshotImportReport{}
-	mi := &file_agent_proto_msgTypes[21]
+	mi := &file_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1745,7 +1862,7 @@ func (x *SnapshotImportReport) String() string {
 func (*SnapshotImportReport) ProtoMessage() {}
 
 func (x *SnapshotImportReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[21]
+	mi := &file_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1758,7 +1875,7 @@ func (x *SnapshotImportReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotImportReport.ProtoReflect.Descriptor instead.
 func (*SnapshotImportReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{21}
+	return file_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SnapshotImportReport) GetAgentId() string {
@@ -1806,7 +1923,7 @@ type SnapshotImportResponse struct {
 
 func (x *SnapshotImportResponse) Reset() {
 	*x = SnapshotImportResponse{}
-	mi := &file_agent_proto_msgTypes[22]
+	mi := &file_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1818,7 +1935,7 @@ func (x *SnapshotImportResponse) String() string {
 func (*SnapshotImportResponse) ProtoMessage() {}
 
 func (x *SnapshotImportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[22]
+	mi := &file_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1831,7 +1948,7 @@ func (x *SnapshotImportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotImportResponse.ProtoReflect.Descriptor instead.
 func (*SnapshotImportResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{22}
+	return file_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SnapshotImportResponse) GetOk() bool {
@@ -1878,7 +1995,7 @@ type SnapshotReconcileReport struct {
 
 func (x *SnapshotReconcileReport) Reset() {
 	*x = SnapshotReconcileReport{}
-	mi := &file_agent_proto_msgTypes[23]
+	mi := &file_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1890,7 +2007,7 @@ func (x *SnapshotReconcileReport) String() string {
 func (*SnapshotReconcileReport) ProtoMessage() {}
 
 func (x *SnapshotReconcileReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[23]
+	mi := &file_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1903,7 +2020,7 @@ func (x *SnapshotReconcileReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotReconcileReport.ProtoReflect.Descriptor instead.
 func (*SnapshotReconcileReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{23}
+	return file_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SnapshotReconcileReport) GetAgentId() string {
@@ -1959,7 +2076,7 @@ type SnapshotReconcileResponse struct {
 
 func (x *SnapshotReconcileResponse) Reset() {
 	*x = SnapshotReconcileResponse{}
-	mi := &file_agent_proto_msgTypes[24]
+	mi := &file_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1971,7 +2088,7 @@ func (x *SnapshotReconcileResponse) String() string {
 func (*SnapshotReconcileResponse) ProtoMessage() {}
 
 func (x *SnapshotReconcileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[24]
+	mi := &file_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1984,7 +2101,7 @@ func (x *SnapshotReconcileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotReconcileResponse.ProtoReflect.Descriptor instead.
 func (*SnapshotReconcileResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{24}
+	return file_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SnapshotReconcileResponse) GetDeleted() int64 {
@@ -2092,7 +2209,13 @@ const file_agent_proto_rawDesc = "" +
 	"\aentries\x18\x03 \x03(\v2\x18.agent.SnapshotFileEntryR\aentries\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\"(\n" +
 	"\x16SnapshotBrowseResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xed\x01\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x83\x01\n" +
+	"\x15SnapshotDownloadChunk\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12%\n" +
+	"\x0ecorrelation_id\x18\x02 \x01(\tR\rcorrelationId\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x15\n" +
+	"\x13SnapshotDownloadAck\"\xed\x01\n" +
 	"\x14ImportedSnapshotInfo\x12,\n" +
 	"\x12restic_snapshot_id\x18\x01 \x01(\tR\x10resticSnapshotId\x12#\n" +
 	"\rsnapshot_time\x18\x02 \x01(\tR\fsnapshotTime\x12\x14\n" +
@@ -2119,7 +2242,7 @@ const file_agent_proto_rawDesc = "" +
 	"\tlisted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\blistedAt\x12&\n" +
 	"\x0frepo_size_bytes\x18\x06 \x01(\x03R\rrepoSizeBytes\"5\n" +
 	"\x19SnapshotReconcileResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\x03R\adeleted*\xe9\x01\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted*\x8e\x02\n" +
 	"\aJobType\x12\x18\n" +
 	"\x14JOB_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fJOB_TYPE_BACKUP\x10\x01\x12\x13\n" +
@@ -2129,7 +2252,8 @@ const file_agent_proto_rawDesc = "" +
 	"\x15JOB_TYPE_LIST_VOLUMES\x10\x05\x12 \n" +
 	"\x1cJOB_TYPE_LIST_SNAPSHOT_FILES\x10\x06\x12\x1d\n" +
 	"\x19JOB_TYPE_IMPORT_SNAPSHOTS\x10\a\x12\x13\n" +
-	"\x0fJOB_TYPE_CANCEL\x10\b*\x8a\x01\n" +
+	"\x0fJOB_TYPE_CANCEL\x10\b\x12#\n" +
+	"\x1fJOB_TYPE_DOWNLOAD_SNAPSHOT_FILE\x10\t*\x8a\x01\n" +
 	"\tJobStatus\x12\x1a\n" +
 	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12JOB_STATUS_RUNNING\x10\x01\x12\x18\n" +
@@ -2141,7 +2265,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x0fLOG_LEVEL_DEBUG\x10\x01\x12\x12\n" +
 	"\x0eLOG_LEVEL_INFO\x10\x02\x12\x12\n" +
 	"\x0eLOG_LEVEL_WARN\x10\x03\x12\x13\n" +
-	"\x0fLOG_LEVEL_ERROR\x10\x042\xf5\x05\n" +
+	"\x0fLOG_LEVEL_ERROR\x10\x042\xcb\x06\n" +
 	"\fAgentService\x12;\n" +
 	"\bRegister\x12\x16.agent.RegisterRequest\x1a\x17.agent.RegisterResponse\x12>\n" +
 	"\tHeartbeat\x12\x17.agent.HeartbeatRequest\x1a\x18.agent.HeartbeatResponse\x12>\n" +
@@ -2153,7 +2277,8 @@ const file_agent_proto_rawDesc = "" +
 	"StreamLogs\x12\x0f.agent.LogEntry\x1a\x18.agent.LogStreamResponse(\x01\x12F\n" +
 	"\x10ReportVolumeList\x12\x17.agent.VolumeListReport\x1a\x19.agent.VolumeListResponse\x12R\n" +
 	"\x14ReportSnapshotBrowse\x12\x1b.agent.SnapshotBrowseReport\x1a\x1d.agent.SnapshotBrowseResponse\x12R\n" +
-	"\x14ReportSnapshotImport\x12\x1b.agent.SnapshotImportReport\x1a\x1d.agent.SnapshotImportResponse\x12[\n" +
+	"\x14ReportSnapshotImport\x12\x1b.agent.SnapshotImportReport\x1a\x1d.agent.SnapshotImportResponse\x12T\n" +
+	"\x16UploadSnapshotDownload\x12\x1c.agent.SnapshotDownloadChunk\x1a\x1a.agent.SnapshotDownloadAck(\x01\x12[\n" +
 	"\x17ReportSnapshotReconcile\x12\x1e.agent.SnapshotReconcileReport\x1a .agent.SnapshotReconcileResponseB*Z(github.com/arkeep-io/arkeep/shared/protob\x06proto3"
 
 var (
@@ -2169,7 +2294,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_agent_proto_goTypes = []any{
 	(JobType)(0),                      // 0: agent.JobType
 	(JobStatus)(0),                    // 1: agent.JobStatus
@@ -2194,27 +2319,29 @@ var file_agent_proto_goTypes = []any{
 	(*SnapshotFileEntry)(nil),         // 20: agent.SnapshotFileEntry
 	(*SnapshotBrowseReport)(nil),      // 21: agent.SnapshotBrowseReport
 	(*SnapshotBrowseResponse)(nil),    // 22: agent.SnapshotBrowseResponse
-	(*ImportedSnapshotInfo)(nil),      // 23: agent.ImportedSnapshotInfo
-	(*SnapshotImportReport)(nil),      // 24: agent.SnapshotImportReport
-	(*SnapshotImportResponse)(nil),    // 25: agent.SnapshotImportResponse
-	(*SnapshotReconcileReport)(nil),   // 26: agent.SnapshotReconcileReport
-	(*SnapshotReconcileResponse)(nil), // 27: agent.SnapshotReconcileResponse
-	(*timestamppb.Timestamp)(nil),     // 28: google.protobuf.Timestamp
+	(*SnapshotDownloadChunk)(nil),     // 23: agent.SnapshotDownloadChunk
+	(*SnapshotDownloadAck)(nil),       // 24: agent.SnapshotDownloadAck
+	(*ImportedSnapshotInfo)(nil),      // 25: agent.ImportedSnapshotInfo
+	(*SnapshotImportReport)(nil),      // 26: agent.SnapshotImportReport
+	(*SnapshotImportResponse)(nil),    // 27: agent.SnapshotImportResponse
+	(*SnapshotReconcileReport)(nil),   // 28: agent.SnapshotReconcileReport
+	(*SnapshotReconcileResponse)(nil), // 29: agent.SnapshotReconcileResponse
+	(*timestamppb.Timestamp)(nil),     // 30: google.protobuf.Timestamp
 }
 var file_agent_proto_depIdxs = []int32{
 	4,  // 0: agent.RegisterRequest.capabilities:type_name -> agent.AgentCapabilities
 	7,  // 1: agent.HeartbeatRequest.metrics:type_name -> agent.SystemMetrics
 	0,  // 2: agent.JobAssignment.type:type_name -> agent.JobType
-	28, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
+	30, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
 	1,  // 4: agent.JobStatusReport.status:type_name -> agent.JobStatus
-	28, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
-	28, // 6: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
+	30, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
+	30, // 6: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
 	2,  // 7: agent.LogEntry.level:type_name -> agent.LogLevel
-	28, // 8: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	30, // 8: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
 	17, // 9: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
 	20, // 10: agent.SnapshotBrowseReport.entries:type_name -> agent.SnapshotFileEntry
-	23, // 11: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
-	28, // 12: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
+	25, // 11: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
+	30, // 12: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
 	3,  // 13: agent.AgentService.Register:input_type -> agent.RegisterRequest
 	6,  // 14: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
 	9,  // 15: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
@@ -2223,20 +2350,22 @@ var file_agent_proto_depIdxs = []int32{
 	15, // 18: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
 	18, // 19: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
 	21, // 20: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
-	24, // 21: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
-	26, // 22: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
-	5,  // 23: agent.AgentService.Register:output_type -> agent.RegisterResponse
-	8,  // 24: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // 25: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
-	12, // 26: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
-	14, // 27: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
-	16, // 28: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
-	19, // 29: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
-	22, // 30: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
-	25, // 31: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
-	27, // 32: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
-	23, // [23:33] is the sub-list for method output_type
-	13, // [13:23] is the sub-list for method input_type
+	26, // 21: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
+	23, // 22: agent.AgentService.UploadSnapshotDownload:input_type -> agent.SnapshotDownloadChunk
+	28, // 23: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
+	5,  // 24: agent.AgentService.Register:output_type -> agent.RegisterResponse
+	8,  // 25: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
+	10, // 26: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
+	12, // 27: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
+	14, // 28: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
+	16, // 29: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
+	19, // 30: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
+	22, // 31: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
+	27, // 32: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
+	24, // 33: agent.AgentService.UploadSnapshotDownload:output_type -> agent.SnapshotDownloadAck
+	29, // 34: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
+	24, // [24:35] is the sub-list for method output_type
+	13, // [13:24] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name
@@ -2253,7 +2382,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   25,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

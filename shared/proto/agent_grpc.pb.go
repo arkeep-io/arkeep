@@ -28,6 +28,7 @@ const (
 	AgentService_ReportVolumeList_FullMethodName        = "/agent.AgentService/ReportVolumeList"
 	AgentService_ReportSnapshotBrowse_FullMethodName    = "/agent.AgentService/ReportSnapshotBrowse"
 	AgentService_ReportSnapshotImport_FullMethodName    = "/agent.AgentService/ReportSnapshotImport"
+	AgentService_UploadSnapshotDownload_FullMethodName  = "/agent.AgentService/UploadSnapshotDownload"
 	AgentService_ReportSnapshotReconcile_FullMethodName = "/agent.AgentService/ReportSnapshotReconcile"
 )
 
@@ -100,6 +101,13 @@ type AgentServiceClient interface {
 	// JOB_TYPE_IMPORT_SNAPSHOTS assignment. The agent runs restic snapshots on the
 	// destination and returns all snapshot metadata for the server to persist.
 	ReportSnapshotImport(ctx context.Context, in *SnapshotImportReport, opts ...grpc.CallOption) (*SnapshotImportResponse, error)
+	// UploadSnapshotDownload is opened by the agent in response to a
+	// JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE assignment and streams the output of
+	// restic dump back to the server, which relays it to the waiting HTTP
+	// download. The first chunk carries only the agent and correlation IDs; an
+	// error chunk ends a failed dump. The server closing the stream (the browser
+	// went away) is the agent's signal to stop dumping.
+	UploadSnapshotDownload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SnapshotDownloadChunk, SnapshotDownloadAck], error)
 	// ReportSnapshotReconcile is called by the agent after retention has run for
 	// a destination. It carries the authoritative set of snapshot IDs still
 	// present in that destination's repository, so the server can evict cached
@@ -221,6 +229,19 @@ func (c *agentServiceClient) ReportSnapshotImport(ctx context.Context, in *Snaps
 	return out, nil
 }
 
+func (c *agentServiceClient) UploadSnapshotDownload(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SnapshotDownloadChunk, SnapshotDownloadAck], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[2], AgentService_UploadSnapshotDownload_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[SnapshotDownloadChunk, SnapshotDownloadAck]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_UploadSnapshotDownloadClient = grpc.ClientStreamingClient[SnapshotDownloadChunk, SnapshotDownloadAck]
+
 func (c *agentServiceClient) ReportSnapshotReconcile(ctx context.Context, in *SnapshotReconcileReport, opts ...grpc.CallOption) (*SnapshotReconcileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SnapshotReconcileResponse)
@@ -300,6 +321,13 @@ type AgentServiceServer interface {
 	// JOB_TYPE_IMPORT_SNAPSHOTS assignment. The agent runs restic snapshots on the
 	// destination and returns all snapshot metadata for the server to persist.
 	ReportSnapshotImport(context.Context, *SnapshotImportReport) (*SnapshotImportResponse, error)
+	// UploadSnapshotDownload is opened by the agent in response to a
+	// JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE assignment and streams the output of
+	// restic dump back to the server, which relays it to the waiting HTTP
+	// download. The first chunk carries only the agent and correlation IDs; an
+	// error chunk ends a failed dump. The server closing the stream (the browser
+	// went away) is the agent's signal to stop dumping.
+	UploadSnapshotDownload(grpc.ClientStreamingServer[SnapshotDownloadChunk, SnapshotDownloadAck]) error
 	// ReportSnapshotReconcile is called by the agent after retention has run for
 	// a destination. It carries the authoritative set of snapshot IDs still
 	// present in that destination's repository, so the server can evict cached
@@ -345,6 +373,9 @@ func (UnimplementedAgentServiceServer) ReportSnapshotBrowse(context.Context, *Sn
 }
 func (UnimplementedAgentServiceServer) ReportSnapshotImport(context.Context, *SnapshotImportReport) (*SnapshotImportResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportSnapshotImport not implemented")
+}
+func (UnimplementedAgentServiceServer) UploadSnapshotDownload(grpc.ClientStreamingServer[SnapshotDownloadChunk, SnapshotDownloadAck]) error {
+	return status.Error(codes.Unimplemented, "method UploadSnapshotDownload not implemented")
 }
 func (UnimplementedAgentServiceServer) ReportSnapshotReconcile(context.Context, *SnapshotReconcileReport) (*SnapshotReconcileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportSnapshotReconcile not implemented")
@@ -514,6 +545,13 @@ func _AgentService_ReportSnapshotImport_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_UploadSnapshotDownload_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentServiceServer).UploadSnapshotDownload(&grpc.GenericServerStream[SnapshotDownloadChunk, SnapshotDownloadAck]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_UploadSnapshotDownloadServer = grpc.ClientStreamingServer[SnapshotDownloadChunk, SnapshotDownloadAck]
+
 func _AgentService_ReportSnapshotReconcile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SnapshotReconcileReport)
 	if err := dec(in); err != nil {
@@ -581,6 +619,11 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamLogs",
 			Handler:       _AgentService_StreamLogs_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "UploadSnapshotDownload",
+			Handler:       _AgentService_UploadSnapshotDownload_Handler,
 			ClientStreams: true,
 		},
 	},

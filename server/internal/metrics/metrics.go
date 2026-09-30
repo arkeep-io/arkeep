@@ -137,6 +137,13 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap exposes the underlying ResponseWriter to http.ResponseController, so
+// handlers behind this middleware can flush and extend their write deadline
+// (long snapshot browses, streamed downloads).
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 // Hijack implements http.Hijacker so that WebSocket upgrades work correctly
 // through this middleware. Gorilla websocket (and the stdlib) require the
 // underlying ResponseWriter to satisfy http.Hijacker to take over the TCP

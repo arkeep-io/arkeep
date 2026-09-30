@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -66,6 +67,8 @@ type policyResponse struct {
 	// ResumeInterrupted: resume a backup automatically when the agent reconnects
 	// after having disconnected mid-run.
 	ResumeInterrupted bool                        `json:"resume_interrupted"`
+	NotifyOnSuccess   string                      `json:"notify_on_success"`
+	NotifyOnFailure   string                      `json:"notify_on_failure"`
 	Destinations      []policyDestinationResponse `json:"destinations"`
 	LastRunAt         *string                     `json:"last_run_at"`
 	NextRunAt         *string                     `json:"next_run_at"`
@@ -89,6 +92,8 @@ func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinatio
 		HookPostBackup:    p.HookPostBackup,
 		ExcludePatterns:   p.ExcludePatterns,
 		ResumeInterrupted: p.ResumeInterrupted,
+		NotifyOnSuccess:   p.NotifyOnSuccess,
+		NotifyOnFailure:   p.NotifyOnFailure,
 		Destinations:      make([]policyDestinationResponse, len(destinations)),
 		CreatedAt:         p.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -180,8 +185,12 @@ type createPolicyRequest struct {
 	ExcludePatterns        string `json:"exclude_patterns"` // JSON array
 	// ResumeInterrupted is optional: omitted means enabled, which is the useful
 	// default for the laptop case this exists for.
-	ResumeInterrupted *bool                     `json:"resume_interrupted"`
-	Destinations      []destinationEntryRequest `json:"destinations"`
+	ResumeInterrupted *bool `json:"resume_interrupted"`
+	// NotifyOnSuccess / NotifyOnFailure are optional: omitted means inherit the
+	// global notification settings.
+	NotifyOnSuccess string                    `json:"notify_on_success"`
+	NotifyOnFailure string                    `json:"notify_on_failure"`
+	Destinations    []destinationEntryRequest `json:"destinations"`
 }
 
 // destinationEntryRequest represents a single destination entry in a create/update request.
@@ -251,6 +260,8 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HookPostBackup:    req.HookPostBackup,
 		ExcludePatterns:   normalizeJSONArray(req.ExcludePatterns),
 		ResumeInterrupted: req.ResumeInterrupted == nil || *req.ResumeInterrupted,
+		NotifyOnSuccess:   req.NotifyOnSuccess,
+		NotifyOnFailure:   req.NotifyOnFailure,
 	}
 
 	if err := h.repo.Create(r.Context(), policy); err != nil {
@@ -380,6 +391,8 @@ type updatePolicyRequest struct {
 	HookPostBackup    *string                   `json:"hook_post_backup"`
 	ExcludePatterns   *string                   `json:"exclude_patterns"`
 	ResumeInterrupted *bool                     `json:"resume_interrupted"`
+	NotifyOnSuccess   *string                   `json:"notify_on_success"`
+	NotifyOnFailure   *string                   `json:"notify_on_failure"`
 	Destinations      []destinationEntryRequest `json:"destinations"`
 }
 
@@ -492,6 +505,20 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ResumeInterrupted != nil {
 		policy.ResumeInterrupted = *req.ResumeInterrupted
+	}
+	if req.NotifyOnSuccess != nil {
+		if err := validateNotifyOverride(*req.NotifyOnSuccess); err != nil {
+			ErrBadRequest(w, "notify_on_success: "+err.Error())
+			return
+		}
+		policy.NotifyOnSuccess = *req.NotifyOnSuccess
+	}
+	if req.NotifyOnFailure != nil {
+		if err := validateNotifyOverride(*req.NotifyOnFailure); err != nil {
+			ErrBadRequest(w, "notify_on_failure: "+err.Error())
+			return
+		}
+		policy.NotifyOnFailure = *req.NotifyOnFailure
 	}
 	if req.ExcludePatterns != nil {
 		policy.ExcludePatterns = normalizeJSONArray(*req.ExcludePatterns)
@@ -611,7 +638,8 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 // Validation
 // -----------------------------------------------------------------------------
 
-// validateCreatePolicy checks required fields for policy creation.
+// validateCreatePolicy checks required fields for policy creation and fills
+// in the defaults of optional fields.
 func validateCreatePolicy(req *createPolicyRequest) error {
 	if req.Name == "" {
 		return errors.New("name is required")
@@ -643,7 +671,24 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	if err := validateHookCommand(req.HookPostBackup); err != nil {
 		return errors.New("hook_post_backup: " + err.Error())
 	}
+	req.NotifyOnSuccess = cmp.Or(req.NotifyOnSuccess, db.NotifyInherit)
+	if err := validateNotifyOverride(req.NotifyOnSuccess); err != nil {
+		return errors.New("notify_on_success: " + err.Error())
+	}
+	req.NotifyOnFailure = cmp.Or(req.NotifyOnFailure, db.NotifyInherit)
+	if err := validateNotifyOverride(req.NotifyOnFailure); err != nil {
+		return errors.New("notify_on_failure: " + err.Error())
+	}
 	return nil
+}
+
+// validateNotifyOverride checks a per-policy notification override value.
+func validateNotifyOverride(v string) error {
+	switch v {
+	case db.NotifyInherit, db.NotifyAlways, db.NotifyNever:
+		return nil
+	}
+	return fmt.Errorf("must be one of %q, %q, %q", db.NotifyInherit, db.NotifyAlways, db.NotifyNever)
 }
 
 // validateSchedule parses a cron expression to ensure it's valid.

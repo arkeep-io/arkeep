@@ -317,6 +317,7 @@ type JobRepository interface {
 type SnapshotRepository interface {
 	Create(ctx context.Context, snapshot *db.Snapshot) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Snapshot, error)
+	GetByIDWithNames(ctx context.Context, id uuid.UUID) (*SnapshotWithNames, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteStaleByDestination(ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time) (int64, error)
 	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)

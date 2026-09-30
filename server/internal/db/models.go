@@ -254,14 +254,26 @@ type Policy struct {
 	// explicit false into true. The DEFAULT TRUE in the migration is what
 	// backfills pre-existing rows.
 	ResumeInterrupted bool `gorm:"not null"`
-	LastRunAt         *time.Time
-	NextRunAt         *time.Time
+	// NotifyOnSuccess / NotifyOnFailure override the global job_success /
+	// job_failure notification toggles for this policy's jobs. One of the
+	// Notify* values below.
+	NotifyOnSuccess string `gorm:"type:text;not null"`
+	NotifyOnFailure string `gorm:"type:text;not null"`
+	LastRunAt       *time.Time
+	NextRunAt       *time.Time
 
 	// Destinations is populated by GetByIDWithDestinations via a manual query.
 	// The gorm:"-" tag prevents GORM from attempting foreign key resolution
 	// on this field, which would fail with uuid.UUID primary keys.
 	Destinations []PolicyDestination `gorm:"-"`
 }
+
+// Values of Policy.NotifyOnSuccess / Policy.NotifyOnFailure.
+const (
+	NotifyInherit = "inherit" // follow the global notification setting
+	NotifyAlways  = "always"
+	NotifyNever   = "never"
+)
 
 // PolicyDestination is the join table between Policy and Destination.
 // Priority determines the order in which destinations are tried (lower = first).

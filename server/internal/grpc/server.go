@@ -1063,6 +1063,31 @@ func (s *Server) ReportSnapshotBrowse(ctx context.Context, req *proto.SnapshotBr
 	return &proto.SnapshotBrowseResponse{Ok: true}, nil
 }
 
+// UploadSnapshotDownload receives the output of restic dump from an agent in
+// response to a JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE request and hands it to the
+// HTTP download waiting for it. The handler stays parked while the download
+// reads the stream; returning ends the stream, which is how a download the
+// browser abandoned stops the dump on the agent.
+func (s *Server) UploadSnapshotDownload(stream proto.AgentService_UploadSnapshotDownloadServer) error {
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+
+	dl := agentmanager.NewSnapshotDownload(first, stream.Recv)
+	if !s.agentManager.DeliverSnapshotDownload(dl) {
+		return status.Error(codes.NotFound, "no download is waiting for this correlation id")
+	}
+
+	select {
+	case <-dl.Done():
+		return stream.SendAndClose(&proto.SnapshotDownloadAck{})
+	case <-stream.Context().Done():
+		dl.Close()
+		return stream.Context().Err()
+	}
+}
+
 // ReportSnapshotImport receives the snapshot list from an agent in response to
 // a JOB_TYPE_IMPORT_SNAPSHOTS request. It delivers the result to the waiting
 // RequestSnapshotImport call via the agent manager.

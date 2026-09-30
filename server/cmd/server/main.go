@@ -294,6 +294,7 @@ func run(ctx context.Context, cfg *config) error {
 		NotifRepo:    notificationRepo,
 		UserRepo:     userRepo,
 		SettingsRepo: settingsRepo,
+		PolicyRepo:   policyRepo,
 		Hub:          wsHub,
 		Logger:       logger,
 	})

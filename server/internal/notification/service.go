@@ -3,6 +3,7 @@ package notification
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ type NotificationService struct {
 	notifRepo    repositories.NotificationRepository
 	userRepo     repositories.UserRepository
 	settingsRepo repositories.SettingsRepository
+	policyRepo   repositories.PolicyRepository
 	hub          *websocket.Hub
 	email        *emailSender
 	webhook      *webhookSender
@@ -58,6 +60,7 @@ type Config struct {
 	NotifRepo    repositories.NotificationRepository
 	UserRepo     repositories.UserRepository
 	SettingsRepo repositories.SettingsRepository
+	PolicyRepo   repositories.PolicyRepository
 	Hub          *websocket.Hub
 	Logger       *zap.Logger
 }
@@ -72,6 +75,7 @@ func NewService(cfg Config) *NotificationService {
 		notifRepo:    cfg.NotifRepo,
 		userRepo:     cfg.UserRepo,
 		settingsRepo: cfg.SettingsRepo,
+		policyRepo:   cfg.PolicyRepo,
 		hub:          cfg.Hub,
 		logger:       cfg.Logger.Named("notification"),
 	}
@@ -137,11 +141,16 @@ func (s *NotificationService) NotifyJobSucceeded(ctx context.Context, jobID, pol
 		"policy_id":   policyID.String(),
 		"policy_name": policyName,
 	}
+	var override string
+	if p := s.loadPolicy(ctx, policyID); p != nil {
+		override = p.NotifyOnSuccess
+	}
 	return s.notify(ctx, event{
 		notifType: "job_success",
 		title:     fmt.Sprintf("Backup completed: %s", policyName),
 		body:      fmt.Sprintf("Policy \"%s\" completed successfully at %s.", policyName, time.Now().UTC().Format(time.RFC3339)),
 		payload:   payload,
+		override:  override,
 	})
 }
 
@@ -154,12 +163,37 @@ func (s *NotificationService) NotifyJobFailed(ctx context.Context, jobID, policy
 		"policy_name": policyName,
 		"error":       errMsg,
 	}
+	var override string
+	if p := s.loadPolicy(ctx, policyID); p != nil {
+		override = p.NotifyOnFailure
+	}
 	return s.notify(ctx, event{
 		notifType: "job_failure",
 		title:     fmt.Sprintf("Backup failed: %s", policyName),
 		body:      fmt.Sprintf("Policy \"%s\" failed at %s: %s", policyName, time.Now().UTC().Format(time.RFC3339), errMsg),
 		payload:   payload,
+		override:  override,
 	})
+}
+
+// loadPolicy returns the policy a job notification refers to, or nil when the
+// job has none (retention jobs, restores of imported snapshots) or it can no
+// longer be loaded — the global notification settings then apply.
+func (s *NotificationService) loadPolicy(ctx context.Context, policyID uuid.UUID) *db.Policy {
+	if policyID == uuid.Nil {
+		return nil
+	}
+	p, err := s.policyRepo.GetByID(ctx, policyID)
+	if err != nil {
+		if !errors.Is(err, repositories.ErrNotFound) {
+			s.logger.Warn("failed to load policy notification override",
+				zap.String("policy_id", policyID.String()),
+				zap.Error(err),
+			)
+		}
+		return nil
+	}
+	return p
 }
 
 func (s *NotificationService) NotifyAgentOffline(ctx context.Context, agentID uuid.UUID, agentName string) error {
@@ -201,6 +235,9 @@ type event struct {
 	title     string
 	body      string
 	payload   map[string]any
+	// override is the policy's per-event override of the global toggle
+	// (db.Notify*); empty for events not tied to a policy.
+	override string
 }
 
 // notify is the internal dispatch method. It:
@@ -280,7 +317,7 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 	// Check per-event toggles before creating any external delivery rows.
 	// In-app notifications (above) are always created regardless of these settings.
 	eventsConfig := loadNotificationEventsConfig(ctx, s.settingsRepo)
-	if !isEventEnabled(eventsConfig, ev.notifType) {
+	if !isEventEnabled(eventsConfig, ev.notifType, ev.override) {
 		return nil
 	}
 
@@ -478,8 +515,15 @@ func (s *NotificationService) configuredRecipients(ctx context.Context) []string
 }
 
 // isEventEnabled returns whether external delivery (email + webhook) should be
-// sent for the given event type, based on the loaded events config.
-func isEventEnabled(cfg NotificationEventsConfig, eventType string) bool {
+// sent for the given event type, based on the loaded events config unless the
+// policy override replaces it.
+func isEventEnabled(cfg NotificationEventsConfig, eventType, override string) bool {
+	switch override {
+	case db.NotifyAlways:
+		return true
+	case db.NotifyNever:
+		return false
+	}
 	switch eventType {
 	case "job_success":
 		return cfg.JobSuccess

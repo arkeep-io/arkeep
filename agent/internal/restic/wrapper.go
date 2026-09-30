@@ -535,6 +535,34 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir stri
 	return entries, nil
 }
 
+// Dump writes the content of path within snapshotID to w: the file itself, or
+// a ZIP archive of the directory when archive is true. The output is streamed,
+// never buffered, so arbitrarily large files pass through in constant memory.
+// A write error from w (the reader went away) makes restic fail on its stdout,
+// and cancelling ctx stops it like any other restic command.
+func (w *Wrapper) Dump(ctx context.Context, dest Destination, snapshotID, path string, archive bool, out io.Writer) error {
+	cmd := w.buildCmd(ctx, dest, buildDumpArgs(snapshotID, path, archive))
+	cmd.Stdout = out
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("restic: command failed: %w\n%s", err, strings.TrimSpace(stderrBuf.String()))
+	}
+	return nil
+}
+
+// buildDumpArgs constructs the restic dump argument slice. As in Ls, the "--"
+// end-of-options marker keeps a user-supplied path beginning with "-" from
+// being interpreted as a flag.
+func buildDumpArgs(snapshotID, path string, archive bool) []string {
+	args := []string{"dump"}
+	if archive {
+		args = append(args, "--archive", "zip")
+	}
+	return append(args, "--", snapshotID, path)
+}
+
 // StatsResult holds the real on-disk footprint of a restic repository.
 type StatsResult struct {
 	// TotalSize is the deduplicated, compressed size of all data stored in the
