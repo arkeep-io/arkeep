@@ -604,6 +604,19 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 	// elapsed-time display without waiting for a full REST fetch.
 	if dbStatus == "succeeded" || dbStatus == "failed" || dbStatus == "cancelled" {
 		wsPayload["finished_at"] = now.Format(time.RFC3339)
+
+		// Release any busy gate the job still holds (issue #283). Normally each
+		// destination's result releases its own, but a job that ends before
+		// reporting one (pre-backup hook failure, rejected assignment) would
+		// otherwise keep its destinations locked out of every later run.
+		if s.destRepo != nil {
+			if err := s.destRepo.ReleaseBusyForJobs(ctx, []uuid.UUID{jobID}); err != nil {
+				s.logger.Warn("ReportJobStatus: failed to release destination busy gate",
+					zap.String("job_id", req.JobId),
+					zap.Error(err),
+				)
+			}
+		}
 	}
 	s.hub.Publish("job:"+req.JobId, websocket.Message{
 		Type:    websocket.MsgJobStatus,
