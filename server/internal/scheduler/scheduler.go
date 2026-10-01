@@ -617,6 +617,31 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		})
 	}
 
+	// Every destination was skipped (busy or failed to load): sending the job
+	// would run the hooks, back up to nothing and report success (issue #283).
+	// Close it as failed instead so the user learns the backup did not happen.
+	if len(destPayloads) == 0 {
+		const errMsg = "all destinations busy or unavailable: backup not run"
+		now := time.Now().UTC()
+		if err := s.jobs.UpdateStatus(ctx, job.ID, "failed", nil, &now, errMsg); err != nil {
+			return fmt.Errorf("failed to mark job without destinations as failed: %w", err)
+		}
+		s.logger.Warn("no destination available, backup not dispatched",
+			zap.String("job_id", job.ID.String()),
+			zap.String("policy_id", policy.ID.String()),
+		)
+		if s.notifSvc != nil {
+			// Detached from the dispatch timeout: a slow SMTP send must not be cut short.
+			if err := s.notifSvc.NotifyJobFailed(context.WithoutCancel(ctx), job.ID, policy.ID, policy.Name, errMsg); err != nil {
+				s.logger.Warn("failed to send job failed notification",
+					zap.String("job_id", job.ID.String()),
+					zap.Error(err),
+				)
+			}
+		}
+		return nil
+	}
+
 	sourcePaths, err := policyutil.SourcePaths(policy.Sources)
 	if err != nil {
 		return fmt.Errorf("failed to build sources list: %w", err)

@@ -283,3 +283,52 @@ func (c *countingNotifier) NotifyAgentOffline(_ context.Context, _ uuid.UUID, _ 
 func (c *countingNotifier) NotifyAgentOnline(_ context.Context, _ uuid.UUID, _ string) error {
 	return nil
 }
+
+// TestDispatch_AllDestinationsBusy is the regression case for issue #283: when
+// every destination is held by another operation the backup must not be sent
+// to the agent (it would run its hooks, back up to nothing and report success),
+// but closed as failed so the user learns it did not happen.
+func TestDispatch_AllDestinationsBusy(t *testing.T) {
+	s, gdb, policies, jobs := newTestScheduler(t)
+	f := newResumeFixture(t, gdb, policies, jobs)
+	ctx := context.Background()
+	f.policy.Sources = `[{"type":"directory","path":"/data"}]`
+	notif := &countingNotifier{}
+	s.SetNotificationService(notif)
+
+	dest := &db.Destination{Name: "busy-dest", Type: "local", Config: "{}", Enabled: true}
+	if err := s.dests.Create(ctx, dest); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	holder := &db.Job{AgentID: f.agentID, Type: "retention", Status: "running"}
+	if err := jobs.Create(ctx, holder); err != nil {
+		t.Fatalf("create holder job: %v", err)
+	}
+	if acquired, err := s.dests.TryAcquireBusy(ctx, dest.ID, holder.ID); err != nil || !acquired {
+		t.Fatalf("TryAcquireBusy: acquired=%v err=%v", acquired, err)
+	}
+
+	job := &db.Job{PolicyID: &f.policy.ID, AgentID: f.agentID, Type: "backup", Status: "pending"}
+	if err := jobs.Create(ctx, job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := jobs.CreateDestination(ctx, &db.JobDestination{JobID: job.ID, DestinationID: dest.ID, Status: "pending"}); err != nil {
+		t.Fatalf("create job destination: %v", err)
+	}
+
+	policyDests := []repositories.PolicyDestinationWithName{{PolicyDestination: db.PolicyDestination{DestinationID: dest.ID}}}
+	if err := s.dispatch(job, f.policy, policyDests); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	stored, err := jobs.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Status != "failed" {
+		t.Errorf("job status = %q, want \"failed\"", stored.Status)
+	}
+	if notif.jobFailed != 1 {
+		t.Errorf("NotifyJobFailed called %d times, want 1", notif.jobFailed)
+	}
+}

@@ -595,6 +595,11 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 				zap.String("job_id", assignment.JobId),
 				zap.Error(err),
 			)
+			// Close the job on the server: left pending, it would keep holding
+			// its destinations' busy gate and block every later backup (#283).
+			if assignment.JobId != "" {
+				m.ReportStatus(assignment.JobId, "failed", err.Error())
+			}
 			continue
 		}
 
@@ -1247,8 +1252,8 @@ func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, er
 	}
 
 	switch p.Type {
-	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE:
-		// Both types are handled by the executor — payload is passed through as-is.
+	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE, proto.JobType_JOB_TYPE_FORGET:
+		// All three types are handled by the executor — payload is passed through as-is.
 	default:
 		return executor.JobAssignment{}, fmt.Errorf("unsupported job type: %v", p.Type)
 	}

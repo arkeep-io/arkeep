@@ -166,6 +166,11 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 // agent disconnection cleanup to recover orphaned jobs that would otherwise be
 // stuck in "running" forever.
 //
+// Pending retention jobs are swept too: unlike a pending backup, which
+// DispatchPending re-sends on reconnect, a retention job has no retry queue, so
+// one the agent never picked up would hold its destination's busy gate forever
+// (issue #283).
+//
 // "interrupted" rather than "failed" is what makes these jobs eligible for
 // automatic resume: the agent vanished, it did not report an error. The
 // status = "running" filter leaves a job the user cancelled untouched, since the
@@ -185,7 +190,7 @@ func (r *gormJobRepository) MarkRunningJobsInterruptedForAgent(ctx context.Conte
 		// found before the parent rows stop matching status = "running".
 		var jobIDs []uuid.UUID
 		if err := tx.Model(&db.Job{}).
-			Where("agent_id = ? AND status = ?", agentID, "running").
+			Where("agent_id = ? AND (status = ? OR (type = ? AND status = ?))", agentID, "running", "retention", "pending").
 			Pluck("id", &jobIDs).Error; err != nil {
 			return fmt.Errorf("select running jobs: %w", err)
 		}
@@ -258,9 +263,10 @@ func (r *gormJobRepository) MarkResumeExhausted(ctx context.Context, id uuid.UUI
 	return nil
 }
 
-// MarkRunningJobsInterrupted does the same for every agent. Called once at server
-// startup: a job that was running when the process died has no stream teardown
-// to recover it and would stay "running" forever.
+// MarkRunningJobsInterrupted does the same for every agent, pending retention
+// jobs included. Called once at server startup: a job that was running when the
+// process died has no stream teardown to recover it and would stay "running"
+// forever.
 //
 // Returns the number of jobs updated.
 func (r *gormJobRepository) MarkRunningJobsInterrupted(ctx context.Context, errMsg string) (int64, error) {
@@ -270,7 +276,7 @@ func (r *gormJobRepository) MarkRunningJobsInterrupted(ctx context.Context, errM
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var jobIDs []uuid.UUID
 		if err := tx.Model(&db.Job{}).
-			Where("status = ?", "running").
+			Where("status = ? OR (type = ? AND status = ?)", "running", "retention", "pending").
 			Pluck("id", &jobIDs).Error; err != nil {
 			return fmt.Errorf("select running jobs: %w", err)
 		}

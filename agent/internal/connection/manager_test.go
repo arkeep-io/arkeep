@@ -52,3 +52,33 @@ func TestChunkWriter(t *testing.T) {
 		}
 	})
 }
+
+// TestProtoToJob checks which assignment types reach the executor. A type
+// rejected here is never executed, so the executor-supported FORGET must pass
+// (issue #283: a rejected retention job held its destination's busy gate).
+func TestProtoToJob(t *testing.T) {
+	tests := []struct {
+		name    string
+		jobID   string
+		jobType proto.JobType
+		wantErr bool
+	}{
+		{"backup", "job-1", proto.JobType_JOB_TYPE_BACKUP, false},
+		{"restore", "job-1", proto.JobType_JOB_TYPE_RESTORE, false},
+		{"forget", "job-1", proto.JobType_JOB_TYPE_FORGET, false},
+		{"unsupported type", "job-1", proto.JobType_JOB_TYPE_UNSPECIFIED, true},
+		{"missing job id", "", proto.JobType_JOB_TYPE_BACKUP, true},
+	}
+	m := &Manager{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job, err := m.protoToJob(&proto.JobAssignment{JobId: tt.jobID, Type: tt.jobType})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("protoToJob() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && job.Type != tt.jobType {
+				t.Errorf("job.Type = %v, want %v", job.Type, tt.jobType)
+			}
+		})
+	}
+}
