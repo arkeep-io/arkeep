@@ -619,7 +619,7 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, scheduler.ErrPolicyDisabled) {
-			ErrConflict(w, "policy is disabled")
+			ErrConflict(w, "This policy is disabled. Enable it to run a backup.")
 			return
 		}
 		h.logger.Error("failed to trigger policy",

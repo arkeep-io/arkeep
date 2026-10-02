@@ -36,7 +36,7 @@ import {
     HardDrive,
     ClipboardList,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
@@ -139,7 +139,7 @@ async function fetchAgent() {
         const res = await api<ApiResponse<Agent>>(`/api/v1/agents/${agentId}`)
         agent.value = res.data
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load agent'
+        error.value = apiErrorMessage(e, 'Failed to load agent')
     } finally {
         loading.value = false
     }
@@ -195,7 +195,7 @@ async function confirmDelete() {
         await api(`/api/v1/agents/${agentId}`, { method: 'DELETE' })
         router.push('/agents')
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete agent'
+        error.value = apiErrorMessage(e, 'Failed to delete agent')
     } finally {
         deleteLoading.value = false
         deleteDialogOpen.value = false

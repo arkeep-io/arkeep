@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/field'
 import { AlertCircle, Loader2 } from '@lucide/vue'
 import { Separator } from '@/components/ui/separator'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Agent, ApiResponse, RestoreResponse, Snapshot, SnapshotFileEntry } from '@/types'
 import SnapshotFileTree from '@/components/snapshots/SnapshotFileTree.vue'
 
@@ -187,7 +187,7 @@ async function browseSnapshot() {
         browseEntries.value = await loadChildren('')
         selectedPaths.value = []
     } catch (e: any) {
-        browseError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to browse snapshot.'
+        browseError.value = apiErrorMessage(e, 'Failed to browse snapshot.')
     } finally {
         isBrowsing.value = false
     }
@@ -232,7 +232,7 @@ const onSubmit = handleSubmit(async () => {
         emit('update:open', false)
         router.push({ name: 'job-detail', params: { id: res.data.job_id } })
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to start restore.'
+        submitError.value = apiErrorMessage(e, 'Failed to start restore.')
     }
 })
 

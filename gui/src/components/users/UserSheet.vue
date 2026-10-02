@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { AlertCircle, Loader2 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { User } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ async function onSubmit() {
         emit('update:open', false)
         emit('saved')
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save user.'
+        submitError.value = apiErrorMessage(e, 'Failed to save user.')
     } finally {
         submitting.value = false
     }

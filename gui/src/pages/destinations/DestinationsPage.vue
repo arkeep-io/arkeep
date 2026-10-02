@@ -47,7 +47,7 @@ import {
   Network,
   Cloud,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, ApiResponse } from '@/types'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 import ImportSnapshotsDialog from '@/components/destinations/ImportSnapshotsDialog.vue'
@@ -152,7 +152,7 @@ async function fetchDestinations() {
     destinations.value = res.data.items
     total.value = res.data.total
   } catch (e: any) {
-    error.value = e?.message ?? 'Failed to load destinations'
+    error.value = apiErrorMessage(e, 'Failed to load destinations')
   } finally {
     loading.value = false
   }
@@ -216,7 +216,7 @@ async function confirmDelete() {
     }
     await fetchDestinations()
   } catch (e: any) {
-    error.value = e?.message ?? 'Failed to delete destination'
+    error.value = apiErrorMessage(e, 'Failed to delete destination')
   } finally {
     deleteLoading.value = false
   }

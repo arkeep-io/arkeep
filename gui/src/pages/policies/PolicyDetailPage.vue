@@ -36,7 +36,8 @@ import {
     Terminal,
     CalendarClock,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 
@@ -88,7 +89,7 @@ async function fetchPolicy() {
         const res = await api<ApiResponse<Policy>>(`/api/v1/policies/${policyId}`)
         policy.value = res.data
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load policy'
+        error.value = apiErrorMessage(e, 'Failed to load policy')
     } finally {
         loading.value = false
     }
@@ -120,7 +121,7 @@ async function triggerPolicy() {
         // Refresh jobs after a short delay to pick up the new pending job
         setTimeout(fetchJobs, 800)
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to trigger policy'
+        error.value = apiErrorMessage(e, 'Failed to trigger policy')
     } finally {
         triggerLoading.value = false
     }
@@ -132,7 +133,7 @@ async function confirmDelete() {
         await api(`/api/v1/policies/${policyId}`, { method: 'DELETE' })
         router.push('/policies')
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete policy'
+        error.value = apiErrorMessage(e, 'Failed to delete policy')
     } finally {
         deleteLoading.value = false
         deleteDialogOpen.value = false
@@ -233,12 +234,20 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                 <Button variant="outline" size="icon" :disabled="loading" @click="fetchPolicy(); fetchJobs()">
                     <RefreshCw class="w-4 h-4" />
                 </Button>
-                <Button v-if="authStore.isAdmin" variant="outline" size="sm" :disabled="triggerLoading"
-                    @click="triggerPolicy">
-                    <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
-                    <Play v-else class="w-4 h-4 mr-1.5" />
-                    Run Now
-                </Button>
+                <!-- The span receives hover while the disabled button has pointer-events: none -->
+                <Tooltip v-if="authStore.isAdmin" :disabled="policy.enabled">
+                    <TooltipTrigger as-child>
+                        <span :tabindex="policy.enabled ? undefined : 0">
+                            <Button variant="outline" size="sm" :disabled="!policy.enabled || triggerLoading"
+                                @click="triggerPolicy">
+                                <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
+                                <Play v-else class="w-4 h-4 mr-1.5" />
+                                Run Now
+                            </Button>
+                        </span>
+                    </TooltipTrigger>
+                    <TooltipContent>Enable the policy to run a backup.</TooltipContent>
+                </Tooltip>
                 <Button variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Edit

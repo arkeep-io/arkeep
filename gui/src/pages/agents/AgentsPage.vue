@@ -39,7 +39,7 @@ import {
     RefreshCw,
     Eye,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
@@ -116,7 +116,7 @@ async function fetchAgents() {
         total.value = res.data.total
         subscribeToAgents()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load agents'
+        error.value = apiErrorMessage(e, 'Failed to load agents')
     } finally {
         loading.value = false
     }
@@ -182,7 +182,7 @@ async function confirmDelete() {
         }
         await fetchAgents()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete agent'
+        error.value = apiErrorMessage(e, 'Failed to delete agent')
     } finally {
         deleteLoading.value = false
     }

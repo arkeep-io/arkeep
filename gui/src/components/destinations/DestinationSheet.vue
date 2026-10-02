@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { z } from 'zod'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { summariseImport } from '@/lib/importSummary'
 import type { ApiResponse, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
 import { AsyncCombobox } from '@/components/ui/async-combobox'
@@ -511,7 +511,7 @@ async function onSubmit() {
         emit('update:open', false)
         emit('saved')
     } catch (e: any) {
-        const msg = e?.data?.error?.message ?? e?.message ?? 'An error occurred'
+        const msg = apiErrorMessage(e, 'An error occurred')
         if (importEnabled.value && !isEdit.value) {
             importError.value = msg
         } else {

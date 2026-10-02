@@ -11,7 +11,7 @@ import {
     Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { AlertCircle, Eye, EyeOff, Loader2, ShieldCheck } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type {
     ApiResponse, TwoFactorRecoveryCodesResponse, TwoFactorSetupResponse, TwoFactorStatus,
@@ -67,7 +67,7 @@ async function startEnrollment(): Promise<void> {
         enrollStep.value = 'qr'
         enrollDialogOpen.value = true
     } catch (e: any) {
-        enrollError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to start enrollment.'
+        enrollError.value = apiErrorMessage(e, 'Failed to start enrollment.')
     } finally {
         enrollSubmitting.value = false
     }
@@ -102,7 +102,7 @@ async function submitVerify(): Promise<void> {
         recoveryCodesDialogOpen.value = true
         await fetchStatus()
     } catch (e: any) {
-        enrollError.value = e?.data?.error?.message ?? e?.message ?? 'Invalid code.'
+        enrollError.value = apiErrorMessage(e, 'Invalid code.')
     } finally {
         enrollSubmitting.value = false
     }
@@ -160,7 +160,7 @@ async function confirmDisable(): Promise<void> {
         disableDialogOpen.value = false
         await fetchStatus()
     } catch (e: any) {
-        disableError.value = e?.data?.error?.message ?? e?.message ?? 'Incorrect password.'
+        disableError.value = apiErrorMessage(e, 'Incorrect password.')
     } finally {
         disableLoading.value = false
     }
@@ -195,7 +195,7 @@ async function confirmRegenerate(): Promise<void> {
         recoveryCodesDialogOpen.value = true
         await fetchStatus()
     } catch (e: any) {
-        regenerateError.value = e?.data?.error?.message ?? e?.message ?? 'Incorrect password.'
+        regenerateError.value = apiErrorMessage(e, 'Incorrect password.')
     } finally {
         regenerateLoading.value = false
     }

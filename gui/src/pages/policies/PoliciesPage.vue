@@ -41,7 +41,8 @@ import {
     ShieldCheck,
     RefreshCw,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, ApiResponse, TriggerResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 
@@ -117,7 +118,7 @@ async function fetchPolicies() {
         policies.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load policies'
+        error.value = apiErrorMessage(e, 'Failed to load policies')
     } finally {
         loading.value = false
     }
@@ -165,7 +166,7 @@ async function triggerPolicy(policy: Policy) {
         const res = await api<ApiResponse<TriggerResponse>>(`/api/v1/policies/${policy.id}/trigger`, { method: 'POST' })
         router.push({ name: 'job-detail', params: { id: res.data.job_id } })
     } catch (e: any) {
-        error.value = e?.message ?? `Failed to trigger "${policy.name}"`
+        error.value = apiErrorMessage(e, `Failed to trigger "${policy.name}"`)
     } finally {
         triggeringId.value = null
     }
@@ -192,7 +193,7 @@ async function confirmDelete() {
         }
         await fetchPolicies()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete policy'
+        error.value = apiErrorMessage(e, 'Failed to delete policy')
     } finally {
         deleteLoading.value = false
     }
@@ -312,12 +313,20 @@ onMounted(fetchPolicies)
                                         </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end">
-                                        <DropdownMenuItem v-if="authStore.isAdmin"
-                                            :disabled="triggeringId === policy.id"
-                                            @click="triggerPolicy(policy)">
-                                            <Play class="w-4 h-4 mr-2" />
-                                            Run Now
-                                        </DropdownMenuItem>
+                                        <!-- The wrapper receives hover while the disabled item has pointer-events: none -->
+                                        <Tooltip v-if="authStore.isAdmin" :disabled="policy.enabled">
+                                            <TooltipTrigger as-child>
+                                                <div>
+                                                    <DropdownMenuItem
+                                                        :disabled="!policy.enabled || triggeringId === policy.id"
+                                                        @click="triggerPolicy(policy)">
+                                                        <Play class="w-4 h-4 mr-2" />
+                                                        Run Now
+                                                    </DropdownMenuItem>
+                                                </div>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="left">Enable the policy to run a backup.</TooltipContent>
+                                        </Tooltip>
                                         <DropdownMenuSeparator v-if="authStore.isAdmin" />
                                         <DropdownMenuItem @click="openEditSheet(policy)">
                                             <PencilLine class="w-4 h-4 mr-2" />

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { ChevronRight, ChevronDown, Download, Folder, FolderOpen, File, Loader2 } from '@lucide/vue'
 import { formatBytes } from '@/lib/jobUtils'
 import type { SnapshotFileEntry } from '@/types'
+import { apiErrorMessage } from '@/services/api'
 
 const props = withDefaults(defineProps<{
   // entries are the root-level children of the snapshot (its top directories).
@@ -92,7 +93,7 @@ async function toggleDir(entry: SnapshotFileEntry) {
       childrenByPath.value.set(path, children)
       childrenByPath.value = new Map(childrenByPath.value)
     } catch (e: any) {
-      errors.value.set(path, e?.data?.error?.message ?? e?.message ?? 'Failed to load directory.')
+      errors.value.set(path, apiErrorMessage(e, 'Failed to load directory.'))
       errors.value = new Map(errors.value)
       // Collapse again so the chevron offers a retry.
       expanded.value.delete(path)

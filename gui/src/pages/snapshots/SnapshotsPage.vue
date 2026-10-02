@@ -31,7 +31,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Snapshot } from '@/types'
 import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'
 
@@ -115,7 +115,7 @@ async function fetchSnapshots() {
         snapshots.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load snapshots.'
+        error.value = apiErrorMessage(e, 'Failed to load snapshots.')
     } finally {
         loading.value = false
     }
@@ -165,7 +165,7 @@ async function confirmDelete() {
         }
         await fetchSnapshots()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete snapshot.'
+        error.value = apiErrorMessage(e, 'Failed to delete snapshot.')
     } finally {
         deleteLoading.value = false
     }
