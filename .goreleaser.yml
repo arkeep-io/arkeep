@@ -185,6 +185,7 @@ changelog:
       - '^merge '
       - '^revert: merge '
       - '^docs: update badge'
+      - '^docs\(readme\): update sponsors'
       - '^chore\(deps\):'
       - '^chore\(release\):'
 

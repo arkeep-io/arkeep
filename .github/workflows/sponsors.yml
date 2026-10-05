@@ -1,0 +1,58 @@
+name: Sponsors
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * *"   # every day at 03:30 UTC
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sponsors
+  cancel-in-progress: false
+
+jobs:
+  # ─── Refresh README sponsor avatars ─────────────────────────────────────────
+  update:
+    name: Update README sponsors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # SPONSORS_PAT reads arkeep-io's sponsorships: GITHUB_TOKEN has no access
+      # to the Sponsors GraphQL API. With organization: true the action queries
+      # the repository owner (arkeep-io). active-only: false keeps past and
+      # one-time sponsors; include-private is pinned to false so private
+      # sponsors are never rendered.
+      #
+      # The action does not fetch avatarUrl and falls back to
+      # https://github.com/<login>.png, so the template builds that URL itself
+      # with ?size=120 for a sharp 60px avatar on HiDPI screens. Every
+      # placeholder is HTML-escaped (the action rewrites {{{ }}} to {{ }}).
+      - name: Generate sponsor avatars
+        uses: JamesIves/github-sponsors-readme-action@v1
+        with:
+          token: ${{ secrets.SPONSORS_PAT }}
+          file: README.md
+          organization: true
+          active-only: false
+          include-private: false
+          template: '<a href="https://github.com/{{ login }}"><img src="https://github.com/{{ login }}.png?size=120" width="60" height="60" alt="{{#name}}{{ name }}{{/name}}{{^name}}{{ login }}{{/name}}" /></a>'
+
+      # Pushed with GITHUB_TOKEN (checkout's persisted credentials): pushes made
+      # with it never trigger other workflows, so there is no loop. [skip ci]
+      # also covers the case where the push credentials change in the future.
+      # The commit subject is excluded from the release changelog in
+      # .goreleaser.yml.
+      - name: Commit if README changed
+        run: |
+          if git diff --quiet -- README.md; then
+            echo "No sponsor changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs(readme): update sponsors [skip ci]"
+          git push
