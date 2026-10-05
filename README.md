@@ -50,6 +50,7 @@ built on top of [Restic](https://restic.net/) and [Rclone](https://rclone.org/).
 - [Telemetry](#telemetry)
 - [Contributing](#contributing)
 - [Support Arkeep](#support-arkeep)
+- [Sponsors](#sponsors)
 - [License](#license)
 
 ---
@@ -1004,7 +1005,13 @@ If Arkeep saves you time, helps your workflow, or gives you more confidence mana
 
 Sponsoring is a bit like buying me a coffee for open source: it helps me spend more time on bug fixes, documentation, releases, restore testing, and the next pieces of the roadmap, from inventory to safer update orchestration.
 
-[Become a sponsor](https://github.com/sponsors/filippocrotti12)
+[Become a sponsor](https://github.com/sponsors/arkeep-io)
+
+## Sponsors
+
+Thank you to everyone who has sponsored Arkeep, past and present. Your support keeps the project independent and moving forward.
+
+<!-- sponsors --><!-- sponsors -->
 
 ## License
 
