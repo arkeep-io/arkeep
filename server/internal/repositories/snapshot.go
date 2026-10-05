@@ -18,8 +18,16 @@ type SnapshotWithNames struct {
 	db.Snapshot
 	PolicyName      string
 	DestinationName string
+	DestinationType string
 	AgentID         string
 	AgentName       string
+	// DestinationDeleted reports that the snapshot's destination is
+	// soft-deleted (its stored secrets have been wiped).
+	DestinationDeleted bool
+	// PolicyDeleted reports that no live policy holds the snapshot's
+	// repository password: the snapshot was imported, or its policy is
+	// soft-deleted.
+	PolicyDeleted bool
 }
 
 // gormSnapshotRepository is the GORM implementation of SnapshotRepository.
@@ -94,8 +102,11 @@ func (r *gormSnapshotRepository) listWithNamesQuery(ctx context.Context) *gorm.D
 		Select(`snapshots.*,
 			policies.name        AS policy_name,
 			destinations.name    AS destination_name,
+			destinations.type    AS destination_type,
 			policies.agent_id    AS agent_id,
-			agents.name          AS agent_name`).
+			agents.name          AS agent_name,
+			CASE WHEN destinations.deleted_at IS NOT NULL THEN 1 ELSE 0 END AS destination_deleted,
+			CASE WHEN policies.id IS NULL OR policies.deleted_at IS NOT NULL THEN 1 ELSE 0 END AS policy_deleted`).
 		Joins("LEFT JOIN policies ON policies.id = snapshots.policy_id").
 		Joins("LEFT JOIN destinations ON destinations.id = snapshots.destination_id").
 		Joins("LEFT JOIN agents ON agents.id = policies.agent_id").

@@ -43,6 +43,22 @@ func (r *gormDestinationRepository) GetByID(ctx context.Context, id uuid.UUID) (
 	return &destination, nil
 }
 
+// GetByIDIncludingDeleted retrieves a destination by its UUID, soft-deleted
+// rows included. Used where a deleted destination's non-sensitive fields
+// (type, config) are still needed, e.g. restoring a snapshot with
+// caller-supplied credentials. Returns ErrNotFound if no record exists.
+func (r *gormDestinationRepository) GetByIDIncludingDeleted(ctx context.Context, id uuid.UUID) (*db.Destination, error) {
+	var destination db.Destination
+	err := r.db.WithContext(ctx).Unscoped().First(&destination, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("destinations: get by id including deleted: %w", err)
+	}
+	return &destination, nil
+}
+
 // Update persists all fields of an existing destination record.
 // Credentials are automatically re-encrypted by EncryptedString.Value()
 // before being written to the database.
@@ -77,20 +93,32 @@ func (r *gormDestinationRepository) UpdateRepoSize(ctx context.Context, id uuid.
 	return nil
 }
 
-// Delete permanently removes a destination record by ID.
-// Returns ErrNotFound if no record exists.
-// Note: deletion will fail if the destination is still referenced by an active
-// policy (FK constraint with ON DELETE RESTRICT). The caller should verify
-// there are no active policy_destinations before deleting.
+// Delete soft-deletes a destination by ID and wipes its stored secrets
+// (credentials and repository password) in the same transaction. The row
+// itself is kept so snapshots and job history keep resolving the destination's
+// name, type and config, but nothing sensitive outlives the deletion: restoring
+// a snapshot of a deleted destination requires the caller to supply the
+// credentials again.
+// Returns ErrNotFound if no live record exists.
 func (r *gormDestinationRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).Delete(&db.Destination{}, "id = ?", id)
-	if result.Error != nil {
-		return fmt.Errorf("destinations: delete: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Destination{}).
+			Where("id = ?", id).
+			Updates(map[string]any{
+				"credentials":   "",
+				"repo_password": "",
+			})
+		if result.Error != nil {
+			return fmt.Errorf("destinations: delete: wipe secrets: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		if err := tx.Delete(&db.Destination{}, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("destinations: delete: %w", err)
+		}
+		return nil
+	})
 }
 
 // destinationOrderClause maps ListOptions.SortBy to a safe ORDER BY clause via a

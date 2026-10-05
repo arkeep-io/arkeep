@@ -86,17 +86,27 @@ func (r *gormPolicyRepository) Update(ctx context.Context, policy *db.Policy) er
 	return nil
 }
 
-// Delete soft-deletes a policy by setting deleted_at. Associated
-// policy_destinations are cascade-deleted automatically by the database.
+// Delete soft-deletes a policy by setting deleted_at and wipes its stored
+// repository password in the same transaction, so no secret outlives the
+// deletion. Associated policy_destinations are cascade-deleted automatically
+// by the database.
+// Returns ErrNotFound if no live record exists.
 func (r *gormPolicyRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).Delete(&db.Policy{}, "id = ?", id)
-	if result.Error != nil {
-		return fmt.Errorf("policies: delete: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Policy{}).
+			Where("id = ?", id).
+			Update("repo_password", "")
+		if result.Error != nil {
+			return fmt.Errorf("policies: delete: wipe secrets: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		if err := tx.Delete(&db.Policy{}, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("policies: delete: %w", err)
+		}
+		return nil
+	})
 }
 
 // List returns a paginated list of policies and the total count.

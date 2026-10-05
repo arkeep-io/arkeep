@@ -48,6 +48,7 @@ import {
   Cloud,
 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 import type { Destination, ApiResponse } from '@/types'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 import ImportSnapshotsDialog from '@/components/destinations/ImportSnapshotsDialog.vue'
@@ -62,6 +63,7 @@ interface DestinationListResponse {
 // ---------------------------------------------------------------------------
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const destinations = ref<Destination[]>([])
 const total = ref(0)
@@ -391,8 +393,9 @@ onMounted(fetchDestinations)
                       <Archive class="w-4 h-4 mr-2" />
                       Import snapshots
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem class="text-destructive focus:text-destructive" @click="openDeleteDialog(dest)">
+                    <DropdownMenuSeparator v-if="authStore.isAdmin" />
+                    <DropdownMenuItem v-if="authStore.isAdmin" class="text-destructive focus:text-destructive"
+                      @click="openDeleteDialog(dest)">
                       <Trash2 class="w-4 h-4 mr-2" />
                       Delete
                     </DropdownMenuItem>
@@ -438,7 +441,10 @@ onMounted(fetchDestinations)
         <AlertDialogTitle>Delete destination?</AlertDialogTitle>
         <AlertDialogDescription>
           <span v-if="destinationToDelete">
-            <strong>{{ destinationToDelete.name }}</strong> will be permanently deleted.
+            <strong>{{ destinationToDelete.name }}</strong> will be deleted and its stored credentials erased.
+            Its existing snapshots stay listed, but restoring one will require entering
+            the destination's credentials again; browsing and downloading them will no longer be possible.
+            The backup data on the storage is not touched.
             This action cannot be undone.
           </span>
         </AlertDialogDescription>
