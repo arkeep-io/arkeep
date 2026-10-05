@@ -123,6 +123,42 @@ func TestBuildBackupArgs_Linux(t *testing.T) {
 	assertSourcesAfterEndOfOptions(t, args, opts.Sources)
 }
 
+// TestBuildBackupArgs_Host verifies the snapshot hostname is pinned with
+// --host when set (a Dockerized agent would otherwise stamp its container ID,
+// #284), left to restic when empty, and always kept before "--".
+func TestBuildBackupArgs_Host(t *testing.T) {
+	opts := BackupOptions{Sources: []string{"/data"}, Host: "nas-home"}
+	args := buildBackupArgs(opts, "linux")
+	idx := slices.Index(args, "--host")
+	if idx == -1 || idx+1 >= len(args) || args[idx+1] != "nas-home" {
+		t.Fatalf("expected --host nas-home in args, got %v", args)
+	}
+	if idx > slices.Index(args, "--") {
+		t.Errorf("--host must come before \"--\", got %v", args)
+	}
+	assertSourcesAfterEndOfOptions(t, args, opts.Sources)
+
+	opts.Host = ""
+	if args := buildBackupArgs(opts, "linux"); slices.Contains(args, "--host") {
+		t.Errorf("unexpected --host with empty Host, got %v", args)
+	}
+}
+
+func TestBuildStdinBackupArgs_Host(t *testing.T) {
+	opts := StdinBackupOptions{Command: "pg_dump mydb", Filename: "pgdump", Host: "nas-home"}
+	args := buildStdinBackupArgs(opts, "linux")
+
+	want := []string{
+		"backup", "--json", "--stdin-from-command",
+		"--stdin-filename", "pgdump",
+		"--host", "nas-home",
+		"--", "/bin/sh", "-c", "pg_dump mydb",
+	}
+	if !slices.Equal(args, want) {
+		t.Errorf("buildStdinBackupArgs() = %v, want %v", args, want)
+	}
+}
+
 // assertSourcesAfterEndOfOptions verifies that wantSources are exactly the
 // tail of args, immediately after a "--" end-of-options marker. This is the
 // property that prevents a source beginning with "-" (e.g.
@@ -351,7 +387,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Daily: 7},
 			tags:   []string{"policy:11111111-2222-3333-4444-555555555555"},
 			want: []string{
-				"forget", "--prune", "--json",
+				"forget", "--prune", "--json", "--group-by", "paths,tags",
 				"--tag", "policy:11111111-2222-3333-4444-555555555555",
 				"--keep-daily", "7",
 			},
@@ -361,7 +397,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 1, Hourly: 2, Daily: 3, Weekly: 4, Monthly: 5, Yearly: 6},
 			tags:   []string{"policy:abc"},
 			want: []string{
-				"forget", "--prune", "--json", "--tag", "policy:abc",
+				"forget", "--prune", "--json", "--group-by", "paths,tags", "--tag", "policy:abc",
 				"--keep-last", "1", "--keep-hourly", "2", "--keep-daily", "3",
 				"--keep-weekly", "4", "--keep-monthly", "5", "--keep-yearly", "6",
 			},
@@ -371,7 +407,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Weekly: 4},
 			tags:   []string{"policy:abc"},
 			want: []string{
-				"forget", "--prune", "--json", "--tag", "policy:abc",
+				"forget", "--prune", "--json", "--group-by", "paths,tags", "--tag", "policy:abc",
 				"--keep-weekly", "4",
 			},
 		},
@@ -380,7 +416,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 1},
 			tags:   []string{"policy:abc", "env:prod"},
 			want: []string{
-				"forget", "--prune", "--json",
+				"forget", "--prune", "--json", "--group-by", "paths,tags",
 				"--tag", "policy:abc", "--tag", "env:prod",
 				"--keep-last", "1",
 			},
@@ -400,7 +436,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 7},
 			tags:   []string{"policy:abc:command:pgdump"},
 			want: []string{
-				"forget", "--prune", "--json",
+				"forget", "--prune", "--json", "--group-by", "paths,tags",
 				"--tag", "policy:abc:command:pgdump",
 				"--keep-last", "7",
 			},

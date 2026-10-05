@@ -33,7 +33,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Agent, ApiResponse, Destination, NotifyOverride, Policy, VolumeInfo } from '@/types'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -856,7 +856,7 @@ const onSubmit = handleSubmit(async (values) => {
     emit('update:open', false)
     emit('saved')
   } catch (e: any) {
-    submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save policy'
+    submitError.value = apiErrorMessage(e, 'Failed to save policy')
   } finally {
     submitting.value = false
   }

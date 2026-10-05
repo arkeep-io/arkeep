@@ -43,6 +43,22 @@ func (r *gormDestinationRepository) GetByID(ctx context.Context, id uuid.UUID) (
 	return &destination, nil
 }
 
+// GetByIDIncludingDeleted retrieves a destination by its UUID, soft-deleted
+// rows included. Used where a deleted destination's non-sensitive fields
+// (type, config) are still needed, e.g. restoring a snapshot with
+// caller-supplied credentials. Returns ErrNotFound if no record exists.
+func (r *gormDestinationRepository) GetByIDIncludingDeleted(ctx context.Context, id uuid.UUID) (*db.Destination, error) {
+	var destination db.Destination
+	err := r.db.WithContext(ctx).Unscoped().First(&destination, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("destinations: get by id including deleted: %w", err)
+	}
+	return &destination, nil
+}
+
 // Update persists all fields of an existing destination record.
 // Credentials are automatically re-encrypted by EncryptedString.Value()
 // before being written to the database.
@@ -77,20 +93,32 @@ func (r *gormDestinationRepository) UpdateRepoSize(ctx context.Context, id uuid.
 	return nil
 }
 
-// Delete permanently removes a destination record by ID.
-// Returns ErrNotFound if no record exists.
-// Note: deletion will fail if the destination is still referenced by an active
-// policy (FK constraint with ON DELETE RESTRICT). The caller should verify
-// there are no active policy_destinations before deleting.
+// Delete soft-deletes a destination by ID and wipes its stored secrets
+// (credentials and repository password) in the same transaction. The row
+// itself is kept so snapshots and job history keep resolving the destination's
+// name, type and config, but nothing sensitive outlives the deletion: restoring
+// a snapshot of a deleted destination requires the caller to supply the
+// credentials again.
+// Returns ErrNotFound if no live record exists.
 func (r *gormDestinationRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).Delete(&db.Destination{}, "id = ?", id)
-	if result.Error != nil {
-		return fmt.Errorf("destinations: delete: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Destination{}).
+			Where("id = ?", id).
+			Updates(map[string]any{
+				"credentials":   "",
+				"repo_password": "",
+			})
+		if result.Error != nil {
+			return fmt.Errorf("destinations: delete: wipe secrets: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		if err := tx.Delete(&db.Destination{}, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("destinations: delete: %w", err)
+		}
+		return nil
+	})
 }
 
 // destinationOrderClause maps ListOptions.SortBy to a safe ORDER BY clause via a
@@ -198,18 +226,26 @@ func (r *gormDestinationRepository) ListWithRetentionSchedule(ctx context.Contex
 	return destinations, nil
 }
 
+// busyHolderInactive matches a destination whose busy gate is held by a job
+// that can no longer release it: the job is gone (removed by job retention) or
+// no longer pending/running (it finished, was cancelled or was interrupted
+// without its release reaching the gate). Such a gate is stale (issue #290).
+const busyHolderInactive = `NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = destinations.busy_job_id AND jobs.status IN ('pending', 'running'))`
+
 // TryAcquireBusy atomically claims the destination for jobID if it is not
 // already busy. A false, nil-error return means another job already holds
 // it — the caller should skip or defer this dispatch, not treat it as an
 // error. Idempotent for the same jobID (matches if already held by jobID
 // itself), so retrying a dispatch that previously acquired the gate — e.g.
 // DispatchPending resending to an agent that just reconnected — never
-// mistakes its own hold for contention.
+// mistakes its own hold for contention. A gate held by an inactive job (see
+// busyHolderInactive) is taken over, so a release that never happened cannot
+// lock the destination out forever.
 func (r *gormDestinationRepository) TryAcquireBusy(ctx context.Context, destinationID, jobID uuid.UUID) (bool, error) {
 	now := time.Now().UTC()
 	result := r.db.WithContext(ctx).
 		Model(&db.Destination{}).
-		Where("id = ? AND (busy_job_id IS NULL OR busy_job_id = ?)", destinationID, jobID).
+		Where("id = ? AND (busy_job_id IS NULL OR busy_job_id = ? OR "+busyHolderInactive+")", destinationID, jobID).
 		Updates(map[string]any{
 			"busy_job_id": jobID,
 			"busy_since":  now,
@@ -254,6 +290,25 @@ func (r *gormDestinationRepository) ReleaseBusyForJobs(ctx context.Context, jobI
 		return fmt.Errorf("destinations: release busy for jobs: %w", result.Error)
 	}
 	return nil
+}
+
+// ReleaseStaleBusy clears every busy gate held by an inactive job (see
+// busyHolderInactive). Called once at server startup, after jobs left running
+// by the previous process have been marked interrupted, so the busy state the
+// GUI shows reflects only operations actually in flight. Returns the number of
+// destinations released.
+func (r *gormDestinationRepository) ReleaseStaleBusy(ctx context.Context) (int64, error) {
+	result := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("busy_job_id IS NOT NULL AND " + busyHolderInactive).
+		Updates(map[string]any{
+			"busy_job_id": nil,
+			"busy_since":  nil,
+		})
+	if result.Error != nil {
+		return 0, fmt.Errorf("destinations: release stale busy: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 // List returns a paginated list of destinations and the total count.

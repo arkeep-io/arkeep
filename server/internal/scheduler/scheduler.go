@@ -245,10 +245,13 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 	for i := range pendingJobs {
 		j := &pendingJobs[i]
 
-		// A job without a policy is a restore of an imported snapshot: there is
-		// no policy to rebuild a backup payload from, and it is not this
-		// method's job to re-dispatch it.
-		if j.PolicyID == nil {
+		// Only backups can be rebuilt from the database. Restores and retention
+		// sweeps are never queued for an offline agent (their callers require
+		// it online), so a pending one is left over from a dispatch that failed
+		// or from an older release that queued restores: close it out instead of
+		// re-sending it — rebuilding it here would run a backup in its place.
+		if j.Type != "backup" {
+			s.failUndispatchedJob(ctx, &j.Job)
 			continue
 		}
 
@@ -273,6 +276,25 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 			)
 		}
 	}
+}
+
+// failUndispatchedJob marks a pending non-backup job as failed: it never
+// reached its agent and cannot be rebuilt, so it must not stay pending forever.
+func (s *Scheduler) failUndispatchedJob(ctx context.Context, j *db.Job) {
+	now := time.Now()
+	errMsg := fmt.Sprintf("the agent was offline when this %s job was requested, so it never ran — start it again", j.Type)
+	if err := s.jobs.UpdateStatus(ctx, j.ID, "failed", nil, &now, errMsg); err != nil {
+		s.logger.Warn("failed to close out an undispatched job",
+			zap.String("job_id", j.ID.String()),
+			zap.String("type", j.Type),
+			zap.Error(err),
+		)
+		return
+	}
+	s.logger.Info("closed out an undispatched job left pending",
+		zap.String("job_id", j.ID.String()),
+		zap.String("type", j.Type),
+	)
 }
 
 // maxResumeAttempts caps how many times in a row a backup is resumed after being
@@ -633,6 +655,31 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 			Env:           destutil.BuildEnv(dest),
 			Priority:      pd.Priority,
 		})
+	}
+
+	// Every destination was skipped (busy or failed to load): sending the job
+	// would run the hooks, back up to nothing and report success (issue #283).
+	// Close it as failed instead so the user learns the backup did not happen.
+	if len(destPayloads) == 0 {
+		const errMsg = "all destinations busy or unavailable: backup not run"
+		now := time.Now().UTC()
+		if err := s.jobs.UpdateStatus(ctx, job.ID, "failed", nil, &now, errMsg); err != nil {
+			return fmt.Errorf("failed to mark job without destinations as failed: %w", err)
+		}
+		s.logger.Warn("no destination available, backup not dispatched",
+			zap.String("job_id", job.ID.String()),
+			zap.String("policy_id", policy.ID.String()),
+		)
+		if s.notifSvc != nil {
+			// Detached from the dispatch timeout: a slow SMTP send must not be cut short.
+			if err := s.notifSvc.NotifyJobFailed(context.WithoutCancel(ctx), job.ID, policy.ID, policy.Name, errMsg); err != nil {
+				s.logger.Warn("failed to send job failed notification",
+					zap.String("job_id", job.ID.String()),
+					zap.Error(err),
+				)
+			}
+		}
+		return nil
 	}
 
 	sourcePaths, err := policyutil.SourcePaths(policy.Sources)

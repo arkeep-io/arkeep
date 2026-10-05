@@ -31,7 +31,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { AlertCircle, Check, ClipboardCopy, Loader2, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, OIDCProvider } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ async function submitForm() {
         sheetOpen.value = false
         await fetchOIDC()
     } catch (e: any) {
-        formError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save provider'
+        formError.value = apiErrorMessage(e, 'Failed to save provider')
     } finally {
         formSubmitting.value = false
     }
@@ -207,7 +207,7 @@ async function confirmDelete() {
         deleteDialogOpen.value = false
         await fetchOIDC()
     } catch (e: any) {
-        deleteError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to delete provider'
+        deleteError.value = apiErrorMessage(e, 'Failed to delete provider')
     } finally {
         deleteSubmitting.value = false
     }

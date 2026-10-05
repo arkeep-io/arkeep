@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { MoreHorizontal, PencilLine, Plus, RefreshCw, ShieldOff, Trash2, Users } from '@lucide/vue'
 import UserSheet from '@/components/users/UserSheet.vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, User } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ async function fetchUsers() {
         users.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load users.'
+        error.value = apiErrorMessage(e, 'Failed to load users.')
     } finally {
         loading.value = false
     }
@@ -145,7 +145,7 @@ async function confirmDelete() {
         }
         await fetchUsers()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to delete user.'
+        error.value = apiErrorMessage(e, 'Failed to delete user.')
     } finally {
         deleteLoading.value = false
     }
@@ -169,7 +169,7 @@ async function confirmReset() {
         userToReset.value = null
         await fetchUsers()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to reset two-factor authentication.'
+        error.value = apiErrorMessage(e, 'Failed to reset two-factor authentication.')
     } finally {
         resetLoading.value = false
     }

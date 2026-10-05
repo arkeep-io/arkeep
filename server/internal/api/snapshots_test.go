@@ -246,6 +246,29 @@ func TestSnapshotHandler_Restore(t *testing.T) {
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
+	t.Run("returns 503 for an offline agent and stores no job", func(t *testing.T) {
+		e := newTestEnv(t)
+		s := createDBSnapshot(t, e.deps)
+		agent := createDBAgent(t, e.deps, "offline-agent")
+
+		resp := e.post(t, "/api/v1/snapshots/"+s.ID.String()+"/restore",
+			e.adminToken(t), map[string]string{
+				"agent_id":    agent.ID.String(),
+				"target_path": "/restore/path",
+			})
+		assertStatus(t, resp, http.StatusServiceUnavailable)
+
+		// A queued restore would be rebuilt as a backup on reconnect, so
+		// nothing may be left pending for this agent.
+		var count int64
+		if err := e.deps.gdb.Model(&db.Job{}).Where("agent_id = ?", agent.ID).Count(&count).Error; err != nil {
+			t.Fatalf("count jobs: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("stored %d jobs for the offline agent, want 0", count)
+		}
+	})
+
 	t.Run("returns 401 without token", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/snapshots/00000000-0000-0000-0000-000000000001/restore",
@@ -307,20 +330,17 @@ func TestSnapshotHandler_RestoreImported(t *testing.T) {
 	t.Run("creates a restore job with no policy", func(t *testing.T) {
 		e := newTestEnv(t)
 		s, _ := createDBImportedSnapshot(t, e.deps, "repo-secret")
-		agent := createDBAgent(t, e.deps, "restore-agent")
+		agentID := connectDBFakeAgent(t, e, &fakeAgentStream{})
 
-		// The agent is not connected, so the job is queued (202) rather than
-		// dispatched immediately — but it must already have been persisted by
-		// then, which is what proves a policy-less restore job is storable.
 		resp := e.post(t, "/api/v1/snapshots/"+s.ID.String()+"/restore",
 			e.adminToken(t), map[string]string{
-				"agent_id":    agent.ID.String(),
+				"agent_id":    agentID,
 				"target_path": "/restore/path",
 			})
-		assertStatus(t, resp, http.StatusAccepted)
+		assertStatus(t, resp, http.StatusOK)
 
 		var jobs []db.Job
-		if err := e.deps.gdb.Where("agent_id = ?", agent.ID).Find(&jobs).Error; err != nil {
+		if err := e.deps.gdb.Where("agent_id = ?", agentID).Find(&jobs).Error; err != nil {
 			t.Fatalf("load jobs: %v", err)
 		}
 		if len(jobs) != 1 {

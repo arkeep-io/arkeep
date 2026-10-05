@@ -21,7 +21,7 @@ import { AlertCircle, Loader2 } from '@lucide/vue'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Agent, ApiResponse } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ const onSubmit = handleSubmit(async (values) => {
         emit('saved')
         resetForm()
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save agent'
+        submitError.value = apiErrorMessage(e, 'Failed to save agent')
     }
 })
 

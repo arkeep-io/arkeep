@@ -21,7 +21,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BriefcaseBusiness, RefreshCw } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job, JobStatus, JobType } from '@/types'
 import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration } from '@/lib/jobUtils'
 
@@ -102,7 +102,7 @@ async function fetchJobs() {
         jobs.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load jobs.'
+        error.value = apiErrorMessage(e, 'Failed to load jobs.')
     } finally {
         loading.value = false
     }

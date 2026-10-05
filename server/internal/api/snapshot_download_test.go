@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -22,9 +23,22 @@ type fakeAgentStream struct {
 	agentID string
 	entries []*proto.SnapshotFileEntry
 	chunks  []*proto.SnapshotDownloadChunk
+
+	mu   sync.Mutex
+	sent []*proto.JobAssignment
+}
+
+// assignments returns every JobAssignment sent to the fake agent so far.
+func (f *fakeAgentStream) assignments() []*proto.JobAssignment {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*proto.JobAssignment(nil), f.sent...)
 }
 
 func (f *fakeAgentStream) Send(a *proto.JobAssignment) error {
+	f.mu.Lock()
+	f.sent = append(f.sent, a)
+	f.mu.Unlock()
 	switch a.Type {
 	case proto.JobType_JOB_TYPE_LIST_SNAPSHOT_FILES:
 		go f.mgr.DeliverSnapshotBrowse(&proto.SnapshotBrowseReport{AgentId: f.agentID, CorrelationId: a.JobId, Entries: f.entries})
@@ -48,6 +62,17 @@ func (f *fakeAgentStream) Send(a *proto.JobAssignment) error {
 func connectFakeAgent(e *testEnv, stream *fakeAgentStream) string {
 	stream.mgr = e.mgr
 	stream.agentID = uuid.NewString()
+	e.mgr.Register(stream.agentID, "fake-host", false, stream)
+	return stream.agentID
+}
+
+// connectDBFakeAgent registers an online fake agent backed by a real agents
+// row, so the restore job it receives satisfies the jobs.agent_id foreign key.
+func connectDBFakeAgent(t *testing.T, e *testEnv, stream *fakeAgentStream) string {
+	t.Helper()
+	agent := createDBAgent(t, e.deps, "restore-agent-"+uuid.NewString())
+	stream.mgr = e.mgr
+	stream.agentID = agent.ID.String()
 	e.mgr.Register(stream.agentID, "fake-host", false, stream)
 	return stream.agentID
 }

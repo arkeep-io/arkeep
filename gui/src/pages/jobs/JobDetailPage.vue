@@ -24,7 +24,7 @@ import {
     XCircle,
     Ban,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import type { ApiResponse, Job, JobLog, JobStatus, JobStatusPayload, JobLogPayload, ResticProgressEvent } from '@/types'
 import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration, formatBytes } from '@/lib/jobUtils'
@@ -110,7 +110,7 @@ async function fetchJob() {
         // truth; for running jobs we load historic DB logs and then append live ones.
         await fetchLogs()
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load job.'
+        error.value = apiErrorMessage(e, 'Failed to load job.')
     } finally {
         loading.value = false
     }
@@ -167,7 +167,7 @@ async function cancelJob() {
         await api(`/api/v1/jobs/${jobId}/cancel`, { method: 'POST' })
         // Optimistic UI: status will be updated via WebSocket event
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to cancel job.'
+        error.value = apiErrorMessage(e, 'Failed to cancel job.')
     } finally {
         cancelling.value = false
     }
@@ -378,6 +378,10 @@ onMounted(fetchJob)
                                     <Badge :variant="statusVariant(dest.status)" :class="statusClass(dest.status)">
                                         {{ statusLabel(dest.status) }}
                                     </Badge>
+                                    <!-- Why a destination was skipped or failed (e.g. busy gate, issue #290) -->
+                                    <p v-if="dest.error" class="mt-1 max-w-md text-xs text-muted-foreground whitespace-normal">
+                                        {{ dest.error }}
+                                    </p>
                                 </TableCell>
                                 <TableCell class="text-sm font-mono text-muted-foreground">
                                     {{ formatBytes(dest.size_bytes) }}

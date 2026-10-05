@@ -181,6 +181,11 @@ export interface Destination {
   // the "already used by N other policies" notice in the policy editor's
   // destination picker.
   policy_count: number
+  // busy_job_id: the backup or retention job currently holding this
+  // destination's repository ("" when free); busy_since: when it took it.
+  // Explains why a backup to this destination was skipped.
+  busy_job_id: string
+  busy_since: string
 }
 
 // ─── Policy ───────────────────────────────────────────────────────────────────
@@ -326,6 +331,14 @@ export interface Snapshot {
   policy_name: string
   destination_id: string
   destination_name: string
+  destination_type: string
+  // destination_deleted: the destination was deleted and its stored
+  // credentials were erased — a restore must supply them again, and browse /
+  // download are unavailable.
+  destination_deleted: boolean
+  // repo_password_required: a restore of a deleted destination must also
+  // supply the restic repository password (no live policy holds it).
+  repo_password_required: boolean
   agent_id: string
   agent_name: string
   job_id: string | null

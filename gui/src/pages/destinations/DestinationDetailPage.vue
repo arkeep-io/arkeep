@@ -34,7 +34,7 @@ import {
     CalendarClock,
     AlertTriangle,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
@@ -87,7 +87,7 @@ async function fetchDestination() {
         const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
         destination.value = res.data
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load destination'
+        error.value = apiErrorMessage(e, 'Failed to load destination')
     } finally {
         loading.value = false
     }
@@ -118,7 +118,7 @@ async function triggerRetention() {
         await api(`/api/v1/destinations/${destinationId}/trigger-retention`, { method: 'POST' })
         setTimeout(fetchJobs, 800)
     } catch (e: any) {
-        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to trigger retention'
+        error.value = apiErrorMessage(e, 'Failed to trigger retention')
     } finally {
         triggerLoading.value = false
     }
@@ -130,7 +130,7 @@ async function confirmDelete() {
         await api(`/api/v1/destinations/${destinationId}`, { method: 'DELETE' })
         router.push('/destinations')
     } catch (e: any) {
-        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to delete destination'
+        error.value = apiErrorMessage(e, 'Failed to delete destination')
     } finally {
         deleteLoading.value = false
         deleteDialogOpen.value = false
@@ -186,6 +186,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                                 {{ destination.enabled ? 'Enabled' : 'Disabled' }}
                             </Badge>
                             <Badge v-if="destination.append_only" variant="outline">Append-only</Badge>
+                            <Badge v-if="destination.busy_job_id" variant="outline">Busy</Badge>
                             <Badge v-if="destination.retention_needs_review" variant="destructive">
                                 Retention needs reconfiguration
                             </Badge>
@@ -194,6 +195,12 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                             Type: <span class="font-medium text-foreground uppercase">{{ destination.type }}</span>
                             <span v-if="destination.policy_count > 0">
                                 · Used by {{ destination.policy_count }} polic{{ destination.policy_count === 1 ? 'y' : 'ies' }}
+                            </span>
+                            <span v-if="destination.busy_job_id">
+                                · In use since {{ formatDate(destination.busy_since) }} by
+                                <RouterLink :to="{ name: 'job-detail', params: { id: destination.busy_job_id } }"
+                                    class="underline underline-offset-4 hover:text-foreground">this job</RouterLink>
+                                — backups here are skipped until it finishes
                             </span>
                         </p>
                     </template>
@@ -412,8 +419,10 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                 <AlertDialogTitle>Delete destination?</AlertDialogTitle>
                 <AlertDialogDescription>
                     <span v-if="destination">
-                        <strong>{{ destination.name }}</strong> will be permanently deleted.
-                        This does not delete the underlying repository data.
+                        <strong>{{ destination.name }}</strong> will be deleted and its stored credentials erased.
+                        Its existing snapshots stay listed, but restoring one will require entering
+                        the destination's credentials again; browsing and downloading them will no longer be possible.
+                        The backup data on the storage is not touched.
                         This action cannot be undone.
                     </span>
                 </AlertDialogDescription>

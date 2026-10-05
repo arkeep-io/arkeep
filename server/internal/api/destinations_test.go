@@ -422,6 +422,18 @@ func TestDestinationHandler_Delete(t *testing.T) {
 		assertStatus(t, resp, http.StatusNoContent)
 	})
 
+	t.Run("returns 403 for non-admin user", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "protected", "local")
+
+		resp := e.del(t, "/api/v1/destinations/"+dest.ID.String(), e.userToken(t))
+		assertStatus(t, resp, http.StatusForbidden)
+
+		if _, err := e.deps.dests.GetByID(context.Background(), dest.ID); err != nil {
+			t.Errorf("destination no longer live after a forbidden delete: %v", err)
+		}
+	})
+
 	t.Run("returns 404 for non-existent destination", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.del(t, "/api/v1/destinations/00000000-0000-0000-0000-000000000001", e.adminToken(t))

@@ -171,6 +171,8 @@ type DestinationFilter struct {
 type DestinationRepository interface {
 	Create(ctx context.Context, destination *db.Destination) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Destination, error)
+	// GetByIDIncludingDeleted is GetByID without the soft-delete filter.
+	GetByIDIncludingDeleted(ctx context.Context, id uuid.UUID) (*db.Destination, error)
 	Update(ctx context.Context, destination *db.Destination) error
 	// UpdateRepoSize refreshes only the cached restic repository size and its
 	// timestamp, leaving all other destination fields untouched.
@@ -212,6 +214,9 @@ type DestinationRepository interface {
 	// orphan-recovery methods (JobRepository.MarkRunningJobsInterrupted*), so
 	// the gate can never get stuck on a crashed/disconnected agent.
 	ReleaseBusyForJobs(ctx context.Context, jobIDs []uuid.UUID) error
+	// ReleaseStaleBusy clears every gate held by a job that is gone or no
+	// longer pending/running. Run at server startup.
+	ReleaseStaleBusy(ctx context.Context) (int64, error)
 }
 
 // -----------------------------------------------------------------------------

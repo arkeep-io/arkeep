@@ -63,20 +63,29 @@ func NewSnapshotHandler(
 
 // snapshotResponse is the JSON representation of a snapshot returned by the API.
 type snapshotResponse struct {
-	ID               string `json:"id"`
-	PolicyID         string `json:"policy_id"`
-	PolicyName       string `json:"policy_name"`
-	DestinationID    string `json:"destination_id"`
-	DestinationName  string `json:"destination_name"`
-	AgentID          string `json:"agent_id"`
-	AgentName        string `json:"agent_name"`
-	JobID            string `json:"job_id"`
-	ResticSnapshotID string `json:"restic_snapshot_id"`
-	SizeBytes        int64  `json:"size_bytes"`
-	Tags             string `json:"tags"`
-	Hostname         string `json:"hostname"`
-	IsImported       bool   `json:"is_imported"`
-	CreatedAt        string `json:"created_at"`
+	ID              string `json:"id"`
+	PolicyID        string `json:"policy_id"`
+	PolicyName      string `json:"policy_name"`
+	DestinationID   string `json:"destination_id"`
+	DestinationName string `json:"destination_name"`
+	DestinationType string `json:"destination_type"`
+	// DestinationDeleted is true when the snapshot's destination was deleted.
+	// Its stored credentials are wiped on delete, so a restore needs them
+	// supplied again and browse/download are unavailable.
+	DestinationDeleted bool `json:"destination_deleted"`
+	// RepoPasswordRequired is true when a restore must also supply the restic
+	// repository password: the destination is deleted and no live policy holds
+	// the password (the policy is gone, or the snapshot was imported).
+	RepoPasswordRequired bool   `json:"repo_password_required"`
+	AgentID              string `json:"agent_id"`
+	AgentName            string `json:"agent_name"`
+	JobID                string `json:"job_id"`
+	ResticSnapshotID     string `json:"restic_snapshot_id"`
+	SizeBytes            int64  `json:"size_bytes"`
+	Tags                 string `json:"tags"`
+	Hostname             string `json:"hostname"`
+	IsImported           bool   `json:"is_imported"`
+	CreatedAt            string `json:"created_at"`
 }
 
 // listSnapshotsResponse wraps a paginated list of snapshots.
@@ -90,6 +99,11 @@ type restoreRequest struct {
 	AgentID      string   `json:"agent_id"`
 	TargetPath   string   `json:"target_path"`
 	IncludePaths []string `json:"include_paths,omitempty"`
+	// Credentials and RepoPassword are only read when the snapshot's
+	// destination was deleted (its stored secrets are wiped on delete). They
+	// are used for this one restore and never persisted.
+	Credentials  map[string]string `json:"credentials,omitempty"`
+	RepoPassword string            `json:"repo_password,omitempty"`
 }
 
 // restoreResponse is returned after a restore job is successfully dispatched.
@@ -165,20 +179,23 @@ func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotRespo
 		jobID = ""
 	}
 	return snapshotResponse{
-		ID:               s.ID.String(),
-		PolicyID:         policyID,
-		PolicyName:       policyName,
-		DestinationID:    s.DestinationID.String(),
-		DestinationName:  s.DestinationName,
-		AgentID:          s.AgentID,
-		AgentName:        s.AgentName,
-		JobID:            jobID,
-		ResticSnapshotID: s.SnapshotID,
-		SizeBytes:        s.SizeBytes,
-		Tags:             s.Tags,
-		Hostname:         s.Hostname,
-		IsImported:       s.IsImported,
-		CreatedAt:        s.SnapshotAt.UTC().Format(time.RFC3339),
+		ID:                   s.ID.String(),
+		PolicyID:             policyID,
+		PolicyName:           policyName,
+		DestinationID:        s.DestinationID.String(),
+		DestinationName:      s.DestinationName,
+		DestinationType:      s.DestinationType,
+		DestinationDeleted:   s.DestinationDeleted,
+		RepoPasswordRequired: s.DestinationDeleted && s.PolicyDeleted,
+		AgentID:              s.AgentID,
+		AgentName:            s.AgentName,
+		JobID:                jobID,
+		ResticSnapshotID:     s.SnapshotID,
+		SizeBytes:            s.SizeBytes,
+		Tags:                 s.Tags,
+		Hostname:             s.Hostname,
+		IsImported:           s.IsImported,
+		CreatedAt:            s.SnapshotAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -326,16 +343,59 @@ func (h *SnapshotHandler) writeRepoAccessError(w http.ResponseWriter, err error,
 	}
 }
 
+// applySuppliedCredentials prepares a deleted destination for a one-off
+// restore: it rejects what such a restore cannot do and puts the
+// caller-supplied credentials on the in-memory destination (never saved), so
+// destutil builds the agent env exactly as for a live destination. It writes
+// the error response and returns false on failure.
+func applySuppliedCredentials(w http.ResponseWriter, dest *db.Destination, req *restoreRequest) bool {
+	if len(req.IncludePaths) > 0 {
+		ErrUnprocessable(w, "partial restore is not available for a snapshot whose destination was deleted — restore the whole snapshot instead")
+		return false
+	}
+	if dest.Type == "s3" && (req.Credentials["access_key"] == "" || req.Credentials["secret_key"] == "") {
+		ErrUnprocessable(w, "the destination of this snapshot was deleted and its credentials were erased — enter the access key and secret key to restore")
+		return false
+	}
+	dest.Credentials = ""
+	if len(req.Credentials) > 0 {
+		creds, err := json.Marshal(req.Credentials)
+		if err != nil {
+			ErrBadRequest(w, "invalid credentials")
+			return false
+		}
+		dest.Credentials = db.EncryptedString(creds)
+	}
+	return true
+}
+
+// failUndispatchedRestore closes a restore job that was created but never
+// reached its agent, so it does not linger as pending.
+func (h *SnapshotHandler) failUndispatchedRestore(ctx context.Context, jobID uuid.UUID, reason string) {
+	now := time.Now()
+	if err := h.jobs.UpdateStatus(ctx, jobID, "failed", nil, &now, reason); err != nil {
+		h.logger.Warn("failed to mark undispatched restore job as failed",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+	}
+}
+
 // Restore handles POST /api/v1/snapshots/{id}/restore.
 // Creates a restore job and dispatches it to the chosen agent via gRPC.
 // The agent will run `restic restore <snapshot_id> --target <target_path>`.
 //
 // Flow:
 //  1. Load snapshot → get restic_snapshot_id, destination_id, policy_id
-//  2. Load destination → build repo URL and env (credentials)
-//  3. Resolve repo password (from the policy, or the destination if imported)
-//  4. Create db.Job{Type: "restore"} for the chosen agent
-//  5. Build and dispatch JobAssignment with JOB_TYPE_RESTORE
+//  2. Load destination → build repo URL and env (credentials). A deleted
+//     destination's credentials were wiped: the caller supplies them, and the
+//     restore must be full
+//  3. Resolve repo password (from the policy, or the destination if imported;
+//     for a deleted destination with neither, from the caller)
+//  4. Require the chosen agent to be online — a restore is never queued
+//  5. Create db.Job{Type: "restore"} for the chosen agent
+//  6. Build and dispatch JobAssignment with JOB_TYPE_RESTORE; if dispatch
+//     still fails, the job is marked failed rather than left pending
 func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	snapshotID, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -377,7 +437,9 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- 2. Load destination ---
-	dest, err := h.dests.GetByID(ctx, snapshot.DestinationID)
+	// A deleted destination is still loaded: its type and config give the
+	// repository address, and the caller supplies the wiped credentials.
+	dest, err := h.dests.GetByIDIncludingDeleted(ctx, snapshot.DestinationID)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrBadRequest(w, "destination not found")
@@ -387,17 +449,38 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		ErrInternal(w)
 		return
 	}
+	destDeleted := dest.DeletedAt.Valid
+	if destDeleted && !applySuppliedCredentials(w, dest, &req) {
+		return
+	}
 
 	// --- 3. Resolve the repo password (from the policy, or from the
 	// destination when the snapshot was imported). The agent stays the one the
 	// caller asked for: a restore may legitimately target another machine.
 	repoPassword, _, err := h.resolveRepoAccess(ctx, snapshot, dest)
 	if err != nil {
-		h.writeRepoAccessError(w, err, "restore")
+		missing := errors.Is(err, errPolicyMissing) || errors.Is(err, errRepoPasswordUnavailable)
+		if !destDeleted || !missing {
+			h.writeRepoAccessError(w, err, "restore")
+			return
+		}
+		if req.RepoPassword == "" {
+			ErrUnprocessable(w, "the repository password is required: the destination of this snapshot was deleted and no policy holds the password any more")
+			return
+		}
+		repoPassword = req.RepoPassword
+	}
+
+	// --- 4. Require an online agent ---
+	// A restore is never queued for later: it writes to a path the user chose
+	// now, and starting it hours later on reconnect would be a surprise (the
+	// pending queue only rebuilds backups — see Scheduler.DispatchPending).
+	if !h.agentMgr.IsConnected(agentID.String()) {
+		ErrServiceUnavailable(w, "agent is not connected — start the restore again once the agent is online")
 		return
 	}
 
-	// --- 4. Create restore job ---
+	// --- 5. Create restore job ---
 	job := &db.Job{
 		PolicyID: snapshot.PolicyID,
 		AgentID:  agentID,
@@ -410,7 +493,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- 5. Build and dispatch ---
+	// --- 6. Build and dispatch ---
 	payload := restorePayload{
 		ResticSnapshotID: snapshot.SnapshotID,
 		RepoPassword:     repoPassword,
@@ -427,6 +510,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		h.logger.Error("failed to marshal restore payload", zap.Error(err))
+		h.failUndispatchedRestore(ctx, job.ID, "the restore could not be prepared")
 		ErrInternal(w)
 		return
 	}
@@ -441,13 +525,9 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.agentMgr.Dispatch(agentID.String(), assignment); err != nil {
 		if errors.Is(err, agentmanager.ErrAgentNotConnected) {
-			// Agent is offline — job stays pending in DB and will be dispatched
-			// automatically by DispatchPending when the agent reconnects.
-			h.logger.Info("restore job queued: agent offline",
-				zap.String("job_id", job.ID.String()),
-				zap.String("agent_id", agentID.String()),
-			)
-			JSON(w, http.StatusAccepted, envelope{"data": restoreResponse{JobID: job.ID.String()}})
+			// The agent dropped between the online check and the dispatch.
+			h.failUndispatchedRestore(ctx, job.ID, "the agent went offline before the restore could start — start it again once the agent is online")
+			ErrServiceUnavailable(w, "agent is not connected — start the restore again once the agent is online")
 			return
 		}
 		h.logger.Error("failed to dispatch restore job",
@@ -455,6 +535,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			zap.String("agent_id", agentID.String()),
 			zap.Error(err),
 		)
+		h.failUndispatchedRestore(ctx, job.ID, "the restore could not be sent to the agent")
 		ErrInternal(w)
 		return
 	}
@@ -467,10 +548,11 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	)
 
 	logAudit(r, h.auditRepo, h.logger, "snapshot.restore", "snapshot", snapshotID.String(), map[string]any{
-		"snapshot_id":    snapshot.SnapshotID,
-		"destination_id": snapshot.DestinationID.String(),
-		"target_path":    req.TargetPath,
-		"agent_id":       agentID.String(),
+		"snapshot_id":         snapshot.SnapshotID,
+		"destination_id":      snapshot.DestinationID.String(),
+		"destination_deleted": destDeleted,
+		"target_path":         req.TargetPath,
+		"agent_id":            agentID.String(),
 	})
 	Ok(w, restoreResponse{JobID: job.ID.String()})
 }
@@ -567,7 +649,7 @@ func (h *SnapshotHandler) openSnapshot(w http.ResponseWriter, r *http.Request, s
 		return snapshotRepoAccess{}, "", false
 	}
 
-	dest, err := h.dests.GetByID(ctx, snapshot.DestinationID)
+	dest, err := h.dests.GetByIDIncludingDeleted(ctx, snapshot.DestinationID)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
 			ErrBadRequest(w, "destination not found")
@@ -575,6 +657,10 @@ func (h *SnapshotHandler) openSnapshot(w http.ResponseWriter, r *http.Request, s
 		}
 		h.logger.Error("failed to load destination", zap.String("action", action), zap.Error(err))
 		ErrInternal(w)
+		return snapshotRepoAccess{}, "", false
+	}
+	if dest.DeletedAt.Valid {
+		ErrUnprocessable(w, "the destination of this snapshot was deleted — browsing and downloading are not available, but you can still restore the whole snapshot by entering its credentials")
 		return snapshotRepoAccess{}, "", false
 	}
 

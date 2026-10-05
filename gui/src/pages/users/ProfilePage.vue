@@ -8,7 +8,7 @@ import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Loader2 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import TwoFactorSection from '@/components/users/TwoFactorSection.vue'
 import type { ApiResponse, User } from '@/types'
@@ -70,7 +70,7 @@ async function submitProfile() {
         profileSuccess.value = true
         setTimeout(() => { profileSuccess.value = false }, 3000)
     } catch (e: any) {
-        profileError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to update profile.'
+        profileError.value = apiErrorMessage(e, 'Failed to update profile.')
     } finally {
         profileSubmitting.value = false
     }
@@ -130,7 +130,7 @@ async function submitPassword() {
         passwordSuccess.value = true
         setTimeout(() => { passwordSuccess.value = false }, 3000)
     } catch (e: any) {
-        passwordError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to update password.'
+        passwordError.value = apiErrorMessage(e, 'Failed to update password.')
     } finally {
         passwordSubmitting.value = false
     }

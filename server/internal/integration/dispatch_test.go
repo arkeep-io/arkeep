@@ -128,6 +128,41 @@ func TestJobDispatchFailed(t *testing.T) {
 	waitForJobStatus(t, ts.jobRepo, job.ID.String(), "failed")
 }
 
+// TestJobFailedReleasesDestinationBusyGate is the regression case for issue
+// #283: a job that fails before reporting any per-destination result (a
+// pre-backup hook failure, an assignment the agent rejected) must not leave
+// its destinations locked out of every later backup or retention sweep.
+func TestJobFailedReleasesDestinationBusyGate(t *testing.T) {
+	ts := newTestServer(t)
+	agent := newFakeAgent(t, ts.addr)
+
+	agentID := agent.register(t)
+	job := createIntegrationJob(t, ts, mustParseUUID(t, agentID))
+	dest := addJobDestination(t, ts, job, "pending")
+
+	ctx := context.Background()
+	if acquired, err := ts.destRepo.TryAcquireBusy(ctx, dest.ID, job.ID); err != nil || !acquired {
+		t.Fatalf("TryAcquireBusy: acquired=%v err=%v", acquired, err)
+	}
+
+	if _, err := agent.client.ReportJobStatus(ctx, &proto.JobStatusReport{
+		JobId:   job.ID.String(),
+		AgentId: agentID,
+		Status:  proto.JobStatus_JOB_STATUS_FAILED,
+		Message: "pre-backup hook failed",
+	}); err != nil {
+		t.Fatalf("ReportJobStatus FAILED: %v", err)
+	}
+
+	got, err := ts.destRepo.GetByID(ctx, dest.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.BusyJobID != nil {
+		t.Errorf("destination BusyJobID = %v after the job failed, want nil (gate must be released)", got.BusyJobID)
+	}
+}
+
 // TestDispatchToOfflineAgent verifies that dispatching to an agent that has
 // no open stream returns an error immediately (no blocking).
 func TestDispatchToOfflineAgent(t *testing.T) {

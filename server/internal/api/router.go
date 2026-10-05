@@ -208,7 +208,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/destinations", destinationHandler.Create)
 			r.Get("/destinations/{id}", destinationHandler.GetByID)
 			r.Patch("/destinations/{id}", destinationHandler.Update)
-			r.Delete("/destinations/{id}", destinationHandler.Delete)
+			r.With(RequireRole("admin")).Delete("/destinations/{id}", destinationHandler.Delete)
 			r.Post("/destinations/{id}/import", destinationHandler.Import)
 			r.Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)

@@ -50,6 +50,7 @@ type config struct {
 	grpcTLSCA      string
 	grpcInsecure   bool
 	dockerHostRoot string
+	hostname       string
 }
 
 func main() {
@@ -84,6 +85,7 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 	root.PersistentFlags().StringVar(&cfg.serverHTTPAddr, "server-http-addr", envOrDefault("ARKEEP_SERVER_HTTP_ADDR", ""), "Base URL of the server HTTP API for enrollment (default: derived from --server-addr with port 8080)")
 	root.PersistentFlags().StringVar(&cfg.dockerHostRoot, "docker-host-root", envOrDefault("ARKEEP_DOCKER_HOST_ROOT", ""), "Container path where the host filesystem is mounted (default: /hostfs when running inside Docker, empty otherwise). Override only if you mount the host filesystem at a custom path.")
+	root.PersistentFlags().StringVar(&cfg.hostname, "hostname", envOrDefault("ARKEEP_AGENT_HOSTNAME", ""), "Hostname reported to the server and recorded on snapshots (default: the host's hostname, read from <docker-host-root>/etc/hostname inside Docker)")
 
 	return root
 }
@@ -121,6 +123,14 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Info("running inside Docker: defaulting docker-host-root to /hostfs " +
 			"(override with --docker-host-root or ARKEEP_DOCKER_HOST_ROOT)")
 	}
+
+	// Resolve the hostname once: it is reported at registration and passed to
+	// restic as --host so snapshots stay in one group across container recreates.
+	hostname, hostnameSource := resolveHostname(cfg.hostname, cfg.dockerHostRoot)
+	logger.Info("agent hostname resolved",
+		zap.String("hostname", hostname),
+		zap.String("source", hostnameSource),
+	)
 
 	// --- Signal handling ---
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -173,7 +183,7 @@ func run(ctx context.Context, cfg *config) error {
 	hooksRunner := hooks.NewRunner(0) // 0 = use DefaultTimeout (5 minutes)
 
 	// --- Executor ---
-	exec := executor.New(wrapper, dockerClient, hooksRunner, logger, cfg.dockerHostRoot)
+	exec := executor.New(wrapper, dockerClient, hooksRunner, logger, cfg.dockerHostRoot, hostname)
 
 	// --- Load mTLS credentials from state-dir (written by enrollment) ---
 	// If all three files are present the agent was enrolled previously and can
@@ -205,6 +215,7 @@ func run(ctx context.Context, cfg *config) error {
 		SharedSecret:    cfg.sharedSecret,
 		StateDir:        cfg.stateDir,
 		Version:         version,
+		Hostname:        hostname,
 		DockerAvailable: dockerAvailable,
 		TLSCAFile:       cfg.grpcTLSCA,
 		ClientCertFile:  clientCertFile,

@@ -4,7 +4,7 @@
 // destination; this covers repointing or re-scanning an existing one — the last
 // step when migrating a repository between storage providers.
 import { ref, watch, computed } from 'vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { summariseImport } from '@/lib/importSummary'
 import type { ApiResponse, Destination, ImportDestinationRequest, ImportDestinationResponse } from '@/types'
 import { AsyncCombobox } from '@/components/ui/async-combobox'
@@ -79,7 +79,7 @@ async function onSubmit() {
         result.value = res.data
         emit('imported')
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to import snapshots.'
+        submitError.value = apiErrorMessage(e, 'Failed to import snapshots.')
     } finally {
         submitting.value = false
     }

@@ -74,6 +74,10 @@ type BackupOptions struct {
 	Tags     []string
 	// ExcludePatterns are passed to restic as --exclude flags.
 	ExcludePatterns []string
+	// Host is recorded as the snapshot's hostname (--host). Set so a Dockerized
+	// agent does not stamp its container ID, which changes on every recreate.
+	// Empty leaves restic's default (os.Hostname).
+	Host string
 }
 
 // StdinBackupOptions carries the parameters for a backup whose content is the
@@ -90,6 +94,8 @@ type StdinBackupOptions struct {
 	// the only one set, so its retention pool never overlaps the policy's
 	// regular snapshots (see Forget).
 	Tags []string
+	// Host is recorded as the snapshot's hostname (--host); see BackupOptions.
+	Host string
 }
 
 // LsEntry represents a single file or directory returned by `restic ls --json`.
@@ -256,6 +262,9 @@ func buildBackupArgs(opts BackupOptions, goos string) []string {
 	for _, ex := range opts.ExcludePatterns {
 		args = append(args, "--exclude", ex)
 	}
+	if opts.Host != "" {
+		args = append(args, "--host", opts.Host)
+	}
 	args = append(args, "--")
 	args = append(args, opts.Sources...)
 	return args
@@ -320,6 +329,9 @@ func buildStdinBackupArgs(opts StdinBackupOptions, goos string) []string {
 	for _, tag := range opts.Tags {
 		args = append(args, "--tag", tag)
 	}
+	if opts.Host != "" {
+		args = append(args, "--host", opts.Host)
+	}
 	args = append(args, "--")
 	return append(args, shellArgv(opts.Command, goos)...)
 }
@@ -382,7 +394,13 @@ func buildForgetArgs(policy RetentionPolicy, tags []string) ([]string, error) {
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("restic: refusing to run forget without tags: an unscoped forget would prune snapshots belonging to other policies")
 	}
-	args := []string{"forget", "--prune", "--json"}
+	// --group-by paths,tags replaces restic's default host,paths. Grouping by
+	// host split one pool into a separate group per container ID every time a
+	// Dockerized agent was recreated, and keep-* rules were applied to each
+	// group alone, so old groups were never pruned (#284). Every Arkeep
+	// snapshot carries exactly one pool tag, so grouping by tags keeps each
+	// pool separate — also when a sweep passes several pools' tags at once.
+	args := []string{"forget", "--prune", "--json", "--group-by", "paths,tags"}
 	for _, tag := range tags {
 		args = append(args, "--tag", tag)
 	}
