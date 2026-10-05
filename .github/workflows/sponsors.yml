@@ -5,8 +5,10 @@ on:
   schedule:
     - cron: "30 3 * * *"   # every day at 03:30 UTC
 
+# All writes go through SPONSORS_PR_PAT (main is protected and only accepts
+# PRs), so GITHUB_TOKEN only needs to read the repository.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sponsors
@@ -18,7 +20,11 @@ jobs:
     name: Update README sponsors
     runs-on: ubuntu-latest
     steps:
+      # Always start from main: a manual run dispatched from develop would
+      # otherwise carry unreleased develop changes into the PR against main.
       - uses: actions/checkout@v7
+        with:
+          ref: main
 
       # SPONSORS_PAT reads arkeep-io's sponsorships: GITHUB_TOKEN has no access
       # to the Sponsors GraphQL API. With organization: true the action queries
@@ -40,19 +46,23 @@ jobs:
           include-private: false
           template: '<a href="https://github.com/{{ login }}"><img src="https://github.com/{{ login }}.png?size=120" width="60" height="60" alt="{{#name}}{{ name }}{{/name}}{{^name}}{{ login }}{{/name}}" /></a>'
 
-      # Pushed with GITHUB_TOKEN (checkout's persisted credentials): pushes made
-      # with it never trigger other workflows, so there is no loop. [skip ci]
-      # also covers the case where the push credentials change in the future.
+      # Opens (or updates) a PR against main only when README.md changed; with
+      # no diff the action does nothing. The PR is created with a PAT instead of
+      # GITHUB_TOKEN because PRs opened by GITHUB_TOKEN don't trigger the
+      # required CI checks. No [skip ci] in the message for the same reason.
       # The commit subject is excluded from the release changelog in
       # .goreleaser.yml.
-      - name: Commit if README changed
-        run: |
-          if git diff --quiet -- README.md; then
-            echo "No sponsor changes."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "docs(readme): update sponsors [skip ci]"
-          git push
+      - name: Open sponsors PR
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.SPONSORS_PR_PAT }}
+          base: main
+          branch: chore/sponsors
+          delete-branch: true
+          add-paths: README.md
+          commit-message: "docs(readme): update sponsors"
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          title: "docs(readme): update sponsors"
+          body: Automated update of the Sponsors section from GitHub Sponsors (arkeep-io).
+          labels: no-changelog
