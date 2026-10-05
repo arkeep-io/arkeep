@@ -1011,7 +1011,7 @@ Sponsoring is a bit like buying me a coffee for open source: it helps me spend m
 
 Thank you to everyone who has sponsored Arkeep, past and present. Your support keeps the project independent and moving forward.
 
-<!-- sponsors --><!-- sponsors -->
+<!-- sponsors --><a href="https://github.com/123-soleil"><img src="https://github.com/123-soleil.png?size=120" width="60" height="60" alt="123soleil" /></a><!-- sponsors -->
 
 ## License
 
