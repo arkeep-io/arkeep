@@ -27,10 +27,13 @@ func resolveHostname(override, hostRoot string) (hostname, source string) {
 		return v, "override"
 	}
 	if hostRoot != "" {
-		for _, name := range []string{"hostname", "HOSTNAME"} {
-			path := filepath.Join(hostRoot, "etc", name)
-			if v, ok := readHostnameFile(path); ok {
-				return v, path
+		if root, err := os.OpenRoot(hostRoot); err == nil {
+			defer func() { _ = root.Close() }()
+			for _, name := range []string{"hostname", "HOSTNAME"} {
+				rel := filepath.Join("etc", name)
+				if v, ok := readHostnameFile(root, rel); ok {
+					return v, filepath.Join(hostRoot, rel)
+				}
 			}
 		}
 	}
@@ -40,10 +43,12 @@ func resolveHostname(override, hostRoot string) (hostname, source string) {
 	return "unknown", "default"
 }
 
-// readHostnameFile returns the first line of path when it holds a plausible
-// hostname: non-empty, no inner whitespace, at most maxHostnameLen bytes.
-func readHostnameFile(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+// readHostnameFile returns the first line of name (relative to root) when it
+// holds a plausible hostname: non-empty, no inner whitespace, at most
+// maxHostnameLen bytes. Reading through root keeps the access scoped to the
+// host filesystem mount.
+func readHostnameFile(root *os.Root, name string) (string, bool) {
+	data, err := root.ReadFile(name)
 	if err != nil {
 		return "", false
 	}
