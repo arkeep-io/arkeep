@@ -37,10 +37,18 @@ func TestDispatchPending_OnlyRebuildsBackups(t *testing.T) {
 	s, gdb, policies, jobs := newTestScheduler(t)
 	f := newResumeFixture(t, gdb, policies, jobs)
 	ctx := context.Background()
-	// The shared fixture's legacy sources format does not parse; the backup
-	// payload must build for the backup to actually be dispatched.
+	// The backup must be dispatchable for the assertion below to mean
+	// anything: the shared fixture's legacy sources format does not parse, and
+	// a policy with no destination is failed instead of sent (#283).
 	if err := gdb.Model(f.policy).Update("sources", `[{"type":"directory","path":"/data"}]`).Error; err != nil {
 		t.Fatalf("set policy sources: %v", err)
+	}
+	dest := &db.Destination{Name: "dest", Type: "local", Config: `{"path":"/backups"}`, Enabled: true}
+	if err := s.dests.Create(ctx, dest); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	if err := policies.AddDestination(ctx, &db.PolicyDestination{PolicyID: f.policy.ID, DestinationID: dest.ID}); err != nil {
+		t.Fatalf("attach destination: %v", err)
 	}
 
 	pending := func(jobType string, withPolicy bool) *db.Job {
