@@ -66,6 +66,17 @@ func connectFakeAgent(e *testEnv, stream *fakeAgentStream) string {
 	return stream.agentID
 }
 
+// connectDBFakeAgent registers an online fake agent backed by a real agents
+// row, so the restore job it receives satisfies the jobs.agent_id foreign key.
+func connectDBFakeAgent(t *testing.T, e *testEnv, stream *fakeAgentStream) string {
+	t.Helper()
+	agent := createDBAgent(t, e.deps, "restore-agent-"+uuid.NewString())
+	stream.mgr = e.mgr
+	stream.agentID = agent.ID.String()
+	e.mgr.Register(stream.agentID, "fake-host", false, stream)
+	return stream.agentID
+}
+
 // requestDownload asks for a download ticket and returns its URL.
 func requestDownload(t *testing.T, e *testEnv, snapshotID, path, typ, agentID string) string {
 	t.Helper()

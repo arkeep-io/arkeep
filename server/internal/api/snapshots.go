@@ -369,6 +369,18 @@ func applySuppliedCredentials(w http.ResponseWriter, dest *db.Destination, req *
 	return true
 }
 
+// failUndispatchedRestore closes a restore job that was created but never
+// reached its agent, so it does not linger as pending.
+func (h *SnapshotHandler) failUndispatchedRestore(ctx context.Context, jobID uuid.UUID, reason string) {
+	now := time.Now()
+	if err := h.jobs.UpdateStatus(ctx, jobID, "failed", nil, &now, reason); err != nil {
+		h.logger.Warn("failed to mark undispatched restore job as failed",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+	}
+}
+
 // Restore handles POST /api/v1/snapshots/{id}/restore.
 // Creates a restore job and dispatches it to the chosen agent via gRPC.
 // The agent will run `restic restore <snapshot_id> --target <target_path>`.
@@ -377,11 +389,13 @@ func applySuppliedCredentials(w http.ResponseWriter, dest *db.Destination, req *
 //  1. Load snapshot → get restic_snapshot_id, destination_id, policy_id
 //  2. Load destination → build repo URL and env (credentials). A deleted
 //     destination's credentials were wiped: the caller supplies them, and the
-//     restore must be full and dispatched immediately (nothing is queued)
+//     restore must be full
 //  3. Resolve repo password (from the policy, or the destination if imported;
 //     for a deleted destination with neither, from the caller)
-//  4. Create db.Job{Type: "restore"} for the chosen agent
-//  5. Build and dispatch JobAssignment with JOB_TYPE_RESTORE
+//  4. Require the chosen agent to be online — a restore is never queued
+//  5. Create db.Job{Type: "restore"} for the chosen agent
+//  6. Build and dispatch JobAssignment with JOB_TYPE_RESTORE; if dispatch
+//     still fails, the job is marked failed rather than left pending
 func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	snapshotID, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -457,14 +471,16 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		repoPassword = req.RepoPassword
 	}
 
-	// Supplied credentials are never stored, so this restore cannot wait in
-	// the pending queue for the agent to come back online.
-	if destDeleted && !h.agentMgr.IsConnected(agentID.String()) {
-		ErrServiceUnavailable(w, "agent is not connected — a restore from a deleted destination needs the agent online, because the credentials you entered are not stored")
+	// --- 4. Require an online agent ---
+	// A restore is never queued for later: it writes to a path the user chose
+	// now, and starting it hours later on reconnect would be a surprise (the
+	// pending queue only rebuilds backups — see Scheduler.DispatchPending).
+	if !h.agentMgr.IsConnected(agentID.String()) {
+		ErrServiceUnavailable(w, "agent is not connected — start the restore again once the agent is online")
 		return
 	}
 
-	// --- 4. Create restore job ---
+	// --- 5. Create restore job ---
 	job := &db.Job{
 		PolicyID: snapshot.PolicyID,
 		AgentID:  agentID,
@@ -477,7 +493,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- 5. Build and dispatch ---
+	// --- 6. Build and dispatch ---
 	payload := restorePayload{
 		ResticSnapshotID: snapshot.SnapshotID,
 		RepoPassword:     repoPassword,
@@ -494,6 +510,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		h.logger.Error("failed to marshal restore payload", zap.Error(err))
+		h.failUndispatchedRestore(ctx, job.ID, "the restore could not be prepared")
 		ErrInternal(w)
 		return
 	}
@@ -508,13 +525,9 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.agentMgr.Dispatch(agentID.String(), assignment); err != nil {
 		if errors.Is(err, agentmanager.ErrAgentNotConnected) {
-			// Agent is offline — job stays pending in DB and will be dispatched
-			// automatically by DispatchPending when the agent reconnects.
-			h.logger.Info("restore job queued: agent offline",
-				zap.String("job_id", job.ID.String()),
-				zap.String("agent_id", agentID.String()),
-			)
-			JSON(w, http.StatusAccepted, envelope{"data": restoreResponse{JobID: job.ID.String()}})
+			// The agent dropped between the online check and the dispatch.
+			h.failUndispatchedRestore(ctx, job.ID, "the agent went offline before the restore could start — start it again once the agent is online")
+			ErrServiceUnavailable(w, "agent is not connected — start the restore again once the agent is online")
 			return
 		}
 		h.logger.Error("failed to dispatch restore job",
@@ -522,6 +535,7 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			zap.String("agent_id", agentID.String()),
 			zap.Error(err),
 		)
+		h.failUndispatchedRestore(ctx, job.ID, "the restore could not be sent to the agent")
 		ErrInternal(w)
 		return
 	}

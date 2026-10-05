@@ -50,17 +50,6 @@ func createDBSnapshotOnDeletedDest(t *testing.T, deps *testDeps, destType string
 	return s
 }
 
-// connectDBFakeAgent registers an online fake agent backed by a real agents
-// row, so the restore job it receives satisfies the jobs.agent_id foreign key.
-func connectDBFakeAgent(t *testing.T, e *testEnv, stream *fakeAgentStream) string {
-	t.Helper()
-	agent := createDBAgent(t, e.deps, "restore-agent-"+uuid.NewString())
-	stream.mgr = e.mgr
-	stream.agentID = agent.ID.String()
-	e.mgr.Register(stream.agentID, "fake-host", false, stream)
-	return stream.agentID
-}
-
 // restorePayloadSent decodes the single restore assignment the fake agent got.
 func restorePayloadSent(t *testing.T, stream *fakeAgentStream) restorePayload {
 	t.Helper()

@@ -245,10 +245,13 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 	for i := range pendingJobs {
 		j := &pendingJobs[i]
 
-		// A job without a policy is a restore of an imported snapshot: there is
-		// no policy to rebuild a backup payload from, and it is not this
-		// method's job to re-dispatch it.
-		if j.PolicyID == nil {
+		// Only backups can be rebuilt from the database. Restores and retention
+		// sweeps are never queued for an offline agent (their callers require
+		// it online), so a pending one is left over from a dispatch that failed
+		// or from an older release that queued restores: close it out instead of
+		// re-sending it — rebuilding it here would run a backup in its place.
+		if j.Type != "backup" {
+			s.failUndispatchedJob(ctx, &j.Job)
 			continue
 		}
 
@@ -273,6 +276,25 @@ func (s *Scheduler) DispatchPending(ctx context.Context, agentID uuid.UUID) {
 			)
 		}
 	}
+}
+
+// failUndispatchedJob marks a pending non-backup job as failed: it never
+// reached its agent and cannot be rebuilt, so it must not stay pending forever.
+func (s *Scheduler) failUndispatchedJob(ctx context.Context, j *db.Job) {
+	now := time.Now()
+	errMsg := fmt.Sprintf("the agent was offline when this %s job was requested, so it never ran — start it again", j.Type)
+	if err := s.jobs.UpdateStatus(ctx, j.ID, "failed", nil, &now, errMsg); err != nil {
+		s.logger.Warn("failed to close out an undispatched job",
+			zap.String("job_id", j.ID.String()),
+			zap.String("type", j.Type),
+			zap.Error(err),
+		)
+		return
+	}
+	s.logger.Info("closed out an undispatched job left pending",
+		zap.String("job_id", j.ID.String()),
+		zap.String("type", j.Type),
+	)
 }
 
 // maxResumeAttempts caps how many times in a row a backup is resumed after being
