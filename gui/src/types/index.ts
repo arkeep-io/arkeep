@@ -181,6 +181,11 @@ export interface Destination {
   // the "already used by N other policies" notice in the policy editor's
   // destination picker.
   policy_count: number
+  // busy_job_id: the backup or retention job currently holding this
+  // destination's repository ("" when free); busy_since: when it took it.
+  // Explains why a backup to this destination was skipped.
+  busy_job_id: string
+  busy_since: string
 }
 
 // ─── Policy ───────────────────────────────────────────────────────────────────

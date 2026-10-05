@@ -186,6 +186,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                                 {{ destination.enabled ? 'Enabled' : 'Disabled' }}
                             </Badge>
                             <Badge v-if="destination.append_only" variant="outline">Append-only</Badge>
+                            <Badge v-if="destination.busy_job_id" variant="outline">Busy</Badge>
                             <Badge v-if="destination.retention_needs_review" variant="destructive">
                                 Retention needs reconfiguration
                             </Badge>
@@ -194,6 +195,12 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                             Type: <span class="font-medium text-foreground uppercase">{{ destination.type }}</span>
                             <span v-if="destination.policy_count > 0">
                                 · Used by {{ destination.policy_count }} polic{{ destination.policy_count === 1 ? 'y' : 'ies' }}
+                            </span>
+                            <span v-if="destination.busy_job_id">
+                                · In use since {{ formatDate(destination.busy_since) }} by
+                                <RouterLink :to="{ name: 'job-detail', params: { id: destination.busy_job_id } }"
+                                    class="underline underline-offset-4 hover:text-foreground">this job</RouterLink>
+                                — backups here are skipped until it finishes
                             </span>
                         </p>
                     </template>

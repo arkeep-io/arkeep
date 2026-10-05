@@ -95,6 +95,11 @@ type destinationResponse struct {
 	// backs the "already used by N other policies" notice in the policy
 	// editor's destination picker.
 	PolicyCount int64 `json:"policy_count"`
+	// BusyJobID is the job (backup or retention) currently holding this
+	// destination's busy gate, "" when it is free; BusySince is when it took
+	// it. Lets the GUI explain why a backup to this destination was skipped.
+	BusyJobID string `json:"busy_job_id"`
+	BusySince string `json:"busy_since"`
 }
 
 // singleDestinationResponse builds a destinationResponse for a single
@@ -147,6 +152,12 @@ func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentN
 		AppendOnly:           d.AppendOnly,
 		RetentionNeedsReview: d.RetentionNeedsReview,
 		PolicyCount:          policyCount,
+	}
+	if d.BusyJobID != nil {
+		resp.BusyJobID = d.BusyJobID.String()
+	}
+	if d.BusySince != nil {
+		resp.BusySince = d.BusySince.UTC().Format(time.RFC3339)
 	}
 	if d.RetentionAgentID != nil {
 		resp.RetentionAgentID = d.RetentionAgentID.String()
