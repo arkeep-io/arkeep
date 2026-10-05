@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -127,6 +128,11 @@ var terminalJobStatuses = []string{"succeeded", "failed", "cancelled", "interrup
 // ErrTerminalState and writes nothing, so a report that arrives after the server
 // gave up on the job cannot resurrect it. Returns ErrNotFound if no such job
 // exists.
+//
+// Moving a job to a terminal status also releases any destination busy gate it
+// still holds, in the same transaction: whichever path ends the job (agent
+// report, user cancel, server-side failure), the gate never outlives it
+// (issue #290).
 func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error {
 	updates := map[string]interface{}{
 		"status": status,
@@ -139,14 +145,29 @@ func (r *gormJobRepository) UpdateStatus(ctx context.Context, id uuid.UUID, stat
 		updates["ended_at"] = endedAt
 	}
 
-	result := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Where("id = ? AND status NOT IN ?", id, terminalJobStatuses).
-		Updates(updates)
-	if result.Error != nil {
-		return fmt.Errorf("jobs: update status: %w", result.Error)
+	var rowsAffected int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Job{}).
+			Where("id = ? AND status NOT IN ?", id, terminalJobStatuses).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		if rowsAffected == 0 || !slices.Contains(terminalJobStatuses, status) {
+			return nil
+		}
+		return tx.Model(&db.Destination{}).
+			Where("busy_job_id = ?", id).
+			Updates(map[string]interface{}{
+				"busy_job_id": nil,
+				"busy_since":  nil,
+			}).Error
+	})
+	if err != nil {
+		return fmt.Errorf("jobs: update status: %w", err)
 	}
-	if result.RowsAffected == 0 {
+	if rowsAffected == 0 {
 		// Tell "already finished" apart from "does not exist" — the caller logs
 		// them very differently.
 		var count int64

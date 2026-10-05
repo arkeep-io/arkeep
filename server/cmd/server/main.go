@@ -241,6 +241,14 @@ func run(ctx context.Context, cfg *config) error {
 	} else if n > 0 {
 		logger.Info("recovered jobs left running by a previous run", zap.Int64("count", n))
 	}
+	// Then clear any destination busy gate still held by a job that is no longer
+	// pending/running — e.g. one cancelled before its release reached the gate
+	// (issue #290) — so the GUI's busy state only shows operations in flight.
+	if n, err := destinationRepo.ReleaseStaleBusy(ctx); err != nil {
+		logger.Warn("failed to release stale destination busy gates", zap.Error(err))
+	} else if n > 0 {
+		logger.Info("released stale destination busy gates", zap.Int64("count", n))
+	}
 
 	// --- Retention migration backfill (issue #130) ---
 	// One-time: populates each destination's new retention fields from

@@ -378,6 +378,10 @@ onMounted(fetchJob)
                                     <Badge :variant="statusVariant(dest.status)" :class="statusClass(dest.status)">
                                         {{ statusLabel(dest.status) }}
                                     </Badge>
+                                    <!-- Why a destination was skipped or failed (e.g. busy gate, issue #290) -->
+                                    <p v-if="dest.error" class="mt-1 max-w-md text-xs text-muted-foreground whitespace-normal">
+                                        {{ dest.error }}
+                                    </p>
                                 </TableCell>
                                 <TableCell class="text-sm font-mono text-muted-foreground">
                                     {{ formatBytes(dest.size_bytes) }}

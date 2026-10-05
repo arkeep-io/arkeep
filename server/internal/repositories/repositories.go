@@ -212,6 +212,9 @@ type DestinationRepository interface {
 	// orphan-recovery methods (JobRepository.MarkRunningJobsInterrupted*), so
 	// the gate can never get stuck on a crashed/disconnected agent.
 	ReleaseBusyForJobs(ctx context.Context, jobIDs []uuid.UUID) error
+	// ReleaseStaleBusy clears every gate held by a job that is gone or no
+	// longer pending/running. Run at server startup.
+	ReleaseStaleBusy(ctx context.Context) (int64, error)
 }
 
 // -----------------------------------------------------------------------------
