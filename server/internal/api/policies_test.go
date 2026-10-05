@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -580,6 +581,42 @@ func TestPolicyHandler_Delete(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.del(t, "/api/v1/policies/00000000-0000-0000-0000-000000000001", "")
 		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+// TestPolicyHandler_Trigger locks the message shown by the GUI when "Run now"
+// is used on a disabled policy (#287): it must tell the user how to fix it.
+func TestPolicyHandler_Trigger(t *testing.T) {
+	t.Run("returns 409 with an actionable message for a disabled policy", func(t *testing.T) {
+		e := newTestEnv(t)
+		policy := createDBPolicy(t, e.deps, "disabled", createDBAgent(t, e.deps, "test-agent").ID)
+		policy.Enabled = false
+		if err := e.deps.policies.Update(context.Background(), policy); err != nil {
+			t.Fatalf("disable policy: %v", err)
+		}
+
+		resp := e.post(t, "/api/v1/policies/"+policy.ID.String()+"/trigger", e.adminToken(t), nil)
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusConflict)
+		}
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if want := "This policy is disabled. Enable it to run a backup."; body.Error.Message != want {
+			t.Errorf("message = %q, want %q", body.Error.Message, want)
+		}
+	})
+
+	t.Run("returns 404 for non-existent policy", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/policies/00000000-0000-0000-0000-000000000001/trigger", e.adminToken(t), nil)
+		assertStatus(t, resp, http.StatusNotFound)
 	})
 }
 

@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ChevronLeft, ChevronRight, RefreshCw, ScrollText } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, AuditLog } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ async function fetchEntries() {
         entries.value = res.data.items
         total.value = res.data.total
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load audit log.'
+        error.value = apiErrorMessage(e, 'Failed to load audit log.')
     } finally {
         loading.value = false
     }

@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { AlertCircle, Loader2, RefreshCw, Trash2 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, LogRetentionSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ async function submit() {
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to save log retention settings'
+        submitError.value = apiErrorMessage(e, 'Failed to save log retention settings')
     } finally {
         submitting.value = false
     }
@@ -84,7 +84,7 @@ async function pruneNow() {
         pruneMessage.value = `Cleanup complete — ${res.data.deleted.toLocaleString()} log line(s) removed.`
         setTimeout(() => { pruneMessage.value = null }, 6000)
     } catch (e: any) {
-        submitError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to run cleanup'
+        submitError.value = apiErrorMessage(e, 'Failed to run cleanup')
     } finally {
         pruning.value = false
     }

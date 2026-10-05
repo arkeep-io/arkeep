@@ -34,7 +34,7 @@ import {
     CalendarClock,
     AlertTriangle,
 } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
@@ -87,7 +87,7 @@ async function fetchDestination() {
         const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
         destination.value = res.data
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load destination'
+        error.value = apiErrorMessage(e, 'Failed to load destination')
     } finally {
         loading.value = false
     }
@@ -118,7 +118,7 @@ async function triggerRetention() {
         await api(`/api/v1/destinations/${destinationId}/trigger-retention`, { method: 'POST' })
         setTimeout(fetchJobs, 800)
     } catch (e: any) {
-        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to trigger retention'
+        error.value = apiErrorMessage(e, 'Failed to trigger retention')
     } finally {
         triggerLoading.value = false
     }
@@ -130,7 +130,7 @@ async function confirmDelete() {
         await api(`/api/v1/destinations/${destinationId}`, { method: 'DELETE' })
         router.push('/destinations')
     } catch (e: any) {
-        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to delete destination'
+        error.value = apiErrorMessage(e, 'Failed to delete destination')
     } finally {
         deleteLoading.value = false
         deleteDialogOpen.value = false

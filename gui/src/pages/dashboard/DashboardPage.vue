@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {
     ChartContainer,
@@ -167,7 +167,7 @@ async function fetchAll() {
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
     } catch (e: any) {
-        error.value = e?.message ?? 'Failed to load dashboard data.'
+        error.value = apiErrorMessage(e, 'Failed to load dashboard data.')
     } finally {
         loading.value = false
     }

@@ -17,7 +17,7 @@
 //   import { api } from '@/services/api'
 //   const res = await api<ApiResponse<Agent[]>>('/api/v1/agents')
 
-import { ofetch, type FetchOptions } from 'ofetch'
+import { ofetch, FetchError, type FetchOptions } from 'ofetch'
 import { useAuthStore } from '@/stores/auth'
 import { router } from '@/router'
 
@@ -99,4 +99,21 @@ export async function api<T = unknown>(
     credentials: 'include',
     headers: buildHeaders(options.headers, auth.accessToken),
   })
+}
+
+// apiErrorMessage extracts a human-readable message from an error thrown by
+// api(). The server reports failures as { error: { message, code } }, so that
+// message is preferred. ofetch's own message ("[POST] "/api/...": 409 ...")
+// is never shown to users: for an HTTP or network failure without a server
+// message the caller's fallback is used instead. Other errors (e.g. "Session
+// expired" thrown above) keep their message.
+//
+// Usage:
+//   catch (e) { error.value = apiErrorMessage(e, 'Failed to load agents') }
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  const e = err as any
+  const serverMessage = e?.data?.error?.message
+  if (typeof serverMessage === 'string' && serverMessage !== '') return serverMessage
+  if (err instanceof FetchError) return fallback
+  return typeof e?.message === 'string' && e.message !== '' ? e.message : fallback
 }

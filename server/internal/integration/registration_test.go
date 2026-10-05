@@ -108,3 +108,67 @@ func TestReconnect(t *testing.T) {
 	}
 	_ = agents
 }
+
+// TestReconnect_NameFollowsHostname verifies issue #284's migration path: an
+// agent whose name is still its first-registration hostname (e.g. a Docker
+// container ID) takes the new hostname on reconnect, while a name the user
+// chose is left untouched.
+func TestReconnect_NameFollowsHostname(t *testing.T) {
+	reconnect := func(t *testing.T, ts *testServer, agentID, hostname string) {
+		t.Helper()
+		agent := newFakeAgent(t, ts.addr)
+		_, err := agent.client.Register(context.Background(), &proto.RegisterRequest{ //nolint:composites — proto fields use generated names
+			AgentId:  agentID,
+			Hostname: hostname,
+			Version:  "0.0.0-test",
+			Os:       "linux",
+			Arch:     "amd64",
+		})
+		if err != nil {
+			t.Fatalf("reconnect Register: %v", err)
+		}
+	}
+
+	t.Run("default name follows the new hostname", func(t *testing.T) {
+		ts := newTestServer(t)
+		agentID := newFakeAgent(t, ts.addr).register(t) // name == hostname == integration-test-host
+
+		reconnect(t, ts, agentID, "nas-home")
+
+		record, err := ts.agentRepo.GetByID(context.Background(), mustParseUUID(t, agentID))
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if record.Hostname != "nas-home" || record.Name != "nas-home" {
+			t.Errorf("name/hostname = %q/%q, want nas-home/nas-home", record.Name, record.Hostname)
+		}
+	})
+
+	t.Run("user-chosen name is kept", func(t *testing.T) {
+		ts := newTestServer(t)
+		agentID := newFakeAgent(t, ts.addr).register(t)
+		id := mustParseUUID(t, agentID)
+
+		record, err := ts.agentRepo.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		record.Name = "Backup box"
+		if err := ts.agentRepo.Update(context.Background(), record); err != nil {
+			t.Fatalf("rename agent: %v", err)
+		}
+
+		reconnect(t, ts, agentID, "nas-home")
+
+		record, err = ts.agentRepo.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if record.Name != "Backup box" {
+			t.Errorf("name = %q, want the user's \"Backup box\"", record.Name)
+		}
+		if record.Hostname != "nas-home" {
+			t.Errorf("hostname = %q, want nas-home", record.Hostname)
+		}
+	})
+}

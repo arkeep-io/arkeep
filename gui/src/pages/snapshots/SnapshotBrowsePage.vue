@@ -18,7 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'
 import SnapshotFileTree from '@/components/snapshots/SnapshotFileTree.vue'
 import { formatDate } from '@/lib/jobUtils'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiResponse, Snapshot, SnapshotBrowseResponse, SnapshotFileEntry } from '@/types'
 
@@ -58,7 +58,7 @@ async function fetchSnapshot() {
         // to browse with, only a full restore with re-entered credentials.
         if (!res.data.destination_deleted) await browseRoot()
     } catch (e: any) {
-        error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to load snapshot.'
+        error.value = apiErrorMessage(e, 'Failed to load snapshot.')
     } finally {
         loading.value = false
     }
@@ -82,7 +82,7 @@ async function browseRoot() {
         selectedPaths.value = []
     } catch (e: any) {
         entries.value = []
-        browseError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to browse snapshot.'
+        browseError.value = apiErrorMessage(e, 'Failed to browse snapshot.')
     } finally {
         browsing.value = false
     }
@@ -107,7 +107,7 @@ async function download(entry: SnapshotFileEntry | null) {
         a.download = ''
         a.click()
     } catch (e: any) {
-        downloadError.value = e?.data?.error?.message ?? e?.message ?? 'Failed to start the download.'
+        downloadError.value = apiErrorMessage(e, 'Failed to start the download.')
     }
 }
 

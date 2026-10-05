@@ -29,6 +29,10 @@ services:
       # The agent auto-detects Docker and uses the /hostfs mount below for path
       # translation — no env var required. Override only for custom mount points:
       #   ARKEEP_DOCKER_HOST_ROOT: "/custom-mountpoint"
+      # ── Agent hostname ───────────────────────────────────────────────────────
+      # Read from the host's /etc/hostname through the /hostfs mount below, so the
+      # agent shows the host's name instead of the container ID. Override if needed:
+      #   ARKEEP_AGENT_HOSTNAME: "my-server"
       # ── PUID / PGID (optional) ───────────────────────────────────────────────
       # Uncomment when writing to host directories via the hostfs mount and the
       # agent does not have write permission as root.
