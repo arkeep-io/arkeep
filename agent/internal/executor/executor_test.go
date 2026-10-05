@@ -94,7 +94,7 @@ func TestExecuteBackupEmptyRepoURL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	e := New(nil, nil, nil, zap.NewNop(), "")
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	reporter := &fakeReporter{}
 	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
 
@@ -118,7 +118,7 @@ func TestExecuteBackupEmptyRepoURL(t *testing.T) {
 // wrapper (unlike backup, retention has no destination/repo_url validation
 // gate before its first wrapper call — every other path touches e.wrapper).
 func TestExecuteRetention_MalformedPayloadFails(t *testing.T) {
-	e := New(nil, nil, nil, zap.NewNop(), "")
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	reporter := &fakeReporter{}
 	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_FORGET, Payload: []byte("not json")}
 
@@ -137,7 +137,7 @@ func TestExecuteRetention_MalformedPayloadFails(t *testing.T) {
 // defense-in-depth gate that must still reject a flag-like source even if a
 // malicious policy predates server-side validation.
 func TestResolveSources_RejectsFlagLikeEntries(t *testing.T) {
-	e := New(nil, nil, nil, zap.NewNop(), "")
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	noopLog := func(level, msg string) {}
 
 	_, err := e.resolveSources(context.Background(), `["--password-command=touch /tmp/pwned"]`, noopLog)
@@ -149,7 +149,7 @@ func TestResolveSources_RejectsFlagLikeEntries(t *testing.T) {
 // TestResolveSources_AcceptsNormalPaths guards against over-restricting: the
 // flag-like check must not reject legitimate source paths.
 func TestResolveSources_AcceptsNormalPaths(t *testing.T) {
-	e := New(nil, nil, nil, zap.NewNop(), "")
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	noopLog := func(level, msg string) {}
 
 	got, err := e.resolveSources(context.Background(), `["/data", "C:\\Users"]`, noopLog)
@@ -182,7 +182,7 @@ func TestExecuteBackup_CommandOnlyPolicyDoesNotFailOnEmptySources(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	e := New(nil, nil, nil, zap.NewNop(), "")
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	reporter := &fakeReporter{}
 	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
 

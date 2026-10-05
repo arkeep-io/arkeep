@@ -143,7 +143,11 @@ type Config struct {
 	// StateDir is the directory where agent-state.json is persisted.
 	StateDir string
 	// Version is the agent binary version, sent during registration.
-	Version         string
+	Version string
+	// Hostname is reported to the server at registration. Resolved once at
+	// startup (see cmd/agent/hostname.go) so a Dockerized agent reports the
+	// host's name rather than its container ID.
+	Hostname        string
 	DockerAvailable bool
 	// TLSCAFile is the path to a PEM-encoded CA certificate used to verify the
 	// server's TLS certificate. Required when the server uses a self-signed cert.
@@ -474,9 +478,11 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 		m.logger.Warn("failed to load agent state, will re-register", zap.Error(err))
 	}
 
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "unknown"
+	hostname := m.cfg.Hostname
+	if hostname == "" {
+		if hostname, err = os.Hostname(); err != nil {
+			hostname = "unknown"
+		}
 	}
 
 	// AgentCapabilities reflect what is available on this host.

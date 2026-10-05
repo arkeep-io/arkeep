@@ -312,6 +312,17 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 		}
 
 		if existing != nil {
+			// The default name is the hostname at first registration. Dockerized
+			// agents used to report their container ID, which changes on every
+			// recreate (#284): keep the name in step with the hostname as long as
+			// the user never renamed the agent. A custom name is never touched.
+			if req.Hostname != "" && req.Hostname != existing.Hostname && existing.Name == existing.Hostname {
+				logger.Info("register: agent name follows hostname change",
+					zap.String("agent_id", existing.ID.String()),
+					zap.String("old_name", existing.Name),
+				)
+				existing.Name = req.Hostname
+			}
 			existing.Hostname = req.Hostname
 			existing.Version = req.Version
 			existing.OS = req.Os

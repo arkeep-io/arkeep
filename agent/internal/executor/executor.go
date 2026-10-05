@@ -171,6 +171,7 @@ type Executor struct {
 	queue          chan JobAssignment
 	logger         *zap.Logger
 	dockerHostRoot string // resolved by main.go: /hostfs when inside Docker, empty for native deployments, or user-supplied override
+	hostname       string // passed to restic as --host; resolved by main.go (host's name, not the container ID)
 
 	// cancelledMu protects cancelled — jobs marked for cancellation before
 	// they are dequeued. Populated by Cancel() when a job is still queued.
@@ -189,12 +190,15 @@ type Executor struct {
 // empty for native deployments, or the user-supplied --docker-host-root value):
 // when non-empty, local destination paths and restore targets entered by the
 // user are automatically translated so they resolve inside the container.
+// hostname is stamped on every backup snapshot (restic --host); empty leaves
+// restic's own default.
 func New(
 	wrapper *restic.Wrapper,
 	dockerClient *docker.Client,
 	hooksRunner *hooks.Runner,
 	logger *zap.Logger,
 	dockerHostRoot string,
+	hostname string,
 ) *Executor {
 	return &Executor{
 		wrapper:        wrapper,
@@ -203,6 +207,7 @@ func New(
 		queue:          make(chan JobAssignment, queueSize),
 		logger:         logger.Named("executor"),
 		dockerHostRoot: dockerHostRoot,
+		hostname:       hostname,
 		cancelled:      make(map[string]bool),
 		runningCancel:  make(map[string]context.CancelFunc),
 	}
@@ -539,6 +544,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				Sources:         sources,
 				Tags:            payload.Tags,
 				ExcludePatterns: payload.ExcludePatterns,
+				Host:            e.hostname,
 			}
 
 			result, err := e.wrapper.Backup(ctx, d, opts, onProgress)
@@ -594,6 +600,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				Command:  cs.Command,
 				Filename: cs.Name,
 				Tags:     cs.Tags,
+				Host:     e.hostname,
 			}, onProgress)
 			if err != nil {
 				// A non-zero exit from the command cancels the backup — restic
