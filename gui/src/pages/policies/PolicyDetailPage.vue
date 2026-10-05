@@ -431,8 +431,9 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                 <AlertDialogTitle>Delete policy?</AlertDialogTitle>
                 <AlertDialogDescription>
                     <span v-if="policy">
-                        <strong>{{ policy.name }}</strong> will be permanently deleted.
+                        <strong>{{ policy.name }}</strong> will be deleted and its stored repository password erased.
                         All scheduled runs for this policy will be removed.
+                        Its existing snapshots stay listed, and the backup data on the storage is not touched.
                         This action cannot be undone.
                     </span>
                 </AlertDialogDescription>

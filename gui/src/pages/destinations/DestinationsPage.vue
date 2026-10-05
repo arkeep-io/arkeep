@@ -48,6 +48,7 @@ import {
   Cloud,
 } from '@lucide/vue'
 import { api } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 import type { Destination, ApiResponse } from '@/types'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 import ImportSnapshotsDialog from '@/components/destinations/ImportSnapshotsDialog.vue'
@@ -62,6 +63,7 @@ interface DestinationListResponse {
 // ---------------------------------------------------------------------------
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const destinations = ref<Destination[]>([])
 const total = ref(0)
@@ -391,8 +393,9 @@ onMounted(fetchDestinations)
                       <Archive class="w-4 h-4 mr-2" />
                       Import snapshots
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem class="text-destructive focus:text-destructive" @click="openDeleteDialog(dest)">
+                    <DropdownMenuSeparator v-if="authStore.isAdmin" />
+                    <DropdownMenuItem v-if="authStore.isAdmin" class="text-destructive focus:text-destructive"
+                      @click="openDeleteDialog(dest)">
                       <Trash2 class="w-4 h-4 mr-2" />
                       Delete
                     </DropdownMenuItem>

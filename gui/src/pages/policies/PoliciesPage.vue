@@ -371,8 +371,9 @@ onMounted(fetchPolicies)
                 <AlertDialogTitle>Delete policy?</AlertDialogTitle>
                 <AlertDialogDescription>
                     <span v-if="policyToDelete">
-                        <strong>{{ policyToDelete.name }}</strong> will be permanently deleted.
+                        <strong>{{ policyToDelete.name }}</strong> will be deleted and its stored repository password erased.
                         All scheduled runs for this policy will be removed.
+                        Its existing snapshots stay listed, and the backup data on the storage is not touched.
                         This action cannot be undone.
                     </span>
                 </AlertDialogDescription>

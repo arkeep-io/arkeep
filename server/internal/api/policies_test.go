@@ -535,6 +535,33 @@ func TestPolicyHandler_Delete(t *testing.T) {
 		assertStatus(t, resp, http.StatusNoContent)
 	})
 
+	t.Run("wipes the stored repository password", func(t *testing.T) {
+		e := newTestEnv(t)
+		policy := createDBPolicy(t, e.deps, "to-wipe", createDBAgent(t, e.deps, "test-agent").ID)
+
+		resp := e.del(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t))
+		assertStatus(t, resp, http.StatusNoContent)
+
+		var row struct {
+			RepoPassword string
+			Deleted      bool
+		}
+		if err := e.deps.gdb.Raw(`SELECT repo_password, deleted_at IS NOT NULL AS deleted FROM policies WHERE id = ?`, policy.ID).
+			Scan(&row).Error; err != nil {
+			t.Fatalf("read policy row: %v", err)
+		}
+		if !row.Deleted {
+			t.Error("deleted_at is NULL, want the row soft-deleted")
+		}
+		if row.RepoPassword != "" {
+			t.Errorf("repo_password = %q, want wiped", row.RepoPassword)
+		}
+
+		// A second delete of the same policy is a 404, not a re-wipe.
+		resp = e.del(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t))
+		assertStatus(t, resp, http.StatusNotFound)
+	})
+
 	t.Run("returns 403 for non-admin user", func(t *testing.T) {
 		e := newTestEnv(t)
 		policy := createDBPolicy(t, e.deps, "protected", createDBAgent(t, e.deps, "test-agent").ID)
