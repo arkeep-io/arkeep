@@ -171,6 +171,8 @@ type DestinationFilter struct {
 type DestinationRepository interface {
 	Create(ctx context.Context, destination *db.Destination) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Destination, error)
+	// GetByIDIncludingDeleted is GetByID without the soft-delete filter.
+	GetByIDIncludingDeleted(ctx context.Context, id uuid.UUID) (*db.Destination, error)
 	Update(ctx context.Context, destination *db.Destination) error
 	// UpdateRepoSize refreshes only the cached restic repository size and its
 	// timestamp, leaving all other destination fields untouched.

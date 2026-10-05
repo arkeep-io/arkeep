@@ -29,7 +29,7 @@ import {
     FieldGroup,
     FieldLabel,
 } from '@/components/ui/field'
-import { AlertCircle, Loader2 } from '@lucide/vue'
+import { AlertCircle, Loader2, TriangleAlert } from '@lucide/vue'
 import { Separator } from '@/components/ui/separator'
 import { api } from '@/services/api'
 import type { Agent, ApiResponse, RestoreResponse, Snapshot, SnapshotFileEntry } from '@/types'
@@ -56,11 +56,24 @@ const emit = defineEmits<{
 // Schema
 // ---------------------------------------------------------------------------
 
+// A snapshot whose destination was deleted: Arkeep erased the destination's
+// credentials, so they must be entered again for this one restore (they are
+// not saved), and only a full restore is possible.
+const destinationDeleted = computed(() => !!props.snapshot?.destination_deleted)
+const destinationType = computed(() => props.snapshot?.destination_type ?? '')
+const repoPasswordRequired = computed(() => !!props.snapshot?.repo_password_required)
+
 const schema = toTypedSchema(
     z.object({
         agent_id: z.string().min(1, 'Please select a target agent.'),
         restore_mode: z.enum(['custom', 'inplace']),
         target_path: z.string().optional(),
+        access_key: z.string().optional(),
+        secret_key: z.string().optional(),
+        cred_user: z.string().optional(),
+        cred_password: z.string().optional(),
+        private_key: z.string().optional(),
+        repo_password: z.string().optional(),
     }).superRefine((data, ctx) => {
         if (data.restore_mode === 'custom' && (!data.target_path || !data.target_path.trim())) {
             ctx.addIssue({
@@ -68,6 +81,18 @@ const schema = toTypedSchema(
                 path: ['target_path'],
                 message: 'Target path is required.',
             })
+        }
+        if (!destinationDeleted.value) return
+        if (destinationType.value === 's3') {
+            if (!data.access_key?.trim()) {
+                ctx.addIssue({ code: 'custom', path: ['access_key'], message: 'Access key is required.' })
+            }
+            if (!data.secret_key?.trim()) {
+                ctx.addIssue({ code: 'custom', path: ['secret_key'], message: 'Secret key is required.' })
+            }
+        }
+        if (repoPasswordRequired.value && !data.repo_password) {
+            ctx.addIssue({ code: 'custom', path: ['repo_password'], message: 'Repository password is required.' })
         }
     })
 )
@@ -78,12 +103,39 @@ const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
         agent_id: '',
         restore_mode: 'custom' as const,
         target_path: '/tmp/arkeep-restore',
+        access_key: '',
+        secret_key: '',
+        cred_user: '',
+        cred_password: '',
+        private_key: '',
+        repo_password: '',
     },
 })
 
 const { value: agentId, errorMessage: agentError } = useField<string>('agent_id')
 const { value: restoreMode } = useField<'custom' | 'inplace'>('restore_mode')
 const { value: targetPath, errorMessage: targetPathError } = useField<string>('target_path')
+const { value: accessKey, errorMessage: accessKeyError } = useField<string>('access_key')
+const { value: secretKey, errorMessage: secretKeyError } = useField<string>('secret_key')
+const { value: credUser } = useField<string>('cred_user')
+const { value: credPassword } = useField<string>('cred_password')
+const { value: privateKey } = useField<string>('private_key')
+const { value: repoPassword, errorMessage: repoPasswordError } = useField<string>('repo_password')
+
+// suppliedCredentials builds the credentials JSON for a deleted destination,
+// with the same keys the destination form stores for each type.
+function suppliedCredentials(): Record<string, string> {
+    switch (destinationType.value) {
+        case 's3':
+            return { access_key: accessKey.value ?? '', secret_key: secretKey.value ?? '' }
+        case 'sftp':
+            return { password: credPassword.value ?? '', private_key: privateKey.value ?? '' }
+        case 'rest':
+            return { user: credUser.value ?? '', password: credPassword.value ?? '' }
+        default:
+            return {}
+    }
+}
 
 // resolvedTargetPath is what gets sent to the API.
 // In-place restore uses "/" so restic writes files back to their original paths.
@@ -143,6 +195,8 @@ watch(
             restore_mode: 'custom',
             target_path: '/tmp/arkeep-restore',
         })
+        // resetForm restores the initial (empty) credential values, so nothing
+        // typed for a previous snapshot survives into this one.
         submitError.value = null
         browseEntries.value = []
         selectedPaths.value = props.presetPaths ?? []
@@ -226,6 +280,8 @@ const onSubmit = handleSubmit(async () => {
                     agent_id: agentId.value,
                     target_path: resolvedTargetPath.value,
                     ...(selectedPaths.value.length > 0 && { include_paths: selectedPaths.value }),
+                    ...(destinationDeleted.value && { credentials: suppliedCredentials() }),
+                    ...(destinationDeleted.value && repoPasswordRequired.value && { repo_password: repoPassword.value }),
                 }),
             },
         )
@@ -271,6 +327,17 @@ function onOpenChange(value: boolean) {
                             <AlertDescription>{{ submitError }}</AlertDescription>
                         </Alert>
                     </Transition>
+
+                    <!-- Deleted destination: credentials must be entered again -->
+                    <Alert v-if="destinationDeleted">
+                        <TriangleAlert class="size-4" />
+                        <AlertDescription>
+                            The destination <span class="font-medium">{{ snapshot?.destination_name }}</span>
+                            of this snapshot was deleted, and Arkeep erased its stored credentials.
+                            Enter them below to restore: they are used only for this restore and are not saved.
+                            Only the whole snapshot can be restored, and the target agent must be online.
+                        </AlertDescription>
+                    </Alert>
 
                     <!-- Agent selector — only online agents can receive a restore job -->
                     <Field>
@@ -330,42 +397,117 @@ function onOpenChange(value: boolean) {
                         </AlertDescription>
                     </Alert>
 
-                    <!-- File selection -->
-                    <Separator />
-                    <div v-if="presetPaths?.length" class="space-y-2">
-                        <p class="text-sm font-medium">Files to restore</p>
-                        <ul class="max-h-64 overflow-y-auto rounded border p-2 font-mono text-xs space-y-0.5">
-                            <li v-for="path in presetPaths" :key="path" class="truncate">{{ path }}</li>
-                        </ul>
-                    </div>
-                    <div v-else class="space-y-2">
-                        <p class="text-sm font-medium">Files to restore</p>
-                        <p class="text-xs text-muted-foreground">
-                            Leave empty to restore the entire snapshot, or browse to select specific files.
+                    <!-- Credentials of a deleted destination -->
+                    <template v-if="destinationDeleted">
+                        <Separator />
+                        <p class="text-sm font-medium">Destination credentials</p>
+
+                        <template v-if="destinationType === 's3'">
+                            <Field>
+                                <FieldLabel for="restore-access-key">Access key</FieldLabel>
+                                <Input id="restore-access-key" v-model="accessKey" autocomplete="off"
+                                    :disabled="isSubmitting"
+                                    :class="accessKeyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                <FieldError v-if="accessKeyError">{{ accessKeyError }}</FieldError>
+                            </Field>
+                            <Field>
+                                <FieldLabel for="restore-secret-key">Secret key</FieldLabel>
+                                <Input id="restore-secret-key" v-model="secretKey" type="password" autocomplete="off"
+                                    :disabled="isSubmitting"
+                                    :class="secretKeyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                <FieldError v-if="secretKeyError">{{ secretKeyError }}</FieldError>
+                            </Field>
+                        </template>
+
+                        <template v-else-if="destinationType === 'sftp'">
+                            <Field>
+                                <FieldLabel for="restore-sftp-password">Password</FieldLabel>
+                                <Input id="restore-sftp-password" v-model="credPassword" type="password"
+                                    autocomplete="off" :disabled="isSubmitting" />
+                            </Field>
+                            <Field>
+                                <FieldLabel for="restore-sftp-key">Private key</FieldLabel>
+                                <textarea id="restore-sftp-key" v-model="privateKey" rows="4" :disabled="isSubmitting"
+                                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                                    class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] focus-visible:ring-[3px] resize-none font-mono" />
+                                <p class="text-xs text-muted-foreground mt-1">
+                                    Enter a password, a private key, or leave both empty if the agent's own SSH key has access.
+                                </p>
+                            </Field>
+                        </template>
+
+                        <template v-else-if="destinationType === 'rest'">
+                            <Field>
+                                <FieldLabel for="restore-rest-user">Username</FieldLabel>
+                                <Input id="restore-rest-user" v-model="credUser" autocomplete="off"
+                                    :disabled="isSubmitting" />
+                            </Field>
+                            <Field>
+                                <FieldLabel for="restore-rest-password">Password</FieldLabel>
+                                <Input id="restore-rest-password" v-model="credPassword" type="password"
+                                    autocomplete="off" :disabled="isSubmitting" />
+                                <p class="text-xs text-muted-foreground mt-1">
+                                    Leave empty if the REST server does not require authentication.
+                                </p>
+                            </Field>
+                        </template>
+
+                        <p v-else class="text-xs text-muted-foreground">
+                            This destination type needs no stored credentials: the target agent must be able to
+                            reach the repository on its own.
                         </p>
-                        <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            :disabled="isBrowsing || isSubmitting || !agentId"
-                            @click="browseSnapshot"
-                        >
-                            <Loader2 v-if="isBrowsing" class="mr-2 h-4 w-4 animate-spin" />
-                            {{ browseEntries.length > 0 ? 'Refresh file list' : 'Browse files' }}
-                        </Button>
-                        <p v-if="browseError" class="text-xs text-destructive">{{ browseError }}</p>
-                        <div v-if="browseEntries.length > 0" class="space-y-1">
-                            <p v-if="selectedPaths.length > 0" class="text-xs text-muted-foreground">
-                                {{ selectedPaths.length }} item(s) selected
+
+                        <Field v-if="repoPasswordRequired">
+                            <FieldLabel for="restore-repo-password">Repository password</FieldLabel>
+                            <Input id="restore-repo-password" v-model="repoPassword" type="password"
+                                autocomplete="off" :disabled="isSubmitting"
+                                :class="repoPasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="repoPasswordError">{{ repoPasswordError }}</FieldError>
+                            <p v-else class="text-xs text-muted-foreground mt-1">
+                                The restic password of the repository. Arkeep no longer has it, because the
+                                policy that created this snapshot was deleted too (or the snapshot was imported).
                             </p>
-                            <SnapshotFileTree
-                                v-model="selectedPaths"
-                                :entries="browseEntries"
-                                :load-children="loadChildren"
-                                class="max-h-64 overflow-y-auto rounded border"
-                            />
+                        </Field>
+                    </template>
+
+                    <!-- File selection — a deleted destination only allows a full restore -->
+                    <template v-if="!destinationDeleted">
+                        <Separator />
+                        <div v-if="presetPaths?.length" class="space-y-2">
+                            <p class="text-sm font-medium">Files to restore</p>
+                            <ul class="max-h-64 overflow-y-auto rounded border p-2 font-mono text-xs space-y-0.5">
+                                <li v-for="path in presetPaths" :key="path" class="truncate">{{ path }}</li>
+                            </ul>
                         </div>
-                    </div>
+                        <div v-else class="space-y-2">
+                            <p class="text-sm font-medium">Files to restore</p>
+                            <p class="text-xs text-muted-foreground">
+                                Leave empty to restore the entire snapshot, or browse to select specific files.
+                            </p>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                :disabled="isBrowsing || isSubmitting || !agentId"
+                                @click="browseSnapshot"
+                            >
+                                <Loader2 v-if="isBrowsing" class="mr-2 h-4 w-4 animate-spin" />
+                                {{ browseEntries.length > 0 ? 'Refresh file list' : 'Browse files' }}
+                            </Button>
+                            <p v-if="browseError" class="text-xs text-destructive">{{ browseError }}</p>
+                            <div v-if="browseEntries.length > 0" class="space-y-1">
+                                <p v-if="selectedPaths.length > 0" class="text-xs text-muted-foreground">
+                                    {{ selectedPaths.length }} item(s) selected
+                                </p>
+                                <SnapshotFileTree
+                                    v-model="selectedPaths"
+                                    :entries="browseEntries"
+                                    :load-children="loadChildren"
+                                    class="max-h-64 overflow-y-auto rounded border"
+                                />
+                            </div>
+                        </div>
+                    </template>
 
                     <SheetFooter class="mt-2 px-0">
                         <Button type="button" variant="outline" :disabled="isSubmitting" @click="onOpenChange(false)">

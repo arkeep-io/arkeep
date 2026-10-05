@@ -54,7 +54,9 @@ async function fetchSnapshot() {
         // An imported snapshot has no agent: the user picks one first.
         agentId.value = res.data.agent_id
         agentName.value = res.data.agent_name
-        await browseRoot()
+        // A deleted destination's credentials were erased: there is nothing
+        // to browse with, only a full restore with re-entered credentials.
+        if (!res.data.destination_deleted) await browseRoot()
     } catch (e: any) {
         error.value = e?.data?.error?.message ?? e?.message ?? 'Failed to load snapshot.'
     } finally {
@@ -132,6 +134,7 @@ onMounted(fetchSnapshot)
                                 Snapshot <span class="font-mono">{{ snapshot.restic_snapshot_id.slice(0, 8) }}</span>
                             </h1>
                             <Badge v-if="snapshot.is_imported" variant="outline">Imported</Badge>
+                            <Badge v-if="snapshot.destination_deleted" variant="outline">Destination deleted</Badge>
                         </div>
                         <p class="mt-0.5 text-sm text-muted-foreground">
                             <span v-if="snapshot.policy_name">{{ snapshot.policy_name }} · </span>
@@ -142,7 +145,7 @@ onMounted(fetchSnapshot)
                 </div>
             </div>
 
-            <div v-if="!loading && snapshot && authStore.isAdmin" class="flex items-center gap-2">
+            <div v-if="!loading && snapshot && authStore.isAdmin && !snapshot.destination_deleted" class="flex items-center gap-2">
                 <Button variant="outline" size="sm" :disabled="!agentId || browsing" @click="download(null)">
                     <Download class="w-4 h-4 mr-1.5" />
                     Download all (ZIP)
@@ -159,7 +162,22 @@ onMounted(fetchSnapshot)
             <AlertDescription>{{ error }}</AlertDescription>
         </Alert>
 
-        <template v-if="!loading && snapshot">
+        <!-- ── Deleted destination ─────────────────────────────────────── -->
+        <div v-if="!loading && snapshot?.destination_deleted"
+            class="flex flex-col items-center gap-3 rounded-md border p-10 text-center">
+            <p class="font-medium">The destination of this snapshot was deleted</p>
+            <p class="max-w-lg text-sm text-muted-foreground">
+                Arkeep erased the stored credentials of <span class="font-medium">{{ snapshot.destination_name }}</span>,
+                so it can no longer browse or download files from this snapshot. The backup data is still on the
+                storage: you can restore the whole snapshot by entering the destination's credentials again.
+            </p>
+            <Button v-if="authStore.isAdmin" size="sm" @click="restoreOpen = true">
+                <ArchiveRestore class="w-4 h-4 mr-1.5" />
+                Restore snapshot
+            </Button>
+        </div>
+
+        <template v-else-if="!loading && snapshot">
             <!-- ── Agent ──────────────────────────────────────────────────── -->
             <div class="flex flex-wrap items-end gap-2">
                 <div class="w-72">

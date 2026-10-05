@@ -28,6 +28,7 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
@@ -268,9 +269,21 @@ onMounted(fetchSnapshots)
                     <template v-else>
                         <TableRow v-for="snapshot in snapshots" :key="snapshot.id">
                             <TableCell class="font-medium">{{ snapshot.policy_name }}</TableCell>
-                            <TableCell class="text-muted-foreground">{{ snapshot.destination_name }}</TableCell>
+                            <TableCell class="text-muted-foreground">
+                                <div class="flex items-center gap-2">
+                                    <span>{{ snapshot.destination_name }}</span>
+                                    <Badge v-if="snapshot.destination_deleted" variant="outline"
+                                        title="This destination was deleted and Arkeep erased its credentials. Restoring this snapshot requires entering them again.">
+                                        Deleted
+                                    </Badge>
+                                </div>
+                            </TableCell>
                             <TableCell>
-                                <RouterLink :to="{ name: 'snapshot-browse', params: { id: snapshot.id } }"
+                                <span v-if="snapshot.destination_deleted" class="font-mono text-sm"
+                                    title="Browsing is not available because the destination was deleted. You can still restore the whole snapshot.">
+                                    {{ abbreviate(snapshot.restic_snapshot_id) }}
+                                </span>
+                                <RouterLink v-else :to="{ name: 'snapshot-browse', params: { id: snapshot.id } }"
                                     class="font-mono text-sm underline-offset-4 hover:underline"
                                     :title="`Browse snapshot ${snapshot.restic_snapshot_id}`">
                                     {{ abbreviate(snapshot.restic_snapshot_id) }}

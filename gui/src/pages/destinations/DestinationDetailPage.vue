@@ -412,8 +412,10 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                 <AlertDialogTitle>Delete destination?</AlertDialogTitle>
                 <AlertDialogDescription>
                     <span v-if="destination">
-                        <strong>{{ destination.name }}</strong> will be permanently deleted.
-                        This does not delete the underlying repository data.
+                        <strong>{{ destination.name }}</strong> will be deleted and its stored credentials erased.
+                        Its existing snapshots stay listed, but restoring one will require entering
+                        the destination's credentials again; browsing and downloading them will no longer be possible.
+                        The backup data on the storage is not touched.
                         This action cannot be undone.
                     </span>
                 </AlertDialogDescription>

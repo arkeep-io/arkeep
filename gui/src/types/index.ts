@@ -326,6 +326,14 @@ export interface Snapshot {
   policy_name: string
   destination_id: string
   destination_name: string
+  destination_type: string
+  // destination_deleted: the destination was deleted and its stored
+  // credentials were erased — a restore must supply them again, and browse /
+  // download are unavailable.
+  destination_deleted: boolean
+  // repo_password_required: a restore of a deleted destination must also
+  // supply the restic repository password (no live policy holds it).
+  repo_password_required: boolean
   agent_id: string
   agent_name: string
   job_id: string | null
