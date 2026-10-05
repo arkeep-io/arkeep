@@ -240,6 +240,16 @@ const hookFieldSchema = z.object({
   timeout_secs: z.coerce.number().int().min(0).optional(),
 })
 
+// isPingURL mirrors the server's healthcheck.ValidateURL: absolute http(s) URL.
+function isPingURL(v: string): boolean {
+  try {
+    const u = new URL(v)
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.host !== ''
+  } catch {
+    return false
+  }
+}
+
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
   agent_id: z.string().min(1, 'Agent is required'),
@@ -266,6 +276,7 @@ const schema = z.object({
   resume_interrupted: z.boolean(),
   notify_on_success: z.enum(['inherit', 'always', 'never']),
   notify_on_failure: z.enum(['inherit', 'always', 'never']),
+  healthcheck_url: z.string().trim().refine(v => v === '' || isPingURL(v), 'Must be an http(s) URL'),
 }).superRefine((data, ctx) => {
   if (!isEdit.value) {
     if (data.use_destination_password) {
@@ -547,6 +558,23 @@ const { value: resumeInterrupted } = useField<boolean>('resume_interrupted')
 // Per-policy override of the global notification toggles.
 const { value: notifyOnSuccess } = useField<NotifyOverride>('notify_on_success')
 const { value: notifyOnFailure } = useField<NotifyOverride>('notify_on_failure')
+// Healthchecks.io ping URL (admin only) and its "Send test ping" state.
+const { value: healthcheckURL, errorMessage: healthcheckURLError } = useField<string>('healthcheck_url')
+const hcTestState = ref<'idle' | 'sending' | 'ok' | 'error'>('idle')
+const hcTestError = ref('')
+watch(healthcheckURL, () => { hcTestState.value = 'idle' })
+
+async function sendTestPing() {
+  hcTestState.value = 'sending'
+  try {
+    await api('/api/v1/policies/healthcheck/test', { method: 'POST', body: { url: (healthcheckURL.value ?? '').trim() } })
+    hcTestState.value = 'ok'
+  } catch (e: unknown) {
+    hcTestError.value = apiErrorMessage(e, 'Test ping failed')
+    hcTestState.value = 'error'
+  }
+}
+
 const NOTIFY_OVERRIDE_OPTIONS: { value: NotifyOverride; label: string }[] = [
   { value: 'inherit', label: 'Use global setting' },
   { value: 'always', label: 'Always' },
@@ -574,6 +602,7 @@ function defaultValues(): FormValues {
     resume_interrupted: true,
     notify_on_success: 'inherit',
     notify_on_failure: 'inherit',
+    healthcheck_url: '',
   }
 }
 
@@ -737,6 +766,7 @@ function populateForm(p: Policy, asClone = false) {
     resume_interrupted: p.resume_interrupted ?? true,
     notify_on_success: p.notify_on_success,
     notify_on_failure: p.notify_on_failure,
+    healthcheck_url: p.healthcheck_url ?? '',
   } as unknown as FormValues)
 
   const match = SCHEDULE_PRESETS.find(s => s.value === p.schedule)
@@ -823,6 +853,9 @@ const onSubmit = handleSubmit(async (values) => {
       notify_on_success: values.notify_on_success,
       notify_on_failure: values.notify_on_failure,
     }
+    // Admin only on the server. Non-admins leave it out, so editing or cloning
+    // a policy whose URL an admin set doesn't get refused.
+    if (authStore.isAdmin) body.healthcheck_url = values.healthcheck_url
 
     if (isEdit.value) {
       // PATCH: enabled, optional new password, destinations, and agent (to allow reassignment)
@@ -1472,6 +1505,40 @@ function onOpenChange(value: boolean) {
               </Select>
             </div>
           </div>
+
+          <Separator />
+
+          <!-- Healthchecks.io -->
+          <Field>
+            <div>
+              <p class="text-sm font-medium">Healthchecks.io</p>
+              <p class="text-muted-foreground text-xs">
+                Ping URL of a Healthchecks check. Each backup pings /start, the URL itself on success
+                and /fail on failure, with the job ID as run ID — so a backup that never runs raises
+                an alert too. Leave empty to disable.
+              </p>
+            </div>
+            <div class="flex gap-2">
+              <Input id="policy-healthcheck-url" v-model="healthcheckURL" placeholder="https://hc-ping.com/your-uuid"
+                autocomplete="off" data-bwignore data-1p-ignore data-lpignore="true"
+                :disabled="!authStore.isAdmin"
+                :class="healthcheckURLError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+              <Button v-if="authStore.isAdmin" type="button" variant="outline"
+                :disabled="!healthcheckURL?.trim() || !!healthcheckURLError || hcTestState === 'sending'"
+                @click="sendTestPing">
+                <Loader2 v-if="hcTestState === 'sending'" class="size-4 animate-spin" />
+                Send test ping
+              </Button>
+            </div>
+            <FieldError v-if="healthcheckURLError">{{ healthcheckURLError }}</FieldError>
+            <p v-else-if="hcTestState === 'ok'" class="text-xs text-green-600 dark:text-green-400">
+              Test ping delivered. It appears in the check's event log without changing its status.
+            </p>
+            <FieldError v-else-if="hcTestState === 'error'">{{ hcTestError }}</FieldError>
+            <p v-if="!authStore.isAdmin" class="text-muted-foreground text-xs">
+              Only administrators can change the ping URL.
+            </p>
+          </Field>
 
           <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->
           <template v-if="isEdit || isClone">

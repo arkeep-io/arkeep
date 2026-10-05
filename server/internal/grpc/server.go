@@ -32,6 +32,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -64,7 +65,8 @@ type Server struct {
 	hub             *websocket.Hub
 	pendingDispatch PendingDispatcher // may be nil in tests that don't need it
 	notifSvc        notification.Service
-	metrics         *metrics.Metrics // may be nil when metrics are disabled
+	pinger          *healthcheck.Pinger // may be nil when not wired (tests)
+	metrics         *metrics.Metrics    // may be nil when metrics are disabled
 	logger          *zap.Logger
 	sharedSecret    string // shared secret agents must present in gRPC metadata
 	tlsCertFile     string
@@ -102,6 +104,9 @@ type Config struct {
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
+	// Pinger sends Healthchecks.io pings for backup job status changes.
+	// Optional — if nil, no pings are sent.
+	Pinger *healthcheck.Pinger
 	// Metrics is the Prometheus metrics collector. Optional — if nil, no
 	// job metrics are recorded.
 	Metrics *metrics.Metrics
@@ -129,6 +134,7 @@ func New(
 		hub:               hub,
 		pendingDispatch:   cfg.PendingDispatch,
 		notifSvc:          cfg.NotifService,
+		pinger:            cfg.Pinger,
 		metrics:           cfg.Metrics,
 		logger:            logger.Named("grpc"),
 		sharedSecret:      cfg.SharedSecret,
@@ -638,6 +644,12 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 	// goroutine so a slow notification path never delays the gRPC response.
 	if s.notifSvc != nil && (req.Status == proto.JobStatus_JOB_STATUS_COMPLETED || req.Status == proto.JobStatus_JOB_STATUS_FAILED) {
 		go s.notifyJobTerminal(context.WithoutCancel(ctx), jobID, req.Status, req.Message)
+	}
+
+	// Ping the policy's Healthchecks check (start, success, fail). Non-fatal:
+	// goroutine, like the notifications above.
+	if s.pinger != nil {
+		go s.pinger.ReportJob(context.WithoutCancel(ctx), jobID, dbStatus, req.Message)
 	}
 
 	// Record Prometheus metrics for terminal states. Non-fatal: goroutine.
