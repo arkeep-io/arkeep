@@ -394,6 +394,7 @@ postgres://arkeep:password@localhost:5432/arkeep?sslmode=require
 | `--grpc-tls-ca` | `ARKEEP_GRPC_TLS_CA` | — | Path to CA certificate for gRPC TLS (only needed when the server uses an external, non-system-trusted cert) |
 | `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport — development and same-machine deployments only |
 | `--docker-host-root` | `ARKEEP_DOCKER_HOST_ROOT` | `/hostfs` (auto-detected inside Docker) | Container path where the host filesystem is mounted. Auto-defaults to `/hostfs` inside Docker — no configuration required. Set only when using a custom mount point. See [Local destinations in Docker](#local-destinations-in-docker). |
+| `--hostname` | `ARKEEP_AGENT_HOSTNAME` | *(host's hostname)* | Hostname reported to the server (and used as the agent's default name) and recorded on restic snapshots. Inside Docker it is read from the host's `/etc/hostname` via the host filesystem mount, so the container ID is never shown. Set it only to override that, or when the host filesystem is not mounted. |
 
 ---
 
