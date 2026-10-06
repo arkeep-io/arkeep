@@ -774,20 +774,87 @@ func (r *gormJobRepository) BulkCreateLogs(ctx context.Context, logs []db.JobLog
 	return nil
 }
 
-// HasPendingJob reports whether any job with status "pending" exists for the
-// given policy. Used by the scheduler to avoid creating duplicate pending jobs
-// when the agent is offline: at most one pending job per policy is queued.
+// HasPendingJob reports whether any job with status "pending" or "waiting"
+// exists for the given policy. Used by the scheduler to avoid creating
+// duplicate jobs while one has not started yet — the agent is offline, or its
+// destinations are busy (issue #285): at most one such job per policy is
+// queued, so scheduled ticks never pile up behind a busy destination.
 func (r *gormJobRepository) HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&db.Job{}).
-		Where("policy_id = ? AND status = ?", policyID, "pending").
+		Where("policy_id = ? AND status IN ?", policyID, []string{"pending", "waiting"}).
 		Limit(1).
 		Count(&count).Error
 	if err != nil {
 		return false, fmt.Errorf("jobs: has pending job: %w", err)
 	}
 	return count > 0, nil
+}
+
+// ListWaiting returns up to limit jobs in status "waiting", oldest first: the
+// destination queue is FIFO (issue #285).
+func (r *gormJobRepository) ListWaiting(ctx context.Context, limit int) ([]db.Job, error) {
+	var jobs []db.Job
+	if err := r.db.WithContext(ctx).
+		Where("status = ?", "waiting").
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&jobs).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list waiting: %w", err)
+	}
+	return jobs, nil
+}
+
+// HasWaitingForDestinations reports whether a waiting job other than
+// excludeJobID still needs any of destinationIDs.
+func (r *gormJobRepository) HasWaitingForDestinations(ctx context.Context, destinationIDs []uuid.UUID, excludeJobID uuid.UUID) (bool, error) {
+	if len(destinationIDs) == 0 {
+		return false, nil
+	}
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&db.JobDestination{}).
+		Joins("INNER JOIN jobs ON jobs.id = job_destinations.job_id").
+		Where("jobs.status = ? AND jobs.id <> ? AND job_destinations.status = ? AND job_destinations.destination_id IN ?",
+			"waiting", excludeJobID, "pending", destinationIDs).
+		Limit(1).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("jobs: has waiting for destinations: %w", err)
+	}
+	return count > 0, nil
+}
+
+// HasActiveRetentionJob reports whether a retention job against the
+// destination is pending, waiting or running.
+func (r *gormJobRepository) HasActiveRetentionJob(ctx context.Context, destinationID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&db.JobDestination{}).
+		Joins("INNER JOIN jobs ON jobs.id = job_destinations.job_id").
+		Where("jobs.type = ? AND jobs.status IN ? AND job_destinations.destination_id = ?",
+			"retention", []string{"pending", "waiting", "running"}, destinationID).
+		Limit(1).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("jobs: has active retention job: %w", err)
+	}
+	return count > 0, nil
+}
+
+// ListQueuedDestinationIDs returns the destinations of a job whose result is
+// still pending, in creation order.
+func (r *gormJobRepository) ListQueuedDestinationIDs(ctx context.Context, jobID uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	if err := r.db.WithContext(ctx).
+		Model(&db.JobDestination{}).
+		Where("job_id = ? AND status = ?", jobID, "pending").
+		Order("created_at ASC").
+		Pluck("destination_id", &ids).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list queued destination ids: %w", err)
+	}
+	return ids, nil
 }
 
 // GetLogs returns all log lines for a job ordered by timestamp ascending.

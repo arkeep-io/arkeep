@@ -26,6 +26,9 @@ export type AgentStatus = (typeof AgentStatus)[keyof typeof AgentStatus]
 
 export const JobStatus = {
   Pending: 'pending',
+  // Waiting: queued because a destination is busy with another backup or
+  // retention sweep; starts on its own once all its destinations are free.
+  Waiting: 'waiting',
   Running: 'running',
   Succeeded: 'succeeded',
   Failed: 'failed',
@@ -33,6 +36,9 @@ export const JobStatus = {
   // Interrupted: the agent vanished mid-run (host shut down, sleep, network
   // loss) rather than the backup failing. Eligible for automatic resume.
   Interrupted: 'interrupted',
+  // Skipped: a destination row left out of the run (e.g. removed from the
+  // policy while the job was waiting). Only ever set on destination rows.
+  Skipped: 'skipped',
 } as const
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus]
 export const JobType = {
@@ -401,6 +407,12 @@ export interface NotificationSettings {
 export interface LogRetentionSettings {
   info_days: number
   warn_error_days: number
+}
+
+// JobQueueSettings configures the destination queue: how long a job may wait
+// for a busy destination before it is failed. 0 disables the timeout.
+export interface JobQueueSettings {
+  timeout_minutes: number
 }
 
 // OIDCProvider maps to the oidc_providers table (admin settings view).

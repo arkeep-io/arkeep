@@ -222,6 +222,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/pages/settings/LogRetentionPage.vue'),
             meta: { breadcrumb: 'Log Retention', requiresRole: 'admin' },
           },
+          {
+            path: 'jobs-queue',
+            name: 'settings-jobs-queue',
+            component: () => import('@/pages/settings/JobQueuePage.vue'),
+            meta: { breadcrumb: 'Job Queue', requiresRole: 'admin' },
+          },
         ],
       },
 

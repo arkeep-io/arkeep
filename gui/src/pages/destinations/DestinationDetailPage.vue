@@ -200,7 +200,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                                 · In use since {{ formatDate(destination.busy_since) }} by
                                 <RouterLink :to="{ name: 'job-detail', params: { id: destination.busy_job_id } }"
                                     class="underline underline-offset-4 hover:text-foreground">this job</RouterLink>
-                                — backups here are skipped until it finishes
+                                — other jobs here wait until it finishes
                             </span>
                         </p>
                     </template>

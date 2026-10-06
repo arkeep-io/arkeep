@@ -368,7 +368,7 @@ onMounted(fetchDestinations)
                   <!-- Busy gate: another backup or retention sweep holds the
                        repository; links to that job (issue #290). -->
                   <RouterLink v-if="dest.busy_job_id" :to="{ name: 'job-detail', params: { id: dest.busy_job_id } }"
-                    :title="`In use by a running job since ${formatDate(dest.busy_since)}. Backups to this destination are skipped until it finishes.`"
+                    :title="`In use by a running job since ${formatDate(dest.busy_since)}. Other backups and retention sweeps to this destination wait until it finishes.`"
                     @click.stop>
                     <Badge variant="outline" class="text-xs font-normal">Busy</Badge>
                   </RouterLink>

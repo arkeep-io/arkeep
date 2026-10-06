@@ -58,6 +58,10 @@ type RouterConfig struct {
 	// endpoint responds 503.
 	Pinger *healthcheck.Pinger
 
+	// Queue is the destination queue (issue #285), notified when a cancel
+	// frees a destination. Optional.
+	Queue QueueNotifier
+
 	// Mailer sends transactional emails (e.g. password reset links) and reports
 	// whether SMTP is configured. Satisfied by *notification.NotificationService.
 	Mailer Mailer
@@ -115,7 +119,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.Audit, cfg.Logger)
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
-	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Logger)
+	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
@@ -283,6 +287,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/logs", settingsHandler.GetLogRetention)
 				r.Put("/settings/logs", settingsHandler.UpsertLogRetention)
 				r.Post("/settings/logs/prune", settingsHandler.PruneLogsNow)
+				r.Get("/settings/jobs-queue", settingsHandler.GetJobQueue)
+				r.Put("/settings/jobs-queue", settingsHandler.UpsertJobQueue)
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)

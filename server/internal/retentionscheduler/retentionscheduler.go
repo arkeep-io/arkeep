@@ -11,17 +11,20 @@
 //     one restic tag per policy plus one per that policy's command sources
 //  2. If the retention agent is not connected, log and skip — nothing is
 //     persisted, the next scheduled tick will try again
-//  3. Acquire the destination's busy gate (server/internal/repositories'
+//  3. Create a Job (type "retention", PolicyID nil) + one JobDestination
+//  4. Acquire the destination's busy gate (server/internal/repositories'
 //     Destination.BusyJobID) — if already held by another operation
-//     (backup or retention), skip this tick the same way
-//  4. Create a Job (type "retention", PolicyID nil) + one JobDestination +
-//     one JobRetentionTag per tag, then dispatch a JOB_TYPE_FORGET
+//     (backup or retention), the job waits in status "waiting" and the
+//     destination queue (package destqueue) starts it once the destination
+//     is free (issue #285)
+//  5. Create one JobRetentionTag per tag, then dispatch a JOB_TYPE_FORGET
 //     JobAssignment to the agent
 package retentionscheduler
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -33,6 +36,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/policyutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -82,6 +86,14 @@ type RetentionScheduler struct {
 	agentMgr *agentmanager.Manager
 	logger   *zap.Logger
 	running  atomic.Bool
+	// queue holds sweeps whose destination is busy (issue #285). Required
+	// before the first sweep; set via SetQueue.
+	queue *destqueue.Dispatcher
+}
+
+// SetQueue attaches the destination queue. Must be called before Start.
+func (s *RetentionScheduler) SetQueue(q *destqueue.Dispatcher) {
+	s.queue = q
 }
 
 // New constructs a RetentionScheduler. Call Start once the database
@@ -235,8 +247,10 @@ func (s *RetentionScheduler) UpdateDestination(dest *db.Destination) error {
 // destination, bypassing its cron schedule. Used by the REST handler for an
 // admin "run now" action. Returns the created Job so the caller can surface
 // its ID, or an error if the sweep could not be dispatched (e.g. the
-// retention agent is offline or the destination is busy) — unlike a
+// retention agent is offline or a sweep is already queued) — unlike a
 // scheduled tick, a manual trigger's caller needs to know it didn't happen.
+// A busy destination is not an error: the sweep is queued and its Job
+// returned (issue #285).
 func (s *RetentionScheduler) TriggerNow(ctx context.Context, destinationID uuid.UUID) (*db.Job, error) {
 	dest, err := s.dests.GetByID(ctx, destinationID)
 	if err != nil {
@@ -250,12 +264,12 @@ func (s *RetentionScheduler) TriggerNow(ctx context.Context, destinationID uuid.
 }
 
 // runJob resolves the destination's live policies into restic tags, checks
-// the retention agent is connected and the destination is not already busy,
-// then creates the Job/JobDestination/JobRetentionTag records and dispatches
-// a JOB_TYPE_FORGET assignment. Returns an error (with nothing persisted) if
-// the agent is offline or the destination is busy — the caller decides
-// whether that is worth logging (a scheduled tick) or surfacing to a user (a
-// manual trigger).
+// the retention agent is connected, then creates the Job/JobDestination
+// records and starts the sweep — or queues it when the destination is busy
+// (issue #285). Returns an error (with nothing persisted) if the agent is
+// offline or a sweep of this destination is already pending, queued or
+// running — the caller decides whether that is worth logging (a scheduled
+// tick) or surfacing to a user (a manual trigger).
 func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (*db.Job, error) {
 	if dest.AppendOnly {
 		return nil, fmt.Errorf("destination %s is append-only: retention cannot run", dest.ID)
@@ -281,6 +295,16 @@ func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (
 		return nil, fmt.Errorf("retention agent %s is not connected", agentID)
 	}
 
+	// A sweep already queued or in flight does the same work: a second one
+	// right behind it would only repeat it.
+	active, err := s.jobs.HasActiveRetentionJob(ctx, dest.ID)
+	if err != nil {
+		return nil, err
+	}
+	if active {
+		return nil, fmt.Errorf("a retention sweep of destination %s is already queued or running", dest.ID)
+	}
+
 	job := &db.Job{
 		AgentID: agentID,
 		Type:    "retention",
@@ -302,25 +326,64 @@ func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (
 		)
 	}
 
-	// Busy gate (issue #130): acquired after the Job/JobDestination rows
-	// exist (so ReleaseBusyForJobs' orphan-recovery path has a job to key
-	// off), before dispatch. A destination already held by an in-flight
-	// backup or another retention sweep skips this tick — the Job row stays
-	// pending/unattempted rather than failing loudly.
-	acquired, err := s.dests.TryAcquireBusy(ctx, dest.ID, job.ID)
-	if err != nil {
-		return job, fmt.Errorf("failed to acquire destination busy gate: %w", err)
+	err = s.start(ctx, job, dest, tags, s.queue.AdmitNew(job.ID))
+	if errors.Is(err, destqueue.ErrNotAdmitted) {
+		return job, s.queue.Enqueue(ctx, job.ID)
 	}
-	if !acquired {
-		now := time.Now().UTC()
-		if err := s.jobs.UpdateDestinationStatus(ctx, job.ID, dest.ID, "skipped", nil, &now, "", 0,
-			"destination busy: another backup or retention sweep is already in progress against this repository"); err != nil {
-			s.logger.Error("failed to mark retention job destination skipped",
-				zap.String("job_id", job.ID.String()),
-				zap.Error(err),
-			)
-		}
-		return job, fmt.Errorf("destination %s is busy", dest.ID)
+	return job, err
+}
+
+// StartQueued implements destqueue.Starter for retention sweeps. The tags are
+// resolved again, since policies may have been attached or detached while the
+// sweep waited. A sweep whose destination was deleted, or whose retention
+// settings no longer allow it, is closed as failed: the next scheduled tick
+// creates a fresh one if retention still applies.
+func (s *RetentionScheduler) StartQueued(ctx context.Context, job *db.Job, admit destqueue.AdmitFunc) error {
+	destIDs, err := s.jobs.ListQueuedDestinationIDs(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	if len(destIDs) != 1 {
+		return s.failQueued(ctx, job.ID, "the sweep has no destination left to run against")
+	}
+	dest, err := s.dests.GetByID(ctx, destIDs[0])
+	if errors.Is(err, repositories.ErrNotFound) {
+		return s.failQueued(ctx, job.ID, "the destination was deleted while this sweep was waiting")
+	}
+	if err != nil {
+		return fmt.Errorf("failed to load destination %s: %w", destIDs[0], err)
+	}
+	if dest.AppendOnly || dest.RetentionAgentID == nil || *dest.RetentionAgentID != job.AgentID {
+		return s.failQueued(ctx, job.ID, "the destination's retention settings changed while this sweep was waiting")
+	}
+
+	tags, err := buildTags(ctx, s.dests, dest.ID)
+	if err != nil {
+		return fmt.Errorf("failed to build retention tags for destination %s: %w", dest.ID, err)
+	}
+	if len(tags) == 0 {
+		return s.failQueued(ctx, job.ID, "the destination has no attached policies to sweep")
+	}
+
+	return s.start(ctx, job, dest, tags, admit)
+}
+
+func (s *RetentionScheduler) failQueued(ctx context.Context, jobID uuid.UUID, errMsg string) error {
+	now := time.Now().UTC()
+	return s.jobs.UpdateStatus(ctx, jobID, "failed", nil, &now, errMsg)
+}
+
+// start claims the destination's busy gate through admit (issue #130), then
+// creates the JobRetentionTag records and dispatches the sweep. When admit
+// refuses, nothing is created or sent and destqueue.ErrNotAdmitted is
+// returned.
+func (s *RetentionScheduler) start(ctx context.Context, job *db.Job, dest *db.Destination, tags []string, admit destqueue.AdmitFunc) error {
+	admitted, err := admit(ctx, []uuid.UUID{dest.ID})
+	if err != nil {
+		return fmt.Errorf("failed to acquire destination busy gate: %w", err)
+	}
+	if !admitted {
+		return destqueue.ErrNotAdmitted
 	}
 
 	for _, tag := range tags {
@@ -338,17 +401,17 @@ func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (
 		}
 	}
 
-	if err := s.dispatch(job, dest, agentID, tags); err != nil {
+	if err := s.dispatch(job, dest, job.AgentID, tags); err != nil {
 		if relErr := s.dests.ReleaseBusy(ctx, dest.ID, job.ID); relErr != nil {
 			s.logger.Error("failed to release destination busy gate after dispatch failure",
 				zap.String("destination_id", dest.ID.String()),
 				zap.Error(relErr),
 			)
 		}
-		return job, fmt.Errorf("failed to dispatch retention job: %w", err)
+		return fmt.Errorf("failed to dispatch retention job: %w", err)
 	}
 
-	return job, nil
+	return nil
 }
 
 // buildTags resolves a destination's live policies into the restic tags a

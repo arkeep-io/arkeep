@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -228,9 +230,16 @@ func (r *gormDestinationRepository) ListWithRetentionSchedule(ctx context.Contex
 
 // busyHolderInactive matches a destination whose busy gate is held by a job
 // that can no longer release it: the job is gone (removed by job retention) or
-// no longer pending/running (it finished, was cancelled or was interrupted
-// without its release reaching the gate). Such a gate is stale (issue #290).
-const busyHolderInactive = `NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = destinations.busy_job_id AND jobs.status IN ('pending', 'running'))`
+// no longer pending/waiting/running (it finished, was cancelled or was
+// interrupted without its release reaching the gate). Such a gate is stale
+// (issue #290).
+//
+// A waiting job counts as active: the queue dispatcher claims a queued job's
+// gates just before moving it back to pending (issue #285), and a gate caught
+// between the two must not be taken over. Should the move never happen, the
+// job still re-claims its own gate on the next drain (TryAcquireBusy is
+// idempotent for the holder), and the queue timeout ends it otherwise.
+const busyHolderInactive = `NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id = destinations.busy_job_id AND jobs.status IN ('pending', 'waiting', 'running'))`
 
 // TryAcquireBusy atomically claims the destination for jobID if it is not
 // already busy. A false, nil-error return means another job already holds
@@ -254,6 +263,49 @@ func (r *gormDestinationRepository) TryAcquireBusy(ctx context.Context, destinat
 		return false, fmt.Errorf("destinations: try acquire busy: %w", result.Error)
 	}
 	return result.RowsAffected == 1, nil
+}
+
+// TryAcquireBusyAll claims every destination in destinationIDs for jobID, or
+// none of them: a job that needs several destinations must never hold some
+// while waiting for the rest, otherwise two jobs each holding what the other
+// needs would wait forever (issue #285). Same matching rules as TryAcquireBusy.
+// Rows are claimed in ID order so concurrent callers lock them in the same
+// order. A false, nil-error return means at least one destination is held by
+// another job and nothing was claimed.
+func (r *gormDestinationRepository) TryAcquireBusyAll(ctx context.Context, destinationIDs []uuid.UUID, jobID uuid.UUID) (bool, error) {
+	if len(destinationIDs) == 0 {
+		return true, nil
+	}
+	ids := slices.Clone(destinationIDs)
+	slices.SortFunc(ids, func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
+	ids = slices.Compact(ids)
+
+	errBusy := errors.New("destination busy")
+	now := time.Now().UTC()
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, id := range ids {
+			result := tx.Model(&db.Destination{}).
+				Where("id = ? AND (busy_job_id IS NULL OR busy_job_id = ? OR "+busyHolderInactive+")", id, jobID).
+				Updates(map[string]any{
+					"busy_job_id": jobID,
+					"busy_since":  now,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errBusy
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errBusy) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("destinations: try acquire busy all: %w", err)
+	}
+	return true, nil
 }
 
 // ReleaseBusy clears the busy gate only if jobID is still the current

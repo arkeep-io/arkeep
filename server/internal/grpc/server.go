@@ -50,6 +50,13 @@ type PendingDispatcher interface {
 	ResumeInterrupted(ctx context.Context, agentID uuid.UUID)
 }
 
+// QueueNotifier is implemented by the destination queue (package destqueue):
+// it is told whenever a destination may have been freed, or an agent with
+// queued jobs came back, so waiting jobs start without delay (issue #285).
+type QueueNotifier interface {
+	Notify()
+}
+
 // Server is the gRPC server that handles agent connections.
 // It wraps the generated UnimplementedAgentServiceServer to ensure
 // forward compatibility when new RPCs are added to the proto.
@@ -64,6 +71,7 @@ type Server struct {
 	destRepo        repositories.DestinationRepository
 	hub             *websocket.Hub
 	pendingDispatch PendingDispatcher // may be nil in tests that don't need it
+	queue           QueueNotifier     // may be nil in tests that don't need it
 	notifSvc        notification.Service
 	pinger          *healthcheck.Pinger // may be nil when not wired (tests)
 	metrics         *metrics.Metrics    // may be nil when metrics are disabled
@@ -101,6 +109,10 @@ type Config struct {
 	// to flush any jobs that were created while the agent was offline. Optional
 	// — if nil, pending jobs are not re-dispatched on reconnect (test default).
 	PendingDispatch PendingDispatcher
+	// Queue is notified when a destination may have been freed or an agent
+	// reconnects, so jobs waiting for a busy destination start promptly.
+	// Optional — if nil, only the queue's own fallback ticker drains it.
+	Queue QueueNotifier
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
@@ -133,6 +145,7 @@ func New(
 		destRepo:          destRepo,
 		hub:               hub,
 		pendingDispatch:   cfg.PendingDispatch,
+		queue:             cfg.Queue,
 		notifSvc:          cfg.NotifService,
 		pinger:            cfg.Pinger,
 		metrics:           cfg.Metrics,
@@ -142,6 +155,14 @@ func New(
 		tlsKeyFile:        cfg.TLSKeyFile,
 		autoCerts:         cfg.AutoCerts,
 		capabilitiesCache: make(map[string]*proto.AgentCapabilities),
+	}
+}
+
+// notifyQueue tells the destination queue, when wired, that a destination may
+// have been freed.
+func (s *Server) notifyQueue() {
+	if s.queue != nil {
+		s.queue.Notify()
 	}
 }
 
@@ -493,6 +514,9 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 			s.pendingDispatch.ResumeInterrupted(bgCtx, agentID)
 		}()
 	}
+	// Jobs of this agent queued behind a busy destination were passed over
+	// while it was away.
+	s.notifyQueue()
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
@@ -545,6 +569,8 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 			zap.String("agent_id", req.AgentId),
 			zap.Int64("count", n),
 		)
+		// Their busy gates were released with them.
+		s.notifyQueue()
 	}
 
 	if s.notifSvc != nil {
@@ -634,6 +660,7 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 				)
 			}
 		}
+		s.notifyQueue()
 	}
 	s.hub.Publish("job:"+req.JobId, websocket.Message{
 		Type:    websocket.MsgJobStatus,
@@ -944,6 +971,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 				zap.Error(err),
 			)
 		}
+		s.notifyQueue()
 	}
 
 	// Refresh the destination's cached real repository size (from restic stats)

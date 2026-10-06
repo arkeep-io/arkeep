@@ -57,6 +57,7 @@ func TestTryAcquireBusy_TakesOverStaleGate(t *testing.T) {
 		wantAcquired bool
 	}{
 		{"pending", false},
+		{"waiting", false},
 		{"running", false},
 		{"succeeded", true},
 		{"failed", true},

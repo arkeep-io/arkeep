@@ -681,6 +681,10 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 			ErrConflict(w, "This policy is disabled. Enable it to run a backup.")
 			return
 		}
+		if errors.Is(err, scheduler.ErrJobAlreadyQueued) {
+			ErrConflict(w, "A backup for this policy is already queued and will start automatically.")
+			return
+		}
 		h.logger.Error("failed to trigger policy",
 			zap.String("policy_id", id.String()),
 			zap.Error(err),

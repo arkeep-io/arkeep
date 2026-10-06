@@ -23,16 +23,25 @@ type JobHandler struct {
 	agents *agentmanager.Manager
 	hub    *websocket.Hub
 	pinger *healthcheck.Pinger // may be nil
+	queue  QueueNotifier       // may be nil
 	logger *zap.Logger
 }
 
+// QueueNotifier is told when a cancel may have freed a destination, so jobs
+// waiting for it start promptly (issue #285). Satisfied by
+// *destqueue.Dispatcher.
+type QueueNotifier interface {
+	Notify()
+}
+
 // NewJobHandler creates a new JobHandler.
-func NewJobHandler(repo repositories.JobRepository, agents *agentmanager.Manager, hub *websocket.Hub, pinger *healthcheck.Pinger, logger *zap.Logger) *JobHandler {
+func NewJobHandler(repo repositories.JobRepository, agents *agentmanager.Manager, hub *websocket.Hub, pinger *healthcheck.Pinger, queue QueueNotifier, logger *zap.Logger) *JobHandler {
 	return &JobHandler{
 		repo:   repo,
 		agents: agents,
 		hub:    hub,
 		pinger: pinger,
+		queue:  queue,
 		logger: logger.Named("job_handler"),
 	}
 }
@@ -279,10 +288,10 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if status := r.URL.Query().Get("status"); status != "" {
 		switch status {
-		case "pending", "running", "succeeded", "failed", "cancelled", "interrupted":
+		case "pending", "waiting", "running", "succeeded", "failed", "cancelled", "interrupted":
 			filter.Status = status
 		default:
-			ErrBadRequest(w, "invalid status: must be one of pending, running, succeeded, failed, cancelled, interrupted")
+			ErrBadRequest(w, "invalid status: must be one of pending, waiting, running, succeeded, failed, cancelled, interrupted")
 			return
 		}
 	}
@@ -408,8 +417,8 @@ func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.Job
 
 // Cancel handles POST /api/v1/jobs/{id}/cancel.
 // Marks the job as cancelled in the database and, if the job is running,
-// sends a cancel signal to the agent. Pending jobs are cancelled immediately
-// without agent involvement.
+// sends a cancel signal to the agent. Pending jobs, and jobs waiting for a busy
+// destination, are cancelled immediately without agent involvement.
 func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -427,7 +436,7 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if job.Status != "pending" && job.Status != "running" {
+	if job.Status != "pending" && job.Status != "waiting" && job.Status != "running" {
 		ErrConflict(w, "job is already in a terminal state")
 		return
 	}
@@ -456,6 +465,11 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 				zap.Error(err),
 			)
 		}
+	}
+
+	// The cancel released the job's busy gates: jobs queued behind them can go.
+	if h.queue != nil {
+		h.queue.Notify()
 	}
 
 	// Publish a WebSocket event so all open job-detail pages update immediately.
