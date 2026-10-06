@@ -159,6 +159,21 @@ or a directory as a ZIP archive, straight from the browser, and restore a
 selection of files through the usual restore flow. Downloads are streamed from
 the agent through the server, with no temporary files on either side.
 
+### Sync snapshots with the repository
+
+Arkeep reconciles its snapshot list with the repository after every backup and
+retention run. Snapshots can also change outside Arkeep, for instance when an
+append-only rest-server runs `restic forget --prune` from its own cron job. To
+pick those changes up without waiting for the next backup, an administrator
+can click **Sync Snapshots** on a destination's page, or **Sync** on the
+Snapshots page (one destination when filtered, every enabled destination
+otherwise). Snapshots no longer in the repository are removed from the list,
+and snapshots Arkeep has never seen are added as imported. The repository is
+read, never locked, by an online agent: the destination's retention agent if
+connected, otherwise the agent of any policy writing there. To run the sync
+periodically, set an interval under **Settings → Snapshot Sync**; it is
+disabled by default.
+
 ---
 
 ## Supported Destinations

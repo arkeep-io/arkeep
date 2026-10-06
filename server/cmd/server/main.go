@@ -30,6 +30,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/telemetry"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
@@ -323,6 +324,15 @@ func run(ctx context.Context, cfg *config) error {
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	go logRetentionSvc.Start(ctx)
 
+	// --- Snapshot sync ---
+	// Lists each destination's repository through a connected agent and makes
+	// the snapshot records match it, so snapshots pruned or added outside
+	// arkeep show up (issue #288). Runs on demand from the API, and
+	// periodically once an administrator sets an interval (Settings →
+	// Snapshot Sync).
+	snapshotSyncSvc := snapshotsync.NewService(destinationRepo, snapshotRepo, settingsRepo, agentMgr, logger)
+	go snapshotSyncSvc.Start(ctx)
+
 	// --- Agent watchdog ---
 	// Detects agents that stopped sending heartbeats (network partition, crash,
 	// unplugged cable — anything that doesn't cleanly close the gRPC stream) and
@@ -380,6 +390,7 @@ func run(ctx context.Context, cfg *config) error {
 		OIDCProviders:      oidcProviderRepo,
 		Settings:           settingsRepo,
 		LogRetention:       logRetentionSvc,
+		SnapshotSync:       snapshotSyncSvc,
 		Secure:             cfg.secureCookies,
 		Dashboard:          dashboardRepo,
 		Audit:              auditRepo,
