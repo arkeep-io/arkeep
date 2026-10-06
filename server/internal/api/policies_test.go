@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -802,4 +803,114 @@ func mustParsePolicyUUID(t *testing.T, s string) uuid.UUID {
 		t.Fatalf("parse policy id %q: %v", s, err)
 	}
 	return id
+}
+
+// TestPolicyHandler_HealthcheckURL locks the create/update contract for the
+// per-policy Healthchecks ping URL (issue #294): validated, admin-only.
+func TestPolicyHandler_HealthcheckURL(t *testing.T) {
+	const pingURL = "https://hc-ping.com/5f0c9f9e-1f1e-4e5b-9c7a-1b2c3d4e5f60"
+	body := func(agentID string) map[string]any {
+		return map[string]any{
+			"name":          "hc-policy",
+			"agent_id":      agentID,
+			"schedule":      "@daily",
+			"sources":       `[{"type":"directory","path":"/data"}]`,
+			"repo_password": "supersecret",
+		}
+	}
+	type policyBody struct {
+		ID             string `json:"id"`
+		HealthcheckURL string `json:"healthcheck_url"`
+	}
+
+	t.Run("admin sets it on create", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		b := body(agentID)
+		b["healthcheck_url"] = pingURL
+
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), b)
+		assertStatus(t, resp, http.StatusCreated)
+		var data policyBody
+		decodeData(t, resp, &data)
+		if data.HealthcheckURL != pingURL {
+			t.Errorf("healthcheck_url = %q, want %q", data.HealthcheckURL, pingURL)
+		}
+	})
+
+	t.Run("non-admin cannot set it on create", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		b := body(agentID)
+		b["healthcheck_url"] = pingURL
+		assertStatus(t, e.post(t, "/api/v1/policies", e.userToken(t), b), http.StatusForbidden)
+	})
+
+	t.Run("rejects an invalid URL", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID.String()
+		b := body(agentID)
+		b["healthcheck_url"] = "hc-ping.com/abc"
+		assertStatus(t, e.post(t, "/api/v1/policies", e.adminToken(t), b), http.StatusBadRequest)
+
+		p := createDBPolicy(t, e.deps, "p", mustParsePolicyUUID(t, agentID))
+		resp := e.patch(t, "/api/v1/policies/"+p.ID.String(), e.adminToken(t), map[string]any{
+			"healthcheck_url": "ftp://hc-ping.com/abc",
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("update is admin-only but an unchanged value passes", func(t *testing.T) {
+		e := newTestEnv(t)
+		agent := createDBAgent(t, e.deps, "test-agent")
+		p := createDBPolicy(t, e.deps, "p", agent.ID)
+		path := "/api/v1/policies/" + p.ID.String()
+
+		assertStatus(t, e.patch(t, path, e.userToken(t), map[string]any{"healthcheck_url": pingURL}), http.StatusForbidden)
+
+		resp := e.patch(t, path, e.adminToken(t), map[string]any{"healthcheck_url": pingURL})
+		assertStatus(t, resp, http.StatusOK)
+		var data policyBody
+		decodeData(t, resp, &data)
+		if data.HealthcheckURL != pingURL {
+			t.Errorf("healthcheck_url = %q after PATCH, want %q", data.HealthcheckURL, pingURL)
+		}
+
+		// The GUI resends every field on save: a non-admin editing something
+		// else must not be refused for the URL an admin set.
+		resp = e.patch(t, path, e.userToken(t), map[string]any{"name": "renamed", "healthcheck_url": pingURL})
+		assertStatus(t, resp, http.StatusOK)
+
+		resp = e.patch(t, path, e.adminToken(t), map[string]any{"healthcheck_url": ""})
+		assertStatus(t, resp, http.StatusOK)
+		decodeData(t, resp, &data)
+		if data.HealthcheckURL != "" {
+			t.Errorf("healthcheck_url = %q after clearing, want empty", data.HealthcheckURL)
+		}
+	})
+}
+
+// TestPolicyHandler_TestHealthcheck covers the policy form's "Send test ping".
+func TestPolicyHandler_TestHealthcheck(t *testing.T) {
+	var gotPath string
+	status := http.StatusOK
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(target.Close)
+
+	e := newTestEnv(t)
+	const path = "/api/v1/policies/healthcheck/test"
+
+	assertStatus(t, e.post(t, path, e.userToken(t), map[string]any{"url": target.URL + "/abc"}), http.StatusForbidden)
+	assertStatus(t, e.post(t, path, e.adminToken(t), map[string]any{"url": "not a url"}), http.StatusBadRequest)
+
+	assertStatus(t, e.post(t, path, e.adminToken(t), map[string]any{"url": target.URL + "/abc"}), http.StatusOK)
+	if gotPath != "/abc/log" {
+		t.Errorf("test ping path = %q, want /abc/log", gotPath)
+	}
+
+	status = http.StatusNotFound
+	assertStatus(t, e.post(t, path, e.adminToken(t), map[string]any{"url": target.URL + "/abc"}), http.StatusUnprocessableEntity)
 }

@@ -33,6 +33,7 @@ built on top of [Restic](https://restic.net/) and [Rclone](https://rclone.org/).
   - [Event types](#event-types)
   - [Signature verification](#signature-verification)
   - [Integrations](#integrations)
+  - [Healthchecks.io](#healthchecksio)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Getting Started](#getting-started)
@@ -123,6 +124,7 @@ can recover if something goes wrong, and every operation leaves an audit trail.
 | Integrity verification | ✓ |
 | Retention policies | ✓ |
 | Email + webhook notifications | ✓ |
+| Healthchecks.io pings | ✓ |
 | Restore & restore test | ✓ |
 | Browse & download snapshot files | ✓ |
 | Helm chart | ✓ |
@@ -664,6 +666,23 @@ All event fields are available as `{{ $json.payload.policy_name }}`, `{{ $json.p
 3. Send a test backup event from the Arkeep UI to populate Zapier's sample data.
 4. Use `type`, `title`, `text`, `payload__policy_name`, `payload__error`, and `timestamp` fields in your Zap actions.
 5. Add a **Filter** step to route on `type` (e.g. only trigger downstream actions for `job_failure`).
+
+### Healthchecks.io
+
+Notifications fire when a job ends, so a backup that never starts (server down, scheduler stuck, policy disabled by mistake) stays silent. A [Healthchecks.io](https://healthchecks.io) check covers that case: it alerts when the expected ping does not arrive on time.
+
+1. Create a check in Healthchecks (hosted or self-hosted) with a schedule matching the policy's.
+2. Paste its ping URL into the policy's **Healthchecks.io** field (admins only) and click **Send test ping**: the test lands in the check's event log without changing its status.
+
+Each backup job of the policy then pings:
+
+| Event | Ping |
+|-------|------|
+| Job starts on the agent | `<ping URL>/start` |
+| Job succeeds | `<ping URL>` |
+| Job fails or is cancelled | `<ping URL>/fail` |
+
+Every ping carries the job ID as `rid`, so Healthchecks measures each run's duration correctly, and a short plain-text summary (duration, per-destination snapshot and size, error message) as body. A job interrupted by an agent disconnection sends nothing until it is resumed; if automatic resume gives up, the job pings `/fail`. Restore jobs never ping. Any ping URL works — `https://hc-ping.com/<uuid>`, ping-key + slug URLs (including `?create=1`) and self-hosted instances.
 
 ---
 
