@@ -16,6 +16,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
@@ -53,6 +54,9 @@ type RouterConfig struct {
 	// nil, the manual-prune endpoint responds 503.
 	LogRetention LogPruner
 
+	// SnapshotSync records snapshots found in a destination's repository and
+	// evicts the records of snapshots no longer there (import, sync). Required.
+	SnapshotSync *snapshotsync.Service
 	// Pinger sends Healthchecks.io pings: cancelled backups and the policy
 	// form's test ping. Optional — if nil, no pings are sent and the test
 	// endpoint responds 503.
@@ -113,7 +117,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.Audit, cfg.Logger)
+	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
@@ -218,6 +222,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Post("/destinations/{id}/import", destinationHandler.Import)
 			r.Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/sync", destinationHandler.Sync)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
@@ -283,6 +288,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/logs", settingsHandler.GetLogRetention)
 				r.Put("/settings/logs", settingsHandler.UpsertLogRetention)
 				r.Post("/settings/logs/prune", settingsHandler.PruneLogsNow)
+
+				// Periodic snapshot sync
+				r.Get("/settings/snapshot-sync", settingsHandler.GetSnapshotSync)
+				r.Put("/settings/snapshot-sync", settingsHandler.UpsertSnapshotSync)
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)

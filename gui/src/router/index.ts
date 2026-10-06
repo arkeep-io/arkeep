@@ -222,6 +222,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/pages/settings/LogRetentionPage.vue'),
             meta: { breadcrumb: 'Log Retention', requiresRole: 'admin' },
           },
+          {
+            path: 'snapshot-sync',
+            name: 'settings-snapshot-sync',
+            component: () => import('@/pages/settings/SnapshotSyncPage.vue'),
+            meta: { breadcrumb: 'Snapshot Sync', requiresRole: 'admin' },
+          },
         ],
       },
 
