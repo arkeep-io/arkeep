@@ -227,6 +227,8 @@ export interface Policy {
   // webhook toggles.
   notify_on_success: NotifyOverride
   notify_on_failure: NotifyOverride
+  // Healthchecks.io ping URL; empty = no pings. Only admins may change it.
+  healthcheck_url: string
   destinations: PolicyDestination[]
   last_run_at: string | null
   next_run_at: string | null

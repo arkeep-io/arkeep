@@ -24,6 +24,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -317,6 +318,12 @@ func run(ctx context.Context, cfg *config) error {
 	// interrupted backup has given up.
 	sched.SetNotificationService(notifService)
 
+	// --- Healthchecks pinger ---
+	// Pings each policy's Healthchecks.io check on backup start, success and
+	// failure (issue #294). Policies without a ping URL are skipped.
+	hcPinger := healthcheck.NewPinger(jobRepo, policyRepo, logger)
+	sched.SetPinger(hcPinger)
+
 	// --- Log retention ---
 	// Periodically prunes old job_logs rows so the database does not grow
 	// without bound. Disabled by default (see Settings → Log Retention); it only
@@ -351,6 +358,7 @@ func run(ctx context.Context, cfg *config) error {
 			AutoCerts:       autoCerts,
 			PendingDispatch: sched,
 			NotifService:    notifService,
+			Pinger:          hcPinger,
 			Metrics:         m,
 		},
 		agentMgr,
@@ -399,6 +407,7 @@ func run(ctx context.Context, cfg *config) error {
 		Challenges:         challengeRepo,
 		RecoveryCodes:      recoveryCodeRepo,
 		Mailer:             notifService,
+		Pinger:             hcPinger,
 		PublicBaseURL:      cfg.baseURL,
 		AutoCerts:          autoCerts,
 		AgentSecret:        cfg.agentSecret,

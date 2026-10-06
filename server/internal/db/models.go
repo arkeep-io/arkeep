@@ -259,8 +259,12 @@ type Policy struct {
 	// Notify* values below.
 	NotifyOnSuccess string `gorm:"type:text;not null"`
 	NotifyOnFailure string `gorm:"type:text;not null"`
-	LastRunAt       *time.Time
-	NextRunAt       *time.Time
+	// HealthcheckURL is an optional Healthchecks.io ping URL; backup jobs ping
+	// it on start, success and failure (see internal/healthcheck). Empty
+	// disables the pings.
+	HealthcheckURL string `gorm:"type:text;not null;default:''"`
+	LastRunAt      *time.Time
+	NextRunAt      *time.Time
 
 	// Destinations is populated by GetByIDWithDestinations via a manual query.
 	// The gorm:"-" tag prevents GORM from attempting foreign key resolution

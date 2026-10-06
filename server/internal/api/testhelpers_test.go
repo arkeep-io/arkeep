@@ -20,6 +20,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
@@ -213,6 +214,7 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		Challenges:    deps.challenges,
 		RecoveryCodes: deps.recoveryCodes,
 		Mailer:        mailer,
+		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),
 		PublicBaseURL: baseURL,
 		Secure:        false,
 		AutoCerts:     nil,

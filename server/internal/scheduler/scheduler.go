@@ -33,6 +33,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/policyutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -101,6 +102,9 @@ type Scheduler struct {
 	// because the notification service is built after the scheduler (it needs the
 	// WebSocket hub). Only used to report that automatic resume gave up.
 	notifSvc notification.Service
+	// pinger may be nil. Set via SetPinger; used to ping a policy's
+	// Healthchecks check when a backup fails before reaching the agent.
+	pinger *healthcheck.Pinger
 }
 
 // SetNotificationService attaches the notification service. Safe to skip: the
@@ -108,6 +112,13 @@ type Scheduler struct {
 // will no longer be resumed automatically.
 func (s *Scheduler) SetNotificationService(svc notification.Service) {
 	s.notifSvc = svc
+}
+
+// SetPinger attaches the Healthchecks pinger. Safe to skip: without it, backups
+// that fail in the scheduler itself (no destination available, resume given
+// up) send no /fail ping.
+func (s *Scheduler) SetPinger(p *healthcheck.Pinger) {
+	s.pinger = p
 }
 
 // New creates and configures a new Scheduler. Call Start to begin processing.
@@ -406,6 +417,9 @@ func (s *Scheduler) giveUpOnResume(ctx context.Context, j *repositories.JobWithN
 		zap.Int("attempts", j.ResumeAttempt+1),
 	)
 
+	// Async: a slow ping endpoint must not hold up resume processing.
+	go s.pinger.ReportJob(context.WithoutCancel(ctx), j.ID, "failed", errMsg)
+
 	if s.notifSvc == nil {
 		return
 	}
@@ -670,6 +684,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 			zap.String("job_id", job.ID.String()),
 			zap.String("policy_id", policy.ID.String()),
 		)
+		go s.pinger.ReportJob(context.WithoutCancel(ctx), job.ID, "failed", errMsg)
 		if s.notifSvc != nil {
 			// Detached from the dispatch timeout: a slow SMTP send must not be cut short.
 			if err := s.notifSvc.NotifyJobFailed(context.WithoutCancel(ctx), job.ID, policy.ID, policy.Name, errMsg); err != nil {

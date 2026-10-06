@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
@@ -20,15 +22,17 @@ type JobHandler struct {
 	repo   repositories.JobRepository
 	agents *agentmanager.Manager
 	hub    *websocket.Hub
+	pinger *healthcheck.Pinger // may be nil
 	logger *zap.Logger
 }
 
 // NewJobHandler creates a new JobHandler.
-func NewJobHandler(repo repositories.JobRepository, agents *agentmanager.Manager, hub *websocket.Hub, logger *zap.Logger) *JobHandler {
+func NewJobHandler(repo repositories.JobRepository, agents *agentmanager.Manager, hub *websocket.Hub, pinger *healthcheck.Pinger, logger *zap.Logger) *JobHandler {
 	return &JobHandler{
 		repo:   repo,
 		agents: agents,
 		hub:    hub,
+		pinger: pinger,
 		logger: logger.Named("job_handler"),
 	}
 }
@@ -463,6 +467,12 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 			"finished_at": now.Format(time.RFC3339),
 		},
 	})
+
+	// The agent's own CANCELLED report is refused as terminal, so this is the
+	// only place a user-cancelled backup pings its Healthchecks check.
+	if h.pinger != nil {
+		go h.pinger.ReportJob(context.WithoutCancel(r.Context()), id, "cancelled", "cancelled by user")
+	}
 
 	Ok(w, map[string]string{"status": "cancelled"})
 }

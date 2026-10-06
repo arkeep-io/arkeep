@@ -11,6 +11,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
@@ -56,6 +57,10 @@ type RouterConfig struct {
 	// SnapshotSync records snapshots found in a destination's repository and
 	// evicts the records of snapshots no longer there (import, sync). Required.
 	SnapshotSync *snapshotsync.Service
+	// Pinger sends Healthchecks.io pings: cancelled backups and the policy
+	// form's test ping. Optional — if nil, no pings are sent and the test
+	// endpoint responds 503.
+	Pinger *healthcheck.Pinger
 
 	// Mailer sends transactional emails (e.g. password reset links) and reports
 	// whether SMTP is configured. Satisfied by *notification.NotificationService.
@@ -113,8 +118,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
-	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Audit, cfg.Logger)
-	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Logger)
+	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
+	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
@@ -222,6 +227,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// Policies
 			r.Get("/policies", policyHandler.List)
 			r.Post("/policies", policyHandler.Create)
+			r.With(RequireRole("admin")).Post("/policies/healthcheck/test", policyHandler.TestHealthcheck)
 			r.Get("/policies/{id}", policyHandler.GetByID)
 			r.Patch("/policies/{id}", policyHandler.Update)
 			r.With(RequireRole("admin")).Delete("/policies/{id}", policyHandler.Delete)
