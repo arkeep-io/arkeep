@@ -33,10 +33,12 @@ import {
     Loader2,
     CalendarClock,
     AlertTriangle,
+    RefreshCcw,
 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
-import type { Destination, Job, ApiResponse } from '@/types'
+import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
+import { summariseSync } from '@/lib/syncSummary'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 
 defineOptions({ inheritAttrs: false })
@@ -75,6 +77,8 @@ const editSheetOpen = ref(false)
 const deleteDialogOpen = ref(false)
 const deleteLoading = ref(false)
 const triggerLoading = ref(false)
+const syncLoading = ref(false)
+const syncMessage = ref<string | null>(null)
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -121,6 +125,25 @@ async function triggerRetention() {
         error.value = apiErrorMessage(e, 'Failed to trigger retention')
     } finally {
         triggerLoading.value = false
+    }
+}
+
+// syncSnapshots re-reads the repository so snapshots pruned or added outside
+// Arkeep are reflected in the snapshot list (issue #288).
+async function syncSnapshots() {
+    syncLoading.value = true
+    error.value = null
+    syncMessage.value = null
+    try {
+        const res = await api<ApiResponse<SyncDestinationResponse>>(
+            `/api/v1/destinations/${destinationId}/sync`, { method: 'POST' })
+        syncMessage.value = summariseSync([res.data])
+        setTimeout(() => { syncMessage.value = null }, 6000)
+        fetchDestination()
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to sync snapshots')
+    } finally {
+        syncLoading.value = false
     }
 }
 
@@ -218,6 +241,12 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                     <Play v-else class="w-4 h-4 mr-1.5" />
                     Run Retention Now
                 </Button>
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" :disabled="syncLoading"
+                    @click="syncSnapshots">
+                    <Loader2 v-if="syncLoading" class="w-4 h-4 mr-1.5 animate-spin" />
+                    <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
+                    Sync Snapshots
+                </Button>
                 <Button variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Edit
@@ -234,6 +263,9 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
         <!-- Error banner -->
         <Alert v-if="error" variant="destructive">
             <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+        <Alert v-if="syncMessage" class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+            <AlertDescription>{{ syncMessage }}</AlertDescription>
         </Alert>
 
         <!-- ── Info cards ──────────────────────────────────────────────────── -->

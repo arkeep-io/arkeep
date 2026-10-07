@@ -414,6 +414,11 @@ export interface LogRetentionSettings {
 export interface JobQueueSettings {
   timeout_minutes: number
 }
+// SnapshotSyncSettings controls the periodic sync of every destination's
+// snapshot records with its repository. 0 means disabled.
+export interface SnapshotSyncSettings {
+  interval_hours: number
+}
 
 // OIDCProvider maps to the oidc_providers table (admin settings view).
 // callback_url is computed server-side and returned read-only — copy it into
@@ -450,6 +455,17 @@ export interface ImportDestinationResponse {
   found: number
   imported: number
   skipped: number
+  failed: number
+}
+
+// SyncDestinationResponse is returned by POST /api/v1/destinations/{id}/sync.
+// found is what the repository holds, imported were newly recorded, removed
+// were records of snapshots no longer in the repository, and failed could not
+// be recorded.
+export interface SyncDestinationResponse {
+  found: number
+  imported: number
+  removed: number
   failed: number
 }
 

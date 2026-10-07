@@ -529,6 +529,56 @@ func TestSettingsHandler_LogRetention(t *testing.T) {
 	})
 }
 
+func TestSettingsHandler_SnapshotSync(t *testing.T) {
+	type snapshotSync struct {
+		IntervalHours int `json:"interval_hours"`
+	}
+
+	t.Run("defaults to zero (disabled)", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/snapshot-sync", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data snapshotSync
+		decodeData(t, resp, &data)
+		if data.IntervalHours != 0 {
+			t.Errorf("interval_hours = %d, want 0", data.IntervalHours)
+		}
+	})
+
+	t.Run("persists and returns via GET", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/snapshot-sync", e.adminToken(t), map[string]any{
+			"interval_hours": 24,
+		})
+		assertStatus(t, resp, http.StatusOK)
+
+		resp = e.get(t, "/api/v1/settings/snapshot-sync", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data snapshotSync
+		decodeData(t, resp, &data)
+		if data.IntervalHours != 24 {
+			t.Errorf("interval_hours = %d, want 24", data.IntervalHours)
+		}
+	})
+
+	t.Run("returns 400 for an out-of-range interval", func(t *testing.T) {
+		e := newTestEnv(t)
+		for _, hours := range []int{-1, maxSnapshotSyncIntervalHours + 1} {
+			resp := e.doJSON(t, "PUT", "/api/v1/settings/snapshot-sync", e.adminToken(t), map[string]any{
+				"interval_hours": hours,
+			})
+			assertStatus(t, resp, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("returns 403 for non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/snapshot-sync", e.userToken(t))
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+}
+
 func TestSettingsHandler_JobQueue(t *testing.T) {
 	type queueSettings struct {
 		TimeoutMinutes int `json:"timeout_minutes"`

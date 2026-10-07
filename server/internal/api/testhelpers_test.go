@@ -24,6 +24,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
@@ -205,6 +206,7 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		OIDCProviders: deps.oidc,
 		Settings:      deps.settings,
 		LogRetention:  logretention.NewService(deps.jobs, deps.settings, zap.NewNop()),
+		SnapshotSync:  snapshotsync.NewService(deps.dests, deps.snaps, deps.settings, mgr, zap.NewNop()),
 		Dashboard:     deps.dash,
 		Audit:         deps.audit,
 		ResetTokens:   deps.resets,
