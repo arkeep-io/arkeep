@@ -375,7 +375,7 @@ precedence over environment variables when both are provided.
 | `--db-driver` | `ARKEEP_DB_DRIVER` | `sqlite` | Database driver (`sqlite` or `postgres`) |
 | `--db-dsn` | `ARKEEP_DB_DSN` | `./arkeep.db` | SQLite file path or PostgreSQL DSN |
 | `--secret-key` | `ARKEEP_SECRET_KEY` | — | **Required.** Master key for AES-256-GCM credential encryption |
-| `--agent-secret` | `ARKEEP_AGENT_SECRET` | — | Shared secret for gRPC agent authentication |
+| `--agent-secret` | `ARKEEP_AGENT_SECRET` | — | **Required.** Shared secret agents present to enroll and authenticate over gRPC |
 | `--data-dir` | `ARKEEP_DATA_DIR` | `./data` | Directory for RSA JWT keys and server state |
 | `--base-url` | `ARKEEP_BASE_URL` | — | External URL of the server (e.g. `https://arkeep.example.com`). Used to build links in outbound email (password reset). **Required for self-service password reset**: when unset, reset emails are disabled and users must ask an administrator. Links are never derived from request headers, to prevent password reset poisoning via a forged `Host` / `X-Forwarded-Host`. |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
@@ -749,6 +749,8 @@ and backend simultaneously with hot reload on both sides.
 
 Open `http://localhost:8080` in your browser. On first access you will be
 redirected to the setup page where you can create the initial admin account.
+For safety the setup page only accepts the account within 15 minutes of the
+server starting; if that window has passed, restart the server and try again.
 
 ### Project Structure
 

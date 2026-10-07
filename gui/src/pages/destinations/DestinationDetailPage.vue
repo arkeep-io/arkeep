@@ -247,7 +247,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                     <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
                     Sync Snapshots
                 </Button>
-                <Button variant="outline" size="sm" @click="editSheetOpen = true">
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Edit
                 </Button>
@@ -312,7 +312,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                         configure retention explicitly.
                     </AlertDescription>
                 </Alert>
-                <Button variant="outline" size="sm" class="self-start" @click="editSheetOpen = true">
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" class="self-start" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Configure Retention
                 </Button>

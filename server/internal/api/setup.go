@@ -1,7 +1,10 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -10,17 +13,39 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
+// SetupWindow is how long after the server starts the initial admin account
+// can be created. /setup/complete is public by necessity (no users exist
+// yet), so on a server reachable from the internet anyone who gets there
+// first would become admin; bounding the window to the minutes after an
+// operator started the server keeps the GUI onboarding token-free while not
+// leaving a fresh install claimable indefinitely. A restart reopens it.
+const SetupWindow = 15 * time.Minute
+
 // setupHandler handles the public setup endpoints used during first-time
 // server initialisation. Both routes bypass JWT authentication because no
 // users exist yet when they are called.
 type setupHandler struct {
 	users  repositories.UserRepository
+	audit  repositories.AuditRepository
 	logger *zap.Logger
+
+	// deadline ends the setup window (see SetupWindow).
+	deadline time.Time
+
+	// mu serialises Complete so the "no users yet" check and the insert are
+	// atomic: two concurrent requests must not both create an admin.
+	mu sync.Mutex
 }
 
-// NewSetupHandler constructs a setupHandler with the given dependencies.
-func NewSetupHandler(users repositories.UserRepository, logger *zap.Logger) *setupHandler {
-	return &setupHandler{users: users, logger: logger.Named("setup")}
+// NewSetupHandler constructs a setupHandler with the given dependencies. The
+// setup window starts now, so it must be called at server startup.
+func NewSetupHandler(users repositories.UserRepository, audit repositories.AuditRepository, logger *zap.Logger) *setupHandler {
+	return &setupHandler{
+		users:    users,
+		audit:    audit,
+		logger:   logger.Named("setup"),
+		deadline: time.Now().Add(SetupWindow),
+	}
 }
 
 // setupStatusResponse is the payload returned by GET /api/v1/setup/status.
@@ -67,9 +92,12 @@ func (h *setupHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Guard: refuse if any user already exists. Re-checking here (rather than
-	// relying solely on the frontend having checked /setup/status first) closes
-	// the TOCTOU window and makes the endpoint safe to call directly.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Guard: refuse if any user already exists. Re-checking here, under mu,
+	// rather than relying on the frontend having checked /setup/status first
+	// makes the endpoint safe to call directly and concurrently.
 	_, total, err := h.users.List(r.Context(), repositories.ListOptions{Limit: 1})
 	if err != nil {
 		h.logger.Error("setup: failed to count users", zap.Error(err))
@@ -78,6 +106,10 @@ func (h *setupHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	}
 	if total > 0 {
 		ErrConflict(w, "setup already completed")
+		return
+	}
+	if time.Now().After(h.deadline) {
+		errJSON(w, http.StatusForbidden, "the setup window has expired: restart the Arkeep server, then create the admin account within 15 minutes", "setup_window_expired")
 		return
 	}
 
@@ -105,6 +137,21 @@ func (h *setupHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_id", user.ID.String()),
 		zap.String("email", user.Email),
 	)
+
+	// logAudit needs an authenticated caller, which setup does not have: the
+	// new admin is recorded as the actor.
+	details, _ := json.Marshal(map[string]any{"name": user.DisplayName})
+	if err := h.audit.Create(r.Context(), &db.AuditLog{
+		UserID:       user.ID,
+		UserEmail:    user.Email,
+		Action:       "setup.complete",
+		ResourceType: "user",
+		ResourceID:   user.ID.String(),
+		Details:      string(details),
+		IPAddress:    clientIP(r),
+	}); err != nil {
+		h.logger.Error("audit log write failed", zap.String("action", "setup.complete"), zap.Error(err))
+	}
 
 	Created(w, map[string]string{"message": "setup completed"})
 }

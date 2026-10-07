@@ -92,7 +92,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.secretKey, "secret-key", envOrDefault("ARKEEP_SECRET_KEY", ""), "Master secret key for encrypting credentials at rest (required)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
-	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
+	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret agents present to enroll and authenticate (required)")
 	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Required for self-service password reset emails (disabled when unset)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
@@ -122,10 +122,11 @@ func run(ctx context.Context, cfg *config) error {
 		return fmt.Errorf("secret key is required — set --secret-key or ARKEEP_SECRET_KEY")
 	}
 
-	// Warn if agent secret is not configured — the gRPC port will accept
-	// connections from any agent. Always set ARKEEP_AGENT_SECRET in production.
+	// Without an agent secret, enrollment would hand an mTLS client
+	// certificate to anyone who can reach the HTTP port, and the gRPC port
+	// would accept any client: refuse to start rather than run open.
 	if cfg.agentSecret == "" {
-		logger.Warn("agent-secret not configured — gRPC port is open to any agent (set ARKEEP_AGENT_SECRET in production)")
+		return fmt.Errorf("agent secret is required — set --agent-secret or ARKEEP_AGENT_SECRET (generate one with: openssl rand -hex 24)")
 	}
 
 	// Password reset links are only ever built from the configured base URL,
@@ -194,6 +195,13 @@ func run(ctx context.Context, cfg *config) error {
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
 	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
+
+	// The initial admin can only be created within api.SetupWindow of this
+	// start (see api/setup.go); tell the operator before the window closes.
+	if _, users, err := userRepo.List(ctx, repositories.ListOptions{Limit: 1}); err == nil && users == 0 {
+		logger.Warn("initial setup pending — open the web UI and create the admin account before the setup window closes; restart the server to reopen it",
+			zap.Duration("setup_window", api.SetupWindow))
+	}
 
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are

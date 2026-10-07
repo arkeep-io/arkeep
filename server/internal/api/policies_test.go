@@ -203,12 +203,13 @@ func TestPolicyHandler_Create(t *testing.T) {
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
-	t.Run("returns 400 when a source is flag-like for a non-admin", func(t *testing.T) {
+	t.Run("returns 403 for a non-admin", func(t *testing.T) {
+		// The user role is read-only: a policy decides what an agent backs up
+		// and where the data goes.
 		e := newTestEnv(t)
-		body := validPolicy(uuid.New().String())
-		body["sources"] = `[{"type":"directory","path":"--password-command=touch /tmp/pwned"}]`
-		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
-		assertStatus(t, resp, http.StatusBadRequest)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		resp := e.post(t, "/api/v1/policies", e.userToken(t), validPolicy(agentID.String()))
+		assertStatus(t, resp, http.StatusForbidden)
 	})
 
 	t.Run("returns 403 when non-admin sets hook_pre_backup", func(t *testing.T) {
@@ -482,9 +483,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 		}
 	})
 
-	t.Run("non-admin can update sources with a normal path", func(t *testing.T) {
-		// Guards against over-restricting: sources are validated, not
-		// admin-gated like hooks.
+	t.Run("returns 403 when a non-admin updates a policy", func(t *testing.T) {
 		e := newTestEnv(t)
 		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "policy", agentID)
@@ -493,7 +492,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
 			"sources": &newSources,
 		})
-		assertStatus(t, resp, http.StatusOK)
+		assertStatus(t, resp, http.StatusForbidden)
 	})
 
 	t.Run("returns 403 when non-admin adds a command source", func(t *testing.T) {
@@ -506,25 +505,6 @@ func TestPolicyHandler_Update(t *testing.T) {
 			"sources": &newSources,
 		})
 		assertStatus(t, resp, http.StatusForbidden)
-	})
-
-	t.Run("allows a non-admin to edit other fields of a policy that has an unchanged command source", func(t *testing.T) {
-		// Regression guard for commandSourcesChanged: a non-admin must not be
-		// blocked from editing a policy just because it already has a
-		// command source they are leaving untouched.
-		e := newTestEnv(t)
-		agentID := createDBAgent(t, e.deps, "test-agent").ID
-		policy := createDBPolicy(t, e.deps, "policy", agentID)
-		policy.Sources = `[{"type":"directory","path":"/data"},{"type":"command","path":"pg_dump mydb","label":"pgdump"}]`
-		if err := e.deps.policies.Update(context.Background(), policy); err != nil {
-			t.Fatalf("Update: %v", err)
-		}
-
-		name := "renamed-by-non-admin"
-		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.userToken(t), map[string]any{
-			"name": &name,
-		})
-		assertStatus(t, resp, http.StatusOK)
 	})
 }
 
@@ -860,7 +840,7 @@ func TestPolicyHandler_HealthcheckURL(t *testing.T) {
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
-	t.Run("update is admin-only but an unchanged value passes", func(t *testing.T) {
+	t.Run("update is admin-only", func(t *testing.T) {
 		e := newTestEnv(t)
 		agent := createDBAgent(t, e.deps, "test-agent")
 		p := createDBPolicy(t, e.deps, "p", agent.ID)
@@ -875,11 +855,6 @@ func TestPolicyHandler_HealthcheckURL(t *testing.T) {
 		if data.HealthcheckURL != pingURL {
 			t.Errorf("healthcheck_url = %q after PATCH, want %q", data.HealthcheckURL, pingURL)
 		}
-
-		// The GUI resends every field on save: a non-admin editing something
-		// else must not be refused for the URL an admin set.
-		resp = e.patch(t, path, e.userToken(t), map[string]any{"name": "renamed", "healthcheck_url": pingURL})
-		assertStatus(t, resp, http.StatusOK)
 
 		resp = e.patch(t, path, e.adminToken(t), map[string]any{"healthcheck_url": ""})
 		assertStatus(t, resp, http.StatusOK)

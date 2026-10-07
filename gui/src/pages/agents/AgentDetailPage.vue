@@ -338,7 +338,7 @@ onUnmounted(() => {
                 <Button variant="outline" size="icon" aria-label="Refresh" @click="fetchAgent(); fetchJobs()">
                     <RefreshCw class="w-4 h-4" />
                 </Button>
-                <Button variant="outline" size="sm" @click="editSheetOpen = true">
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Rename
                 </Button>

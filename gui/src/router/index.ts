@@ -155,7 +155,9 @@ const routes: RouteRecordRaw[] = [
             path: ':id',
             name: 'snapshot-browse',
             component: () => import('@/pages/snapshots/SnapshotBrowsePage.vue'),
-            meta: { breadcrumb: 'Browse' },
+            // Browsing makes an agent open the repository, so the server
+            // reserves it to admins.
+            meta: { breadcrumb: 'Browse', requiresRole: 'admin' },
           },
         ],
       },

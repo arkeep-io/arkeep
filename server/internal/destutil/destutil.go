@@ -7,6 +7,7 @@ package destutil
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -83,7 +84,10 @@ func BuildRepoURL(dest *db.Destination) string {
 			Remote string `json:"remote"`
 			Path   string `json:"path"`
 		}
-		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil && cfg.Remote != "" {
+		// An invalid remote yields no URL (the job then fails to dispatch)
+		// rather than handing restic a connection string written by whoever
+		// saved the destination; see ValidateRcloneRemote.
+		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil && cfg.Remote != "" && ValidateRcloneRemote(cfg.Remote) == nil {
 			if cfg.Path != "" {
 				// rclone addresses a remote as "remote:path"; ensure exactly one
 				// colon separates them regardless of whether the user typed it.
@@ -99,9 +103,33 @@ func BuildRepoURL(dest *db.Destination) string {
 	return ""
 }
 
+// rcloneRemoteName matches a plain rclone remote name: letters, digits and
+// _ . + @ - and space, not starting with "-" or a space. It deliberately
+// excludes ":" and "," so that a value can never be an rclone connection
+// string (":sftp,host=…:" or "remote,opt=value:"), whose options can make
+// rclone run an external program on the agent.
+var rcloneRemoteName = regexp.MustCompile(`^[\p{L}\p{N}_.+@][\p{L}\p{N}_.+@ -]*$`)
+
+// ValidateRcloneRemote checks the "remote" field of an rclone destination.
+// The value names a remote that must already be configured in rclone.conf on
+// the agent, optionally followed by ":path" (e.g. "myremote:bucket"). Only the
+// name before the first colon is constrained; the path is opaque to rclone's
+// option parsing.
+func ValidateRcloneRemote(remote string) error {
+	name, _, _ := strings.Cut(remote, ":")
+	if !rcloneRemoteName.MatchString(name) {
+		return fmt.Errorf("remote must be the name of a remote configured in rclone.conf on the agent (letters, digits, _ . + @ - and spaces), optionally followed by :path")
+	}
+	return nil
+}
+
 // BuildEnv derives backend-specific environment variables from a destination.
-// For S3, AWS credentials are extracted from the Credentials JSON.
-// For rclone, the credentials JSON is a flat map of RCLONE_CONFIG_* env vars.
+// For S3, AWS credentials are extracted from the Credentials JSON. rclone
+// destinations take no credentials: the remote is configured in rclone.conf
+// on the agent, and accepting arbitrary env vars here would let whoever saves
+// a destination set e.g. RESTIC_PASSWORD_COMMAND or LD_PRELOAD on the agent.
+// Every key produced here must also be allowed by the agent's env allowlist
+// (agent/internal/restic/env.go).
 func BuildEnv(dest *db.Destination) map[string]string {
 	env := make(map[string]string)
 	// SFTP derives its connection env from Config (host/user/port), which is
@@ -132,13 +160,6 @@ func BuildEnv(dest *db.Destination) map[string]string {
 			}
 			if c.Region != "" {
 				env["AWS_DEFAULT_REGION"] = c.Region
-			}
-		}
-	case "rclone":
-		var c map[string]string
-		if err := json.Unmarshal([]byte(creds), &c); err == nil {
-			for k, v := range c {
-				env[k] = v
 			}
 		}
 	case "rest":

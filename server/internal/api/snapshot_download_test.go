@@ -207,7 +207,13 @@ func TestSnapshotHandler_BrowseOnChosenAgent(t *testing.T) {
 	s := createDBSnapshot(t, e.deps) // its policy's agent is offline
 	agentID := connectFakeAgent(e, &fakeAgentStream{entries: []*proto.SnapshotFileEntry{{Path: "/etc", Type: "dir"}}})
 
+	// Browsing makes an agent read the repository with its password and
+	// credentials, so it is admin-only.
 	resp := e.get(t, "/api/v1/snapshots/"+s.ID.String()+"/browse?agent_id="+agentID, e.userToken(t))
+	_ = resp.Body.Close()
+	assertStatus(t, resp, http.StatusForbidden)
+
+	resp = e.get(t, "/api/v1/snapshots/"+s.ID.String()+"/browse?agent_id="+agentID, e.adminToken(t))
 	assertStatus(t, resp, http.StatusOK)
 	var data struct {
 		Entries []struct {

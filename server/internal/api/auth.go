@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -307,6 +309,21 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) {
 			ErrUnauthorized(w)
+			return
+		}
+		// The browser is mid-redirect here, so a JSON error would leave the
+		// user on a raw API response: send them to the callback page, which
+		// shows the reason. Both messages are safe to disclose.
+		var reason string
+		switch {
+		case errors.Is(err, auth.ErrOIDCLinkRefused):
+			reason = strings.TrimPrefix(err.Error(), "auth: ")
+		case errors.Is(err, auth.ErrProviderNotFound):
+			reason = "this sign-in provider is not available"
+		}
+		if reason != "" {
+			h.logger.Warn("OIDC login refused", zap.Error(err))
+			http.Redirect(w, r, "/auth/callback?error="+url.QueryEscape(reason), http.StatusFound)
 			return
 		}
 		h.logger.Error("OIDC code exchange failed", zap.Error(err))

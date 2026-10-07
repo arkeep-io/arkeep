@@ -112,7 +112,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 
 	// --- Initialize handlers ---
-	setupHandler := NewSetupHandler(cfg.Users, cfg.Logger)
+	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.Audit, cfg.Logger, cfg.Secure)
 	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
@@ -175,7 +175,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RateLimit(loginLimiter)).Post("/auth/password-reset/confirm", passwordResetHandler.Confirm)
 
 			r.Get("/setup/status", setupHandler.GetStatus)
-			r.Post("/setup/complete", setupHandler.Complete)
+			r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/setup/complete", setupHandler.Complete)
 
 			if enrollHandler != nil {
 				r.Post("/agents/enroll", enrollHandler.Enroll)
@@ -190,6 +190,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		})
 
 		// --- Authenticated routes ---
+		//
+		// The "user" role is read-only: it can view dashboards, agents,
+		// destinations, policies, jobs, snapshots and its own notifications.
+		// Everything that changes backup configuration or makes an agent act
+		// (including browsing a snapshot or listing an agent's volumes) is
+		// admin-only, because destinations and policies decide what runs on
+		// the agents and where their data goes. Objects have no owner, so a
+		// write open to "user" would be a write on every agent.
 		r.Group(func(r chi.Router) {
 			r.Use(Authenticate(cfg.AuthService))
 
@@ -211,29 +219,29 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Agents
 			r.Get("/agents", agentHandler.List)
-			r.Post("/agents", agentHandler.Create)
+			r.With(RequireRole("admin")).Post("/agents", agentHandler.Create)
 			r.Get("/agents/{id}", agentHandler.GetByID)
-			r.Patch("/agents/{id}", agentHandler.Update)
+			r.With(RequireRole("admin")).Patch("/agents/{id}", agentHandler.Update)
 			r.With(RequireRole("admin")).Delete("/agents/{id}", agentHandler.Delete)
-			r.Get("/agents/{id}/volumes", agentHandler.ListVolumes)
+			r.With(RequireRole("admin")).Get("/agents/{id}/volumes", agentHandler.ListVolumes)
 
 			// Destinations
 			r.Get("/destinations", destinationHandler.List)
-			r.Post("/destinations", destinationHandler.Create)
+			r.With(RequireRole("admin")).Post("/destinations", destinationHandler.Create)
 			r.Get("/destinations/{id}", destinationHandler.GetByID)
-			r.Patch("/destinations/{id}", destinationHandler.Update)
+			r.With(RequireRole("admin")).Patch("/destinations/{id}", destinationHandler.Update)
 			r.With(RequireRole("admin")).Delete("/destinations/{id}", destinationHandler.Delete)
-			r.Post("/destinations/{id}/import", destinationHandler.Import)
-			r.Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/import", destinationHandler.Import)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/sync", destinationHandler.Sync)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
-			r.Post("/policies", policyHandler.Create)
+			r.With(RequireRole("admin")).Post("/policies", policyHandler.Create)
 			r.With(RequireRole("admin")).Post("/policies/healthcheck/test", policyHandler.TestHealthcheck)
 			r.Get("/policies/{id}", policyHandler.GetByID)
-			r.Patch("/policies/{id}", policyHandler.Update)
+			r.With(RequireRole("admin")).Patch("/policies/{id}", policyHandler.Update)
 			r.With(RequireRole("admin")).Delete("/policies/{id}", policyHandler.Delete)
 			r.With(RequireRole("admin")).Post("/policies/{id}/trigger", policyHandler.Trigger)
 			r.Get("/policies/{id}/jobs", jobHandler.ListByPolicy)
@@ -242,14 +250,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/jobs", jobHandler.List)
 			r.Get("/jobs/{id}", jobHandler.GetByID)
 			r.Get("/jobs/{id}/logs", jobHandler.GetLogs)
-			r.Post("/jobs/{id}/cancel", jobHandler.Cancel)
+			r.With(RequireRole("admin")).Post("/jobs/{id}/cancel", jobHandler.Cancel)
 
 			// Snapshots
 			r.Get("/snapshots", snapshotHandler.List)
 			r.Get("/snapshots/{id}", snapshotHandler.GetByID)
 			r.With(RequireRole("admin")).Delete("/snapshots/{id}", snapshotHandler.Delete)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/restore", snapshotHandler.Restore)
-			r.Get("/snapshots/{id}/browse", snapshotHandler.Browse)
+			r.With(RequireRole("admin")).Get("/snapshots/{id}/browse", snapshotHandler.Browse)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/download", snapshotHandler.CreateDownload)
 
 			// Notifications

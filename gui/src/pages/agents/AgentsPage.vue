@@ -397,7 +397,7 @@ onUnmounted(teardownSubscriptions)
                                             <Eye class="w-4 h-4 mr-2" />
                                             View
                                         </DropdownMenuItem>
-                                        <DropdownMenuItem @click="openEditSheet(agent)">
+                                        <DropdownMenuItem v-if="authStore.isAdmin" @click="openEditSheet(agent)">
                                             <PencilLine class="w-4 h-4 mr-2" />
                                             Edit
                                         </DropdownMenuItem>

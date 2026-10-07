@@ -5,7 +5,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -148,15 +147,6 @@ func New(cfg Config) (*gorm.DB, error) {
 	}
 
 	return database, nil
-}
-
-// Ping verifies that the database connection is still alive.
-func Ping(ctx context.Context, database *gorm.DB) error {
-	sqlDB, err := database.DB()
-	if err != nil {
-		return fmt.Errorf("db: failed to get sql.DB: %w", err)
-	}
-	return sqlDB.PingContext(ctx)
 }
 
 // runMigrations applies all pending up-migrations from the embedded SQL files.

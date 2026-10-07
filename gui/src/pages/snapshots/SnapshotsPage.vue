@@ -352,6 +352,9 @@ onMounted(fetchSnapshots)
                                     title="Browsing is not available because the destination was deleted. You can still restore the whole snapshot.">
                                     {{ abbreviate(snapshot.restic_snapshot_id) }}
                                 </span>
+                                <span v-else-if="!authStore.isAdmin" class="font-mono text-sm">
+                                    {{ abbreviate(snapshot.restic_snapshot_id) }}
+                                </span>
                                 <RouterLink v-else :to="{ name: 'snapshot-browse', params: { id: snapshot.id } }"
                                     class="font-mono text-sm underline-offset-4 hover:underline"
                                     :title="`Browse snapshot ${snapshot.restic_snapshot_id}`">

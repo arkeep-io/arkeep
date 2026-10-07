@@ -3,6 +3,7 @@
 //
 // After a successful OAuth2 exchange the server redirects here:
 //   /auth/callback?token=<access_token>&expires_in=<seconds>
+// or, when it refuses the sign-in, /auth/callback?error=<reason>.
 //
 // This page stores the token in memory (via the auth store), replaces the
 // URL so the token is not left in browser history or exposed via Referer,
@@ -24,6 +25,14 @@ const { isDark, cycle, modeLabel } = useTheme()
 const error = ref<string | null>(null)
 
 onMounted(async () => {
+  // The server redirects here with ?error=<reason> when it refuses the
+  // sign-in (e.g. an existing account it will not link automatically).
+  const refused = route.query.error
+  if (typeof refused === 'string' && refused) {
+    error.value = `Sign-in refused: ${refused}.`
+    return
+  }
+
   const token = route.query.token
   const expiresIn = route.query.expires_in
 

@@ -960,7 +960,12 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 		"RESTIC_PASSWORD="+dest.Password,
 	)
 
-	for k, v := range dest.Env {
+	allowed, rejected := filterDestEnv(dest.Env)
+	if len(rejected) > 0 {
+		w.logger.Warn("dropped destination env vars that are not on the backend allowlist",
+			zap.Strings("keys", rejected))
+	}
+	for k, v := range allowed {
 		env = append(env, k+"="+v)
 	}
 

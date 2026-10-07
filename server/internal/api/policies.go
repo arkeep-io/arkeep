@@ -220,6 +220,11 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Policy writes are admin-only at the router, so the field gates below
+	// cannot fire today. They are kept so that hooks, command sources and the
+	// healthcheck URL stay admin-only if policy writes are ever reopened to
+	// non-admins (e.g. per-agent permissions).
+
 	// Hook commands execute with agent privileges — only admins may set them.
 	if (req.HookPreBackup != "" || req.HookPostBackup != "") && !isAdmin(r) {
 		ErrForbidden(w)
@@ -227,14 +232,12 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sources also execute with agent privileges (restic's --password-command
-	// can be smuggled in via an unvalidated source entry), but unlike hooks,
-	// setting backup source paths is core non-admin functionality. So sources
-	// are not admin-gated — instead validateCreatePolicy rejects flag-like
-	// entries for every caller, admin included.
+	// can be smuggled in via an unvalidated source entry), so
+	// validateCreatePolicy rejects flag-like entries for every caller, admin
+	// included.
 	//
-	// A "command" source is the one exception: it runs an arbitrary shell
-	// command with agent privileges, the same trust class as a hook, so it
-	// gets the same gate.
+	// A "command" source runs an arbitrary shell command with agent
+	// privileges, the same trust class as a hook, so it gets the same gate.
 	if policyHasCommandSource(req.Sources) && !isAdmin(r) {
 		ErrForbidden(w)
 		return
