@@ -23,6 +23,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
@@ -260,11 +261,19 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Warn("destination retention backfill failed", zap.Error(err))
 	}
 
+	// --- Destination queue ---
+	// Jobs that find a destination busy with another backup or retention sweep
+	// wait here and start once all their destinations are free (issue #285).
+	// Both schedulers enqueue into it and register as its starters.
+	destQueue := destqueue.New(jobRepo, destinationRepo, settingsRepo, agentMgr, logger)
+
 	// --- Scheduler ---
 	sched, err := scheduler.New(policyRepo, jobRepo, destinationRepo, agentMgr, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
+	sched.SetQueue(destQueue)
+	destQueue.RegisterStarter("backup", sched)
 	if err := sched.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start scheduler: %w", err)
 	}
@@ -281,6 +290,8 @@ func run(ctx context.Context, cfg *config) error {
 	if err != nil {
 		return fmt.Errorf("failed to create retention scheduler: %w", err)
 	}
+	retentionSched.SetQueue(destQueue)
+	destQueue.RegisterStarter("retention", retentionSched)
 	if err := retentionSched.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start retention scheduler: %w", err)
 	}
@@ -324,6 +335,12 @@ func run(ctx context.Context, cfg *config) error {
 	hcPinger := healthcheck.NewPinger(jobRepo, policyRepo, logger)
 	sched.SetPinger(hcPinger)
 
+	// The queue reports a job that timed out waiting like any failed backup.
+	destQueue.SetNotificationService(notifService)
+	destQueue.SetPinger(hcPinger)
+	destQueue.SetHub(wsHub)
+	go destQueue.Run(ctx)
+
 	// --- Log retention ---
 	// Periodically prunes old job_logs rows so the database does not grow
 	// without bound. Disabled by default (see Settings → Log Retention); it only
@@ -357,6 +374,7 @@ func run(ctx context.Context, cfg *config) error {
 			TLSKeyFile:      cfg.grpcTLSKey,
 			AutoCerts:       autoCerts,
 			PendingDispatch: sched,
+			Queue:           destQueue,
 			NotifService:    notifService,
 			Pinger:          hcPinger,
 			Metrics:         m,
@@ -408,6 +426,7 @@ func run(ctx context.Context, cfg *config) error {
 		RecoveryCodes:      recoveryCodeRepo,
 		Mailer:             notifService,
 		Pinger:             hcPinger,
+		Queue:              destQueue,
 		PublicBaseURL:      cfg.baseURL,
 		AutoCerts:          autoCerts,
 		AgentSecret:        cfg.agentSecret,

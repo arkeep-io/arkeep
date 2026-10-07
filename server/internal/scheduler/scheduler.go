@@ -15,6 +15,9 @@
 //  3. Attempt immediate dispatch via AgentManager if agent is connected
 //  4. If agent is offline, the job stays pending; DispatchPending retries
 //     when the agent reconnects (called from the gRPC server on StreamJobs open)
+//  5. If a destination is busy with another backup or retention sweep, the
+//     job waits in status "waiting" and the destination queue (package
+//     destqueue) dispatches it once all its destinations are free
 package scheduler
 
 import (
@@ -22,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +36,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -87,6 +92,12 @@ type commandSourcePayload struct {
 // ErrPolicyDisabled is returned by TriggerNow when the target policy is disabled.
 var ErrPolicyDisabled = errors.New("policy is disabled")
 
+// ErrJobAlreadyQueued is returned by TriggerNow when the policy already has a
+// backup that has not started yet: pending for an offline agent, or waiting
+// for a busy destination. That backup will run; a second one would only
+// repeat it.
+var ErrJobAlreadyQueued = errors.New("a backup for this policy is already queued")
+
 // Scheduler wraps gocron and coordinates job creation and dispatch.
 // The zero value is not usable — create instances with New.
 type Scheduler struct {
@@ -105,6 +116,15 @@ type Scheduler struct {
 	// pinger may be nil. Set via SetPinger; used to ping a policy's
 	// Healthchecks check when a backup fails before reaching the agent.
 	pinger *healthcheck.Pinger
+	// queue holds jobs whose destinations are busy (issue #285). Required
+	// before the first dispatch; set via SetQueue.
+	queue *destqueue.Dispatcher
+}
+
+// SetQueue attaches the destination queue. Must be called before Start: every
+// dispatch goes through it to claim its destinations or wait for them.
+func (s *Scheduler) SetQueue(q *destqueue.Dispatcher) {
+	s.queue = q
 }
 
 // SetNotificationService attaches the notification service. Safe to skip: the
@@ -236,7 +256,11 @@ func (s *Scheduler) TriggerNow(ctx context.Context, policyID uuid.UUID) (*db.Job
 		zap.String("policy_id", policyID.String()),
 		zap.String("policy_name", policy.Name),
 	)
-	return s.runJob(policy, destinations)
+	job, err := s.runJob(policy, destinations)
+	if job == nil && err == nil {
+		return nil, ErrJobAlreadyQueued
+	}
+	return job, err
 }
 
 // DispatchPending looks up all pending jobs for a given agent and attempts to
@@ -607,16 +631,73 @@ func (s *Scheduler) createAndDispatch(policy *db.Policy, destinations []reposito
 	return job, nil
 }
 
-// dispatch builds a complete JobAssignment with the full backup payload and
-// sends it to the agent via AgentManager. It loads full destination records
-// (including decrypted credentials) so the agent has everything it needs
-// without making additional calls back to the server.
+// dispatch sends a job that is not in the destination queue: a fresh run, or a
+// pending job re-sent to an agent that just reconnected. When one of its
+// destinations is busy, or an older queued job is waiting for one, the job is
+// queued instead and started by the destination queue once all of them are
+// free (issue #285).
 func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repositories.PolicyDestinationWithName) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	err := s.startBackup(ctx, job, policy, policyDests, s.queue.AdmitNew(job.ID))
+	if errors.Is(err, destqueue.ErrNotAdmitted) {
+		return s.queue.Enqueue(ctx, job.ID)
+	}
+	return err
+}
+
+// StartQueued implements destqueue.Starter for backups: it rebuilds a queued
+// job from its policy and sends it once admit has claimed its destinations.
+// Only the destinations the job was created with, and has not resolved yet,
+// are backed up — a destination added to the policy while the job waited
+// belongs to the next run.
+func (s *Scheduler) StartQueued(ctx context.Context, job *db.Job, admit destqueue.AdmitFunc) error {
+	policy, policyDests, err := s.policies.GetByIDWithDestinations(ctx, *job.PolicyID)
+	if errors.Is(err, repositories.ErrNotFound) {
+		now := time.Now().UTC()
+		return s.jobs.UpdateStatus(ctx, job.ID, "failed", nil, &now, "the policy was deleted while this backup was waiting for its destinations")
+	}
+	if err != nil {
+		return fmt.Errorf("failed to load policy %s: %w", *job.PolicyID, err)
+	}
+
+	queued, err := s.jobs.ListQueuedDestinationIDs(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	remaining := make([]repositories.PolicyDestinationWithName, 0, len(queued))
+	for _, destID := range queued {
+		i := slices.IndexFunc(policyDests, func(pd repositories.PolicyDestinationWithName) bool { return pd.DestinationID == destID })
+		if i < 0 {
+			now := time.Now().UTC()
+			if err := s.jobs.UpdateDestinationStatus(ctx, job.ID, destID, "skipped", nil, &now, "", 0,
+				"destination removed from the policy while this backup was waiting"); err != nil {
+				s.logger.Error("failed to mark destination skipped",
+					zap.String("destination_id", destID.String()),
+					zap.Error(err),
+				)
+			}
+			continue
+		}
+		remaining = append(remaining, policyDests[i])
+	}
+
+	return s.startBackup(ctx, job, policy, remaining, admit)
+}
+
+// startBackup builds a complete JobAssignment with the full backup payload and
+// sends it to the agent via AgentManager. It loads full destination records
+// (including decrypted credentials) so the agent has everything it needs
+// without making additional calls back to the server.
+//
+// admit claims the busy gate of every destination the job runs against
+// (issue #130), all at once or none (issue #285). When it refuses, nothing is
+// sent and destqueue.ErrNotAdmitted is returned: the caller queues the job, or
+// leaves it queued.
+func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Policy, policyDests []repositories.PolicyDestinationWithName, admit destqueue.AdmitFunc) error {
 	destPayloads := make([]destinationPayload, 0, len(policyDests))
-	acquiredDestIDs := make([]uuid.UUID, 0, len(policyDests))
+	destIDs := make([]uuid.UUID, 0, len(policyDests))
 	for _, pd := range policyDests {
 		dest, err := s.dests.GetByID(ctx, pd.DestinationID)
 		if err != nil {
@@ -627,39 +708,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 			continue
 		}
 
-		// Busy gate (issue #130): a destination already held by another
-		// in-flight backup or retention sweep (any agent) is excluded from
-		// this run rather than the whole job — a policy backing up to 3
-		// destinations where 1 is mid-retention-sweep still backs up to the
-		// other 2. The pre-created JobDestination row (see createAndDispatch)
-		// is marked 'skipped', not 'failed': this is an expected deferral,
-		// not an error, and will be retried on the destination's next
-		// scheduled backup.
-		acquired, err := s.dests.TryAcquireBusy(ctx, pd.DestinationID, job.ID)
-		if err != nil {
-			s.logger.Error("failed to acquire destination busy gate",
-				zap.String("destination_id", pd.DestinationID.String()),
-				zap.Error(err),
-			)
-			continue
-		}
-		if !acquired {
-			now := time.Now().UTC()
-			s.logger.Info("destination busy, skipping for this run",
-				zap.String("job_id", job.ID.String()),
-				zap.String("destination_id", pd.DestinationID.String()),
-			)
-			if err := s.jobs.UpdateDestinationStatus(ctx, job.ID, pd.DestinationID, "skipped", nil, &now, "", 0,
-				"destination busy: another backup or retention sweep is already in progress against this repository"); err != nil {
-				s.logger.Error("failed to mark destination skipped",
-					zap.String("destination_id", pd.DestinationID.String()),
-					zap.Error(err),
-				)
-			}
-			continue
-		}
-
-		acquiredDestIDs = append(acquiredDestIDs, pd.DestinationID)
+		destIDs = append(destIDs, pd.DestinationID)
 		destPayloads = append(destPayloads, destinationPayload{
 			DestinationID: dest.ID.String(),
 			Type:          dest.Type,
@@ -671,11 +720,11 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		})
 	}
 
-	// Every destination was skipped (busy or failed to load): sending the job
-	// would run the hooks, back up to nothing and report success (issue #283).
-	// Close it as failed instead so the user learns the backup did not happen.
+	// No destination could be loaded: sending the job would run the hooks, back
+	// up to nothing and report success (issue #283). Close it as failed instead
+	// so the user learns the backup did not happen.
 	if len(destPayloads) == 0 {
-		const errMsg = "all destinations busy or unavailable: backup not run"
+		const errMsg = "all destinations unavailable: backup not run"
 		now := time.Now().UTC()
 		if err := s.jobs.UpdateStatus(ctx, job.ID, "failed", nil, &now, errMsg); err != nil {
 			return fmt.Errorf("failed to mark job without destinations as failed: %w", err)
@@ -695,6 +744,14 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 			}
 		}
 		return nil
+	}
+
+	admitted, err := admit(ctx, destIDs)
+	if err != nil {
+		return fmt.Errorf("failed to claim destinations: %w", err)
+	}
+	if !admitted {
+		return destqueue.ErrNotAdmitted
 	}
 
 	sourcePaths, err := policyutil.SourcePaths(policy.Sources)
@@ -758,7 +815,7 @@ func (s *Scheduler) dispatch(job *db.Job, policy *db.Policy, policyDests []repos
 		// The agent never received this job — release the busy gates we just
 		// acquired so they don't sit locked until DispatchPending's eventual
 		// retry (or, worse, until orphan recovery mistakes this for a crash).
-		for _, destID := range acquiredDestIDs {
+		for _, destID := range destIDs {
 			if relErr := s.dests.ReleaseBusy(ctx, destID, job.ID); relErr != nil {
 				s.logger.Error("failed to release destination busy gate after dispatch failure",
 					zap.String("destination_id", destID.String()),

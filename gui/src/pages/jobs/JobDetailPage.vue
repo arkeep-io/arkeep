@@ -23,6 +23,7 @@ import {
     HardDrive,
     XCircle,
     Ban,
+    Hourglass,
 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
@@ -78,7 +79,7 @@ function formatTime(iso: string): string {
 // isRunning is true while the job has not yet reached a terminal state.
 // Used to decide whether to subscribe to live WebSocket updates.
 const isRunning = computed(() =>
-    job.value?.status === 'running' || job.value?.status === 'pending',
+    job.value?.status === 'running' || job.value?.status === 'pending' || job.value?.status === 'waiting',
 )
 
 // ---------------------------------------------------------------------------
@@ -274,6 +275,15 @@ onMounted(fetchJob)
         <!-- Error banner -->
         <Alert v-if="error" variant="destructive">
             <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+
+        <!-- Queued behind a busy destination (issue #285) -->
+        <Alert v-if="job?.status === 'waiting'">
+            <Hourglass class="w-4 h-4" />
+            <AlertDescription>
+                Waiting for a destination: another backup or retention sweep is in progress on the same
+                repository. This job starts automatically as soon as all its destinations are free.
+            </AlertDescription>
         </Alert>
 
         <!-- ── Info cards ──────────────────────────────────────────────────── -->

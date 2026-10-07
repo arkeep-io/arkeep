@@ -578,3 +578,50 @@ func TestSettingsHandler_SnapshotSync(t *testing.T) {
 		assertStatus(t, resp, http.StatusForbidden)
 	})
 }
+
+func TestSettingsHandler_JobQueue(t *testing.T) {
+	type queueSettings struct {
+		TimeoutMinutes int `json:"timeout_minutes"`
+	}
+
+	t.Run("defaults to 24 hours", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/jobs-queue", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data queueSettings
+		decodeData(t, resp, &data)
+		if data.TimeoutMinutes != 1440 {
+			t.Errorf("timeout_minutes = %d, want 1440", data.TimeoutMinutes)
+		}
+	})
+
+	t.Run("persists and returns via GET, including 0", func(t *testing.T) {
+		e := newTestEnv(t)
+		for _, v := range []int{90, 0} {
+			resp := e.doJSON(t, "PUT", "/api/v1/settings/jobs-queue", e.adminToken(t), map[string]any{"timeout_minutes": v})
+			assertStatus(t, resp, http.StatusOK)
+
+			resp = e.get(t, "/api/v1/settings/jobs-queue", e.adminToken(t))
+			assertStatus(t, resp, http.StatusOK)
+			var data queueSettings
+			decodeData(t, resp, &data)
+			if data.TimeoutMinutes != v {
+				t.Errorf("timeout_minutes = %d, want %d", data.TimeoutMinutes, v)
+			}
+		}
+	})
+
+	t.Run("returns 400 out of range", func(t *testing.T) {
+		e := newTestEnv(t)
+		for _, v := range []int{-1, 30*24*60 + 1} {
+			resp := e.doJSON(t, "PUT", "/api/v1/settings/jobs-queue", e.adminToken(t), map[string]any{"timeout_minutes": v})
+			assertStatus(t, resp, http.StatusBadRequest)
+		}
+	})
+
+	t.Run("returns 403 for non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.get(t, "/api/v1/settings/jobs-queue", e.userToken(t))
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+}

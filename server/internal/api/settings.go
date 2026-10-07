@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -684,6 +686,45 @@ func (h *SettingsHandler) PruneLogsNow(w http.ResponseWriter, r *http.Request) {
 		"deleted": deleted,
 	})
 	Ok(w, map[string]any{"deleted": deleted})
+}
+
+// =============================================================================
+// Job queue settings
+// =============================================================================
+
+// jobQueueSettings configures the destination queue (issue #285): how long a
+// job may wait for a busy destination before it is failed. 0 disables the
+// timeout.
+type jobQueueSettings struct {
+	TimeoutMinutes int `json:"timeout_minutes"`
+}
+
+// GetJobQueue handles GET /api/v1/settings/jobs-queue (admin only).
+func (h *SettingsHandler) GetJobQueue(w http.ResponseWriter, r *http.Request) {
+	Ok(w, jobQueueSettings{TimeoutMinutes: destqueue.TimeoutMinutes(r.Context(), h.settingsRepo)})
+}
+
+// UpsertJobQueue handles PUT /api/v1/settings/jobs-queue (admin only).
+func (h *SettingsHandler) UpsertJobQueue(w http.ResponseWriter, r *http.Request) {
+	var req jobQueueSettings
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.TimeoutMinutes < 0 || req.TimeoutMinutes > destqueue.MaxTimeoutMinutes {
+		ErrBadRequest(w, fmt.Sprintf("timeout_minutes must be between 0 and %d", destqueue.MaxTimeoutMinutes))
+		return
+	}
+
+	if err := h.settingsRepo.Set(r.Context(), destqueue.KeyTimeoutMinutes, db.EncryptedString(strconv.Itoa(req.TimeoutMinutes))); err != nil {
+		h.logger.Error("failed to save job queue setting", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "settings.jobs_queue.update", "settings", "", map[string]any{
+		"timeout_minutes": req.TimeoutMinutes,
+	})
+	Ok(w, req)
 }
 
 // =============================================================================
