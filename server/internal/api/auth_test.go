@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"testing"
+
+	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
 // TestAuthHandler_Login exercises POST /api/v1/auth/login.
@@ -196,6 +199,27 @@ func TestAuthHandler_Refresh(t *testing.T) {
 			t.Error("refreshed token should differ from original")
 		}
 	})
+}
+
+// TestAuthHandler_OIDCLoginDisabledProvider guards against logging in through
+// a provider an admin disabled: only the login buttons used to honour Enabled.
+func TestAuthHandler_OIDCLoginDisabledProvider(t *testing.T) {
+	e := newTestEnv(t)
+	provider := &db.OIDCProvider{
+		Name:         "disabled",
+		Issuer:       "https://127.0.0.1:1", // never reached: the provider is refused first
+		ClientID:     "client",
+		ClientSecret: db.EncryptedString("secret"),
+		Scopes:       "openid email",
+		Enabled:      false,
+	}
+	if err := e.deps.oidc.Create(context.Background(), provider); err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	resp := e.get(t, "/api/v1/auth/oidc/login?provider_id="+provider.ID.String(), "")
+	_ = resp.Body.Close()
+	assertStatus(t, resp, http.StatusBadRequest)
 }
 
 // TestAuthHandler_ListOIDCProviders exercises GET /api/v1/auth/oidc/providers.

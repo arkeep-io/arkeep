@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
@@ -150,13 +151,15 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 
 	// Extract standard claims from the verified ID token.
 	var claims struct {
-		Sub   string `json:"sub"`
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		Sub           string `json:"sub"`
+		Email         string `json:"email"`
+		EmailVerified any    `json:"email_verified"`
+		Name          string `json:"name"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("auth: extracting OIDC claims: %w", err)
 	}
+	emailVerified := claimIsTrue(claims.EmailVerified)
 
 	// Many providers (e.g. Zitadel, Keycloak) only guarantee sub in the ID
 	// token and return email/name via the UserInfo endpoint. Fetch UserInfo as
@@ -168,12 +171,17 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 				zap.Error(uiErr))
 		} else {
 			var uiClaims struct {
-				Email string `json:"email"`
-				Name  string `json:"name"`
+				Sub           string `json:"sub"`
+				Email         string `json:"email"`
+				EmailVerified any    `json:"email_verified"`
+				Name          string `json:"name"`
 			}
-			if uiErr = userInfo.Claims(&uiClaims); uiErr == nil {
+			// UserInfo is only trusted for the subject the verified ID token
+			// names (OIDC Core 5.3.2).
+			if uiErr = userInfo.Claims(&uiClaims); uiErr == nil && uiClaims.Sub == claims.Sub {
 				if claims.Email == "" {
 					claims.Email = uiClaims.Email
+					emailVerified = claimIsTrue(uiClaims.EmailVerified)
 				}
 				if claims.Name == "" {
 					claims.Name = uiClaims.Name
@@ -194,7 +202,7 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		claims.Name = claims.Sub
 	}
 
-	user, err := p.findOrProvisionUser(ctx, cfg, claims.Sub, claims.Email, claims.Name)
+	user, err := p.findOrProvisionUser(ctx, cfg, claims.Sub, claims.Email, emailVerified, claims.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +285,12 @@ func (p *OIDCAuthProvider) loadConfig(ctx context.Context, providerID uuid.UUID,
 		}
 		return nil, nil, fmt.Errorf("auth: loading OIDC provider config: %w", err)
 	}
+	// A disabled provider is treated as absent: disabling one (e.g. because
+	// the IdP was compromised) must stop logins through it, not only hide
+	// its button on the login page.
+	if !cfg.Enabled {
+		return nil, nil, ErrProviderNotFound
+	}
 
 	// Use OIDC discovery to obtain the correct authorization and token endpoints.
 	// This replaces the previous hard-coded {issuer}/authorize and {issuer}/token
@@ -301,13 +315,14 @@ func (p *OIDCAuthProvider) loadConfig(ctx context.Context, providerID uuid.UUID,
 //
 // Lookup order:
 //  1. By (oidc_provider, oidc_sub) — returning OIDC user, fast path.
-//  2. By email — account linking: an existing local (or other-provider) account
-//     with the same email is adopted for this OIDC provider so that no duplicate
-//     is created.
+//  2. By email — account linking: an existing account with the same email is
+//     adopted for this OIDC provider so that no duplicate is created, but only
+//     when canLinkByEmail allows it (verified email, not an admin, not
+//     already linked to another provider).
 //  3. Neither found — JIT-provision a new account with role "user".
 //
 // Email and display name are synced from the IdP on every login.
-func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDCProvider, sub, email, displayName string) (*db.User, error) {
+func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDCProvider, sub, email string, emailVerified bool, displayName string) (*db.User, error) {
 	// 1. Fast path: returning OIDC user.
 	user, err := p.userRepo.GetByOIDC(ctx, cfg.ID.String(), sub)
 	if err != nil && !isNotFound(err) {
@@ -337,7 +352,16 @@ func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDC
 			return newUser, nil
 		}
 
-		// Existing account found by email — link it to this OIDC provider.
+		// Existing account found by email — link it to this OIDC provider
+		// only if that cannot hand the account to someone else.
+		if err := canLinkByEmail(user, cfg.ID.String(), emailVerified); err != nil {
+			p.logger.Warn("refused to link existing account to OIDC provider",
+				zap.String("user_id", user.ID.String()),
+				zap.String("provider", cfg.ID.String()),
+				zap.Error(err),
+			)
+			return nil, err
+		}
 		p.logger.Info("linking existing account to OIDC provider",
 			zap.String("user_id", user.ID.String()),
 			zap.String("provider", cfg.ID.String()),
@@ -414,4 +438,37 @@ func splitScopes(s string) []string {
 		}
 	}
 	return scopes
+}
+
+// canLinkByEmail decides whether an existing account found by email may be
+// linked to an OIDC identity from providerID. The email is the only thing
+// tying the two together, so linking is refused whenever the IdP does not
+// vouch for it, or when a mistake would hand over an account that matters:
+//   - the IdP did not assert email_verified=true (many IdPs let users pick or
+//     edit their email, so an unverified claim proves nothing);
+//   - the account is an admin (an IdP account must never become an admin
+//     through an email match);
+//   - the account is already linked to a different provider.
+func canLinkByEmail(user *db.User, providerID string, emailVerified bool) error {
+	switch {
+	case !emailVerified:
+		return fmt.Errorf("%w: the identity provider did not verify the email address", ErrOIDCLinkRefused)
+	case user.Role == "admin":
+		return fmt.Errorf("%w: admin accounts are never linked automatically", ErrOIDCLinkRefused)
+	case user.OIDCProvider != "" && user.OIDCProvider != providerID:
+		return fmt.Errorf("%w: the account is already linked to another identity provider", ErrOIDCLinkRefused)
+	}
+	return nil
+}
+
+// claimIsTrue interprets a boolean OIDC claim. The spec makes email_verified a
+// JSON boolean, but some IdPs send the string "true".
+func claimIsTrue(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		return strings.EqualFold(b, "true")
+	}
+	return false
 }

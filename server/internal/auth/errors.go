@@ -39,6 +39,11 @@ var (
 	// absent from the session during the callback phase.
 	ErrOIDCCodeVerifierMissing = errors.New("auth: oidc code verifier missing")
 
+	// ErrOIDCLinkRefused is returned when an OIDC login matches an existing
+	// account by email but linking it would be unsafe (see canLinkByEmail).
+	// Wrapped errors carry the reason, which is safe to show to the user.
+	ErrOIDCLinkRefused = errors.New("auth: this account cannot be linked to the identity provider automatically")
+
 	// ErrTokenRevoked is returned when a syntactically valid access token has
 	// been explicitly revoked via the denylist (e.g. after logout).
 	ErrTokenRevoked = errors.New("auth: token has been revoked")
