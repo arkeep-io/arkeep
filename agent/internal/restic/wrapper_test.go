@@ -297,6 +297,46 @@ func TestBuildCmd_SFTPRepository(t *testing.T) {
 	}
 }
 
+// Destination env vars outside the backend allowlist must never reach restic:
+// RESTIC_PASSWORD_COMMAND runs a command, LD_PRELOAD loads a library, and
+// RESTIC_REPOSITORY would redirect the repository.
+func TestBuildCmd_DropsEnvOutsideAllowlist(t *testing.T) {
+	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{
+		Type:     DestS3,
+		RepoURL:  "s3:s3.example.com/bucket",
+		Password: "repo-pass",
+		Env: map[string]string{
+			"AWS_ACCESS_KEY_ID":              "AKIA",
+			"aws_secret_access_key":          "secret",
+			"RESTIC_PASSWORD_COMMAND":        "sh -c id",
+			"LD_PRELOAD":                     "/tmp/x.so",
+			"RESTIC_REPOSITORY":              "/tmp/elsewhere",
+			"RCLONE_CONFIG_ARKEEPSFTP_SSH":   "id",
+			"RCLONE_CONFIG_OTHERREMOTE_TYPE": "local",
+		},
+	}
+
+	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+
+	if got := envVar(cmd.Env, "AWS_ACCESS_KEY_ID"); got != "AKIA" {
+		t.Errorf("AWS_ACCESS_KEY_ID = %q, want AKIA", got)
+	}
+	if got := envVar(cmd.Env, "aws_secret_access_key"); got != "secret" {
+		t.Errorf("allowlist must match case-insensitively, got %q", got)
+	}
+	for _, k := range []string{"RESTIC_PASSWORD_COMMAND", "LD_PRELOAD", "RCLONE_CONFIG_ARKEEPSFTP_SSH", "RCLONE_CONFIG_OTHERREMOTE_TYPE"} {
+		for _, kv := range cmd.Env {
+			if strings.HasPrefix(kv, k+"=") && os.Getenv(k) == "" {
+				t.Errorf("%s reached the restic environment", k)
+			}
+		}
+	}
+	if got := envVar(cmd.Env, "RESTIC_REPOSITORY"); got != "s3:s3.example.com/bucket" {
+		t.Errorf("RESTIC_REPOSITORY = %q, must not be overridden by destination env", got)
+	}
+}
+
 // Pure local/s3 destinations must NOT get the rclone.program option.
 func TestBuildCmd_NonRcloneNoRcloneProgram(t *testing.T) {
 	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone"}

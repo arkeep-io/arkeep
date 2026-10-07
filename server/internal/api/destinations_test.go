@@ -116,12 +116,39 @@ func TestDestinationHandler_Create(t *testing.T) {
 	t.Run("accepts all valid destination types", func(t *testing.T) {
 		for _, typ := range []string{"local", "s3", "sftp", "rest", "rclone"} {
 			e := newTestEnv(t)
-			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			body := map[string]string{
 				"name": "dest-" + typ,
 				"type": typ,
-			})
+			}
+			if typ == "rclone" {
+				body["config"] = `{"remote":"myremote","path":"bucket"}`
+			}
+			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), body)
 			assertStatus(t, resp, http.StatusCreated)
 		}
+	})
+
+	// rclone credentials used to be passed verbatim as env vars to restic on
+	// the agent, so a key like RESTIC_PASSWORD_COMMAND ran a command there.
+	t.Run("rejects rclone credentials", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			"name":        "rclone-creds",
+			"type":        "rclone",
+			"config":      `{"remote":"myremote"}`,
+			"credentials": `{"RESTIC_PASSWORD_COMMAND":"id"}`,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("rejects an rclone connection string as remote", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			"name":   "rclone-connstr",
+			"type":   "rclone",
+			"config": `{"remote":":sftp,host=evil,ssh=id:"}`,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
 	t.Run("returns 401 without token", func(t *testing.T) {
@@ -373,6 +400,30 @@ func TestDestinationHandler_Update(t *testing.T) {
 			"name": &name,
 		})
 		assertStatus(t, resp, http.StatusNotFound)
+	})
+
+	t.Run("rejects rclone credentials and connection strings", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "legacy-rclone", "rclone")
+
+		creds := `{"LD_PRELOAD":"/tmp/x.so"}`
+		resp := e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"credentials": &creds,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		config := `{"remote":"myremote,ssh=id:"}`
+		resp = e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"config": &config,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		// A rename does not re-validate the legacy row's stored config.
+		name := "renamed"
+		resp = e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"name": &name,
+		})
+		assertStatus(t, resp, http.StatusOK)
 	})
 
 	t.Run("preserves credentials when PATCH omits them", func(t *testing.T) {

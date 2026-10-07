@@ -15,6 +15,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
@@ -286,6 +287,16 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Config == "" {
 		req.Config = "{}"
 	}
+	if req.Type == "rclone" {
+		if err := validateRcloneConfig(req.Config); err != nil {
+			ErrBadRequest(w, err.Error())
+			return
+		}
+		if hasNonEmptyCredential(req.Credentials) {
+			ErrBadRequest(w, errRcloneCredentials.Error())
+			return
+		}
+	}
 	if req.RetentionEnabled && req.AppendOnly {
 		ErrBadRequest(w, "retention cannot be enabled on an append-only destination")
 		return
@@ -482,6 +493,21 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		dest.Name = *req.Name
 	}
+	// Only what the PATCH changes is validated, so a legacy rclone row can
+	// still be renamed or disabled; BuildRepoURL refuses an invalid remote
+	// at dispatch time regardless, and BuildEnv ignores stored credentials.
+	if dest.Type == "rclone" {
+		if req.Config != nil {
+			if err := validateRcloneConfig(*req.Config); err != nil {
+				ErrBadRequest(w, err.Error())
+				return
+			}
+		}
+		if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
+			ErrBadRequest(w, errRcloneCredentials.Error())
+			return
+		}
+	}
 	if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
 		dest.Credentials = db.EncryptedString(*req.Credentials)
 	}
@@ -581,6 +607,23 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched})
 	Ok(w, h.singleDestinationResponse(r.Context(), dest))
+}
+
+// errRcloneCredentials rejects credentials on an rclone destination. rclone
+// remotes are configured in rclone.conf on the agent, so there is nothing to
+// store, and the server no longer turns credentials into agent env vars.
+var errRcloneCredentials = errors.New("rclone destinations take no credentials: configure the remote in rclone.conf on the agent")
+
+// validateRcloneConfig rejects an rclone config whose remote is not a plain
+// remote name (see destutil.ValidateRcloneRemote).
+func validateRcloneConfig(config string) error {
+	var cfg struct {
+		Remote string `json:"remote"`
+	}
+	if err := json.Unmarshal([]byte(config), &cfg); err != nil {
+		return errors.New("config must be a JSON object")
+	}
+	return destutil.ValidateRcloneRemote(cfg.Remote)
 }
 
 // hasNonEmptyCredential reports whether the credentials JSON carries at least

@@ -70,6 +70,18 @@ func TestBuildRepoURL(t *testing.T) {
 			config: `{"remote":"pCloudDrive","path":"Arkeep"}`,
 			want:   "rclone:pCloudDrive:Arkeep",
 		},
+		{
+			name:   "rclone connection string yields empty",
+			dType:  "rclone",
+			config: `{"remote":":sftp,host=evil,ssh=sh -c id:","path":"x"}`,
+			want:   "",
+		},
+		{
+			name:   "rclone remote with option override yields empty",
+			dType:  "rclone",
+			config: `{"remote":"myremote,ssh=id:bucket"}`,
+			want:   "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -79,6 +91,47 @@ func TestBuildRepoURL(t *testing.T) {
 				t.Errorf("BuildRepoURL(%s, %s) = %q, want %q", tt.dType, tt.config, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValidateRcloneRemote(t *testing.T) {
+	tests := []struct {
+		remote string
+		valid  bool
+	}{
+		{"myremote", true},
+		{"myremote:", true},
+		{"myremote:bucket/path", true},
+		{"pCloud Drive", true},
+		{"my_remote-2.backup+x@y", true},
+		{"", false},
+		{":sftp,host=h:", false},
+		{":local:", false},
+		{"myremote,ssh=id:", false},
+		{"-myremote", false},
+		{" myremote", false},
+		{"my/remote", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.remote, func(t *testing.T) {
+			if err := ValidateRcloneRemote(tt.remote); (err == nil) != tt.valid {
+				t.Errorf("ValidateRcloneRemote(%q) error = %v, want valid=%v", tt.remote, err, tt.valid)
+			}
+		})
+	}
+}
+
+// TestBuildEnvRcloneIgnoresCredentials guards against reintroducing the
+// pass-through of rclone credentials as env vars: a key such as
+// RESTIC_PASSWORD_COMMAND would run a command on the agent.
+func TestBuildEnvRcloneIgnoresCredentials(t *testing.T) {
+	dest := &db.Destination{
+		Type:        "rclone",
+		Config:      `{"remote":"myremote"}`,
+		Credentials: db.EncryptedString(`{"RESTIC_PASSWORD_COMMAND":"id","LD_PRELOAD":"/tmp/x.so"}`),
+	}
+	if env := BuildEnv(dest); len(env) != 0 {
+		t.Errorf("BuildEnv(rclone) = %v, want no env vars", env)
 	}
 }
 
