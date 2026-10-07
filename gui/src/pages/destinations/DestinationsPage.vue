@@ -247,7 +247,7 @@ onMounted(fetchDestinations)
         <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchDestinations">
           <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
         </Button>
-        <Button @click="openCreate">
+        <Button v-if="authStore.isAdmin" @click="openCreate">
           <Plus class="w-4 h-4" />
           New Destination
         </Button>
@@ -317,7 +317,7 @@ onMounted(fetchDestinations)
                       Create a destination to start storing your backups.
                     </p>
                   </div>
-                  <Button size="sm" @click="openCreate">
+                  <Button v-if="authStore.isAdmin" size="sm" @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Destination
                   </Button>
@@ -383,7 +383,8 @@ onMounted(fetchDestinations)
 
               <!-- Actions dropdown -->
               <TableCell @click.stop>
-                <DropdownMenu>
+                <!-- Every action changes the destination: admins only -->
+                <DropdownMenu v-if="authStore.isAdmin">
                   <DropdownMenuTrigger as-child>
                     <Button variant="ghost" size="icon" class="w-8 h-8">
                       <MoreHorizontal class="w-4 h-4" />
