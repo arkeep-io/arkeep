@@ -11,10 +11,12 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
@@ -51,6 +53,18 @@ type RouterConfig struct {
 	// Retention "run now"). Satisfied by *logretention.Service. Optional — if
 	// nil, the manual-prune endpoint responds 503.
 	LogRetention LogPruner
+
+	// SnapshotSync records snapshots found in a destination's repository and
+	// evicts the records of snapshots no longer there (import, sync). Required.
+	SnapshotSync *snapshotsync.Service
+	// Pinger sends Healthchecks.io pings: cancelled backups and the policy
+	// form's test ping. Optional — if nil, no pings are sent and the test
+	// endpoint responds 503.
+	Pinger *healthcheck.Pinger
+
+	// Queue is the destination queue (issue #285), notified when a cancel
+	// frees a destination. Optional.
+	Queue QueueNotifier
 
 	// Mailer sends transactional emails (e.g. password reset links) and reports
 	// whether SMTP is configured. Satisfied by *notification.NotificationService.
@@ -98,7 +112,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 
 	// --- Initialize handlers ---
-	setupHandler := NewSetupHandler(cfg.Users, cfg.Logger)
+	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.Audit, cfg.Logger, cfg.Secure)
 	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
@@ -107,9 +121,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Snapshots, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.Audit, cfg.Logger)
-	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Audit, cfg.Logger)
-	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Logger)
+	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
+	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
+	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
@@ -161,7 +175,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RateLimit(loginLimiter)).Post("/auth/password-reset/confirm", passwordResetHandler.Confirm)
 
 			r.Get("/setup/status", setupHandler.GetStatus)
-			r.Post("/setup/complete", setupHandler.Complete)
+			r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/setup/complete", setupHandler.Complete)
 
 			if enrollHandler != nil {
 				r.Post("/agents/enroll", enrollHandler.Enroll)
@@ -176,6 +190,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		})
 
 		// --- Authenticated routes ---
+		//
+		// The "user" role is read-only: it can view dashboards, agents,
+		// destinations, policies, jobs, snapshots and its own notifications.
+		// Everything that changes backup configuration or makes an agent act
+		// (including browsing a snapshot or listing an agent's volumes) is
+		// admin-only, because destinations and policies decide what runs on
+		// the agents and where their data goes. Objects have no owner, so a
+		// write open to "user" would be a write on every agent.
 		r.Group(func(r chi.Router) {
 			r.Use(Authenticate(cfg.AuthService))
 
@@ -197,27 +219,29 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Agents
 			r.Get("/agents", agentHandler.List)
-			r.Post("/agents", agentHandler.Create)
+			r.With(RequireRole("admin")).Post("/agents", agentHandler.Create)
 			r.Get("/agents/{id}", agentHandler.GetByID)
-			r.Patch("/agents/{id}", agentHandler.Update)
+			r.With(RequireRole("admin")).Patch("/agents/{id}", agentHandler.Update)
 			r.With(RequireRole("admin")).Delete("/agents/{id}", agentHandler.Delete)
-			r.Get("/agents/{id}/volumes", agentHandler.ListVolumes)
+			r.With(RequireRole("admin")).Get("/agents/{id}/volumes", agentHandler.ListVolumes)
 
 			// Destinations
 			r.Get("/destinations", destinationHandler.List)
-			r.Post("/destinations", destinationHandler.Create)
+			r.With(RequireRole("admin")).Post("/destinations", destinationHandler.Create)
 			r.Get("/destinations/{id}", destinationHandler.GetByID)
-			r.Patch("/destinations/{id}", destinationHandler.Update)
+			r.With(RequireRole("admin")).Patch("/destinations/{id}", destinationHandler.Update)
 			r.With(RequireRole("admin")).Delete("/destinations/{id}", destinationHandler.Delete)
-			r.Post("/destinations/{id}/import", destinationHandler.Import)
-			r.Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/import", destinationHandler.Import)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/sync", destinationHandler.Sync)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
-			r.Post("/policies", policyHandler.Create)
+			r.With(RequireRole("admin")).Post("/policies", policyHandler.Create)
+			r.With(RequireRole("admin")).Post("/policies/healthcheck/test", policyHandler.TestHealthcheck)
 			r.Get("/policies/{id}", policyHandler.GetByID)
-			r.Patch("/policies/{id}", policyHandler.Update)
+			r.With(RequireRole("admin")).Patch("/policies/{id}", policyHandler.Update)
 			r.With(RequireRole("admin")).Delete("/policies/{id}", policyHandler.Delete)
 			r.With(RequireRole("admin")).Post("/policies/{id}/trigger", policyHandler.Trigger)
 			r.Get("/policies/{id}/jobs", jobHandler.ListByPolicy)
@@ -226,14 +250,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/jobs", jobHandler.List)
 			r.Get("/jobs/{id}", jobHandler.GetByID)
 			r.Get("/jobs/{id}/logs", jobHandler.GetLogs)
-			r.Post("/jobs/{id}/cancel", jobHandler.Cancel)
+			r.With(RequireRole("admin")).Post("/jobs/{id}/cancel", jobHandler.Cancel)
 
 			// Snapshots
 			r.Get("/snapshots", snapshotHandler.List)
 			r.Get("/snapshots/{id}", snapshotHandler.GetByID)
 			r.With(RequireRole("admin")).Delete("/snapshots/{id}", snapshotHandler.Delete)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/restore", snapshotHandler.Restore)
-			r.Get("/snapshots/{id}/browse", snapshotHandler.Browse)
+			r.With(RequireRole("admin")).Get("/snapshots/{id}/browse", snapshotHandler.Browse)
 			r.With(RequireRole("admin")).Post("/snapshots/{id}/download", snapshotHandler.CreateDownload)
 
 			// Notifications
@@ -276,6 +300,12 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/logs", settingsHandler.GetLogRetention)
 				r.Put("/settings/logs", settingsHandler.UpsertLogRetention)
 				r.Post("/settings/logs/prune", settingsHandler.PruneLogsNow)
+				r.Get("/settings/jobs-queue", settingsHandler.GetJobQueue)
+				r.Put("/settings/jobs-queue", settingsHandler.UpsertJobQueue)
+
+				// Periodic snapshot sync
+				r.Get("/settings/snapshot-sync", settingsHandler.GetSnapshotSync)
+				r.Put("/settings/snapshot-sync", settingsHandler.UpsertSnapshotSync)
 
 				// Notification delivery queue visibility
 				r.Get("/notifications/queue", notificationHandler.ListDeliveryQueue)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -51,7 +52,9 @@ func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.agentSecret != "" && body.AgentSecret != h.agentSecret {
+	// An empty configured secret fails closed (the server refuses to start
+	// without one), and the comparison is constant-time.
+	if h.agentSecret == "" || subtle.ConstantTimeCompare([]byte(body.AgentSecret), []byte(h.agentSecret)) != 1 {
 		h.logger.Warn("enrollment rejected: wrong agent_secret", zap.String("ip", ip))
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return

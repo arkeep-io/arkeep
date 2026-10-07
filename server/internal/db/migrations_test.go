@@ -214,6 +214,91 @@ func TestSQLiteMigrationsDownUp_SkippedStatus(t *testing.T) {
 	}
 }
 
+// TestSQLiteMigrationDownUp_WaitingStatus steps the 000032 migration down and
+// back up with a waiting job and its child rows present (issue #285), so the
+// jobs table rebuild is exercised in both directions: the down migration must
+// fold 'waiting' into 'failed', and both rebuilds must keep every column and
+// the child tables' foreign keys.
+func TestSQLiteMigrationDownUp_WaitingStatus(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/down.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	if err := gdb.Create(agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	policy := &Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `["/data"]`, RepoPassword: EncryptedString("x")}
+	if err := gdb.Create(policy).Error; err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	dest := &Destination{Name: "d", Type: "local", Config: `{"path":"/tmp/r"}`, Enabled: true}
+	if err := gdb.Create(dest).Error; err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	prior := uuid.New()
+	job := &Job{PolicyID: &policy.ID, AgentID: agent.ID, Type: "backup", Status: "waiting", ResumeOfJobID: &prior, ResumeAttempt: 2}
+	if err := gdb.Create(job).Error; err != nil {
+		t.Fatalf("create waiting job: %v", err)
+	}
+	if err := gdb.Create(&JobDestination{JobID: job.ID, DestinationID: dest.ID, Status: "pending"}).Error; err != nil {
+		t.Fatalf("create job destination: %v", err)
+	}
+
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Steps(-1); err != nil {
+		t.Fatalf("Steps(-1): %v", err)
+	}
+
+	var row struct {
+		Status        string
+		ResumeOfJobID string
+		ResumeAttempt int
+	}
+	if err := gdb.Raw(`SELECT status, resume_of_job_id, resume_attempt FROM jobs WHERE id = ?`, job.ID).Scan(&row).Error; err != nil {
+		t.Fatalf("query job after down: %v", err)
+	}
+	if row.Status != "failed" {
+		t.Errorf("job status after down = %q, want %q: the down migration did not fold 'waiting'", row.Status, "failed")
+	}
+	if row.ResumeOfJobID != prior.String() || row.ResumeAttempt != 2 {
+		t.Errorf("resume columns after down = (%q, %d), want (%q, 2)", row.ResumeOfJobID, row.ResumeAttempt, prior)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Up after down: %v", err)
+	}
+	if err := gdb.Model(&Job{}).Where("id = ?", job.ID).Update("status", "waiting").Error; err != nil {
+		t.Errorf("cannot set 'waiting' after down/up: %v", err)
+	}
+
+	// The child table still points at the rebuilt jobs table: deleting the job
+	// cascades to its destination rows.
+	if err := gdb.Exec(`DELETE FROM jobs WHERE id = ?`, job.ID).Error; err != nil {
+		t.Fatalf("delete job: %v", err)
+	}
+	var children int64
+	if err := gdb.Model(&JobDestination{}).Where("job_id = ?", job.ID).Count(&children).Error; err != nil {
+		t.Fatalf("count job destinations: %v", err)
+	}
+	if children != 0 {
+		t.Errorf("job destinations after deleting the job = %d, want 0 (ON DELETE CASCADE lost in the rebuild)", children)
+	}
+}
+
 // TestInterruptedStatusIsAccepted pins the migrated CHECK constraints: both the
 // job and its destination rows must accept 'interrupted'.
 func TestInterruptedStatusIsAccepted(t *testing.T) {

@@ -6,11 +6,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
-
-	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
-	"github.com/arkeep-io/arkeep/server/internal/repositories"
-	proto "github.com/arkeep-io/arkeep/shared/proto"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 )
@@ -121,12 +116,39 @@ func TestDestinationHandler_Create(t *testing.T) {
 	t.Run("accepts all valid destination types", func(t *testing.T) {
 		for _, typ := range []string{"local", "s3", "sftp", "rest", "rclone"} {
 			e := newTestEnv(t)
-			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			body := map[string]string{
 				"name": "dest-" + typ,
 				"type": typ,
-			})
+			}
+			if typ == "rclone" {
+				body["config"] = `{"remote":"myremote","path":"bucket"}`
+			}
+			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), body)
 			assertStatus(t, resp, http.StatusCreated)
 		}
+	})
+
+	// rclone credentials used to be passed verbatim as env vars to restic on
+	// the agent, so a key like RESTIC_PASSWORD_COMMAND ran a command there.
+	t.Run("rejects rclone credentials", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			"name":        "rclone-creds",
+			"type":        "rclone",
+			"config":      `{"remote":"myremote"}`,
+			"credentials": `{"RESTIC_PASSWORD_COMMAND":"id"}`,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("rejects an rclone connection string as remote", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			"name":   "rclone-connstr",
+			"type":   "rclone",
+			"config": `{"remote":":sftp,host=evil,ssh=id:"}`,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
 	t.Run("returns 401 without token", func(t *testing.T) {
@@ -285,6 +307,35 @@ func TestDestinationHandler_CheckRepo(t *testing.T) {
 	})
 }
 
+func TestDestinationHandler_Sync(t *testing.T) {
+	t.Run("returns 401 without token", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "rest-dest", "rest")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/sync", "", nil)
+		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+
+	t.Run("returns 403 for non-admin", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "rest-dest", "rest")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/sync", e.userToken(t), nil)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("returns 404 for unknown destination", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations/00000000-0000-0000-0000-000000000001/sync", e.adminToken(t), nil)
+		assertStatus(t, resp, http.StatusNotFound)
+	})
+
+	t.Run("returns 409 when no agent can reach the destination", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "rest-dest", "rest")
+		resp := e.post(t, "/api/v1/destinations/"+dest.ID.String()+"/sync", e.adminToken(t), nil)
+		assertStatus(t, resp, http.StatusConflict)
+	})
+}
+
 func TestClassifyRepoCheckError(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -349,6 +400,30 @@ func TestDestinationHandler_Update(t *testing.T) {
 			"name": &name,
 		})
 		assertStatus(t, resp, http.StatusNotFound)
+	})
+
+	t.Run("rejects rclone credentials and connection strings", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "legacy-rclone", "rclone")
+
+		creds := `{"LD_PRELOAD":"/tmp/x.so"}`
+		resp := e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"credentials": &creds,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		config := `{"remote":"myremote,ssh=id:"}`
+		resp = e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"config": &config,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		// A rename does not re-validate the legacy row's stored config.
+		name := "renamed"
+		resp = e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{
+			"name": &name,
+		})
+		assertStatus(t, resp, http.StatusOK)
 	})
 
 	t.Run("preserves credentials when PATCH omits them", func(t *testing.T) {
@@ -444,133 +519,5 @@ func TestDestinationHandler_Delete(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.del(t, "/api/v1/destinations/00000000-0000-0000-0000-000000000001", "")
 		assertStatus(t, resp, http.StatusUnauthorized)
-	})
-}
-
-// TestPersistImportedSnapshots covers importing the snapshots of a pre-existing
-// Restic repository. Such snapshots belong to no policy and no job, so they are
-// stored with a nil policy_id / job_id.
-func TestPersistImportedSnapshots(t *testing.T) {
-	newHandler := func(deps *testDeps) *DestinationHandler {
-		// agentMgr is not touched by persistImportedSnapshots.
-		return &DestinationHandler{
-			repo:         deps.dests,
-			snapshotRepo: deps.snaps,
-			logger:       zap.NewNop(),
-		}
-	}
-	result := func(ids ...string) *agentmanager.SnapshotImportResult {
-		res := &agentmanager.SnapshotImportResult{}
-		for _, id := range ids {
-			res.Snapshots = append(res.Snapshots, &proto.ImportedSnapshotInfo{
-				ResticSnapshotId: id,
-				SnapshotTime:     "2026-07-26T13:20:45.123456789+02:00",
-				Paths:            []string{"/data"},
-				Tags:             []string{},
-				Hostname:         "nas",
-				SizeBytes:        2048,
-				FileCount:        7,
-			})
-		}
-		return res
-	}
-
-	t.Run("persists every snapshot found", func(t *testing.T) {
-		e := newTestEnv(t)
-		dest := createDBDestination(t, e.deps, "imported", "rclone")
-		h := newHandler(e.deps)
-
-		out := h.persistImportedSnapshots(context.Background(), dest, result("aaa111", "bbb222"))
-
-		if out.Imported != 2 || out.Skipped != 0 || out.Failed != 0 {
-			t.Fatalf("outcome = %+v, want {Imported:2 Skipped:0 Failed:0}", out)
-		}
-
-		rows, total, err := e.deps.snaps.ListByDestination(context.Background(), dest.ID, repositories.ListOptions{Limit: 10})
-		if err != nil {
-			t.Fatalf("ListByDestination: %v", err)
-		}
-		if total != 2 {
-			t.Fatalf("stored %d snapshots, want 2", total)
-		}
-		for _, row := range rows {
-			if row.PolicyID != nil {
-				t.Errorf("snapshot %s: PolicyID = %v, want nil", row.SnapshotID, row.PolicyID)
-			}
-			if row.JobID != nil {
-				t.Errorf("snapshot %s: JobID = %v, want nil", row.SnapshotID, row.JobID)
-			}
-			if !row.IsImported {
-				t.Errorf("snapshot %s: IsImported = false, want true", row.SnapshotID)
-			}
-			if row.Hostname != "nas" {
-				t.Errorf("snapshot %s: Hostname = %q, want %q", row.SnapshotID, row.Hostname, "nas")
-			}
-			if row.SnapshotAt.IsZero() {
-				t.Errorf("snapshot %s: SnapshotAt is zero, want the parsed restic timestamp", row.SnapshotID)
-			}
-			if row.SizeBytes != 2048 {
-				t.Errorf("snapshot %s: SizeBytes = %d, want 2048", row.SnapshotID, row.SizeBytes)
-			}
-			if row.FileCount != 7 {
-				t.Errorf("snapshot %s: FileCount = %d, want 7", row.SnapshotID, row.FileCount)
-			}
-		}
-	})
-
-	t.Run("reports already known snapshots as skipped, not imported", func(t *testing.T) {
-		e := newTestEnv(t)
-		dest := createDBDestination(t, e.deps, "imported", "rclone")
-		h := newHandler(e.deps)
-		ctx := context.Background()
-
-		if out := h.persistImportedSnapshots(ctx, dest, result("aaa111", "bbb222")); out.Imported != 2 {
-			t.Fatalf("first import: outcome = %+v, want 2 imported", out)
-		}
-
-		out := h.persistImportedSnapshots(ctx, dest, result("aaa111", "bbb222", "ccc333"))
-
-		if out.Imported != 1 || out.Skipped != 2 || out.Failed != 0 {
-			t.Fatalf("second import: outcome = %+v, want {Imported:1 Skipped:2 Failed:0}", out)
-		}
-	})
-
-	t.Run("the same repository copied to another destination is importable again", func(t *testing.T) {
-		// Migrating a repository between cloud providers yields two
-		// destinations holding the same restic snapshot IDs.
-		e := newTestEnv(t)
-		oldDest := createDBDestination(t, e.deps, "provider1", "rclone")
-		newDest := createDBDestination(t, e.deps, "provider2", "rclone")
-		h := newHandler(e.deps)
-		ctx := context.Background()
-
-		if out := h.persistImportedSnapshots(ctx, oldDest, result("aaa111")); out.Imported != 1 {
-			t.Fatalf("import into provider1: outcome = %+v, want 1 imported", out)
-		}
-
-		out := h.persistImportedSnapshots(ctx, newDest, result("aaa111"))
-
-		if out.Imported != 1 || out.Skipped != 0 || out.Failed != 0 {
-			t.Fatalf("import into provider2: outcome = %+v, want {Imported:1 Skipped:0 Failed:0}", out)
-		}
-	})
-
-	t.Run("caches the repository size reported by the agent", func(t *testing.T) {
-		e := newTestEnv(t)
-		dest := createDBDestination(t, e.deps, "imported", "rclone")
-		h := newHandler(e.deps)
-
-		res := result("aaa111")
-		res.RepoSizeBytes = 4096
-
-		h.persistImportedSnapshots(context.Background(), dest, res)
-
-		stored, err := e.deps.dests.GetByID(context.Background(), dest.ID)
-		if err != nil {
-			t.Fatalf("GetByID: %v", err)
-		}
-		if stored.RepoSizeBytes != 4096 {
-			t.Errorf("RepoSizeBytes = %d, want 4096", stored.RepoSizeBytes)
-		}
 	})
 }

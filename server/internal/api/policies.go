@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 )
@@ -23,17 +24,19 @@ type PolicyHandler struct {
 	agentRepo repositories.AgentRepository
 	destRepo  repositories.DestinationRepository
 	scheduler *scheduler.Scheduler
+	pinger    *healthcheck.Pinger // may be nil
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, pinger *healthcheck.Pinger, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
 		agentRepo: agentRepo,
 		destRepo:  destRepo,
 		scheduler: sched,
+		pinger:    pinger,
 		auditRepo: auditRepo,
 		logger:    logger.Named("policy_handler"),
 	}
@@ -69,6 +72,7 @@ type policyResponse struct {
 	ResumeInterrupted bool                        `json:"resume_interrupted"`
 	NotifyOnSuccess   string                      `json:"notify_on_success"`
 	NotifyOnFailure   string                      `json:"notify_on_failure"`
+	HealthcheckURL    string                      `json:"healthcheck_url"`
 	Destinations      []policyDestinationResponse `json:"destinations"`
 	LastRunAt         *string                     `json:"last_run_at"`
 	NextRunAt         *string                     `json:"next_run_at"`
@@ -94,6 +98,7 @@ func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinatio
 		ResumeInterrupted: p.ResumeInterrupted,
 		NotifyOnSuccess:   p.NotifyOnSuccess,
 		NotifyOnFailure:   p.NotifyOnFailure,
+		HealthcheckURL:    p.HealthcheckURL,
 		Destinations:      make([]policyDestinationResponse, len(destinations)),
 		CreatedAt:         p.CreatedAt.UTC().Format(time.RFC3339),
 	}
@@ -188,9 +193,11 @@ type createPolicyRequest struct {
 	ResumeInterrupted *bool `json:"resume_interrupted"`
 	// NotifyOnSuccess / NotifyOnFailure are optional: omitted means inherit the
 	// global notification settings.
-	NotifyOnSuccess string                    `json:"notify_on_success"`
-	NotifyOnFailure string                    `json:"notify_on_failure"`
-	Destinations    []destinationEntryRequest `json:"destinations"`
+	NotifyOnSuccess string `json:"notify_on_success"`
+	NotifyOnFailure string `json:"notify_on_failure"`
+	// HealthcheckURL is an optional Healthchecks.io ping URL (admin only).
+	HealthcheckURL string                    `json:"healthcheck_url"`
+	Destinations   []destinationEntryRequest `json:"destinations"`
 }
 
 // destinationEntryRequest represents a single destination entry in a create/update request.
@@ -213,6 +220,11 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Policy writes are admin-only at the router, so the field gates below
+	// cannot fire today. They are kept so that hooks, command sources and the
+	// healthcheck URL stay admin-only if policy writes are ever reopened to
+	// non-admins (e.g. per-agent permissions).
+
 	// Hook commands execute with agent privileges — only admins may set them.
 	if (req.HookPreBackup != "" || req.HookPostBackup != "") && !isAdmin(r) {
 		ErrForbidden(w)
@@ -220,15 +232,20 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Sources also execute with agent privileges (restic's --password-command
-	// can be smuggled in via an unvalidated source entry), but unlike hooks,
-	// setting backup source paths is core non-admin functionality. So sources
-	// are not admin-gated — instead validateCreatePolicy rejects flag-like
-	// entries for every caller, admin included.
+	// can be smuggled in via an unvalidated source entry), so
+	// validateCreatePolicy rejects flag-like entries for every caller, admin
+	// included.
 	//
-	// A "command" source is the one exception: it runs an arbitrary shell
-	// command with agent privileges, the same trust class as a hook, so it
-	// gets the same gate.
+	// A "command" source runs an arbitrary shell command with agent
+	// privileges, the same trust class as a hook, so it gets the same gate.
 	if policyHasCommandSource(req.Sources) && !isAdmin(r) {
+		ErrForbidden(w)
+		return
+	}
+
+	// The server sends requests to the ping URL, from inside the network it runs
+	// in — only admins may point it somewhere.
+	if req.HealthcheckURL != "" && !isAdmin(r) {
 		ErrForbidden(w)
 		return
 	}
@@ -262,6 +279,7 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ResumeInterrupted: req.ResumeInterrupted == nil || *req.ResumeInterrupted,
 		NotifyOnSuccess:   req.NotifyOnSuccess,
 		NotifyOnFailure:   req.NotifyOnFailure,
+		HealthcheckURL:    req.HealthcheckURL,
 	}
 
 	if err := h.repo.Create(r.Context(), policy); err != nil {
@@ -393,6 +411,7 @@ type updatePolicyRequest struct {
 	ResumeInterrupted *bool                     `json:"resume_interrupted"`
 	NotifyOnSuccess   *string                   `json:"notify_on_success"`
 	NotifyOnFailure   *string                   `json:"notify_on_failure"`
+	HealthcheckURL    *string                   `json:"healthcheck_url"`
 	Destinations      []destinationEntryRequest `json:"destinations"`
 }
 
@@ -520,6 +539,20 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		policy.NotifyOnFailure = *req.NotifyOnFailure
 	}
+	if req.HealthcheckURL != nil {
+		if *req.HealthcheckURL != "" {
+			if err := healthcheck.ValidateURL(*req.HealthcheckURL); err != nil {
+				ErrBadRequest(w, err.Error())
+				return
+			}
+		}
+		// The server sends requests to the ping URL — only admins may change it.
+		if *req.HealthcheckURL != policy.HealthcheckURL && !isAdmin(r) {
+			ErrForbidden(w)
+			return
+		}
+		policy.HealthcheckURL = *req.HealthcheckURL
+	}
 	if req.ExcludePatterns != nil {
 		policy.ExcludePatterns = normalizeJSONArray(*req.ExcludePatterns)
 	}
@@ -603,6 +636,35 @@ func (h *PolicyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	NoContent(w)
 }
 
+// testHealthcheckRequest is the JSON body expected by
+// POST /api/v1/policies/healthcheck/test.
+type testHealthcheckRequest struct {
+	URL string `json:"url"`
+}
+
+// TestHealthcheck handles POST /api/v1/policies/healthcheck/test (admin only).
+// Sends a ping to the /log endpoint of the given check, so the policy form can
+// verify a URL before saving it without changing the check's up/down state.
+func (h *PolicyHandler) TestHealthcheck(w http.ResponseWriter, r *http.Request) {
+	if h.pinger == nil {
+		ErrServiceUnavailable(w, "healthcheck pings are not available")
+		return
+	}
+	var req testHealthcheckRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := healthcheck.ValidateURL(req.URL); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+	if err := h.pinger.Ping(r.Context(), req.URL, healthcheck.EventLog, "", "Test ping from Arkeep"); err != nil {
+		ErrUnprocessable(w, err.Error())
+		return
+	}
+	Ok(w, map[string]bool{"ok": true})
+}
+
 // Trigger handles POST /api/v1/policies/{id}/trigger.
 // Manually triggers an immediate backup job for the policy, bypassing the
 // cron schedule.
@@ -620,6 +682,10 @@ func (h *PolicyHandler) Trigger(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, scheduler.ErrPolicyDisabled) {
 			ErrConflict(w, "This policy is disabled. Enable it to run a backup.")
+			return
+		}
+		if errors.Is(err, scheduler.ErrJobAlreadyQueued) {
+			ErrConflict(w, "A backup for this policy is already queued and will start automatically.")
 			return
 		}
 		h.logger.Error("failed to trigger policy",
@@ -678,6 +744,11 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	req.NotifyOnFailure = cmp.Or(req.NotifyOnFailure, db.NotifyInherit)
 	if err := validateNotifyOverride(req.NotifyOnFailure); err != nil {
 		return errors.New("notify_on_failure: " + err.Error())
+	}
+	if req.HealthcheckURL != "" {
+		if err := healthcheck.ValidateURL(req.HealthcheckURL); err != nil {
+			return err
+		}
 	}
 	return nil
 }

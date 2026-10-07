@@ -53,3 +53,40 @@ func TestJobHandler_CancelReleasesBusyGate(t *testing.T) {
 		t.Errorf("busy_job_id after cancel = %q, want the gate released", got)
 	}
 }
+
+// TestJobHandler_CancelWaitingJob: a job queued behind a busy destination
+// (issue #285) can be cancelled, and the status filter lists waiting jobs.
+func TestJobHandler_CancelWaitingJob(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+
+	agent := createDBAgent(t, e.deps, "retention-agent")
+	job := &db.Job{AgentID: agent.ID, Type: "retention", Status: "pending"}
+	if err := e.deps.jobs.Create(ctx, job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := e.deps.jobs.UpdateStatus(ctx, job.ID, "waiting", nil, nil, ""); err != nil {
+		t.Fatalf("queue job: %v", err)
+	}
+
+	resp := e.get(t, "/api/v1/jobs?status=waiting", e.adminToken(t))
+	assertStatus(t, resp, http.StatusOK)
+	var list struct {
+		Total int64 `json:"total"`
+	}
+	decodeData(t, resp, &list)
+	if list.Total != 1 {
+		t.Errorf("jobs with status=waiting = %d, want 1", list.Total)
+	}
+
+	resp = e.post(t, "/api/v1/jobs/"+job.ID.String()+"/cancel", e.adminToken(t), nil)
+	assertStatus(t, resp, http.StatusOK)
+
+	stored, err := e.deps.jobs.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Status != "cancelled" {
+		t.Errorf("status after cancel = %q, want \"cancelled\"", stored.Status)
+	}
+}

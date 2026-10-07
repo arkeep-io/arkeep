@@ -259,8 +259,12 @@ type Policy struct {
 	// Notify* values below.
 	NotifyOnSuccess string `gorm:"type:text;not null"`
 	NotifyOnFailure string `gorm:"type:text;not null"`
-	LastRunAt       *time.Time
-	NextRunAt       *time.Time
+	// HealthcheckURL is an optional Healthchecks.io ping URL; backup jobs ping
+	// it on start, success and failure (see internal/healthcheck). Empty
+	// disables the pings.
+	HealthcheckURL string `gorm:"type:text;not null;default:''"`
+	LastRunAt      *time.Time
+	NextRunAt      *time.Time
 
 	// Destinations is populated by GetByIDWithDestinations via a manual query.
 	// The gorm:"-" tag prevents GORM from attempting foreign key resolution
@@ -308,7 +312,7 @@ type Job struct {
 	PolicyID  *uuid.UUID `gorm:"type:text;index"`
 	AgentID   uuid.UUID  `gorm:"type:text;not null;index"`
 	Type      string     `gorm:"not null;default:'backup'"`  // "backup", "restore"
-	Status    string     `gorm:"not null;default:'pending'"` // "pending", "running", "succeeded", "failed", "cancelled", "interrupted"
+	Status    string     `gorm:"not null;default:'pending'"` // "pending", "waiting", "running", "succeeded", "failed", "cancelled", "interrupted"
 	StartedAt *time.Time
 	EndedAt   *time.Time
 	Error     string `gorm:"type:text;default:''"` // populated on failure

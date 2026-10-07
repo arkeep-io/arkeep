@@ -155,7 +155,9 @@ const routes: RouteRecordRaw[] = [
             path: ':id',
             name: 'snapshot-browse',
             component: () => import('@/pages/snapshots/SnapshotBrowsePage.vue'),
-            meta: { breadcrumb: 'Browse' },
+            // Browsing makes an agent open the repository, so the server
+            // reserves it to admins.
+            meta: { breadcrumb: 'Browse', requiresRole: 'admin' },
           },
         ],
       },
@@ -221,6 +223,18 @@ const routes: RouteRecordRaw[] = [
             name: 'settings-logs',
             component: () => import('@/pages/settings/LogRetentionPage.vue'),
             meta: { breadcrumb: 'Log Retention', requiresRole: 'admin' },
+          },
+          {
+            path: 'jobs-queue',
+            name: 'settings-jobs-queue',
+            component: () => import('@/pages/settings/JobQueuePage.vue'),
+            meta: { breadcrumb: 'Job Queue', requiresRole: 'admin' },
+          },
+          {
+            path: 'snapshot-sync',
+            name: 'settings-snapshot-sync',
+            component: () => import('@/pages/settings/SnapshotSyncPage.vue'),
+            meta: { breadcrumb: 'Snapshot Sync', requiresRole: 'admin' },
           },
         ],
       },

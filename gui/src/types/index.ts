@@ -26,6 +26,9 @@ export type AgentStatus = (typeof AgentStatus)[keyof typeof AgentStatus]
 
 export const JobStatus = {
   Pending: 'pending',
+  // Waiting: queued because a destination is busy with another backup or
+  // retention sweep; starts on its own once all its destinations are free.
+  Waiting: 'waiting',
   Running: 'running',
   Succeeded: 'succeeded',
   Failed: 'failed',
@@ -33,6 +36,9 @@ export const JobStatus = {
   // Interrupted: the agent vanished mid-run (host shut down, sleep, network
   // loss) rather than the backup failing. Eligible for automatic resume.
   Interrupted: 'interrupted',
+  // Skipped: a destination row left out of the run (e.g. removed from the
+  // policy while the job was waiting). Only ever set on destination rows.
+  Skipped: 'skipped',
 } as const
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus]
 export const JobType = {
@@ -227,6 +233,8 @@ export interface Policy {
   // webhook toggles.
   notify_on_success: NotifyOverride
   notify_on_failure: NotifyOverride
+  // Healthchecks.io ping URL; empty = no pings. Only admins may change it.
+  healthcheck_url: string
   destinations: PolicyDestination[]
   last_run_at: string | null
   next_run_at: string | null
@@ -401,6 +409,17 @@ export interface LogRetentionSettings {
   warn_error_days: number
 }
 
+// JobQueueSettings configures the destination queue: how long a job may wait
+// for a busy destination before it is failed. 0 disables the timeout.
+export interface JobQueueSettings {
+  timeout_minutes: number
+}
+// SnapshotSyncSettings controls the periodic sync of every destination's
+// snapshot records with its repository. 0 means disabled.
+export interface SnapshotSyncSettings {
+  interval_hours: number
+}
+
 // OIDCProvider maps to the oidc_providers table (admin settings view).
 // callback_url is computed server-side and returned read-only — copy it into
 // the identity provider's allowed redirect URIs.
@@ -436,6 +455,17 @@ export interface ImportDestinationResponse {
   found: number
   imported: number
   skipped: number
+  failed: number
+}
+
+// SyncDestinationResponse is returned by POST /api/v1/destinations/{id}/sync.
+// found is what the repository holds, imported were newly recorded, removed
+// were records of snapshots no longer in the repository, and failed could not
+// be recorded.
+export interface SyncDestinationResponse {
+  found: number
+  imported: number
+  removed: number
   failed: number
 }
 

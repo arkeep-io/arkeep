@@ -274,6 +274,36 @@ func TestCreateImportedSnapshot(t *testing.T) {
 // scoped per destination: the same Restic snapshot ID copied into a second
 // destination (e.g. after migrating a repository to another provider) must not
 // be reported as already present.
+// TestDeleteStaleByDestination_EmptyListingEvictsAll covers an explicit sync
+// against a repository whose snapshots were all pruned externally (issue #288):
+// an empty listing must evict every record older than the cutoff for that
+// destination, instead of matching nothing as a bare NOT IN () would.
+func TestDeleteStaleByDestination_EmptyListingEvictsAll(t *testing.T) {
+	f, destIDs := newSnapshotFixture(t, 2)
+	destA, destB := destIDs[0], destIDs[1]
+
+	cutoff := time.Now().UTC()
+	f.createSnapshot(t, destA, "pruned-1", cutoff.Add(-2*time.Hour))
+	f.createSnapshot(t, destA, "pruned-2", cutoff.Add(-time.Hour))
+	f.createSnapshot(t, destA, "after-listing", cutoff.Add(time.Hour))
+	f.createSnapshot(t, destB, "other-dest", cutoff.Add(-time.Hour))
+
+	deleted, err := f.repo.DeleteStaleByDestination(context.Background(), destA, nil, cutoff)
+	if err != nil {
+		t.Fatalf("DeleteStaleByDestination: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2", deleted)
+	}
+
+	if got := f.remainingSnapshotIDs(t, destA); len(got) != 1 || got[0] != "after-listing" {
+		t.Errorf("destination A remaining = %v, want [after-listing]", got)
+	}
+	if got := f.remainingSnapshotIDs(t, destB); len(got) != 1 || got[0] != "other-dest" {
+		t.Errorf("destination B remaining = %v, want [other-dest] — the other destination must be untouched", got)
+	}
+}
+
 func TestExistsBySnapshotIDAndDestination(t *testing.T) {
 	gdb := newTestDB(t)
 	repo := NewSnapshotRepository(gdb)

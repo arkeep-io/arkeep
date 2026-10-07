@@ -56,6 +56,28 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Collects the GitHub logins of everyone who authored a commit since the
+      # previous tag (bots excluded) and exposes them to GoReleaser as
+      # CONTRIBUTORS, rendered in the release notes footer. Commits whose email
+      # is not linked to a GitHub account have no login and are skipped.
+      - name: Collect contributors
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -z "$prev" ]; then
+            echo "No previous tag, skipping contributors"
+            exit 0
+          fi
+          contributors=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_REF_NAME}" \
+              --jq '.commits[].author.login // empty' \
+            | { grep -v -e '\[bot\]$' -e '^dependabot$' || true; } \
+            | sort -fu \
+            | sed 's/^/@/' \
+            | paste -sd ' ' -)
+          echo "Contributors since ${prev}: ${contributors}"
+          echo "CONTRIBUTORS=${contributors}" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

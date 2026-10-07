@@ -201,16 +201,23 @@ func (r *gormSnapshotRepository) ExistsBySnapshotIDAndDestination(ctx context.Co
 // snapshot created after the listing was taken — for instance by a concurrent
 // backup from another agent writing to the same repository — is never removed.
 //
-// Returns the number of records removed. Callers must reject an empty liveIDs
-// slice before calling: an empty listing means the engine could not be read,
-// not that the repository is empty.
+// An empty liveIDs slice evicts every record before cutoff: the repository is
+// taken to hold no snapshots at all. Callers that cannot trust an empty listing
+// (the post-backup reconcile, where the backup just created a snapshot) must
+// reject it before calling.
+//
+// Returns the number of records removed.
 func (r *gormSnapshotRepository) DeleteStaleByDestination(
 	ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time,
 ) (int64, error) {
-	result := r.db.WithContext(ctx).
-		Where("destination_id = ? AND snapshot_at < ? AND snapshot_id NOT IN ?",
-			destinationID, cutoff, liveIDs).
-		Delete(&db.Snapshot{})
+	q := r.db.WithContext(ctx).
+		Where("destination_id = ? AND snapshot_at < ?", destinationID, cutoff)
+	// GORM renders NOT IN with an empty slice as NOT IN (NULL), which matches
+	// no row, so the filter is only applied when there is something to keep.
+	if len(liveIDs) > 0 {
+		q = q.Where("snapshot_id NOT IN ?", liveIDs)
+	}
+	result := q.Delete(&db.Snapshot{})
 	if result.Error != nil {
 		return 0, fmt.Errorf("snapshots: delete stale by destination: %w", result.Error)
 	}

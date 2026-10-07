@@ -186,3 +186,29 @@ func TestEnrollmentWrongSecret(t *testing.T) {
 		t.Errorf("status = %d, want 403 Forbidden", resp.StatusCode)
 	}
 }
+
+// TestEnrollmentEmptyServerSecret verifies that enrollment fails closed when
+// the server has no agent secret configured: it used to issue a client
+// certificate to anyone in that case.
+func TestEnrollmentEmptyServerSecret(t *testing.T) {
+	dataDir := t.TempDir()
+	autoCerts, err := grpcserver.EnsureCerts(dataDir, zap.NewNop())
+	if err != nil {
+		t.Fatalf("EnsureCerts: %v", err)
+	}
+
+	enrollHandler := api.NewEnrollHandler(autoCerts, "", zap.NewNop())
+	httpSrv := httptest.NewServer(http.HandlerFunc(enrollHandler.Enroll))
+	defer httpSrv.Close()
+
+	body, _ := json.Marshal(map[string]string{"agent_secret": ""})
+	resp, err := http.Post(httpSrv.URL, "application/json", bytes.NewReader(body)) //nolint:noctx
+	if err != nil {
+		t.Fatalf("POST enroll: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 Forbidden", resp.StatusCode)
+	}
+}

@@ -155,6 +155,7 @@ onMounted(fetchJobs)
                 <SelectContent>
                     <SelectItem value="all">All statuses</SelectItem>
                     <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="waiting">Waiting</SelectItem>
                     <SelectItem value="running">Running</SelectItem>
                     <SelectItem value="succeeded">Succeeded</SelectItem>
                     <SelectItem value="failed">Failed</SelectItem>

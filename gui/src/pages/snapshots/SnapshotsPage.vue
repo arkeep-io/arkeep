@@ -31,9 +31,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, MoreHorizontal, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
+import { Camera, Loader2, MoreHorizontal, RefreshCcw, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
-import type { ApiResponse, Snapshot } from '@/types'
+import type { ApiResponse, Destination, PaginatedResponse, Snapshot, SyncDestinationResponse } from '@/types'
+import { summariseSync } from '@/lib/syncSummary'
 import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,10 @@ const destinationFilter = ref('')
 // Restore sheet
 const restoreSheetOpen = ref(false)
 const restoreSnapshot = ref<Snapshot | null>(null)
+
+// Sync
+const syncLoading = ref(false)
+const syncMessage = ref<string | null>(null)
 
 // Delete dialog
 const deleteDialogOpen = ref(false)
@@ -172,6 +177,60 @@ async function confirmDelete() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+// enabledDestinationIds pages through every destination and keeps the enabled
+// ones — the same set the server's periodic sync covers.
+async function enabledDestinationIds(): Promise<string[]> {
+    const ids: string[] = []
+    for (let offset = 0; ; offset += 100) {
+        const res = await api<ApiResponse<PaginatedResponse<Destination>>>(
+            `/api/v1/destinations?limit=100&offset=${offset}`)
+        ids.push(...res.data.items.filter(d => d.enabled).map(d => d.id))
+        if (res.data.items.length === 0 || offset + res.data.items.length >= res.data.total) return ids
+    }
+}
+
+// syncSnapshots re-reads the repository of the filtered destination — or of
+// every enabled destination when no filter is set — so snapshots pruned or
+// added outside Arkeep are reflected in the list (issue #288). Destinations
+// that cannot be synced right now are reported without stopping the others.
+async function syncSnapshots() {
+    syncLoading.value = true
+    error.value = null
+    syncMessage.value = null
+    const results: SyncDestinationResponse[] = []
+    const failures: string[] = []
+    try {
+        const ids = destinationFilter.value ? [destinationFilter.value] : await enabledDestinationIds()
+        for (const id of ids) {
+            try {
+                const res = await api<ApiResponse<SyncDestinationResponse>>(
+                    `/api/v1/destinations/${id}/sync`, { method: 'POST' })
+                results.push(res.data)
+            } catch (e: any) {
+                failures.push(apiErrorMessage(e, 'sync failed'))
+            }
+        }
+        if (results.length > 0) {
+            syncMessage.value = summariseSync(results)
+            setTimeout(() => { syncMessage.value = null }, 6000)
+        }
+        if (failures.length > 0) {
+            error.value = ids.length === 1
+                ? failures[0]
+                : `${failures.length} of ${ids.length} destinations could not be synced: ${failures.join('; ')}`
+        }
+        await fetchSnapshots()
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to sync snapshots.')
+    } finally {
+        syncLoading.value = false
+    }
+}
+
 onMounted(fetchSnapshots)
 </script>
 
@@ -187,6 +246,13 @@ onMounted(fetchSnapshots)
                 </p>
             </div>
             <div class="flex items-center gap-2">
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" :disabled="syncLoading"
+                    :title="destinationFilter ? 'Re-read this destination\'s repository' : 'Re-read the repository of every enabled destination'"
+                    @click="syncSnapshots">
+                    <Loader2 v-if="syncLoading" class="w-4 h-4 mr-1.5 animate-spin" />
+                    <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
+                    {{ destinationFilter ? 'Sync Destination' : 'Sync All' }}
+                </Button>
                 <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchSnapshots">
                     <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
                 </Button>
@@ -196,6 +262,9 @@ onMounted(fetchSnapshots)
         <!-- Error banner -->
         <Alert v-if="error" variant="destructive">
             <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+        <Alert v-if="syncMessage" class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+            <AlertDescription>{{ syncMessage }}</AlertDescription>
         </Alert>
 
         <!-- Filter bar -->
@@ -281,6 +350,9 @@ onMounted(fetchSnapshots)
                             <TableCell>
                                 <span v-if="snapshot.destination_deleted" class="font-mono text-sm"
                                     title="Browsing is not available because the destination was deleted. You can still restore the whole snapshot.">
+                                    {{ abbreviate(snapshot.restic_snapshot_id) }}
+                                </span>
+                                <span v-else-if="!authStore.isAdmin" class="font-mono text-sm">
                                     {{ abbreviate(snapshot.restic_snapshot_id) }}
                                 </span>
                                 <RouterLink v-else :to="{ name: 'snapshot-browse', params: { id: snapshot.id } }"

@@ -147,34 +147,38 @@ dockers_v2:
       "org.opencontainers.image.source": "https://github.com/arkeep-io/arkeep"
       "org.opencontainers.image.licenses": "Apache-2.0"
 
+# `use: github` resolves each commit's GitHub login, so every entry can credit
+# its author with an @mention (GitHub then renders the contributor avatars on
+# the release page). GoReleaser already prefixes each entry with a bullet, so
+# `format` must not add its own — a leading "- " renders as a nested list.
 changelog:
-  use: git
+  use: github
   sort: asc
-  abbrev: 0
-  format: "- {{ .SHA }} {{ .Message }}"
+  abbrev: 7
+  format: "{{ .Message }} ({{ .SHA }}){{ with .AuthorUsername }} by @{{ . }}{{ end }}"
   groups:
-    - title: "Breaking Changes"
+    - title: "⚠️ Breaking Changes"
       regexp: '^.*![:(]|^BREAKING CHANGE:'
       order: 0
-    - title: "Features"
+    - title: "🚀 Features"
       regexp: '^feat(\(.+\))?:'
       order: 1
-    - title: "Bug Fixes"
+    - title: "🐛 Bug Fixes"
       regexp: '^fix(\(.+\))?:'
       order: 2
-    - title: "Performance"
+    - title: "⚡ Performance"
       regexp: '^perf(\(.+\))?:'
       order: 3
-    - title: "Build & CI"
+    - title: "🏗️ Build & CI"
       regexp: '^(build|ci)(\(.+\))?:'
       order: 4
-    - title: "Maintenance"
+    - title: "🧹 Maintenance"
       regexp: '^(refactor|chore)(\(.+\))?:'
       order: 5
-    - title: "Docs"
+    - title: "📚 Documentation"
       regexp: '^docs(\(.+\))?:'
       order: 6
-    - title: "Other Changes"
+    - title: "🔧 Other Changes"
       order: 999
   filters:
     exclude:
@@ -194,42 +198,39 @@ release:
     owner: arkeep-io
     name: arkeep
   prerelease: auto
+  # CONTRIBUTORS is computed by the release workflow (see
+  # .github/workflows/release.yml); envOrDefault keeps local
+  # `goreleaser release --snapshot` runs working without it.
   header: |
-    ## Release Summary
+    {{- if .Prerelease }}
+    > [!WARNING]
+    > This is a pre-release. It may contain bugs or incomplete features — avoid running it in production.
+    {{ end }}
+    > [!IMPORTANT]
+    > Database migrations run automatically when the server starts. Back up your database (or the `data/` volume) before upgrading.
 
-    **Version:** {{ .Tag }}
-    **Commit:** {{ .Commit }}
-    **Built at:** {{ .Date }}
-
-    ### Included deliverables
-    - arkeep-server binaries for Linux and macOS
-    - arkeep-agent binaries for Linux (amd64, arm64, armv7, mips, mipsle), macOS and Windows
-    - multi-arch Docker images for server and agent
-    - SHA256 checksums for all release artifacts
-
-    ### Change log policy
-    The technical changelog below is generated from Git history using Conventional Commits.
-    For pull-request-oriented notes and contributor rollup, use GitHub generated release notes configured in `.github/release.yml`.
-
-    ---
-
-    ## Technical Changelog
-
-  footer: |
-    ---
-
-    ## Docker Images
+    ## 📦 Install
 
     ```bash
-    # Server
     docker pull ghcr.io/arkeep-io/arkeep-server:{{ .Tag }}
-
-    # Agent
     docker pull ghcr.io/arkeep-io/arkeep-agent:{{ .Tag }}
     ```
 
-    ## Verify Checksums
+    Images are also published on Docker Hub (`arkeepio/arkeep-server`, `arkeepio/arkeep-agent`) for `linux/amd64` and `linux/arm64`. Standalone binaries — server for Linux and macOS, agent for Linux (amd64, arm64, armv7, mips, mipsle), macOS and Windows — are attached below. See the [README](https://github.com/arkeep-io/arkeep#readme) for Docker Compose and Helm setups.
+
+    ## 📝 What's Changed
+
+  footer: |
+    {{- with envOrDefault "CONTRIBUTORS" "" }}
+    ## ❤️ Contributors
+
+    Thanks to everyone who contributed to this release: {{ . }}
+    {{ end }}
+    ## 🔐 Verify
 
     ```bash
-    sha256sum --check checksums.txt
+    sha256sum --check --ignore-missing checksums.txt
     ```
+    {{ if .PreviousTag }}
+    **Full Changelog**: https://github.com/arkeep-io/arkeep/compare/{{ .PreviousTag }}...{{ .Tag }}
+    {{- end }}

@@ -23,13 +23,16 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/telemetry"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
@@ -89,7 +92,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.secretKey, "secret-key", envOrDefault("ARKEEP_SECRET_KEY", ""), "Master secret key for encrypting credentials at rest (required)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
-	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret for gRPC agent authentication (empty = disabled, dev only)")
+	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret agents present to enroll and authenticate (required)")
 	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Required for self-service password reset emails (disabled when unset)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
@@ -119,10 +122,11 @@ func run(ctx context.Context, cfg *config) error {
 		return fmt.Errorf("secret key is required — set --secret-key or ARKEEP_SECRET_KEY")
 	}
 
-	// Warn if agent secret is not configured — the gRPC port will accept
-	// connections from any agent. Always set ARKEEP_AGENT_SECRET in production.
+	// Without an agent secret, enrollment would hand an mTLS client
+	// certificate to anyone who can reach the HTTP port, and the gRPC port
+	// would accept any client: refuse to start rather than run open.
 	if cfg.agentSecret == "" {
-		logger.Warn("agent-secret not configured — gRPC port is open to any agent (set ARKEEP_AGENT_SECRET in production)")
+		return fmt.Errorf("agent secret is required — set --agent-secret or ARKEEP_AGENT_SECRET (generate one with: openssl rand -hex 24)")
 	}
 
 	// Password reset links are only ever built from the configured base URL,
@@ -192,6 +196,13 @@ func run(ctx context.Context, cfg *config) error {
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
 	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
 
+	// The initial admin can only be created within api.SetupWindow of this
+	// start (see api/setup.go); tell the operator before the window closes.
+	if _, users, err := userRepo.List(ctx, repositories.ListOptions{Limit: 1}); err == nil && users == 0 {
+		logger.Warn("initial setup pending — open the web UI and create the admin account before the setup window closes; restart the server to reopen it",
+			zap.Duration("setup_window", api.SetupWindow))
+	}
+
 	// --- Auth ---
 	// In development (no data dir or missing key files), ephemeral keys are
 	// generated in memory. In production, persistent PEM files are used so
@@ -258,11 +269,19 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Warn("destination retention backfill failed", zap.Error(err))
 	}
 
+	// --- Destination queue ---
+	// Jobs that find a destination busy with another backup or retention sweep
+	// wait here and start once all their destinations are free (issue #285).
+	// Both schedulers enqueue into it and register as its starters.
+	destQueue := destqueue.New(jobRepo, destinationRepo, settingsRepo, agentMgr, logger)
+
 	// --- Scheduler ---
 	sched, err := scheduler.New(policyRepo, jobRepo, destinationRepo, agentMgr, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create scheduler: %w", err)
 	}
+	sched.SetQueue(destQueue)
+	destQueue.RegisterStarter("backup", sched)
 	if err := sched.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start scheduler: %w", err)
 	}
@@ -279,6 +298,8 @@ func run(ctx context.Context, cfg *config) error {
 	if err != nil {
 		return fmt.Errorf("failed to create retention scheduler: %w", err)
 	}
+	retentionSched.SetQueue(destQueue)
+	destQueue.RegisterStarter("retention", retentionSched)
 	if err := retentionSched.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start retention scheduler: %w", err)
 	}
@@ -316,12 +337,33 @@ func run(ctx context.Context, cfg *config) error {
 	// interrupted backup has given up.
 	sched.SetNotificationService(notifService)
 
+	// --- Healthchecks pinger ---
+	// Pings each policy's Healthchecks.io check on backup start, success and
+	// failure (issue #294). Policies without a ping URL are skipped.
+	hcPinger := healthcheck.NewPinger(jobRepo, policyRepo, logger)
+	sched.SetPinger(hcPinger)
+
+	// The queue reports a job that timed out waiting like any failed backup.
+	destQueue.SetNotificationService(notifService)
+	destQueue.SetPinger(hcPinger)
+	destQueue.SetHub(wsHub)
+	go destQueue.Run(ctx)
+
 	// --- Log retention ---
 	// Periodically prunes old job_logs rows so the database does not grow
 	// without bound. Disabled by default (see Settings → Log Retention); it only
 	// deletes rows once an administrator configures a retention window.
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	go logRetentionSvc.Start(ctx)
+
+	// --- Snapshot sync ---
+	// Lists each destination's repository through a connected agent and makes
+	// the snapshot records match it, so snapshots pruned or added outside
+	// arkeep show up (issue #288). Runs on demand from the API, and
+	// periodically once an administrator sets an interval (Settings →
+	// Snapshot Sync).
+	snapshotSyncSvc := snapshotsync.NewService(destinationRepo, snapshotRepo, settingsRepo, agentMgr, logger)
+	go snapshotSyncSvc.Start(ctx)
 
 	// --- Agent watchdog ---
 	// Detects agents that stopped sending heartbeats (network partition, crash,
@@ -340,7 +382,9 @@ func run(ctx context.Context, cfg *config) error {
 			TLSKeyFile:      cfg.grpcTLSKey,
 			AutoCerts:       autoCerts,
 			PendingDispatch: sched,
+			Queue:           destQueue,
 			NotifService:    notifService,
+			Pinger:          hcPinger,
 			Metrics:         m,
 		},
 		agentMgr,
@@ -380,6 +424,7 @@ func run(ctx context.Context, cfg *config) error {
 		OIDCProviders:      oidcProviderRepo,
 		Settings:           settingsRepo,
 		LogRetention:       logRetentionSvc,
+		SnapshotSync:       snapshotSyncSvc,
 		Secure:             cfg.secureCookies,
 		Dashboard:          dashboardRepo,
 		Audit:              auditRepo,
@@ -388,6 +433,8 @@ func run(ctx context.Context, cfg *config) error {
 		Challenges:         challengeRepo,
 		RecoveryCodes:      recoveryCodeRepo,
 		Mailer:             notifService,
+		Pinger:             hcPinger,
+		Queue:              destQueue,
 		PublicBaseURL:      cfg.baseURL,
 		AutoCerts:          autoCerts,
 		AgentSecret:        cfg.agentSecret,

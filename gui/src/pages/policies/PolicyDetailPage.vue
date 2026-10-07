@@ -248,7 +248,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                     </TooltipTrigger>
                     <TooltipContent>Enable the policy to run a backup.</TooltipContent>
                 </Tooltip>
-                <Button variant="outline" size="sm" @click="editSheetOpen = true">
+                <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Edit
                 </Button>

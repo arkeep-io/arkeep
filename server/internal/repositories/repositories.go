@@ -206,6 +206,10 @@ type DestinationRepository interface {
 	// A false, nil-error return means another job already holds it — callers
 	// treat that as "skip/defer this dispatch", not a failure.
 	TryAcquireBusy(ctx context.Context, destinationID, jobID uuid.UUID) (bool, error)
+	// TryAcquireBusyAll claims every listed destination for jobID in one
+	// transaction, or none of them (issue #285): a job never holds part of
+	// what it needs while waiting for the rest.
+	TryAcquireBusyAll(ctx context.Context, destinationIDs []uuid.UUID, jobID uuid.UUID) (bool, error)
 	// ReleaseBusy clears the gate only if jobID is still the current holder,
 	// so a stale/duplicate release can never clear a newer lock.
 	ReleaseBusy(ctx context.Context, destinationID, jobID uuid.UUID) error
@@ -215,7 +219,7 @@ type DestinationRepository interface {
 	// the gate can never get stuck on a crashed/disconnected agent.
 	ReleaseBusyForJobs(ctx context.Context, jobIDs []uuid.UUID) error
 	// ReleaseStaleBusy clears every gate held by a job that is gone or no
-	// longer pending/running. Run at server startup.
+	// longer pending/waiting/running. Run at server startup.
 	ReleaseStaleBusy(ctx context.Context) (int64, error)
 }
 
@@ -284,6 +288,23 @@ type JobRepository interface {
 	ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
 	HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
+
+	// Destination queue (issue #285). A job whose destinations are held by
+	// another operation waits in status "waiting" until all of them are free.
+	//
+	// ListWaiting returns waiting jobs oldest first — the queue order.
+	ListWaiting(ctx context.Context, limit int) ([]db.Job, error)
+	// HasWaitingForDestinations reports whether a waiting job other than
+	// excludeJobID needs any of the given destinations, so a new job queues
+	// behind it instead of overtaking it.
+	HasWaitingForDestinations(ctx context.Context, destinationIDs []uuid.UUID, excludeJobID uuid.UUID) (bool, error)
+	// HasActiveRetentionJob reports whether a retention job for the
+	// destination is already pending, waiting or running, so a new sweep is
+	// not queued right behind one that will do the same work.
+	HasActiveRetentionJob(ctx context.Context, destinationID uuid.UUID) (bool, error)
+	// ListQueuedDestinationIDs returns the destinations a queued job still
+	// has to run against: its job_destinations rows not yet resolved.
+	ListQueuedDestinationIDs(ctx context.Context, jobID uuid.UUID) ([]uuid.UUID, error)
 
 	// JobDestination
 	CreateDestination(ctx context.Context, jd *db.JobDestination) error

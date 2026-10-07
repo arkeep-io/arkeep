@@ -14,6 +14,7 @@ package grpc
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -49,6 +51,13 @@ type PendingDispatcher interface {
 	ResumeInterrupted(ctx context.Context, agentID uuid.UUID)
 }
 
+// QueueNotifier is implemented by the destination queue (package destqueue):
+// it is told whenever a destination may have been freed, or an agent with
+// queued jobs came back, so waiting jobs start without delay (issue #285).
+type QueueNotifier interface {
+	Notify()
+}
+
 // Server is the gRPC server that handles agent connections.
 // It wraps the generated UnimplementedAgentServiceServer to ensure
 // forward compatibility when new RPCs are added to the proto.
@@ -63,8 +72,10 @@ type Server struct {
 	destRepo        repositories.DestinationRepository
 	hub             *websocket.Hub
 	pendingDispatch PendingDispatcher // may be nil in tests that don't need it
+	queue           QueueNotifier     // may be nil in tests that don't need it
 	notifSvc        notification.Service
-	metrics         *metrics.Metrics // may be nil when metrics are disabled
+	pinger          *healthcheck.Pinger // may be nil when not wired (tests)
+	metrics         *metrics.Metrics    // may be nil when metrics are disabled
 	logger          *zap.Logger
 	sharedSecret    string // shared secret agents must present in gRPC metadata
 	tlsCertFile     string
@@ -99,9 +110,16 @@ type Config struct {
 	// to flush any jobs that were created while the agent was offline. Optional
 	// — if nil, pending jobs are not re-dispatched on reconnect (test default).
 	PendingDispatch PendingDispatcher
+	// Queue is notified when a destination may have been freed or an agent
+	// reconnects, so jobs waiting for a busy destination start promptly.
+	// Optional — if nil, only the queue's own fallback ticker drains it.
+	Queue QueueNotifier
 	// NotifService is used to send notifications when jobs complete or agents
 	// go offline. Optional — if nil, notifications are silently skipped.
 	NotifService notification.Service
+	// Pinger sends Healthchecks.io pings for backup job status changes.
+	// Optional — if nil, no pings are sent.
+	Pinger *healthcheck.Pinger
 	// Metrics is the Prometheus metrics collector. Optional — if nil, no
 	// job metrics are recorded.
 	Metrics *metrics.Metrics
@@ -128,7 +146,9 @@ func New(
 		destRepo:          destRepo,
 		hub:               hub,
 		pendingDispatch:   cfg.PendingDispatch,
+		queue:             cfg.Queue,
 		notifSvc:          cfg.NotifService,
+		pinger:            cfg.Pinger,
 		metrics:           cfg.Metrics,
 		logger:            logger.Named("grpc"),
 		sharedSecret:      cfg.SharedSecret,
@@ -136,6 +156,14 @@ func New(
 		tlsKeyFile:        cfg.TLSKeyFile,
 		autoCerts:         cfg.AutoCerts,
 		capabilitiesCache: make(map[string]*proto.AgentCapabilities),
+	}
+}
+
+// notifyQueue tells the destination queue, when wired, that a destination may
+// have been freed.
+func (s *Server) notifyQueue() {
+	if s.queue != nil {
+		s.queue.Notify()
 	}
 }
 
@@ -263,10 +291,10 @@ func (s *Server) validateToken(ctx context.Context) error {
 		return nil
 	}
 
-	// If no secret is configured, auth is disabled (development mode).
-	// A warning is logged at startup — see cmd/server/main.go.
+	// The server refuses to start without a secret (cmd/server/main.go); an
+	// empty one here fails closed rather than accepting every client.
 	if s.sharedSecret == "" {
-		return nil
+		return status.Error(codes.Unauthenticated, "agent authentication is not configured")
 	}
 
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -275,7 +303,7 @@ func (s *Server) validateToken(ctx context.Context) error {
 	}
 
 	values := md.Get("agent-secret")
-	if len(values) == 0 || values[0] != s.sharedSecret {
+	if len(values) == 0 || subtle.ConstantTimeCompare([]byte(values[0]), []byte(s.sharedSecret)) != 1 {
 		return status.Error(codes.Unauthenticated, "invalid agent secret")
 	}
 
@@ -487,6 +515,9 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 			s.pendingDispatch.ResumeInterrupted(bgCtx, agentID)
 		}()
 	}
+	// Jobs of this agent queued behind a busy destination were passed over
+	// while it was away.
+	s.notifyQueue()
 
 	// Block until the client disconnects or the server shuts down.
 	<-ctx.Done()
@@ -539,6 +570,8 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 			zap.String("agent_id", req.AgentId),
 			zap.Int64("count", n),
 		)
+		// Their busy gates were released with them.
+		s.notifyQueue()
 	}
 
 	if s.notifSvc != nil {
@@ -628,6 +661,7 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 				)
 			}
 		}
+		s.notifyQueue()
 	}
 	s.hub.Publish("job:"+req.JobId, websocket.Message{
 		Type:    websocket.MsgJobStatus,
@@ -638,6 +672,12 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 	// goroutine so a slow notification path never delays the gRPC response.
 	if s.notifSvc != nil && (req.Status == proto.JobStatus_JOB_STATUS_COMPLETED || req.Status == proto.JobStatus_JOB_STATUS_FAILED) {
 		go s.notifyJobTerminal(context.WithoutCancel(ctx), jobID, req.Status, req.Message)
+	}
+
+	// Ping the policy's Healthchecks check (start, success, fail). Non-fatal:
+	// goroutine, like the notifications above.
+	if s.pinger != nil {
+		go s.pinger.ReportJob(context.WithoutCancel(ctx), jobID, dbStatus, req.Message)
 	}
 
 	// Record Prometheus metrics for terminal states. Non-fatal: goroutine.
@@ -932,6 +972,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 				zap.Error(err),
 			)
 		}
+		s.notifyQueue()
 	}
 
 	// Refresh the destination's cached real repository size (from restic stats)

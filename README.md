@@ -33,6 +33,7 @@ built on top of [Restic](https://restic.net/) and [Rclone](https://rclone.org/).
   - [Event types](#event-types)
   - [Signature verification](#signature-verification)
   - [Integrations](#integrations)
+  - [Healthchecks.io](#healthchecksio)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
   - [Getting Started](#getting-started)
@@ -123,6 +124,7 @@ can recover if something goes wrong, and every operation leaves an audit trail.
 | Integrity verification | ✓ |
 | Retention policies | ✓ |
 | Email + webhook notifications | ✓ |
+| Healthchecks.io pings | ✓ |
 | Restore & restore test | ✓ |
 | Browse & download snapshot files | ✓ |
 | Helm chart | ✓ |
@@ -158,6 +160,21 @@ same S3, SFTP or rclone repository. Administrators can download a single file,
 or a directory as a ZIP archive, straight from the browser, and restore a
 selection of files through the usual restore flow. Downloads are streamed from
 the agent through the server, with no temporary files on either side.
+
+### Sync snapshots with the repository
+
+Arkeep reconciles its snapshot list with the repository after every backup and
+retention run. Snapshots can also change outside Arkeep, for instance when an
+append-only rest-server runs `restic forget --prune` from its own cron job. To
+pick those changes up without waiting for the next backup, an administrator
+can click **Sync Snapshots** on a destination's page, or **Sync** on the
+Snapshots page (one destination when filtered, every enabled destination
+otherwise). Snapshots no longer in the repository are removed from the list,
+and snapshots Arkeep has never seen are added as imported. The repository is
+read, never locked, by an online agent: the destination's retention agent if
+connected, otherwise the agent of any policy writing there. To run the sync
+periodically, set an interval under **Settings → Snapshot Sync**; it is
+disabled by default.
 
 ---
 
@@ -358,7 +375,7 @@ precedence over environment variables when both are provided.
 | `--db-driver` | `ARKEEP_DB_DRIVER` | `sqlite` | Database driver (`sqlite` or `postgres`) |
 | `--db-dsn` | `ARKEEP_DB_DSN` | `./arkeep.db` | SQLite file path or PostgreSQL DSN |
 | `--secret-key` | `ARKEEP_SECRET_KEY` | — | **Required.** Master key for AES-256-GCM credential encryption |
-| `--agent-secret` | `ARKEEP_AGENT_SECRET` | — | Shared secret for gRPC agent authentication |
+| `--agent-secret` | `ARKEEP_AGENT_SECRET` | — | **Required.** Shared secret agents present to enroll and authenticate over gRPC |
 | `--data-dir` | `ARKEEP_DATA_DIR` | `./data` | Directory for RSA JWT keys and server state |
 | `--base-url` | `ARKEEP_BASE_URL` | — | External URL of the server (e.g. `https://arkeep.example.com`). Used to build links in outbound email (password reset). **Required for self-service password reset**: when unset, reset emails are disabled and users must ask an administrator. Links are never derived from request headers, to prevent password reset poisoning via a forged `Host` / `X-Forwarded-Host`. |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
@@ -665,6 +682,23 @@ All event fields are available as `{{ $json.payload.policy_name }}`, `{{ $json.p
 4. Use `type`, `title`, `text`, `payload__policy_name`, `payload__error`, and `timestamp` fields in your Zap actions.
 5. Add a **Filter** step to route on `type` (e.g. only trigger downstream actions for `job_failure`).
 
+### Healthchecks.io
+
+Notifications fire when a job ends, so a backup that never starts (server down, scheduler stuck, policy disabled by mistake) stays silent. A [Healthchecks.io](https://healthchecks.io) check covers that case: it alerts when the expected ping does not arrive on time.
+
+1. Create a check in Healthchecks (hosted or self-hosted) with a schedule matching the policy's.
+2. Paste its ping URL into the policy's **Healthchecks.io** field (admins only) and click **Send test ping**: the test lands in the check's event log without changing its status.
+
+Each backup job of the policy then pings:
+
+| Event | Ping |
+|-------|------|
+| Job starts on the agent | `<ping URL>/start` |
+| Job succeeds | `<ping URL>` |
+| Job fails or is cancelled | `<ping URL>/fail` |
+
+Every ping carries the job ID as `rid`, so Healthchecks measures each run's duration correctly, and a short plain-text summary (duration, per-destination snapshot and size, error message) as body. A job interrupted by an agent disconnection sends nothing until it is resumed; if automatic resume gives up, the job pings `/fail`. Restore jobs never ping. Any ping URL works — `https://hc-ping.com/<uuid>`, ping-key + slug URLs (including `?create=1`) and self-hosted instances.
+
 ---
 
 ## Development
@@ -715,6 +749,8 @@ and backend simultaneously with hot reload on both sides.
 
 Open `http://localhost:8080` in your browser. On first access you will be
 redirected to the setup page where you can create the initial admin account.
+For safety the setup page only accepts the account within 15 minutes of the
+server starting; if that window has passed, restart the server and try again.
 
 ### Project Structure
 

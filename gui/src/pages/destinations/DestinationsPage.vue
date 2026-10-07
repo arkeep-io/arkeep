@@ -247,7 +247,7 @@ onMounted(fetchDestinations)
         <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchDestinations">
           <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
         </Button>
-        <Button @click="openCreate">
+        <Button v-if="authStore.isAdmin" @click="openCreate">
           <Plus class="w-4 h-4" />
           New Destination
         </Button>
@@ -317,7 +317,7 @@ onMounted(fetchDestinations)
                       Create a destination to start storing your backups.
                     </p>
                   </div>
-                  <Button size="sm" @click="openCreate">
+                  <Button v-if="authStore.isAdmin" size="sm" @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Destination
                   </Button>
@@ -368,7 +368,7 @@ onMounted(fetchDestinations)
                   <!-- Busy gate: another backup or retention sweep holds the
                        repository; links to that job (issue #290). -->
                   <RouterLink v-if="dest.busy_job_id" :to="{ name: 'job-detail', params: { id: dest.busy_job_id } }"
-                    :title="`In use by a running job since ${formatDate(dest.busy_since)}. Backups to this destination are skipped until it finishes.`"
+                    :title="`In use by a running job since ${formatDate(dest.busy_since)}. Other backups and retention sweeps to this destination wait until it finishes.`"
                     @click.stop>
                     <Badge variant="outline" class="text-xs font-normal">Busy</Badge>
                   </RouterLink>
@@ -383,7 +383,8 @@ onMounted(fetchDestinations)
 
               <!-- Actions dropdown -->
               <TableCell @click.stop>
-                <DropdownMenu>
+                <!-- Every action changes the destination: admins only -->
+                <DropdownMenu v-if="authStore.isAdmin">
                   <DropdownMenuTrigger as-child>
                     <Button variant="ghost" size="icon" class="w-8 h-8">
                       <MoreHorizontal class="w-4 h-4" />

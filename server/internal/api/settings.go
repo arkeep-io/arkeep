@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,9 +13,11 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 )
 
 // LogPruner runs an on-demand job_logs retention sweep. Satisfied by
@@ -683,6 +686,95 @@ func (h *SettingsHandler) PruneLogsNow(w http.ResponseWriter, r *http.Request) {
 		"deleted": deleted,
 	})
 	Ok(w, map[string]any{"deleted": deleted})
+}
+
+// =============================================================================
+// Job queue settings
+// =============================================================================
+
+// jobQueueSettings configures the destination queue (issue #285): how long a
+// job may wait for a busy destination before it is failed. 0 disables the
+// timeout.
+type jobQueueSettings struct {
+	TimeoutMinutes int `json:"timeout_minutes"`
+}
+
+// GetJobQueue handles GET /api/v1/settings/jobs-queue (admin only).
+func (h *SettingsHandler) GetJobQueue(w http.ResponseWriter, r *http.Request) {
+	Ok(w, jobQueueSettings{TimeoutMinutes: destqueue.TimeoutMinutes(r.Context(), h.settingsRepo)})
+}
+
+// UpsertJobQueue handles PUT /api/v1/settings/jobs-queue (admin only).
+func (h *SettingsHandler) UpsertJobQueue(w http.ResponseWriter, r *http.Request) {
+	var req jobQueueSettings
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.TimeoutMinutes < 0 || req.TimeoutMinutes > destqueue.MaxTimeoutMinutes {
+		ErrBadRequest(w, fmt.Sprintf("timeout_minutes must be between 0 and %d", destqueue.MaxTimeoutMinutes))
+		return
+	}
+
+	if err := h.settingsRepo.Set(r.Context(), destqueue.KeyTimeoutMinutes, db.EncryptedString(strconv.Itoa(req.TimeoutMinutes))); err != nil {
+		h.logger.Error("failed to save job queue setting", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "settings.jobs_queue.update", "settings", "", map[string]any{
+		"timeout_minutes": req.TimeoutMinutes,
+	})
+	Ok(w, req)
+}
+
+// =============================================================================
+// Snapshot sync settings
+// =============================================================================
+
+// maxSnapshotSyncIntervalHours caps the periodic snapshot sync interval at 30 days.
+const maxSnapshotSyncIntervalHours = 720
+
+type snapshotSyncSettings struct {
+	IntervalHours int `json:"interval_hours"`
+}
+
+// GetSnapshotSync handles GET /api/v1/settings/snapshot-sync (admin only).
+// Returns how often, in hours, every destination is synced with its
+// repository. 0 means the periodic sync is disabled.
+func (h *SettingsHandler) GetSnapshotSync(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.settingsRepo.GetMany(r.Context(), snapshotsync.KeyIntervalHours)
+	if err != nil {
+		h.logger.Error("failed to load snapshot sync settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	Ok(w, snapshotSyncSettings{
+		IntervalHours: intSetting(settingsToMap(settings), snapshotsync.KeyIntervalHours),
+	})
+}
+
+// UpsertSnapshotSync handles PUT /api/v1/settings/snapshot-sync (admin only).
+func (h *SettingsHandler) UpsertSnapshotSync(w http.ResponseWriter, r *http.Request) {
+	var req snapshotSyncSettings
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.IntervalHours < 0 || req.IntervalHours > maxSnapshotSyncIntervalHours {
+		ErrBadRequest(w, "interval_hours must be between 0 and "+strconv.Itoa(maxSnapshotSyncIntervalHours))
+		return
+	}
+
+	if err := h.settingsRepo.Set(r.Context(), snapshotsync.KeyIntervalHours, db.EncryptedString(strconv.Itoa(req.IntervalHours))); err != nil {
+		h.logger.Error("failed to save snapshot sync setting", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "settings.snapshot_sync.update", "settings", "", map[string]any{
+		"interval_hours": req.IntervalHours,
+	})
+	Ok(w, req)
 }
 
 // =============================================================================

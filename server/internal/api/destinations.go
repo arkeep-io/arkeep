@@ -18,16 +18,17 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 )
 
 // DestinationHandler groups all destination-related HTTP handlers.
 type DestinationHandler struct {
 	repo           repositories.DestinationRepository
-	snapshotRepo   repositories.SnapshotRepository
 	policyRepo     repositories.PolicyRepository
 	agentRepo      repositories.AgentRepository
 	agentMgr       *agentmanager.Manager
 	retentionSched *retentionscheduler.RetentionScheduler
+	snapshotSync   *snapshotsync.Service
 	auditRepo      repositories.AuditRepository
 	logger         *zap.Logger
 }
@@ -35,21 +36,21 @@ type DestinationHandler struct {
 // NewDestinationHandler creates a new DestinationHandler.
 func NewDestinationHandler(
 	repo repositories.DestinationRepository,
-	snapshotRepo repositories.SnapshotRepository,
 	policyRepo repositories.PolicyRepository,
 	agentRepo repositories.AgentRepository,
 	agentMgr *agentmanager.Manager,
 	retentionSched *retentionscheduler.RetentionScheduler,
+	snapshotSync *snapshotsync.Service,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
 ) *DestinationHandler {
 	return &DestinationHandler{
 		repo:           repo,
-		snapshotRepo:   snapshotRepo,
 		policyRepo:     policyRepo,
 		agentRepo:      agentRepo,
 		agentMgr:       agentMgr,
 		retentionSched: retentionSched,
+		snapshotSync:   snapshotSync,
 		auditRepo:      auditRepo,
 		logger:         logger.Named("destination_handler"),
 	}
@@ -286,6 +287,16 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Config == "" {
 		req.Config = "{}"
 	}
+	if req.Type == "rclone" {
+		if err := validateRcloneConfig(req.Config); err != nil {
+			ErrBadRequest(w, err.Error())
+			return
+		}
+		if hasNonEmptyCredential(req.Credentials) {
+			ErrBadRequest(w, errRcloneCredentials.Error())
+			return
+		}
+	}
 	if req.RetentionEnabled && req.AppendOnly {
 		ErrBadRequest(w, "retention cannot be enabled on an append-only destination")
 		return
@@ -340,13 +351,7 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// returns the raw string when not persisted through GORM.
 	var importResult *agentmanager.SnapshotImportResult
 	if req.ImportAgentID != "" {
-		env := destutil.BuildEnv(dest)
-		env["RESTIC_PASSWORD"] = req.ImportRepoPassword
-		payload := snapshotImportPayload{
-			Type:    dest.Type,
-			RepoURL: destutil.BuildRepoURL(dest),
-			Env:     env,
-		}
+		payload := snapshotsync.NewImportPayload(dest, req.ImportRepoPassword)
 		payloadBytes, err := json.Marshal(payload)
 		if err != nil {
 			h.logger.Error("failed to marshal import payload", zap.Error(err))
@@ -400,7 +405,7 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	resp := createDestinationResponse{destinationResponse: h.singleDestinationResponse(ctx, dest)}
 
 	if importResult != nil {
-		out := h.persistImportedSnapshots(ctx, dest, importResult)
+		out := h.snapshotSync.PersistImported(ctx, dest, importResult)
 		logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", dest.ID.String(), map[string]any{
 			"found":    len(importResult.Snapshots),
 			"imported": out.Imported,
@@ -487,6 +492,21 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		dest.Name = *req.Name
+	}
+	// Only what the PATCH changes is validated, so a legacy rclone row can
+	// still be renamed or disabled; BuildRepoURL refuses an invalid remote
+	// at dispatch time regardless, and BuildEnv ignores stored credentials.
+	if dest.Type == "rclone" {
+		if req.Config != nil {
+			if err := validateRcloneConfig(*req.Config); err != nil {
+				ErrBadRequest(w, err.Error())
+				return
+			}
+		}
+		if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
+			ErrBadRequest(w, errRcloneCredentials.Error())
+			return
+		}
 	}
 	if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
 		dest.Credentials = db.EncryptedString(*req.Credentials)
@@ -589,6 +609,23 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	Ok(w, h.singleDestinationResponse(r.Context(), dest))
 }
 
+// errRcloneCredentials rejects credentials on an rclone destination. rclone
+// remotes are configured in rclone.conf on the agent, so there is nothing to
+// store, and the server no longer turns credentials into agent env vars.
+var errRcloneCredentials = errors.New("rclone destinations take no credentials: configure the remote in rclone.conf on the agent")
+
+// validateRcloneConfig rejects an rclone config whose remote is not a plain
+// remote name (see destutil.ValidateRcloneRemote).
+func validateRcloneConfig(config string) error {
+	var cfg struct {
+		Remote string `json:"remote"`
+	}
+	if err := json.Unmarshal([]byte(config), &cfg); err != nil {
+		return errors.New("config must be a JSON object")
+	}
+	return destutil.ValidateRcloneRemote(cfg.Remote)
+}
+
 // hasNonEmptyCredential reports whether the credentials JSON carries at least
 // one non-empty value. Prevents an edit form that never echoes secrets back
 // from wiping stored credentials with a blank payload (e.g. {"password":""}).
@@ -627,20 +664,13 @@ type importDestinationResponse struct {
 }
 
 // newImportDestinationResponse builds the API payload from an import outcome.
-func newImportDestinationResponse(found int, out importOutcome) importDestinationResponse {
+func newImportDestinationResponse(found int, out snapshotsync.ImportOutcome) importDestinationResponse {
 	return importDestinationResponse{
 		Found:    found,
 		Imported: out.Imported,
 		Skipped:  out.Skipped,
 		Failed:   out.Failed,
 	}
-}
-
-// snapshotImportPayload is the JSON payload sent to the agent for IMPORT_SNAPSHOTS.
-type snapshotImportPayload struct {
-	Type    string            `json:"type"`
-	RepoURL string            `json:"repo_url"`
-	Env     map[string]string `json:"env"`
 }
 
 // Import handles POST /api/v1/destinations/{id}/import.
@@ -685,14 +715,7 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env := destutil.BuildEnv(dest)
-	env["RESTIC_PASSWORD"] = req.RepoPassword
-
-	payload := snapshotImportPayload{
-		Type:    dest.Type,
-		RepoURL: destutil.BuildRepoURL(dest),
-		Env:     env,
-	}
+	payload := snapshotsync.NewImportPayload(dest, req.RepoPassword)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		h.logger.Error("failed to marshal import payload", zap.Error(err))
@@ -739,7 +762,7 @@ func (h *DestinationHandler) Import(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	out := h.persistImportedSnapshots(ctx, dest, &result)
+	out := h.snapshotSync.PersistImported(ctx, dest, &result)
 
 	logAudit(r, h.auditRepo, h.logger, "destination.import", "destination", id.String(), map[string]any{
 		"found":    len(result.Snapshots),
@@ -805,14 +828,7 @@ func (h *DestinationHandler) CheckRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env := destutil.BuildEnv(dest)
-	env["RESTIC_PASSWORD"] = req.RepoPassword
-
-	payload := snapshotImportPayload{
-		Type:    dest.Type,
-		RepoURL: destutil.BuildRepoURL(dest),
-		Env:     env,
-	}
+	payload := snapshotsync.NewImportPayload(dest, req.RepoPassword)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		h.logger.Error("failed to marshal check-repo payload", zap.Error(err))
@@ -890,92 +906,6 @@ func classifyRepoCheckError(raw string) (status string, message string) {
 	}
 }
 
-// importOutcome breaks down what happened to the snapshots the agent reported,
-// so a caller can tell "nothing new to import" apart from "the import failed".
-type importOutcome struct {
-	// Imported counts newly persisted snapshots.
-	Imported int
-	// Skipped counts snapshots already recorded for this destination.
-	Skipped int
-	// Failed counts snapshots that could not be persisted.
-	Failed int
-}
-
-// persistImportedSnapshots saves snapshots returned by a JOB_TYPE_IMPORT_SNAPSHOTS
-// RPC call that have not yet been seen for this destination.
-//
-// Imported snapshots carry no policy and no job: they were not produced by a
-// backup run, so PolicyID and JobID stay nil.
-func (h *DestinationHandler) persistImportedSnapshots(ctx context.Context, dest *db.Destination, result *agentmanager.SnapshotImportResult) importOutcome {
-	var out importOutcome
-	for _, info := range result.Snapshots {
-		exists, err := h.snapshotRepo.ExistsBySnapshotIDAndDestination(ctx, info.ResticSnapshotId, dest.ID)
-		if err != nil {
-			h.logger.Error("failed to check snapshot existence",
-				zap.String("restic_snapshot_id", info.ResticSnapshotId),
-				zap.Error(err),
-			)
-			out.Failed++
-			continue
-		}
-		if exists {
-			out.Skipped++
-			continue
-		}
-
-		snapshotAt, err := time.Parse(time.RFC3339Nano, info.SnapshotTime)
-		if err != nil {
-			snapshotAt, err = time.Parse(time.RFC3339, info.SnapshotTime)
-			if err != nil {
-				h.logger.Warn("imported snapshot has an unparsable timestamp",
-					zap.String("restic_snapshot_id", info.ResticSnapshotId),
-					zap.String("snapshot_time", info.SnapshotTime),
-					zap.Error(err),
-				)
-			}
-		}
-		// Stored in UTC, matching every other SnapshotAt write site — restic
-		// reports the local timezone offset, and a non-UTC time.Time round-trips
-		// through the SQLite driver as a text format the read-side scan can fail
-		// to parse back into time.Time.
-		snapshotAt = snapshotAt.UTC()
-
-		sourcesJSON, _ := json.Marshal(info.Paths)
-		tagsJSON, _ := json.Marshal(info.Tags)
-
-		snap := &db.Snapshot{
-			DestinationID: dest.ID,
-			IsImported:    true,
-			SnapshotID:    info.ResticSnapshotId,
-			Hostname:      info.Hostname,
-			Sources:       string(sourcesJSON),
-			Tags:          string(tagsJSON),
-			SizeBytes:     info.SizeBytes,
-			FileCount:     info.FileCount,
-			SnapshotAt:    snapshotAt,
-		}
-		if err := h.snapshotRepo.Create(ctx, snap); err != nil {
-			h.logger.Error("failed to create imported snapshot",
-				zap.String("restic_snapshot_id", info.ResticSnapshotId),
-				zap.Error(err),
-			)
-			out.Failed++
-			continue
-		}
-		out.Imported++
-	}
-
-	// Cache the repo's real size so an imported destination reports accurate
-	// usage without waiting for its first scheduled backup. Non-fatal.
-	if result.RepoSizeBytes > 0 {
-		if err := h.repo.UpdateRepoSize(ctx, dest.ID, result.RepoSizeBytes, time.Now().UTC()); err != nil {
-			h.logger.Warn("failed to update destination repo size after import", zap.Error(err))
-		}
-	}
-
-	return out
-}
-
 // Delete handles DELETE /api/v1/destinations/{id}.
 func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
@@ -1032,6 +962,74 @@ func (h *DestinationHandler) TriggerRetention(w http.ResponseWriter, r *http.Req
 
 	logAudit(r, h.auditRepo, h.logger, "destination.trigger_retention", "destination", id.String(), map[string]any{"job_id": job.ID.String()})
 	Ok(w, map[string]string{"job_id": job.ID.String()})
+}
+
+// syncDestinationResponse reports what a snapshot sync changed. Found is what
+// the repository holds; Imported were newly recorded; Removed were records of
+// snapshots no longer in the repository; Failed could not be recorded.
+type syncDestinationResponse struct {
+	Found    int   `json:"found"`
+	Imported int   `json:"imported"`
+	Removed  int64 `json:"removed"`
+	Failed   int   `json:"failed"`
+}
+
+// Sync handles POST /api/v1/destinations/{id}/sync (admin only). It lists the
+// destination's repository through a connected agent and makes the snapshot
+// records match it, so snapshots pruned or added outside arkeep show up
+// without waiting for the next backup (issue #288).
+func (h *DestinationHandler) Sync(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	// Same rationale as Import: listing snapshots on a cold remote repository
+	// can exceed the server's default 30s write timeout.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(6 * time.Minute)); err != nil {
+		h.logger.Debug("sync: could not extend write deadline", zap.Error(err))
+	}
+
+	res, err := h.snapshotSync.SyncDestination(r.Context(), id)
+	var listingErr *snapshotsync.ListingError
+	switch {
+	case err == nil:
+	case errors.Is(err, repositories.ErrNotFound):
+		ErrNotFound(w)
+		return
+	case errors.Is(err, snapshotsync.ErrNoAgentAvailable):
+		ErrConflict(w, "no agent that can reach this destination is connected")
+		return
+	case errors.Is(err, snapshotsync.ErrDestinationBusy):
+		ErrConflict(w, "a backup or retention sweep is running on this destination — try again when it finishes")
+		return
+	case errors.Is(err, snapshotsync.ErrNoRepoPassword):
+		ErrConflict(w, "the repository password of this destination is unknown — import its snapshots once to store it")
+		return
+	case errors.Is(err, agentmanager.ErrSnapshotImportTimeout):
+		ErrServiceUnavailable(w, "agent did not respond in time")
+		return
+	case errors.As(err, &listingErr):
+		ErrServiceUnavailable(w, extractResticMessage(listingErr.Message))
+		return
+	default:
+		h.logger.Error("snapshot sync failed", zap.String("destination_id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "destination.sync", "destination", id.String(), map[string]any{
+		"found":    res.Found,
+		"imported": res.Imported,
+		"removed":  res.Removed,
+		"failed":   res.Failed,
+	})
+	Ok(w, syncDestinationResponse{
+		Found:    res.Found,
+		Imported: res.Imported,
+		Removed:  res.Removed,
+		Failed:   res.Failed,
+	})
 }
 
 // extractResticMessage parses a restic error string and returns only the
