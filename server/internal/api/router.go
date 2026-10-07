@@ -112,7 +112,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 
 	// --- Initialize handlers ---
-	setupHandler := NewSetupHandler(cfg.Users, cfg.Logger)
+	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.Audit, cfg.Logger, cfg.Secure)
 	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
@@ -175,7 +175,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RateLimit(loginLimiter)).Post("/auth/password-reset/confirm", passwordResetHandler.Confirm)
 
 			r.Get("/setup/status", setupHandler.GetStatus)
-			r.Post("/setup/complete", setupHandler.Complete)
+			r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/setup/complete", setupHandler.Complete)
 
 			if enrollHandler != nil {
 				r.Post("/agents/enroll", enrollHandler.Enroll)

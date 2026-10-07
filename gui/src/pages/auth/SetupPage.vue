@@ -15,7 +15,7 @@ import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
 import { useSetupStore } from '@/stores/setup'
 import { useAuthStore } from '@/stores/auth'
-import { api } from '@/services/api'
+import { api, apiErrorMessage } from '@/services/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -79,8 +79,10 @@ const onSubmit = handleSubmit(async (values) => {
         // without having to re-enter the credentials they just provided.
         await auth.login(values.email, values.password)
         router.push({ name: 'dashboard' })
-    } catch {
-        serverError.value = 'Setup failed. Please try again.'
+    } catch (e: unknown) {
+        // The server explains refusals it can attribute (e.g. the setup
+        // window expired and the server must be restarted).
+        serverError.value = apiErrorMessage(e, 'Setup failed. Please try again.')
     }
 })
 </script>

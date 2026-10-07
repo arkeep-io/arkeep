@@ -14,6 +14,7 @@ package grpc
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -290,10 +291,10 @@ func (s *Server) validateToken(ctx context.Context) error {
 		return nil
 	}
 
-	// If no secret is configured, auth is disabled (development mode).
-	// A warning is logged at startup — see cmd/server/main.go.
+	// The server refuses to start without a secret (cmd/server/main.go); an
+	// empty one here fails closed rather than accepting every client.
 	if s.sharedSecret == "" {
-		return nil
+		return status.Error(codes.Unauthenticated, "agent authentication is not configured")
 	}
 
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -302,7 +303,7 @@ func (s *Server) validateToken(ctx context.Context) error {
 	}
 
 	values := md.Get("agent-secret")
-	if len(values) == 0 || values[0] != s.sharedSecret {
+	if len(values) == 0 || subtle.ConstantTimeCompare([]byte(values[0]), []byte(s.sharedSecret)) != 1 {
 		return status.Error(codes.Unauthenticated, "invalid agent secret")
 	}
 
