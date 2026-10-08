@@ -376,8 +376,11 @@ function buildConfigAndCreds(): { config: Record<string, string>; creds: Record<
         case 's3':
             return {
                 config: {
-                    bucket: s3Bucket.value,
-                    endpoint: s3Endpoint.value,
+                    // Strip the slashes the server joins these with - an
+                    // endpoint saved as "https://host/" used to produce an
+                    // empty bucket name in the restic repository URL.
+                    bucket: s3Bucket.value.trim().replace(/^\/+|\/+$/g, ''),
+                    endpoint: s3Endpoint.value.trim().replace(/\/+$/, ''),
                     region: s3Region.value,
                     prefix: s3Prefix.value,
                 },

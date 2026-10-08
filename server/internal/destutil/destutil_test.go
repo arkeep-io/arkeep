@@ -11,10 +11,10 @@ import (
 
 func TestBuildRepoURL(t *testing.T) {
 	tests := []struct {
-		name    string
-		dType   string
-		config  string
-		want    string
+		name   string
+		dType  string
+		config string
+		want   string
 	}{
 		{
 			name:   "sftp routed through rclone remote",
@@ -45,6 +45,32 @@ func TestBuildRepoURL(t *testing.T) {
 			dType:  "s3",
 			config: `{"bucket":"b","endpoint":"s3.example.com","path":"/x"}`,
 			want:   "s3:s3.example.com/b/x",
+		},
+		{
+			// A trailing slash on the endpoint used to produce "host//bucket",
+			// which restic parses as an empty bucket name.
+			name:   "s3 endpoint with trailing slash",
+			dType:  "s3",
+			config: `{"bucket":"backups","endpoint":"https://s3.eu-south-mil.io.cloud.ovh.net/","path":""}`,
+			want:   "s3:https://s3.eu-south-mil.io.cloud.ovh.net/backups/",
+		},
+		{
+			name:   "s3 path without leading slash",
+			dType:  "s3",
+			config: `{"bucket":"b","endpoint":"s3.example.com","path":"x"}`,
+			want:   "s3:s3.example.com/b/x",
+		},
+		{
+			name:   "s3 surrounding whitespace and slashes",
+			dType:  "s3",
+			config: `{"bucket":" /b/ ","endpoint":" https://s3.example.com// ","path":"x"}`,
+			want:   "s3:https://s3.example.com/b/x",
+		},
+		{
+			name:   "s3 bucket of only slashes yields empty",
+			dType:  "s3",
+			config: `{"bucket":"/","endpoint":"s3.example.com"}`,
+			want:   "",
 		},
 		{
 			name:   "rest",
@@ -132,6 +158,60 @@ func TestBuildEnvRcloneIgnoresCredentials(t *testing.T) {
 	}
 	if env := BuildEnv(dest); len(env) != 0 {
 		t.Errorf("BuildEnv(rclone) = %v, want no env vars", env)
+	}
+}
+
+func TestBuildEnvS3Region(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		creds  string
+		want   string
+	}{
+		{
+			// The GUI stores region in Config; it used to be read only from
+			// Credentials, so AWS_DEFAULT_REGION was never set.
+			name:   "region from config",
+			config: `{"bucket":"b","endpoint":"s3.example.com","region":"eu-south-mil"}`,
+			creds:  `{"access_key":"ak","secret_key":"sk"}`,
+			want:   "eu-south-mil",
+		},
+		{
+			name:   "region from config without credentials",
+			config: `{"bucket":"b","endpoint":"s3.example.com","region":"eu-south-mil"}`,
+			want:   "eu-south-mil",
+		},
+		{
+			name:   "config region wins over credentials",
+			config: `{"bucket":"b","endpoint":"s3.example.com","region":" eu-south-mil "}`,
+			creds:  `{"access_key":"ak","secret_key":"sk","region":"us-east-1"}`,
+			want:   "eu-south-mil",
+		},
+		{
+			name:   "legacy region in credentials",
+			config: `{"bucket":"b","endpoint":"s3.example.com"}`,
+			creds:  `{"access_key":"ak","secret_key":"sk","region":"us-east-1"}`,
+			want:   "us-east-1",
+		},
+		{
+			name:   "no region",
+			config: `{"bucket":"b","endpoint":"s3.example.com","region":""}`,
+			creds:  `{"access_key":"ak","secret_key":"sk"}`,
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dest := &db.Destination{Type: "s3", Config: tt.config, Credentials: db.EncryptedString(tt.creds)}
+			env := BuildEnv(dest)
+			got, ok := env["AWS_DEFAULT_REGION"]
+			if got != tt.want || ok != (tt.want != "") {
+				t.Errorf("AWS_DEFAULT_REGION = %q (set: %v), want %q", got, ok, tt.want)
+			}
+			if tt.creds != "" && (env["AWS_ACCESS_KEY_ID"] != "ak" || env["AWS_SECRET_ACCESS_KEY"] != "sk") {
+				t.Errorf("credentials not mapped: %v", env)
+			}
+		})
 	}
 }
 

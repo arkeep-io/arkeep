@@ -163,7 +163,7 @@ type commandSourcePayload struct {
 type hookPayload struct {
 	Name        string   `json:"name"`
 	Command     string   `json:"command"`
-	Args    		[]string `json:"args"`
+	Args        []string `json:"args"`
 	TimeoutSecs int      `json:"timeout_secs"`
 }
 
@@ -468,7 +468,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		result, err := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
-		
+
 		if result.Output != "" {
 			log("info", "pre-backup hook output: "+result.Output)
 		}
@@ -551,6 +551,10 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			return nil
 		}
 
+		// Set once any restic invocation for this destination succeeds; the
+		// post-backup stats/snapshots calls below only make sense then.
+		destSucceeded := false
+
 		if len(sources) > 0 {
 			opts := restic.BackupOptions{
 				Sources:         sources,
@@ -566,6 +570,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, err.Error())
 				backupFailed = true
 			} else {
+				destSucceeded = true
 				// addedBytes is the real deduplicated/compressed footprint this backup added
 				// to the repo (data_added_packed, falling back to data_added on older restic).
 				// Stored as the snapshot's size so per-snapshot and per-day figures reconcile
@@ -629,6 +634,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if addedBytes == 0 {
 				addedBytes = restic.ClampInt64(res.DataAdded)
 			}
+			destSucceeded = true
 			log("info", fmt.Sprintf("command source %q to destination %s completed (snapshot: %s, added: %d bytes)",
 				cs.Name, dest.DestinationID, res.SnapshotID, addedBytes))
 			reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "succeeded", res.SnapshotID, cmdStartedAt, addedBytes, "")
@@ -644,6 +650,14 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				st, errMsg = "failed", "one or more command sources failed"
 			}
 			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, st, "", destStartedAt, 0, 0, errMsg)
+		}
+
+		// Nothing reached the repository, so it is most likely unreachable or
+		// misconfigured: stats/snapshots against it would only sit in restic's
+		// backend retry loop for minutes, keeping the job "running" long after
+		// this destination was already reported as failed.
+		if !destSucceeded {
+			continue
 		}
 
 		// Capture the repository's real deduplicated size for per-destination

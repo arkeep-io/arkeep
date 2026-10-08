@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,6 +235,74 @@ func TestExecuteBackup_CommandOnlyPolicyDoesNotFailOnEmptySources(t *testing.T) 
 	}
 	if got := reporter.destResults["dest-1"].status; got != "failed" {
 		t.Errorf("destination status = %q, want %q (empty repo_url)", got, "failed")
+	}
+}
+
+// TestExecuteBackup_FailedDestinationSkipsPostBackupCommands verifies that
+// once a destination's backup has failed, the executor does not go on to run
+// `restic stats` / `restic snapshots` against the same repository. Against an
+// unreachable repository those commands sit in restic's backend retry loop
+// for minutes, keeping the job "running" long after the destination failed.
+func TestExecuteBackup_FailedDestinationSkipsPostBackupCommands(t *testing.T) {
+	tests := []struct {
+		name           string
+		sources        string
+		commandSources []commandSourcePayload
+	}{
+		{name: "regular sources", sources: `["/tmp"]`},
+		{
+			name:           "command sources only",
+			sources:        `[]`,
+			commandSources: []commandSourcePayload{{Name: "pgdump", Command: "pg_dump mydb"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			callLog := filepath.Join(dir, "calls")
+			script := filepath.Join(dir, "fake-restic.sh")
+			// Records each subcommand and fails every one of them, like a
+			// repository restic cannot reach.
+			body := "#!/bin/sh\necho \"$1\" >> '" + callLog + "'\necho 'Fatal: repository unreachable' >&2\nexit 1\n"
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			payload := backupPayload{
+				Sources:        tt.sources,
+				RepoPassword:   "pw",
+				Destinations:   []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+				CommandSources: tt.commandSources,
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			w := restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop())
+			e := New(w, nil, nil, zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+			e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+			if got := reporter.destResults["dest-1"].status; got != "failed" {
+				t.Errorf("destination status = %q, want %q", got, "failed")
+			}
+			if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
+				t.Errorf("final job status = %q, want %q (all statuses: %v)", final, "failed", reporter.statuses)
+			}
+			data, err := os.ReadFile(callLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, sub := range strings.Fields(string(data)) {
+				if sub == "stats" || sub == "snapshots" {
+					t.Errorf("restic %s ran against a destination whose backup failed (calls: %q)", sub, data)
+				}
+			}
+		})
 	}
 }
 

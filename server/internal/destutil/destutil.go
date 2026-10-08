@@ -44,8 +44,13 @@ func BuildRepoURL(dest *db.Destination) string {
 			Endpoint string `json:"endpoint"`
 			Path     string `json:"path"`
 		}
-		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil && cfg.Bucket != "" {
-			endpoint := cfg.Endpoint
+		err := json.Unmarshal([]byte(dest.Config), &cfg)
+		// Normalise the slashes the three parts are joined with: an endpoint
+		// saved as "https://host/" would otherwise yield "host//bucket", which
+		// restic parses as an empty bucket name.
+		bucket := strings.Trim(strings.TrimSpace(cfg.Bucket), "/")
+		if err == nil && bucket != "" {
+			endpoint := strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/")
 			if endpoint == "" {
 				// Legacy compatibility only: destinations created before the
 				// GUI required Endpoint (DestinationSheet.vue) may still have
@@ -56,11 +61,11 @@ func BuildRepoURL(dest *db.Destination) string {
 				// B2), which would otherwise silently point at AWS.
 				endpoint = "s3.amazonaws.com"
 			}
-			path := cfg.Path
-			if path == "" {
-				path = "/"
+			path := strings.TrimSpace(cfg.Path)
+			if !strings.HasPrefix(path, "/") {
+				path = "/" + path
 			}
-			return fmt.Sprintf("s3:%s/%s%s", endpoint, cfg.Bucket, path)
+			return fmt.Sprintf("s3:%s/%s%s", endpoint, bucket, path)
 		}
 	case "sftp":
 		// SFTP is routed through the embedded rclone binary rather than restic's
@@ -138,6 +143,18 @@ func BuildEnv(dest *db.Destination) map[string]string {
 		buildSFTPEnv(dest, env)
 		return env
 	}
+	// The GUI stores the S3 region in Config (DestinationSheet.vue); it is
+	// not a secret and must be applied even when no credentials are set.
+	if dest.Type == "s3" {
+		var cfg struct {
+			Region string `json:"region"`
+		}
+		if err := json.Unmarshal([]byte(dest.Config), &cfg); err == nil {
+			if region := strings.TrimSpace(cfg.Region); region != "" {
+				env["AWS_DEFAULT_REGION"] = region
+			}
+		}
+	}
 	if dest.Credentials == "" {
 		return env
 	}
@@ -158,7 +175,9 @@ func BuildEnv(dest *db.Destination) map[string]string {
 			if c.SecretKey != "" {
 				env["AWS_SECRET_ACCESS_KEY"] = c.SecretKey
 			}
-			if c.Region != "" {
+			// Legacy fallback: region in Credentials, honoured only when
+			// Config does not set one.
+			if _, ok := env["AWS_DEFAULT_REGION"]; !ok && c.Region != "" {
 				env["AWS_DEFAULT_REGION"] = c.Region
 			}
 		}
