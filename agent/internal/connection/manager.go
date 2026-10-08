@@ -1258,8 +1258,8 @@ func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, er
 	}
 
 	switch p.Type {
-	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE, proto.JobType_JOB_TYPE_FORGET:
-		// All three types are handled by the executor — payload is passed through as-is.
+	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE, proto.JobType_JOB_TYPE_FORGET, proto.JobType_JOB_TYPE_VERIFY:
+		// All four types are handled by the executor — payload is passed through as-is.
 	default:
 		return executor.JobAssignment{}, fmt.Errorf("unsupported job type: %v", p.Type)
 	}

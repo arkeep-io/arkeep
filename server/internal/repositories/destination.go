@@ -228,6 +228,39 @@ func (r *gormDestinationRepository) ListWithRetentionSchedule(ctx context.Contex
 	return destinations, nil
 }
 
+// ListWithCheckSchedule returns every destination with integrity checks
+// enabled and a configured schedule — the set the check scheduler registers a
+// gocron job for on Start. Append-only destinations are included: restic
+// check only reads the repository.
+func (r *gormDestinationRepository) ListWithCheckSchedule(ctx context.Context) ([]db.Destination, error) {
+	var destinations []db.Destination
+	err := r.db.WithContext(ctx).
+		Where("check_enabled = ? AND check_schedule != ''", true).
+		Find(&destinations).Error
+	if err != nil {
+		return nil, fmt.Errorf("destinations: list with check schedule: %w", err)
+	}
+	return destinations, nil
+}
+
+// UpdateLastCheck records the outcome of a destination's most recent
+// integrity check job. A missing (e.g. deleted) destination is not an error:
+// there is nothing left to record the outcome on.
+func (r *gormDestinationRepository) UpdateLastCheck(ctx context.Context, destinationID, jobID uuid.UUID, status string, at time.Time) error {
+	err := r.db.WithContext(ctx).
+		Model(&db.Destination{}).
+		Where("id = ?", destinationID).
+		Updates(map[string]interface{}{
+			"last_check_at":     at,
+			"last_check_status": status,
+			"last_check_job_id": jobID,
+		}).Error
+	if err != nil {
+		return fmt.Errorf("destinations: update last check: %w", err)
+	}
+	return nil
+}
+
 // busyHolderInactive matches a destination whose busy gate is held by a job
 // that can no longer release it: the job is gone (removed by job retention) or
 // no longer pending/waiting/running (it finished, was cancelled or was

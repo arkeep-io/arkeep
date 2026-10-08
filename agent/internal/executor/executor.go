@@ -112,6 +112,16 @@ type retentionSweepPayload struct {
 	Tags         []string           `json:"tags"`
 }
 
+// checkPayload is the JSON payload for a JOB_TYPE_VERIFY job (issue #307): a
+// restic check of one destination. Must match server/internal/checkscheduler's
+// identical type field-for-field.
+type checkPayload struct {
+	Destination   destinationPayload `json:"destination"`
+	RepoPassword  string             `json:"repo_password"`
+	Mode          string             `json:"mode"`
+	SubsetPercent int                `json:"subset_percent"`
+}
+
 // restorePayload mirrors the struct serialized by the server snapshot handler.
 // All credentials arrive already decrypted.
 type restorePayload struct {
@@ -365,6 +375,8 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 		e.executeRestore(jobCtx, job, sink, reporter)
 	case proto.JobType_JOB_TYPE_FORGET:
 		e.executeRetention(jobCtx, job, sink, reporter)
+	case proto.JobType_JOB_TYPE_VERIFY:
+		e.executeCheck(jobCtx, job, sink, reporter)
 	default:
 		// JOB_TYPE_BACKUP and unspecified types all run the backup handler.
 		e.executeBackup(jobCtx, job, sink, reporter)
@@ -825,6 +837,100 @@ func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink
 
 	log("info", "retention sweep completed successfully")
 	reporter.ReportStatus(job.JobID, "succeeded", "retention sweep completed")
+}
+
+// executeCheck runs a repository integrity check (restic check) of one
+// destination (JOB_TYPE_VERIFY, issue #307).
+//
+// Execution sequence:
+//  1. Deserialize payload, report status "running"
+//  2. Run restic check in the requested mode, logging every message restic
+//     reports (errors found, suggested repair commands)
+//  3. Report the destination result (which releases the destination's busy
+//     gate on the server), then the final job status
+func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	log := func(level, msg string) {
+		sink.SendLog(job.JobID, level, msg)
+		switch level {
+		case "error":
+			e.logger.Error(msg, zap.String("job_id", job.JobID))
+		case "warn":
+			e.logger.Warn(msg, zap.String("job_id", job.JobID))
+		default:
+			e.logger.Info(msg, zap.String("job_id", job.JobID))
+		}
+	}
+
+	fail := func(msg string) {
+		log("error", msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+	}
+
+	var payload checkPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		fail(fmt.Sprintf("failed to deserialize check job payload: %v", err))
+		return
+	}
+	destID := payload.Destination.DestinationID
+
+	reporter.ReportStatus(job.JobID, "running", "starting integrity check")
+	mode := payload.Mode
+	if mode == restic.CheckModeSubset {
+		mode = fmt.Sprintf("%s (%d%% of the data)", mode, payload.SubsetPercent)
+	}
+	log("info", fmt.Sprintf("integrity check started for destination %s, mode %s", destID, mode))
+
+	repoURL := payload.Destination.RepoURL
+	if restic.DestinationType(payload.Destination.Type) == restic.DestLocal {
+		repoURL = translateLocalPath(repoURL, e.dockerHostRoot)
+	}
+	d := restic.Destination{
+		Type:     restic.DestinationType(payload.Destination.Type),
+		RepoURL:  repoURL,
+		Password: payload.RepoPassword,
+		Env:      payload.Destination.Env,
+	}
+
+	startedAt := time.Now().UTC()
+	result, err := e.wrapper.Check(ctx, d, restic.CheckOptions{Mode: payload.Mode, SubsetPercent: payload.SubsetPercent})
+
+	if ctx.Err() != nil {
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, 0, 0, "integrity check cancelled")
+		log("warn", "integrity check cancelled")
+		reporter.ReportStatus(job.JobID, "cancelled", "integrity check cancelled")
+		return
+	}
+
+	if err != nil {
+		errMsg := err.Error()
+		if result != nil {
+			for _, m := range result.Messages {
+				log("error", m)
+			}
+			switch {
+			case result.NumErrors > 0:
+				errMsg = fmt.Sprintf("repository contains errors: %d error(s), %d damaged pack file(s); see the job log for the repair commands restic suggests",
+					result.NumErrors, len(result.BrokenPacks))
+			case len(result.Messages) > 0:
+				// The last message is restic's fatal error, e.g. a wrong
+				// password or an unreachable repository.
+				errMsg = result.Messages[len(result.Messages)-1]
+			}
+		}
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, 0, 0, errMsg)
+		// The job error stays the bare cause: it is shown next to the
+		// destination's name in notifications and the GUI.
+		log("error", fmt.Sprintf("integrity check of destination %s failed: %s", destID, errMsg))
+		reporter.ReportStatus(job.JobID, "failed", errMsg)
+		return
+	}
+
+	for _, m := range result.Messages {
+		log("warn", m)
+	}
+	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, 0, 0, "")
+	log("info", fmt.Sprintf("integrity check of destination %s passed: no errors found", destID))
+	reporter.ReportStatus(job.JobID, "succeeded", "integrity check passed")
 }
 
 // executeRestore runs a single restore job to completion.

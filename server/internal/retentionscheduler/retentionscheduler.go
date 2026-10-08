@@ -297,7 +297,7 @@ func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (
 
 	// A sweep already queued or in flight does the same work: a second one
 	// right behind it would only repeat it.
-	active, err := s.jobs.HasActiveRetentionJob(ctx, dest.ID)
+	active, err := s.jobs.HasActiveJobOfType(ctx, "retention", dest.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -213,6 +213,19 @@ type Destination struct {
 	// explicitly saves retention config for this destination.
 	RetentionNeedsReview bool `gorm:"not null;default:false"`
 
+	// Integrity check (restic check) — run on its own schedule by
+	// RetentionAgentID, which acts as the destination's maintenance agent for
+	// both retention and check. See server/internal/checkscheduler.
+	CheckEnabled       bool   `gorm:"not null;default:false"`
+	CheckSchedule      string `gorm:"not null;default:''"`       // cron expression; "" = unconfigured
+	CheckMode          string `gorm:"not null;default:'subset'"` // structure | subset | full
+	CheckSubsetPercent int    `gorm:"not null;default:5"`        // used by mode "subset" only
+	// Outcome of the most recent check job. LastCheckStatus is "" when no
+	// check has completed yet, otherwise the job's terminal status.
+	LastCheckAt     *time.Time
+	LastCheckStatus string     `gorm:"not null;default:''"`
+	LastCheckJobID  *uuid.UUID `gorm:"type:text"`
+
 	// Busy gate: which job (backup or retention, on any agent) currently holds
 	// this destination's repository, so a second dispatch can be skipped
 	// server-side instead of racing restic's own lock file. No FK — the

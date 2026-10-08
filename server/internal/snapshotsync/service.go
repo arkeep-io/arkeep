@@ -185,7 +185,7 @@ func (s *Service) SyncDestination(ctx context.Context, destID uuid.UUID) (Result
 	if agentID == "" {
 		return Result{}, ErrNoAgentAvailable
 	}
-	password := repoPassword(dest, policies)
+	password := destutil.RepoPassword(dest, policies)
 	if password == "" {
 		return Result{}, ErrNoRepoPassword
 	}
@@ -242,21 +242,6 @@ func (s *Service) pickAgent(dest *db.Destination, policies []db.Policy) string {
 	for _, p := range policies {
 		if s.agents.IsConnected(p.AgentID.String()) {
 			return p.AgentID.String()
-		}
-	}
-	return ""
-}
-
-// repoPassword returns the password that opens the destination's repository:
-// the one stored on the destination, otherwise the first one carried by an
-// attached policy — every policy writing here shares the same repository.
-func repoPassword(dest *db.Destination, policies []db.Policy) string {
-	if dest.RepoPassword != "" {
-		return string(dest.RepoPassword)
-	}
-	for _, p := range policies {
-		if p.RepoPassword != "" {
-			return string(p.RepoPassword)
 		}
 	}
 	return ""

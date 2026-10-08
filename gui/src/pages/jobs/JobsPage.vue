@@ -172,6 +172,8 @@ onMounted(fetchJobs)
                     <SelectItem value="all">All types</SelectItem>
                     <SelectItem value="backup">Backup</SelectItem>
                     <SelectItem value="restore">Restore</SelectItem>
+                    <SelectItem value="retention">Retention</SelectItem>
+                    <SelectItem value="check">Integrity check</SelectItem>
                 </SelectContent>
             </Select>
 

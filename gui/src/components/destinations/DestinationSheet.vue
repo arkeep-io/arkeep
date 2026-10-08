@@ -3,7 +3,7 @@ import { ref, watch, computed } from 'vue'
 import { z } from 'zod'
 import { api, apiErrorMessage } from '@/services/api'
 import { summariseImport } from '@/lib/importSummary'
-import type { ApiResponse, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
+import type { ApiResponse, CheckMode, CreateDestinationResponse, Destination, ImportDestinationResponse } from '@/types'
 import { AsyncCombobox } from '@/components/ui/async-combobox'
 import {
     Sheet,
@@ -201,6 +201,37 @@ const RETENTION_SCHEDULE_PRESETS = [
 ]
 
 // ---------------------------------------------------------------------------
+// Integrity check (issue #307) — restic check on its own schedule, run by the
+// same agent as retention (the destination's maintenance agent). On by
+// default for new destinations: restic never re-reads stored data, so damage
+// would otherwise only surface during a restore.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_CHECK_SCHEDULE = '0 3 * * 0'
+const checkEnabled = ref(true)
+const checkSchedule = ref(DEFAULT_CHECK_SCHEDULE)
+const checkScheduleError = ref('')
+const checkMode = ref<CheckMode>('subset')
+const checkSubsetPercent = ref(5)
+const checkSubsetPercentError = ref('')
+
+const CHECK_SCHEDULE_PRESETS = [
+    { label: 'Daily at 03:00', value: '0 3 * * *' },
+    { label: 'Weekly (Sunday)', value: DEFAULT_CHECK_SCHEDULE },
+    { label: 'Monthly', value: '0 3 1 * *' },
+]
+
+const CHECK_MODES: { value: CheckMode; label: string; description: string }[] = [
+    { value: 'structure', label: 'Structure only', description: 'Verifies the repository structure and metadata. Fast, but does not read the backed-up data.' },
+    { value: 'subset', label: 'Read a subset of the data', description: 'Also reads and verifies a random share of the data on every run, so the whole repository is covered over time.' },
+    { value: 'full', label: 'Read all data', description: 'Reads and verifies every pack file. Thorough, but downloads the whole repository on every run.' },
+]
+
+// The maintenance agent runs both retention sweeps and integrity checks, so
+// it is needed as soon as either is on.
+const needsMaintenanceAgent = computed(() => (retentionEnabled.value && !appendOnly.value) || checkEnabled.value)
+
+// ---------------------------------------------------------------------------
 // Reset / populate
 // ---------------------------------------------------------------------------
 
@@ -238,6 +269,12 @@ function resetFields() {
     retentionMonthly.value = 6
     retentionYearly.value = 1
     retentionNeedsReview.value = false
+    checkEnabled.value = true
+    checkSchedule.value = DEFAULT_CHECK_SCHEDULE
+    checkScheduleError.value = ''
+    checkMode.value = 'subset'
+    checkSubsetPercent.value = 5
+    checkSubsetPercentError.value = ''
 }
 
 function populateFromDestination(dest: Destination, asClone = false) {
@@ -260,6 +297,10 @@ function populateFromDestination(dest: Destination, asClone = false) {
     // Cloning starts a fresh destination — any "needs review" flag belongs to
     // the original row, not the copy.
     retentionNeedsReview.value = asClone ? false : dest.retention_needs_review
+    checkEnabled.value = dest.check_enabled
+    checkSchedule.value = dest.check_schedule || DEFAULT_CHECK_SCHEDULE
+    checkMode.value = dest.check_mode
+    checkSubsetPercent.value = dest.check_subset_percent
 
     // Parse config JSON — credentials are write-only and never populated
     let config: Record<string, string> = {}
@@ -373,6 +414,8 @@ function validate(): boolean {
     nameError.value = ''
     retentionAgentError.value = ''
     retentionScheduleError.value = ''
+    checkScheduleError.value = ''
+    checkSubsetPercentError.value = ''
     let valid = true
 
     if (!name.value.trim()) {
@@ -386,14 +429,27 @@ function validate(): boolean {
             // entirely when append-only is on — but guard anyway.
             valid = false
         }
-        if (!retentionAgentId.value) {
-            retentionAgentError.value = 'An agent is required to run retention sweeps.'
-            valid = false
-        }
         if (!retentionSchedule.value.trim()) {
             retentionScheduleError.value = 'A schedule is required.'
             valid = false
         }
+    }
+
+    if (checkEnabled.value) {
+        if (!checkSchedule.value.trim()) {
+            checkScheduleError.value = 'A schedule is required.'
+            valid = false
+        }
+        const pct = Number(checkSubsetPercent.value)
+        if (checkMode.value === 'subset' && (!Number.isInteger(pct) || pct < 1 || pct > 100)) {
+            checkSubsetPercentError.value = 'Enter a whole number between 1 and 100.'
+            valid = false
+        }
+    }
+
+    if (needsMaintenanceAgent.value && !retentionAgentId.value) {
+        retentionAgentError.value = 'An agent is required to run retention sweeps and integrity checks.'
+        valid = false
     }
 
     const { config, creds } = buildConfigAndCreds()
@@ -460,6 +516,10 @@ async function onSubmit() {
                 retention_weekly: retentionWeekly.value,
                 retention_monthly: retentionMonthly.value,
                 retention_yearly: retentionYearly.value,
+                check_enabled: checkEnabled.value,
+                check_schedule: checkSchedule.value,
+                check_mode: checkMode.value,
+                check_subset_percent: Number(checkSubsetPercent.value),
             }
             if (hasEnteredCredentials(creds)) {
                 body.credentials = JSON.stringify(creds)
@@ -486,6 +546,10 @@ async function onSubmit() {
                 retention_weekly: retentionWeekly.value,
                 retention_monthly: retentionMonthly.value,
                 retention_yearly: retentionYearly.value,
+                check_enabled: checkEnabled.value,
+                check_schedule: checkSchedule.value,
+                check_mode: checkMode.value,
+                check_subset_percent: Number(checkSubsetPercent.value),
             }
             if (importEnabled.value && importAgentId.value && importRepoPassword.value) {
                 body.import_agent_id = importAgentId.value
@@ -791,7 +855,8 @@ function onOpenChange(value: boolean) {
                             <p class="text-muted-foreground text-xs">
                                 Snapshots here can only be added, never deleted or pruned
                                 (e.g. object-lock / WORM storage). Retention cannot run —
-                                configure deletion outside Arkeep if needed.
+                                configure deletion outside Arkeep if needed. Integrity
+                                checks still run: they only read the repository.
                             </p>
                         </div>
                         <Switch :model-value="appendOnly" @update:model-value="appendOnly = $event; if ($event) retentionEnabled = false" />
@@ -828,20 +893,6 @@ function onOpenChange(value: boolean) {
                         </div>
 
                         <template v-if="retentionEnabled">
-                            <Field>
-                                <FieldLabel for="retention-agent">Retention Agent</FieldLabel>
-                                <AsyncCombobox
-                                    endpoint="/api/v1/agents"
-                                    :model-value="retentionAgentId"
-                                    :initial-label="props.destination?.retention_agent_name"
-                                    placeholder="Select an agent"
-                                    :class="retentionAgentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
-                                    @update:model-value="retentionAgentId = $event; retentionAgentError = ''"
-                                />
-                                <p class="text-muted-foreground text-xs">Which connected agent runs the retention sweep for this destination.</p>
-                                <FieldError v-if="retentionAgentError">{{ retentionAgentError }}</FieldError>
-                            </Field>
-
                             <p class="text-sm font-medium">Schedule</p>
                             <div class="flex flex-wrap gap-1.5">
                                 <button v-for="preset in RETENTION_SCHEDULE_PRESETS" :key="preset.value" type="button"
@@ -940,6 +991,86 @@ function onOpenChange(value: boolean) {
                             </div>
                         </template>
                     </template>
+
+                    <!-- ── Integrity check (issue #307) ───────────────────────────────
+                         restic check on its own schedule. Restic never re-reads
+                         stored data, so this is the only way damage to the
+                         repository surfaces before a restore needs it. -->
+                    <Separator />
+
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-sm font-medium">Enable integrity check</p>
+                            <p class="text-muted-foreground text-xs">
+                                Run a scheduled `restic check` to verify the repository is
+                                intact and its data still readable.
+                            </p>
+                        </div>
+                        <Switch :model-value="checkEnabled" @update:model-value="checkEnabled = $event" />
+                    </div>
+
+                    <template v-if="checkEnabled">
+                        <Field>
+                            <FieldLabel for="check-mode">Check Depth</FieldLabel>
+                            <Select :model-value="checkMode" @update:model-value="checkMode = $event as CheckMode">
+                                <SelectTrigger id="check-mode">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem v-for="m in CHECK_MODES" :key="m.value" :value="m.value">
+                                        {{ m.label }}
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                            <p class="text-muted-foreground text-xs">
+                                {{ CHECK_MODES.find(m => m.value === checkMode)?.description }}
+                            </p>
+                        </Field>
+
+                        <Field v-if="checkMode === 'subset'">
+                            <FieldLabel for="check-subset">Data to Read per Run (%)</FieldLabel>
+                            <Input id="check-subset" v-model="checkSubsetPercent" type="number" min="1" max="100"
+                                :class="checkSubsetPercentError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="checkSubsetPercentError">{{ checkSubsetPercentError }}</FieldError>
+                        </Field>
+
+                        <p class="text-sm font-medium">Schedule</p>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button v-for="preset in CHECK_SCHEDULE_PRESETS" :key="preset.value" type="button"
+                                class="rounded-full border px-2.5 py-0.5 text-xs transition-colors"
+                                :class="checkSchedule === preset.value
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border hover:border-primary/50 hover:bg-muted'"
+                                @click="checkSchedule = preset.value">
+                                {{ preset.label }}
+                            </button>
+                        </div>
+                        <Field>
+                            <FieldLabel for="check-schedule">Cron Expression</FieldLabel>
+                            <Input id="check-schedule" v-model="checkSchedule" class="font-mono" :placeholder="DEFAULT_CHECK_SCHEDULE"
+                                :class="checkScheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="checkScheduleError">{{ checkScheduleError }}</FieldError>
+                        </Field>
+                    </template>
+
+                    <!-- Maintenance agent — runs both retention sweeps and integrity
+                         checks, so it is shown as soon as either is enabled. -->
+                    <Field v-if="needsMaintenanceAgent">
+                        <FieldLabel for="retention-agent">Maintenance Agent</FieldLabel>
+                        <AsyncCombobox
+                            endpoint="/api/v1/agents"
+                            :model-value="retentionAgentId"
+                            :initial-label="props.destination?.retention_agent_name"
+                            placeholder="Select an agent"
+                            :class="retentionAgentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
+                            @update:model-value="retentionAgentId = $event; retentionAgentError = ''"
+                        />
+                        <p class="text-muted-foreground text-xs">
+                            Which connected agent runs retention sweeps and integrity checks for this
+                            destination. It must be able to reach the repository.
+                        </p>
+                        <FieldError v-if="retentionAgentError">{{ retentionAgentError }}</FieldError>
+                    </Field>
 
                     <!-- Enabled toggle — edit and clone modes (clone copies the original's state) -->
                     <template v-if="isEdit || isClone">

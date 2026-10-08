@@ -674,6 +674,12 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 		go s.notifyJobTerminal(context.WithoutCancel(ctx), jobID, req.Status, req.Message)
 	}
 
+	// Record a finished integrity check on its destination (issue #307).
+	// Non-fatal: goroutine, like the notifications above.
+	if s.destRepo != nil && (dbStatus == "succeeded" || dbStatus == "failed") {
+		go s.recordCheckOutcome(context.WithoutCancel(ctx), jobID, dbStatus, now)
+	}
+
 	// Ping the policy's Healthchecks check (start, success, fail). Non-fatal:
 	// goroutine, like the notifications above.
 	if s.pinger != nil {
@@ -700,7 +706,7 @@ func (s *Server) notifyJobTerminal(ctx context.Context, jobID uuid.UUID, st prot
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	job, _, _, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
+	job, dests, _, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
 	if err != nil {
 		s.logger.Warn("notifyJobTerminal: could not fetch job details",
 			zap.String("job_id", jobID.String()),
@@ -708,22 +714,54 @@ func (s *Server) notifyJobTerminal(ctx context.Context, jobID uuid.UUID, st prot
 		)
 		return
 	}
-
-	// A restore of an imported snapshot has no policy; the notification payload
-	// then carries a zero policy ID.
-	var policyID uuid.UUID
-	if job.PolicyID != nil {
-		policyID = *job.PolicyID
-	}
+	subject := notification.JobSubjectFrom(job, dests)
 
 	switch st {
 	case proto.JobStatus_JOB_STATUS_COMPLETED:
-		if err := s.notifSvc.NotifyJobSucceeded(ctx, jobID, policyID, job.PolicyName); err != nil {
+		if err := s.notifSvc.NotifyJobSucceeded(ctx, subject); err != nil {
 			s.logger.Warn("failed to send job-succeeded notification", zap.Error(err))
 		}
 	case proto.JobStatus_JOB_STATUS_FAILED:
-		if err := s.notifSvc.NotifyJobFailed(ctx, jobID, policyID, job.PolicyName, errMsg); err != nil {
+		if err := s.notifSvc.NotifyJobFailed(ctx, subject, errMsg); err != nil {
 			s.logger.Warn("failed to send job-failed notification", zap.Error(err))
+		}
+	}
+}
+
+// recordCheckOutcome stores the outcome of an integrity check job on the
+// destination it checked, so the GUI can show each destination's last check
+// without scanning job history. Jobs of any other type are ignored. A
+// cancelled or interrupted check says nothing about the repository and is
+// never recorded. Runs in a goroutine — errors are logged, never propagated.
+func (s *Server) recordCheckOutcome(ctx context.Context, jobID uuid.UUID, dbStatus string, at time.Time) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	job, err := s.jobRepo.GetByID(ctx, jobID)
+	if err != nil {
+		s.logger.Warn("recordCheckOutcome: could not fetch job",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+	if job.Type != "check" {
+		return
+	}
+	dests, err := s.jobRepo.ListDestinationsByJob(ctx, jobID)
+	if err != nil {
+		s.logger.Warn("recordCheckOutcome: could not list job destinations",
+			zap.String("job_id", jobID.String()),
+			zap.Error(err),
+		)
+		return
+	}
+	for _, d := range dests {
+		if err := s.destRepo.UpdateLastCheck(ctx, d.DestinationID, jobID, dbStatus, at); err != nil {
+			s.logger.Warn("recordCheckOutcome: failed to update destination",
+				zap.String("destination_id", d.DestinationID.String()),
+				zap.Error(err),
+			)
 		}
 	}
 }
