@@ -22,6 +22,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentwatchdog"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
@@ -315,6 +316,24 @@ func run(ctx context.Context, cfg *config) error {
 		}
 	}()
 
+	// --- Check scheduler ---
+	// Runs each destination's repository integrity check (restic check) on
+	// its own schedule (issue #307).
+	checkSched, err := checkscheduler.New(destinationRepo, jobRepo, agentMgr, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create check scheduler: %w", err)
+	}
+	checkSched.SetQueue(destQueue)
+	destQueue.RegisterStarter("check", checkSched)
+	if err := checkSched.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start check scheduler: %w", err)
+	}
+	defer func() {
+		if err := checkSched.Stop(); err != nil {
+			logger.Warn("check scheduler shutdown error", zap.Error(err))
+		}
+	}()
+
 	// --- WebSocket Hub ---
 	// The hub must start before the HTTP server so clients can connect
 	// immediately after the server is ready.
@@ -417,6 +436,7 @@ func run(ctx context.Context, cfg *config) error {
 		AuthService:        authService,
 		Scheduler:          sched,
 		RetentionScheduler: retentionSched,
+		CheckScheduler:     checkSched,
 		AgentManager:       agentMgr,
 		Logger:             logger,
 		Hub:                wsHub,

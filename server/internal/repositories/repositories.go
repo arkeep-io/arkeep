@@ -197,6 +197,15 @@ type DestinationRepository interface {
 	// retention scheduler registers a gocron job for on Start.
 	ListWithRetentionSchedule(ctx context.Context) ([]db.Destination, error)
 
+	// ListWithCheckSchedule returns every destination with integrity checks
+	// enabled and a non-empty CheckSchedule — the set the check scheduler
+	// registers a gocron job for on Start.
+	ListWithCheckSchedule(ctx context.Context) ([]db.Destination, error)
+
+	// UpdateLastCheck records the terminal status of a destination's most
+	// recent integrity check job.
+	UpdateLastCheck(ctx context.Context, destinationID, jobID uuid.UUID, status string, at time.Time) error
+
 	// Busy gate (issue #130): serializes backup/retention operations against
 	// a shared destination's repository server-side, instead of relying only
 	// on restic's own lock file (see agent/internal/restic/wrapper.go's
@@ -298,10 +307,10 @@ type JobRepository interface {
 	// excludeJobID needs any of the given destinations, so a new job queues
 	// behind it instead of overtaking it.
 	HasWaitingForDestinations(ctx context.Context, destinationIDs []uuid.UUID, excludeJobID uuid.UUID) (bool, error)
-	// HasActiveRetentionJob reports whether a retention job for the
-	// destination is already pending, waiting or running, so a new sweep is
-	// not queued right behind one that will do the same work.
-	HasActiveRetentionJob(ctx context.Context, destinationID uuid.UUID) (bool, error)
+	// HasActiveJobOfType reports whether a job of jobType ("retention",
+	// "check") for the destination is already pending, waiting or running, so
+	// a new one is not queued right behind one that will do the same work.
+	HasActiveJobOfType(ctx context.Context, jobType string, destinationID uuid.UUID) (bool, error)
 	// ListQueuedDestinationIDs returns the destinations a queued job still
 	// has to run against: its job_destinations rows not yet resolved.
 	ListQueuedDestinationIDs(ctx context.Context, jobID uuid.UUID) ([]uuid.UUID, error)

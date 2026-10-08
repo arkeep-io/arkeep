@@ -381,7 +381,7 @@ func (d *Dispatcher) notifyFailed(ctx context.Context, jobID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	job, _, _, _, _, err := d.jobs.GetByIDWithDetails(ctx, jobID)
+	job, dests, _, _, _, err := d.jobs.GetByIDWithDetails(ctx, jobID)
 	if err != nil {
 		d.logger.Warn("failed to load job for queue timeout notification",
 			zap.String("job_id", jobID.String()),
@@ -389,12 +389,7 @@ func (d *Dispatcher) notifyFailed(ctx context.Context, jobID uuid.UUID) {
 		)
 		return
 	}
-	// A retention job has no policy; the notification carries a zero ID.
-	var policyID uuid.UUID
-	if job.PolicyID != nil {
-		policyID = *job.PolicyID
-	}
-	if err := d.notifSvc.NotifyJobFailed(ctx, jobID, policyID, job.PolicyName, TimeoutError); err != nil {
+	if err := d.notifSvc.NotifyJobFailed(ctx, notification.JobSubjectFrom(job, dests), TimeoutError); err != nil {
 		d.logger.Warn("failed to send queue timeout notification",
 			zap.String("job_id", jobID.String()),
 			zap.Error(err),

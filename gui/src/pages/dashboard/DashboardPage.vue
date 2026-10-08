@@ -53,6 +53,10 @@ interface DashboardData {
     jobs_today_failed: number
     snapshots_total: number
     snapshots_total_size: number  // bytes
+    // Integrity checks (issue #307): destinations with checks enabled, and how
+    // many of them failed their most recent check.
+    checks_enabled: number
+    checks_failed: number
     job_activity: DayJobActivity[]   // 7 entries, index 0 = oldest
     size_activity: DaySizeActivity[] // 7 entries, index 0 = oldest
 }
@@ -196,6 +200,17 @@ onMounted(fetchAll)
         <Alert v-if="error" variant="destructive">
             <AlertCircle class="size-4" />
             <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+
+        <!-- Integrity check failures (issue #307) — a damaged repository is
+             worth interrupting for, so it is a banner rather than a stat. -->
+        <Alert v-if="(data?.checks_failed ?? 0) > 0" variant="destructive">
+            <AlertCircle class="size-4" />
+            <AlertDescription class="flex flex-wrap items-center gap-x-2">
+                {{ data?.checks_failed }} of {{ data?.checks_enabled }} destination{{ data?.checks_enabled === 1 ? '' : 's' }}
+                with integrity checks failed {{ data?.checks_failed === 1 ? 'its' : 'their' }} last check.
+                <RouterLink to="/destinations" class="underline underline-offset-4 font-medium">View destinations</RouterLink>
+            </AlertDescription>
         </Alert>
 
         <!-- ── Stat cards ──────────────────────────────────────────────────────── -->

@@ -514,7 +514,7 @@ func TestMarkRunningJobsInterrupted_ReleasesDestinationBusyGate(t *testing.T) {
 // and keeps holding its destination's busy gate. Retention jobs have no retry
 // queue, so both sweeps must close them and free the gate. A pending backup job
 // is still waiting for DispatchPending and must be left alone.
-func TestMarkRunningJobsInterrupted_RecoversPendingRetentionJobs(t *testing.T) {
+func TestMarkRunningJobsInterrupted_RecoversPendingMaintenanceJobs(t *testing.T) {
 	sweeps := map[string]func(JobRepository, context.Context, uuid.UUID) (int64, error){
 		"all agents": func(r JobRepository, ctx context.Context, _ uuid.UUID) (int64, error) {
 			return r.MarkRunningJobsInterrupted(ctx, "server restarted")
@@ -523,59 +523,61 @@ func TestMarkRunningJobsInterrupted_RecoversPendingRetentionJobs(t *testing.T) {
 			return r.MarkRunningJobsInterruptedForAgent(ctx, agentID, "server restarted")
 		},
 	}
-	for name, sweep := range sweeps {
-		t.Run(name, func(t *testing.T) {
-			gormDB := newTestDB(t)
-			jobRepo := NewJobRepository(gormDB)
-			destRepo := NewDestinationRepository(gormDB)
-			f := newJobFixture(t, gormDB)
-			ctx := context.Background()
+	for _, jobType := range []string{"retention", "check"} {
+		for name, sweep := range sweeps {
+			t.Run(jobType+"/"+name, func(t *testing.T) {
+				gormDB := newTestDB(t)
+				jobRepo := NewJobRepository(gormDB)
+				destRepo := NewDestinationRepository(gormDB)
+				f := newJobFixture(t, gormDB)
+				ctx := context.Background()
 
-			retention := &db.Job{AgentID: f.agentID, Type: "retention", Status: "pending"}
-			if err := jobRepo.Create(ctx, retention); err != nil {
-				t.Fatalf("Create retention job: %v", err)
-			}
-			if err := jobRepo.CreateDestination(ctx, &db.JobDestination{JobID: retention.ID, DestinationID: f.destID, Status: "pending"}); err != nil {
-				t.Fatalf("CreateDestination: %v", err)
-			}
-			if acquired, err := destRepo.TryAcquireBusy(ctx, f.destID, retention.ID); err != nil || !acquired {
-				t.Fatalf("TryAcquireBusy: acquired=%v err=%v", acquired, err)
-			}
-			backup := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Type: "backup", Status: "pending"}
-			if err := jobRepo.Create(ctx, backup); err != nil {
-				t.Fatalf("Create backup job: %v", err)
-			}
+				maint := &db.Job{AgentID: f.agentID, Type: jobType, Status: "pending"}
+				if err := jobRepo.Create(ctx, maint); err != nil {
+					t.Fatalf("Create %s job: %v", jobType, err)
+				}
+				if err := jobRepo.CreateDestination(ctx, &db.JobDestination{JobID: maint.ID, DestinationID: f.destID, Status: "pending"}); err != nil {
+					t.Fatalf("CreateDestination: %v", err)
+				}
+				if acquired, err := destRepo.TryAcquireBusy(ctx, f.destID, maint.ID); err != nil || !acquired {
+					t.Fatalf("TryAcquireBusy: acquired=%v err=%v", acquired, err)
+				}
+				backup := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Type: "backup", Status: "pending"}
+				if err := jobRepo.Create(ctx, backup); err != nil {
+					t.Fatalf("Create backup job: %v", err)
+				}
 
-			n, err := sweep(jobRepo, ctx, f.agentID)
-			if err != nil {
-				t.Fatalf("sweep: %v", err)
-			}
-			if n != 1 {
-				t.Errorf("marked %d jobs, want 1", n)
-			}
+				n, err := sweep(jobRepo, ctx, f.agentID)
+				if err != nil {
+					t.Fatalf("sweep: %v", err)
+				}
+				if n != 1 {
+					t.Errorf("marked %d jobs, want 1", n)
+				}
 
-			stored, err := jobRepo.GetByID(ctx, retention.ID)
-			if err != nil {
-				t.Fatalf("GetByID(retention): %v", err)
-			}
-			if stored.Status != "interrupted" {
-				t.Errorf("retention job status = %q, want \"interrupted\"", stored.Status)
-			}
-			dest, err := destRepo.GetByID(ctx, f.destID)
-			if err != nil {
-				t.Fatalf("GetByID(destination): %v", err)
-			}
-			if dest.BusyJobID != nil {
-				t.Errorf("destination BusyJobID = %v, want nil (gate must be released)", dest.BusyJobID)
-			}
-			untouched, err := jobRepo.GetByID(ctx, backup.ID)
-			if err != nil {
-				t.Fatalf("GetByID(backup): %v", err)
-			}
-			if untouched.Status != "pending" {
-				t.Errorf("pending backup job status = %q, want it left at \"pending\"", untouched.Status)
-			}
-		})
+				stored, err := jobRepo.GetByID(ctx, maint.ID)
+				if err != nil {
+					t.Fatalf("GetByID(%s): %v", jobType, err)
+				}
+				if stored.Status != "interrupted" {
+					t.Errorf("%s job status = %q, want \"interrupted\"", jobType, stored.Status)
+				}
+				dest, err := destRepo.GetByID(ctx, f.destID)
+				if err != nil {
+					t.Fatalf("GetByID(destination): %v", err)
+				}
+				if dest.BusyJobID != nil {
+					t.Errorf("destination BusyJobID = %v, want nil (gate must be released)", dest.BusyJobID)
+				}
+				untouched, err := jobRepo.GetByID(ctx, backup.ID)
+				if err != nil {
+					t.Fatalf("GetByID(backup): %v", err)
+				}
+				if untouched.Status != "pending" {
+					t.Errorf("pending backup job status = %q, want it left at \"pending\"", untouched.Status)
+				}
+			})
+		}
 	}
 }
 

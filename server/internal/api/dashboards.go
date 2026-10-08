@@ -62,6 +62,10 @@ type dashboardResponse struct {
 	SnapshotsTotal     int64 `json:"snapshots_total"`
 	SnapshotsTotalSize int64 `json:"snapshots_total_size"` // bytes
 
+	// Integrity checks over destinations with checks enabled (issue #307)
+	ChecksEnabled int64 `json:"checks_enabled"`
+	ChecksFailed  int64 `json:"checks_failed"`
+
 	// 7-day activity arrays (index 0 = 6 days ago, index 6 = today)
 	JobActivity  []dayJobActivityResponse  `json:"job_activity"`
 	SizeActivity []daySizeActivityResponse `json:"size_activity"`
@@ -109,6 +113,8 @@ func (h *DashboardHandler) Get(w http.ResponseWriter, r *http.Request) {
 		JobsTodayFailed:    stats.JobsTodayFailed,
 		SnapshotsTotal:     stats.SnapshotsTotal,
 		SnapshotsTotalSize: stats.SnapshotsTotalSize,
+		ChecksEnabled:      stats.ChecksEnabled,
+		ChecksFailed:       stats.ChecksFailed,
 		JobActivity:        jobActivity,
 		SizeActivity:       sizeActivity,
 	})

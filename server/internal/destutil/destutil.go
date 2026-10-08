@@ -225,3 +225,20 @@ func buildSFTPEnv(dest *db.Destination, env map[string]string) {
 		}
 	}
 }
+
+// RepoPassword returns the password that opens the destination's repository:
+// the one stored on the destination, otherwise the first one carried by an
+// attached policy — every policy writing here shares the same repository.
+// Destinations created without importing a repository only have it on their
+// policies. Returns "" when none is known.
+func RepoPassword(dest *db.Destination, policies []db.Policy) string {
+	if dest.RepoPassword != "" {
+		return string(dest.RepoPassword)
+	}
+	for _, p := range policies {
+		if p.RepoPassword != "" {
+			return string(p.RepoPassword)
+		}
+	}
+	return ""
+}

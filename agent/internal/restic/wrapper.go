@@ -425,11 +425,105 @@ func buildForgetArgs(policy RetentionPolicy, tags []string) ([]string, error) {
 	return args, nil
 }
 
-// Check verifies the integrity of the repository. Progress events (one per
-// pack file checked) are forwarded to onProgress.
-func (w *Wrapper) Check(ctx context.Context, dest Destination, onProgress ProgressFunc) error {
+// Check modes: how much of the repository restic check reads.
+const (
+	CheckModeStructure = "structure" // repository structure and metadata only
+	CheckModeSubset    = "subset"    // plus CheckOptions.SubsetPercent of the pack data
+	CheckModeFull      = "full"      // plus all pack data
+)
+
+// CheckOptions selects how much of the repository Check reads.
+type CheckOptions struct {
+	Mode          string // CheckModeStructure, CheckModeSubset or CheckModeFull
+	SubsetPercent int    // 1-100, used by CheckModeSubset only
+}
+
+// CheckResult is the outcome of a restic check: its JSON summary plus the
+// human-readable messages restic wrote to stderr (errors found, the repair
+// commands it suggests, or the reason it could not run at all).
+type CheckResult struct {
+	NumErrors          int      `json:"num_errors"`
+	BrokenPacks        []string `json:"broken_packs"`
+	SuggestRepairIndex bool     `json:"suggest_repair_index"`
+	SuggestPrune       bool     `json:"suggest_prune"`
+	Messages           []string `json:"-"`
+}
+
+// Check verifies the integrity of the repository (issue #307). The returned
+// CheckResult is filled in whenever restic produced output, including when
+// the check fails — the error then says it failed, the result says why.
+func (w *Wrapper) Check(ctx context.Context, dest Destination, opts CheckOptions) (*CheckResult, error) {
+	args, err := buildCheckArgs(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	var result CheckResult
+	err = w.withLockRetry(ctx, dest, func() error {
+		cmd := w.buildCmd(ctx, dest, args)
+		var stdout, stderr strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		runErr := cmd.Run()
+		result = parseCheckOutput(stdout.String(), stderr.String())
+		if runErr != nil {
+			return fmt.Errorf("restic: command failed: %w\n%s", runErr, strings.TrimSpace(stderr.String()))
+		}
+		return nil
+	})
+	return &result, err
+}
+
+// buildCheckArgs builds the restic check arguments for opts.
+func buildCheckArgs(opts CheckOptions) ([]string, error) {
 	args := []string{"check", "--json"}
-	return w.runWithProgress(ctx, dest, args, onProgress)
+	switch opts.Mode {
+	case CheckModeStructure:
+	case CheckModeSubset:
+		if opts.SubsetPercent < 1 || opts.SubsetPercent > 100 {
+			return nil, fmt.Errorf("restic: check subset percent must be between 1 and 100, got %d", opts.SubsetPercent)
+		}
+		args = append(args, fmt.Sprintf("--read-data-subset=%d%%", opts.SubsetPercent))
+	case CheckModeFull:
+		args = append(args, "--read-data")
+	default:
+		return nil, fmt.Errorf("restic: unknown check mode %q", opts.Mode)
+	}
+	return args, nil
+}
+
+// parseCheckOutput extracts the summary from restic check --json's stdout
+// and the messages from its stderr, where restic writes one JSON object per
+// error ("error", then a final "exit_error"). Lines that are not JSON (older
+// restic versions, warnings) are kept as they are.
+func parseCheckOutput(stdout, stderr string) CheckResult {
+	var result CheckResult
+	for _, line := range strings.Split(stdout, "\n") {
+		var msg struct {
+			MessageType string `json:"message_type"`
+		}
+		if json.Unmarshal([]byte(line), &msg) == nil && msg.MessageType == "summary" {
+			_ = json.Unmarshal([]byte(line), &result)
+		}
+	}
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var msg struct {
+			MessageType string `json:"message_type"`
+			Message     string `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &msg) != nil {
+			result.Messages = append(result.Messages, line)
+			continue
+		}
+		if text := strings.TrimSpace(msg.Message); text != "" {
+			result.Messages = append(result.Messages, text)
+		}
+	}
+	return result
 }
 
 // Snapshots returns the list of snapshots stored in the repository.

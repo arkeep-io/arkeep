@@ -10,6 +10,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
@@ -28,9 +29,12 @@ type RouterConfig struct {
 	// schedule (issue #130). Optional — if nil, retention config is still
 	// stored but never dispatched (only relevant for tests).
 	RetentionScheduler *retentionscheduler.RetentionScheduler
-	AgentManager       *agentmanager.Manager
-	Logger             *zap.Logger
-	Hub                *websocket.Hub
+	// CheckScheduler runs each destination's integrity check on its own
+	// schedule (issue #307). Optional, like RetentionScheduler.
+	CheckScheduler *checkscheduler.CheckScheduler
+	AgentManager   *agentmanager.Manager
+	Logger         *zap.Logger
+	Hub            *websocket.Hub
 
 	// Repositories — used directly by handlers that do not need service-layer logic.
 	Users         repositories.UserRepository
@@ -121,7 +125,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
+	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.CheckScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
@@ -234,6 +238,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RequireRole("admin")).Post("/destinations/{id}/import", destinationHandler.Import)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/check-repo", destinationHandler.CheckRepo)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-check", destinationHandler.TriggerCheck)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/sync", destinationHandler.Sync)
 
 			// Policies
