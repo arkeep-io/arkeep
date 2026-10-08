@@ -68,6 +68,7 @@ func TestProtoToJob(t *testing.T) {
 		{"backup", "job-1", proto.JobType_JOB_TYPE_BACKUP, false},
 		{"restore", "job-1", proto.JobType_JOB_TYPE_RESTORE, false},
 		{"forget", "job-1", proto.JobType_JOB_TYPE_FORGET, false},
+		{"verify", "job-1", proto.JobType_JOB_TYPE_VERIFY, false},
 		{"unsupported type", "job-1", proto.JobType_JOB_TYPE_UNSPECIFIED, true},
 		{"missing job id", "", proto.JobType_JOB_TYPE_BACKUP, true},
 	}

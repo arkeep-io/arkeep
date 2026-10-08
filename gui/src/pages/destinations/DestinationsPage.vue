@@ -352,6 +352,10 @@ onMounted(fetchDestinations)
                   <Badge v-else-if="!dest.retention_enabled" variant="secondary" class="text-xs font-normal">
                     No retention
                   </Badge>
+                  <!-- Most recent integrity check failed (issue #307). -->
+                  <Badge v-if="dest.last_check_status === 'failed'" variant="destructive" class="text-xs font-normal">
+                    Integrity check failed
+                  </Badge>
                 </div>
               </TableCell>
               <TableCell>

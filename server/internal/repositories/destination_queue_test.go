@@ -165,18 +165,21 @@ func TestDestinationQueueQueries(t *testing.T) {
 		}
 	}
 
-	if has, _ := jobRepo.HasActiveRetentionJob(ctx, a.ID); has {
-		t.Error("HasActiveRetentionJob with only backups = true, want false")
+	if has, _ := jobRepo.HasActiveJobOfType(ctx, "retention", a.ID); has {
+		t.Error("HasActiveJobOfType(retention) with only backups = true, want false")
 	}
 	newJob("retention", "succeeded", map[*db.Destination]string{a: "succeeded"})
-	if has, _ := jobRepo.HasActiveRetentionJob(ctx, a.ID); has {
-		t.Error("HasActiveRetentionJob with a finished sweep = true, want false")
+	if has, _ := jobRepo.HasActiveJobOfType(ctx, "retention", a.ID); has {
+		t.Error("HasActiveJobOfType(retention) with a finished sweep = true, want false")
 	}
 	newJob("retention", "waiting", map[*db.Destination]string{a: "pending"})
-	if has, err := jobRepo.HasActiveRetentionJob(ctx, a.ID); err != nil || !has {
-		t.Errorf("HasActiveRetentionJob with a waiting sweep = %v, %v; want true", has, err)
+	if has, err := jobRepo.HasActiveJobOfType(ctx, "retention", a.ID); err != nil || !has {
+		t.Errorf("HasActiveJobOfType(retention) with a waiting sweep = %v, %v; want true", has, err)
 	}
-	if has, _ := jobRepo.HasActiveRetentionJob(ctx, b.ID); has {
-		t.Error("HasActiveRetentionJob on another destination = true, want false")
+	if has, _ := jobRepo.HasActiveJobOfType(ctx, "retention", b.ID); has {
+		t.Error("HasActiveJobOfType(retention) on another destination = true, want false")
+	}
+	if has, _ := jobRepo.HasActiveJobOfType(ctx, "check", a.ID); has {
+		t.Error("HasActiveJobOfType(check) with only a waiting sweep = true, want false")
 	}
 }

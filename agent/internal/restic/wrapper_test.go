@@ -683,3 +683,66 @@ func TestBuildDumpArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildCheckArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    CheckOptions
+		want    []string
+		wantErr bool
+	}{
+		{"structure", CheckOptions{Mode: CheckModeStructure}, []string{"check", "--json"}, false},
+		{"subset", CheckOptions{Mode: CheckModeSubset, SubsetPercent: 5}, []string{"check", "--json", "--read-data-subset=5%"}, false},
+		{"subset 100", CheckOptions{Mode: CheckModeSubset, SubsetPercent: 100}, []string{"check", "--json", "--read-data-subset=100%"}, false},
+		{"subset 0", CheckOptions{Mode: CheckModeSubset, SubsetPercent: 0}, nil, true},
+		{"subset 101", CheckOptions{Mode: CheckModeSubset, SubsetPercent: 101}, nil, true},
+		{"full", CheckOptions{Mode: CheckModeFull}, []string{"check", "--json", "--read-data"}, false},
+		{"unknown mode", CheckOptions{Mode: "deep"}, nil, true},
+		{"empty mode", CheckOptions{}, nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildCheckArgs(tt.opts)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("buildCheckArgs(%+v) error = %v, wantErr %v", tt.opts, err, tt.wantErr)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("buildCheckArgs(%+v) = %v, want %v", tt.opts, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseCheckOutput uses output captured from restic 0.19.1 against a
+// repository with one corrupted pack file.
+func TestParseCheckOutput(t *testing.T) {
+	stdout := `{"message_type":"summary","num_errors":1,"broken_packs":["8beb"],"suggest_repair_index":false,"suggest_prune":false}` + "\n"
+	stderr := `{"message_type":"error","message":"pack 8beb contains 2 errors: [blob a83b: ciphertext verification failed]\n"}
+{"message_type":"error","message":"\nThe repository contains damaged pack files.\n\n"}
+{"message_type":"error","message":"restic repair packs 8beb\nrestic repair snapshots --forget\n\n"}
+{"message_type":"exit_error","code":1,"message":"Fatal: repository contains errors"}
+`
+	got := parseCheckOutput(stdout, stderr)
+	if got.NumErrors != 1 || !slices.Equal(got.BrokenPacks, []string{"8beb"}) {
+		t.Errorf("summary = (%d errors, packs %v), want (1, [8beb])", got.NumErrors, got.BrokenPacks)
+	}
+	wantMessages := []string{
+		"pack 8beb contains 2 errors: [blob a83b: ciphertext verification failed]",
+		"The repository contains damaged pack files.",
+		"restic repair packs 8beb\nrestic repair snapshots --forget",
+		"Fatal: repository contains errors",
+	}
+	if !slices.Equal(got.Messages, wantMessages) {
+		t.Errorf("Messages = %q, want %q", got.Messages, wantMessages)
+	}
+
+	clean := parseCheckOutput(`{"message_type":"summary","num_errors":0,"broken_packs":null}`, "")
+	if clean.NumErrors != 0 || len(clean.BrokenPacks) != 0 || len(clean.Messages) != 0 {
+		t.Errorf("clean check = %+v, want an empty result", clean)
+	}
+
+	plain := parseCheckOutput("", "Fatal: wrong password or no key found\n")
+	if !slices.Equal(plain.Messages, []string{"Fatal: wrong password or no key found"}) {
+		t.Errorf("non-JSON stderr Messages = %q, want the raw line", plain.Messages)
+	}
+}

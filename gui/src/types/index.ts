@@ -45,6 +45,7 @@ export const JobType = {
   Backup: 'backup',
   Restore: 'restore',
   Retention: 'retention',
+  Check: 'check',
 } as const
 export type JobType = (typeof JobType)[keyof typeof JobType]
 
@@ -183,6 +184,18 @@ export interface Destination {
   // configuration to inherit unambiguously. Cleared once an admin explicitly
   // saves retention config for this destination.
   retention_needs_review: boolean
+
+  // Integrity check (issue #307) — restic check on its own schedule, run by
+  // retention_agent_id, the destination's maintenance agent.
+  check_enabled: boolean
+  check_schedule: string // cron expression; '' = unconfigured
+  check_mode: CheckMode
+  check_subset_percent: number // used by mode 'subset' only
+  // Most recent completed check: last_check_status is '' when none has
+  // completed yet, otherwise 'succeeded' or 'failed'.
+  last_check_at: string // RFC3339, '' if never
+  last_check_status: '' | 'succeeded' | 'failed'
+  last_check_job_id: string
   // policy_count: how many live policies write to this destination — backs
   // the "already used by N other policies" notice in the policy editor's
   // destination picker.
@@ -193,6 +206,10 @@ export interface Destination {
   busy_job_id: string
   busy_since: string
 }
+
+// structure: repository metadata only; subset: plus a share of the pack data;
+// full: plus all pack data.
+export type CheckMode = 'structure' | 'subset' | 'full'
 
 // ─── Policy ───────────────────────────────────────────────────────────────────
 

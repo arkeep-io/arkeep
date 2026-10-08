@@ -29,6 +29,11 @@ type DashboardStats struct {
 	SnapshotsTotal     int64
 	SnapshotsTotalSize int64 // sum of size_bytes
 
+	// Integrity checks (issue #307), over destinations with checks enabled:
+	// how many there are and how many failed their most recent check.
+	ChecksEnabled int64
+	ChecksFailed  int64
+
 	// Activity over the last 7 days (index 0 = oldest, index 6 = today)
 	JobActivity  []DayJobActivity
 	SizeActivity []DaySizeActivity
@@ -145,6 +150,18 @@ func (r *gormDashboardRepository) GetStats(ctx context.Context) (*DashboardStats
 	if err := d.Raw(`SELECT COALESCE(SUM(repo_size_bytes), 0) FROM destinations WHERE deleted_at IS NULL`).
 		Scan(&stats.SnapshotsTotalSize).Error; err != nil {
 		return nil, fmt.Errorf("dashboard: destinations repo size: %w", err)
+	}
+
+	// ── Integrity checks ─────────────────────────────────────────────────────
+
+	if err := d.Raw(`SELECT COUNT(*) FROM destinations WHERE deleted_at IS NULL AND check_enabled = ?`, true).
+		Scan(&stats.ChecksEnabled).Error; err != nil {
+		return nil, fmt.Errorf("dashboard: checks enabled: %w", err)
+	}
+
+	if err := d.Raw(`SELECT COUNT(*) FROM destinations WHERE deleted_at IS NULL AND check_enabled = ? AND last_check_status = 'failed'`, true).
+		Scan(&stats.ChecksFailed).Error; err != nil {
+		return nil, fmt.Errorf("dashboard: checks failed: %w", err)
 	}
 
 	// ── Job activity — last 7 days ────────────────────────────────────────────

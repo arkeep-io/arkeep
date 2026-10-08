@@ -15,6 +15,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -273,11 +274,11 @@ type countingNotifier struct {
 	jobFailed int
 }
 
-func (c *countingNotifier) NotifyJobSucceeded(_ context.Context, _, _ uuid.UUID, _ string) error {
+func (c *countingNotifier) NotifyJobSucceeded(_ context.Context, _ notification.JobSubject) error {
 	return nil
 }
 
-func (c *countingNotifier) NotifyJobFailed(_ context.Context, _, _ uuid.UUID, _, _ string) error {
+func (c *countingNotifier) NotifyJobFailed(_ context.Context, _ notification.JobSubject, _ string) error {
 	c.jobFailed++
 	return nil
 }

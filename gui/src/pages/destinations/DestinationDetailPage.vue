@@ -34,6 +34,7 @@ import {
     CalendarClock,
     AlertTriangle,
     RefreshCcw,
+    ShieldCheck,
 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
@@ -77,6 +78,7 @@ const editSheetOpen = ref(false)
 const deleteDialogOpen = ref(false)
 const deleteLoading = ref(false)
 const triggerLoading = ref(false)
+const checkLoading = ref(false)
 const syncLoading = ref(false)
 const syncMessage = ref<string | null>(null)
 
@@ -125,6 +127,21 @@ async function triggerRetention() {
         error.value = apiErrorMessage(e, 'Failed to trigger retention')
     } finally {
         triggerLoading.value = false
+    }
+}
+
+// triggerCheck runs the destination's integrity check now (issue #307). Works
+// even when scheduled checks are off: it only needs the maintenance agent.
+async function triggerCheck() {
+    checkLoading.value = true
+    error.value = null
+    try {
+        await api(`/api/v1/destinations/${destinationId}/trigger-check`, { method: 'POST' })
+        setTimeout(fetchJobs, 800)
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to trigger integrity check')
+    } finally {
+        checkLoading.value = false
     }
 }
 
@@ -177,8 +194,19 @@ function scheduleLabel(cron: string): string {
         '0 2 * * 0': 'Weekly (Sun)',
         '0 2 * * 1': 'Weekly (Mon)',
         '0 2 1 * *': 'Monthly',
+        '0 3 * * *': 'Daily at 03:00',
+        '0 3 * * 0': 'Weekly (Sun 03:00)',
+        '0 3 1 * *': 'Monthly (03:00)',
     }
     return presets[cron] ?? cron
+}
+
+function checkModeLabel(d: Destination): string {
+    switch (d.check_mode) {
+        case 'structure': return 'Structure only'
+        case 'full': return 'All data'
+        default: return `${d.check_subset_percent}% of the data per run`
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +268,12 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
                     <Play v-else class="w-4 h-4 mr-1.5" />
                     Run Retention Now
+                </Button>
+                <Button v-if="authStore.isAdmin && destination.retention_agent_id"
+                    variant="outline" size="sm" :disabled="checkLoading" @click="triggerCheck">
+                    <Loader2 v-if="checkLoading" class="w-4 h-4 mr-1.5 animate-spin" />
+                    <ShieldCheck v-else class="w-4 h-4 mr-1.5" />
+                    Run Check Now
                 </Button>
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm" :disabled="syncLoading"
                     @click="syncSnapshots">
@@ -357,6 +391,46 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
         <div v-else-if="loading" class="border rounded-md p-4 flex flex-col gap-3">
             <Skeleton class="w-24 h-4" />
             <Skeleton class="w-full h-8" />
+        </div>
+
+        <!-- ── Integrity check (issue #307) ────────────────────────────────── -->
+        <div v-if="!loading && destination" class="border rounded-md p-4 flex flex-col gap-3">
+            <h2 class="text-sm font-semibold">Integrity Check</h2>
+
+            <p v-if="!destination.check_enabled" class="text-sm text-muted-foreground">
+                Scheduled integrity checks are disabled for this destination.
+            </p>
+            <div v-else class="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-muted-foreground">Depth</span>
+                    <span class="text-sm font-medium">{{ checkModeLabel(destination) }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-muted-foreground">Schedule</span>
+                    <span class="text-sm font-mono font-medium">{{ scheduleLabel(destination.check_schedule) }}</span>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 text-sm">
+                <span class="text-xs text-muted-foreground">Last check:</span>
+                <template v-if="destination.last_check_status">
+                    <Badge :variant="destination.last_check_status === 'succeeded' ? 'outline' : 'destructive'"
+                        :class="destination.last_check_status === 'succeeded' ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400' : ''">
+                        {{ destination.last_check_status === 'succeeded' ? 'Passed' : 'Failed' }}
+                    </Badge>
+                    <span class="text-muted-foreground">{{ formatDate(destination.last_check_at) }}</span>
+                    <RouterLink v-if="destination.last_check_job_id"
+                        :to="{ name: 'job-detail', params: { id: destination.last_check_job_id } }"
+                        class="text-xs underline underline-offset-4 text-muted-foreground hover:text-foreground">
+                        View job
+                    </RouterLink>
+                </template>
+                <span v-else class="text-muted-foreground">Never run</span>
+            </div>
+
+            <p v-if="destination.check_enabled && !destination.retention_agent_id" class="text-xs text-destructive">
+                No maintenance agent is assigned, so scheduled checks cannot run. Edit the destination to choose one.
+            </p>
         </div>
 
         <!-- ── Recent Jobs (backups + retention runs) ─────────────────────── -->

@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
+	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -28,6 +29,7 @@ type DestinationHandler struct {
 	agentRepo      repositories.AgentRepository
 	agentMgr       *agentmanager.Manager
 	retentionSched *retentionscheduler.RetentionScheduler
+	checkSched     *checkscheduler.CheckScheduler
 	snapshotSync   *snapshotsync.Service
 	auditRepo      repositories.AuditRepository
 	logger         *zap.Logger
@@ -40,6 +42,7 @@ func NewDestinationHandler(
 	agentRepo repositories.AgentRepository,
 	agentMgr *agentmanager.Manager,
 	retentionSched *retentionscheduler.RetentionScheduler,
+	checkSched *checkscheduler.CheckScheduler,
 	snapshotSync *snapshotsync.Service,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
@@ -50,6 +53,7 @@ func NewDestinationHandler(
 		agentRepo:      agentRepo,
 		agentMgr:       agentMgr,
 		retentionSched: retentionSched,
+		checkSched:     checkSched,
 		snapshotSync:   snapshotSync,
 		auditRepo:      auditRepo,
 		logger:         logger.Named("destination_handler"),
@@ -92,6 +96,18 @@ type destinationResponse struct {
 	RetentionAgentName   string `json:"retention_agent_name"`
 	AppendOnly           bool   `json:"append_only"`
 	RetentionNeedsReview bool   `json:"retention_needs_review"`
+
+	// Integrity check — issue #307, run by the retention agent above, which
+	// acts as the destination's maintenance agent. LastCheck* describe the
+	// most recent completed check: LastCheckStatus is "" when none has
+	// completed yet.
+	CheckEnabled       bool   `json:"check_enabled"`
+	CheckSchedule      string `json:"check_schedule"`
+	CheckMode          string `json:"check_mode"`
+	CheckSubsetPercent int    `json:"check_subset_percent"`
+	LastCheckAt        string `json:"last_check_at"`
+	LastCheckStatus    string `json:"last_check_status"`
+	LastCheckJobID     string `json:"last_check_job_id"`
 	// PolicyCount is how many live policies write to this destination —
 	// backs the "already used by N other policies" notice in the policy
 	// editor's destination picker.
@@ -152,7 +168,18 @@ func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentN
 		RetentionAgentName:   retentionAgentName,
 		AppendOnly:           d.AppendOnly,
 		RetentionNeedsReview: d.RetentionNeedsReview,
+		CheckEnabled:         d.CheckEnabled,
+		CheckSchedule:        d.CheckSchedule,
+		CheckMode:            d.CheckMode,
+		CheckSubsetPercent:   d.CheckSubsetPercent,
+		LastCheckStatus:      d.LastCheckStatus,
 		PolicyCount:          policyCount,
+	}
+	if d.LastCheckAt != nil {
+		resp.LastCheckAt = d.LastCheckAt.UTC().Format(time.RFC3339)
+	}
+	if d.LastCheckJobID != nil {
+		resp.LastCheckJobID = d.LastCheckJobID.String()
 	}
 	if d.BusyJobID != nil {
 		resp.BusyJobID = d.BusyJobID.String()
@@ -262,6 +289,13 @@ type createDestinationRequest struct {
 	RetentionEnabled  bool   `json:"retention_enabled"`
 	RetentionAgentID  string `json:"retention_agent_id"`
 	AppendOnly        bool   `json:"append_only"`
+
+	// Integrity check — issue #307, all optional at creation (defaults:
+	// disabled, mode "subset", 5%).
+	CheckEnabled       bool   `json:"check_enabled"`
+	CheckSchedule      string `json:"check_schedule"`
+	CheckMode          string `json:"check_mode"`
+	CheckSubsetPercent int    `json:"check_subset_percent"`
 }
 
 type createDestinationResponse struct {
@@ -307,6 +341,16 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.CheckMode == "" {
+		req.CheckMode = checkscheduler.ModeSubset
+	}
+	if req.CheckSubsetPercent == 0 {
+		req.CheckSubsetPercent = defaultCheckSubsetPercent
+	}
+	if err := validateCheckSettings(req.CheckSchedule, req.CheckMode, req.CheckSubsetPercent); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
 	var retentionAgentID *uuid.UUID
 	if req.RetentionAgentID != "" {
 		agentID, err := uuid.Parse(req.RetentionAgentID)
@@ -327,21 +371,25 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dest := &db.Destination{
-		Name:              req.Name,
-		Type:              req.Type,
-		Credentials:       db.EncryptedString(req.Credentials),
-		Config:            req.Config,
-		Enabled:           true,
-		RetentionLast:     req.RetentionLast,
-		RetentionHourly:   req.RetentionHourly,
-		RetentionDaily:    req.RetentionDaily,
-		RetentionWeekly:   req.RetentionWeekly,
-		RetentionMonthly:  req.RetentionMonthly,
-		RetentionYearly:   req.RetentionYearly,
-		RetentionSchedule: req.RetentionSchedule,
-		RetentionEnabled:  req.RetentionEnabled,
-		RetentionAgentID:  retentionAgentID,
-		AppendOnly:        req.AppendOnly,
+		Name:               req.Name,
+		Type:               req.Type,
+		Credentials:        db.EncryptedString(req.Credentials),
+		Config:             req.Config,
+		Enabled:            true,
+		RetentionLast:      req.RetentionLast,
+		RetentionHourly:    req.RetentionHourly,
+		RetentionDaily:     req.RetentionDaily,
+		RetentionWeekly:    req.RetentionWeekly,
+		RetentionMonthly:   req.RetentionMonthly,
+		RetentionYearly:    req.RetentionYearly,
+		RetentionSchedule:  req.RetentionSchedule,
+		RetentionEnabled:   req.RetentionEnabled,
+		RetentionAgentID:   retentionAgentID,
+		AppendOnly:         req.AppendOnly,
+		CheckEnabled:       req.CheckEnabled,
+		CheckSchedule:      req.CheckSchedule,
+		CheckMode:          req.CheckMode,
+		CheckSubsetPercent: req.CheckSubsetPercent,
 	}
 
 	ctx := r.Context()
@@ -399,6 +447,11 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if h.retentionSched != nil {
 		if err := h.retentionSched.AddDestination(dest); err != nil {
 			h.logger.Warn("failed to add destination to retention scheduler", zap.String("id", dest.ID.String()), zap.Error(err))
+		}
+	}
+	if h.checkSched != nil {
+		if err := h.checkSched.AddDestination(dest); err != nil {
+			h.logger.Warn("failed to add destination to check scheduler", zap.String("id", dest.ID.String()), zap.Error(err))
 		}
 	}
 
@@ -461,6 +514,13 @@ type updateDestinationRequest struct {
 	// RetentionAgentID: "" clears the assignment.
 	RetentionAgentID *string `json:"retention_agent_id"`
 	AppendOnly       *bool   `json:"append_only"`
+
+	// Integrity check — issue #307. All optional; only non-nil values are
+	// applied.
+	CheckEnabled       *bool   `json:"check_enabled"`
+	CheckSchedule      *string `json:"check_schedule"`
+	CheckMode          *string `json:"check_mode"`
+	CheckSubsetPercent *int    `json:"check_subset_percent"`
 }
 
 // Update handles PATCH /api/v1/destinations/{id}.
@@ -586,6 +646,24 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		dest.RetentionYearly = *req.RetentionYearly
 	}
 	dest.RetentionEnabled = effectiveRetentionEnabled
+
+	if req.CheckEnabled != nil {
+		dest.CheckEnabled = *req.CheckEnabled
+	}
+	if req.CheckSchedule != nil {
+		dest.CheckSchedule = *req.CheckSchedule
+	}
+	if req.CheckMode != nil {
+		dest.CheckMode = *req.CheckMode
+	}
+	if req.CheckSubsetPercent != nil {
+		dest.CheckSubsetPercent = *req.CheckSubsetPercent
+	}
+	if err := validateCheckSettings(dest.CheckSchedule, dest.CheckMode, dest.CheckSubsetPercent); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+
 	if retentionTouched {
 		// The admin explicitly saved retention config for this destination —
 		// whatever ambiguity the migration backfill flagged has now been
@@ -604,9 +682,37 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn("failed to update retention scheduler for destination", zap.String("id", id.String()), zap.Error(err))
 		}
 	}
+	if h.checkSched != nil {
+		if err := h.checkSched.UpdateDestination(dest); err != nil {
+			h.logger.Warn("failed to update check scheduler for destination", zap.String("id", id.String()), zap.Error(err))
+		}
+	}
 
 	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched})
 	Ok(w, h.singleDestinationResponse(r.Context(), dest))
+}
+
+// defaultCheckSubsetPercent is the share of pack data a "subset" integrity
+// check reads when the request does not say.
+const defaultCheckSubsetPercent = 5
+
+// validateCheckSettings validates a destination's integrity check settings.
+// An empty schedule is allowed: the check is then never run on its own.
+func validateCheckSettings(schedule, mode string, subsetPercent int) error {
+	if schedule != "" {
+		if err := validateSchedule(schedule); err != nil {
+			return err
+		}
+	}
+	switch mode {
+	case checkscheduler.ModeStructure, checkscheduler.ModeSubset, checkscheduler.ModeFull:
+	default:
+		return errors.New("check_mode must be one of: structure, subset, full")
+	}
+	if subsetPercent < 1 || subsetPercent > 100 {
+		return errors.New("check_subset_percent must be between 1 and 100")
+	}
+	return nil
 }
 
 // errRcloneCredentials rejects credentials on an rclone destination. rclone
@@ -932,6 +1038,11 @@ func (h *DestinationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn("failed to remove destination from retention scheduler", zap.String("id", id.String()), zap.Error(err))
 		}
 	}
+	if h.checkSched != nil {
+		if err := h.checkSched.RemoveDestination(id); err != nil {
+			h.logger.Warn("failed to remove destination from check scheduler", zap.String("id", id.String()), zap.Error(err))
+		}
+	}
 
 	logAudit(r, h.auditRepo, h.logger, "destination.delete", "destination", id.String(), map[string]any{})
 	NoContent(w)
@@ -961,6 +1072,33 @@ func (h *DestinationHandler) TriggerRetention(w http.ResponseWriter, r *http.Req
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "destination.trigger_retention", "destination", id.String(), map[string]any{"job_id": job.ID.String()})
+	Ok(w, map[string]string{"job_id": job.ID.String()})
+}
+
+// TriggerCheck handles POST /api/v1/destinations/{id}/trigger-check (admin
+// only). Manually runs a destination's integrity check immediately, bypassing
+// its cron schedule and enabled flag — mirrors TriggerRetention.
+func (h *DestinationHandler) TriggerCheck(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if h.checkSched == nil {
+		ErrServiceUnavailable(w, "check scheduler is not available")
+		return
+	}
+
+	job, err := h.checkSched.TriggerNow(r.Context(), id)
+	if err != nil {
+		h.logger.Warn("failed to trigger check",
+			zap.String("destination_id", id.String()),
+			zap.Error(err),
+		)
+		ErrConflict(w, err.Error())
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "destination.trigger_check", "destination", id.String(), map[string]any{"job_id": job.ID.String()})
 	Ok(w, map[string]string{"job_id": job.ID.String()})
 }
 
