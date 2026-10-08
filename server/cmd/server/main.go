@@ -269,6 +269,12 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Warn("destination retention backfill failed", zap.Error(err))
 	}
 
+	// One-time: erase secrets removed before secure_delete was enabled from
+	// the SQLite file's free space (issue #289).
+	if err := vacuumSecretResidue(ctx, gormDB, settingsRepo, logger); err != nil {
+		logger.Warn("database vacuum for removed secrets failed", zap.Error(err))
+	}
+
 	// --- Destination queue ---
 	// Jobs that find a destination busy with another backup or retention sweep
 	// wait here and start once all their destinations are free (issue #285).

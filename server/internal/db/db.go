@@ -122,6 +122,13 @@ func New(cfg Config) (*gorm.DB, error) {
 		if err := database.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
 			return nil, fmt.Errorf("db: failed to enable foreign keys: %w", err)
 		}
+		// Overwrite freed content with zeros. Without it, a value removed by an
+		// UPDATE or DELETE — e.g. the credentials wiped when a destination is
+		// deleted (issue #289) — stays readable in the database file until
+		// SQLite happens to reuse that space.
+		if err := database.Exec("PRAGMA secure_delete = ON").Error; err != nil {
+			return nil, fmt.Errorf("db: failed to enable secure delete: %w", err)
+		}
 		drvName = "sqlite"
 
 	case "postgres":

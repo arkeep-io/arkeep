@@ -61,6 +61,41 @@ All sensitive values (repository passwords, S3 keys, SFTP passwords, OIDC client
 secrets) are encrypted at rest using AES-256-GCM with a server-side encryption key.
 Credentials are never returned in API responses — they are write-only after creation.
 
+**What the encryption protects against:** someone who obtains the database alone — a
+database dump, a copy of the SQLite file, a backup of it, or access to a PostgreSQL
+server running on another host. It does **not** protect against someone who can read
+both the database and `ARKEEP_SECRET_KEY`, which is any user with access to the server
+host. The server has to decrypt credentials to send them to agents, so it always holds
+the key; this is true of any service that uses stored secrets unattended.
+
+**Deployment recommendations:**
+
+- Restrict the file that holds `ARKEEP_SECRET_KEY` (e.g. `.env`) to the user running the
+  server (`chmod 600`).
+- Do not keep a copy of the key next to copies of the database: a backup that contains
+  both gives away every stored credential.
+- Treat database backups as sensitive. They contain every credential that existed when
+  they were taken, including those of destinations and policies deleted since.
+
+**Deleted destinations and policies:** deleting a destination wipes its credentials and
+repository password, and deleting a policy wipes its repository password. The row is
+kept, without secrets, so snapshot and job history still resolve its name. Restoring a
+snapshot of a deleted destination asks for the credentials again.
+
+On SQLite the database is opened with `secure_delete`, so wiped values are overwritten
+on disk instead of lingering in the file's free space. Databases created by older
+releases are rebuilt once with `VACUUM` on the first start after upgrading, which
+erases what earlier deletes left behind. This needs free disk space about as large as
+the database.
+
+On PostgreSQL old row versions stay on disk until the space is reused, and in WAL
+files and backups until those are rotated. Arkeep cannot erase them: if this matters
+for your threat model, run `VACUUM FULL destinations, policies;` after deleting and
+rotate WAL archives and backups according to your own policy.
+
+If a destination's credentials may have been exposed, rotate them at the storage
+provider; deleting the destination in Arkeep does not invalidate them.
+
 ### Session and token revocation
 
 Arkeep uses two tokens per session:
