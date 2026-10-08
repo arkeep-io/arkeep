@@ -3,6 +3,7 @@ package retentionscheduler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"go.uber.org/zap"
@@ -28,6 +29,17 @@ func (m *mockStream) SetTrailer(_ metadata.MD)          {}
 func (m *mockStream) Context() context.Context          { return context.Background() }
 func (m *mockStream) SendMsg(_ any) error               { return nil }
 func (m *mockStream) RecvMsg(_ any) error               { return nil }
+
+// recordingStream is a mockStream that keeps the assignments it was sent.
+type recordingStream struct {
+	mockStream
+	sent []*proto.JobAssignment
+}
+
+func (r *recordingStream) Send(a *proto.JobAssignment) error {
+	r.sent = append(r.sent, a)
+	return nil
+}
 
 // testEnv bundles everything a test needs: a fresh in-memory DB with all
 // migrations applied, real repositories, and an agentmanager.Manager.
@@ -127,7 +139,7 @@ func TestTriggerNow_AgentOffline_NoJobCreated(t *testing.T) {
 		d.RetentionSchedule = "0 3 * * *"
 		d.RetentionAgentID = &agent.ID
 	})
-	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`}
+	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`, RepoPassword: "policy-pass"}
 	if err := e.policies.Create(context.Background(), policy); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}
@@ -192,17 +204,43 @@ func TestTriggerNow_NoPolicies_Fails(t *testing.T) {
 	}
 }
 
-func TestTriggerNow_Success(t *testing.T) {
+func TestTriggerNow_NoRepoPassword_Fails(t *testing.T) {
 	e := newTestEnv(t)
 	agent := e.createAgent(t, "retention-agent")
 	e.agentMgr.Register(agent.ID.String(), "host", false, &mockStream{})
+	dest := e.createDestination(t, "d", func(d *db.Destination) {
+		d.RetentionEnabled = true
+		d.RetentionAgentID = &agent.ID
+	})
+	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`}
+	if err := e.policies.Create(context.Background(), policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	if err := e.policies.AddDestination(context.Background(), &db.PolicyDestination{PolicyID: policy.ID, DestinationID: dest.ID}); err != nil {
+		t.Fatalf("attach policy: %v", err)
+	}
+
+	s := e.newScheduler(t)
+	if _, err := s.TriggerNow(context.Background(), dest.ID); err == nil {
+		t.Fatal("TriggerNow with no known repository password returned nil error, want one")
+	}
+	if _, total, _ := e.jobs.List(context.Background(), repositories.ListOptions{Limit: 10}); total != 0 {
+		t.Errorf("jobs created without a repository password = %d, want 0", total)
+	}
+}
+
+func TestTriggerNow_Success(t *testing.T) {
+	e := newTestEnv(t)
+	agent := e.createAgent(t, "retention-agent")
+	stream := &recordingStream{}
+	e.agentMgr.Register(agent.ID.String(), "host", false, stream)
 
 	dest := e.createDestination(t, "d", func(d *db.Destination) {
 		d.RetentionEnabled = true
 		d.RetentionAgentID = &agent.ID
 		d.RetentionDaily = 7
 	})
-	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`}
+	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`, RepoPassword: "policy-pass"}
 	if err := e.policies.Create(context.Background(), policy); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}
@@ -231,6 +269,19 @@ func TestTriggerNow_Success(t *testing.T) {
 		t.Errorf("retention tags = %+v, want one tag %q", tags, "policy:"+policy.ID.String())
 	}
 
+	// A destination created without importing a repository only has the
+	// password on its policies: the sweep must carry that one.
+	if len(stream.sent) != 1 {
+		t.Fatalf("assignments sent = %d, want 1", len(stream.sent))
+	}
+	var payload retentionSweepPayload
+	if err := json.Unmarshal(stream.sent[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.RepoPassword != "policy-pass" {
+		t.Errorf("payload repo password = %q, want the attached policy's", payload.RepoPassword)
+	}
+
 	gotDest, err := e.dests.GetByID(context.Background(), dest.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
@@ -250,7 +301,7 @@ func TestTriggerNow_DestinationBusy_Queues(t *testing.T) {
 		d.RetentionEnabled = true
 		d.RetentionAgentID = &agent.ID
 	})
-	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`}
+	policy := &db.Policy{Name: "p", AgentID: agent.ID, Schedule: "@daily", Sources: `[{"type":"directory","path":"/data"}]`, RepoPassword: "policy-pass"}
 	if err := e.policies.Create(ctx, policy); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}

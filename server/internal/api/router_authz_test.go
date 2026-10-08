@@ -22,6 +22,8 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodPatch, "/api/v1/destinations/" + id},
 		{http.MethodPost, "/api/v1/destinations/" + id + "/import"},
 		{http.MethodPost, "/api/v1/destinations/" + id + "/check-repo"},
+		{http.MethodPost, "/api/v1/destinations/" + id + "/trigger-retention"},
+		{http.MethodPost, "/api/v1/destinations/" + id + "/trigger-check"},
 		{http.MethodPost, "/api/v1/policies"},
 		{http.MethodPatch, "/api/v1/policies/" + id},
 		{http.MethodPost, "/api/v1/jobs/" + id + "/cancel"},

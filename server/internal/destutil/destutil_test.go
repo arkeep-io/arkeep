@@ -277,3 +277,24 @@ func escapeJSON(s string) string {
 	}
 	return string(out)
 }
+
+func TestRepoPassword(t *testing.T) {
+	policies := []db.Policy{{RepoPassword: ""}, {RepoPassword: "policy-pass"}}
+	tests := []struct {
+		name     string
+		dest     *db.Destination
+		policies []db.Policy
+		want     string
+	}{
+		{"destination password wins", &db.Destination{RepoPassword: "dest-pass"}, policies, "dest-pass"},
+		{"falls back to the first policy that has one", &db.Destination{}, policies, "policy-pass"},
+		{"unknown", &db.Destination{}, nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RepoPassword(tt.dest, tt.policies); got != tt.want {
+				t.Errorf("RepoPassword() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

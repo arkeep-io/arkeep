@@ -22,6 +22,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentwatchdog"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
@@ -269,6 +270,12 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Warn("destination retention backfill failed", zap.Error(err))
 	}
 
+	// One-time: erase secrets removed before secure_delete was enabled from
+	// the SQLite file's free space (issue #289).
+	if err := vacuumSecretResidue(ctx, gormDB, settingsRepo, logger); err != nil {
+		logger.Warn("database vacuum for removed secrets failed", zap.Error(err))
+	}
+
 	// --- Destination queue ---
 	// Jobs that find a destination busy with another backup or retention sweep
 	// wait here and start once all their destinations are free (issue #285).
@@ -306,6 +313,24 @@ func run(ctx context.Context, cfg *config) error {
 	defer func() {
 		if err := retentionSched.Stop(); err != nil {
 			logger.Warn("retention scheduler shutdown error", zap.Error(err))
+		}
+	}()
+
+	// --- Check scheduler ---
+	// Runs each destination's repository integrity check (restic check) on
+	// its own schedule (issue #307).
+	checkSched, err := checkscheduler.New(destinationRepo, jobRepo, agentMgr, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create check scheduler: %w", err)
+	}
+	checkSched.SetQueue(destQueue)
+	destQueue.RegisterStarter("check", checkSched)
+	if err := checkSched.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start check scheduler: %w", err)
+	}
+	defer func() {
+		if err := checkSched.Stop(); err != nil {
+			logger.Warn("check scheduler shutdown error", zap.Error(err))
 		}
 	}()
 
@@ -411,6 +436,7 @@ func run(ctx context.Context, cfg *config) error {
 		AuthService:        authService,
 		Scheduler:          sched,
 		RetentionScheduler: retentionSched,
+		CheckScheduler:     checkSched,
 		AgentManager:       agentMgr,
 		Logger:             logger,
 		Hub:                wsHub,

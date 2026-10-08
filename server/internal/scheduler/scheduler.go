@@ -447,7 +447,7 @@ func (s *Scheduler) giveUpOnResume(ctx context.Context, j *repositories.JobWithN
 	if s.notifSvc == nil {
 		return
 	}
-	if err := s.notifSvc.NotifyJobFailed(ctx, j.ID, policy.ID, policy.Name, errMsg); err != nil {
+	if err := s.notifSvc.NotifyJobFailed(ctx, notification.JobSubject{JobID: j.ID, Type: j.Type, PolicyID: policy.ID, PolicyName: policy.Name}, errMsg); err != nil {
 		s.logger.Warn("failed to send resume-exhausted notification",
 			zap.String("job_id", j.ID.String()),
 			zap.Error(err),
@@ -736,7 +736,7 @@ func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Pol
 		go s.pinger.ReportJob(context.WithoutCancel(ctx), job.ID, "failed", errMsg)
 		if s.notifSvc != nil {
 			// Detached from the dispatch timeout: a slow SMTP send must not be cut short.
-			if err := s.notifSvc.NotifyJobFailed(context.WithoutCancel(ctx), job.ID, policy.ID, policy.Name, errMsg); err != nil {
+			if err := s.notifSvc.NotifyJobFailed(context.WithoutCancel(ctx), notification.JobSubject{JobID: job.ID, Type: job.Type, PolicyID: policy.ID, PolicyName: policy.Name}, errMsg); err != nil {
 				s.logger.Warn("failed to send job failed notification",
 					zap.String("job_id", job.ID.String()),
 					zap.Error(err),

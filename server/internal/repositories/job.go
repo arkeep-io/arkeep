@@ -211,7 +211,7 @@ func (r *gormJobRepository) MarkRunningJobsInterruptedForAgent(ctx context.Conte
 		// found before the parent rows stop matching status = "running".
 		var jobIDs []uuid.UUID
 		if err := tx.Model(&db.Job{}).
-			Where("agent_id = ? AND (status = ? OR (type = ? AND status = ?))", agentID, "running", "retention", "pending").
+			Where("agent_id = ? AND (status = ? OR (type IN ? AND status = ?))", agentID, "running", maintenanceJobTypes, "pending").
 			Pluck("id", &jobIDs).Error; err != nil {
 			return fmt.Errorf("select running jobs: %w", err)
 		}
@@ -297,7 +297,7 @@ func (r *gormJobRepository) MarkRunningJobsInterrupted(ctx context.Context, errM
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var jobIDs []uuid.UUID
 		if err := tx.Model(&db.Job{}).
-			Where("status = ? OR (type = ? AND status = ?)", "running", "retention", "pending").
+			Where("status = ? OR (type IN ? AND status = ?)", "running", maintenanceJobTypes, "pending").
 			Pluck("id", &jobIDs).Error; err != nil {
 			return fmt.Errorf("select running jobs: %w", err)
 		}
@@ -826,19 +826,25 @@ func (r *gormJobRepository) HasWaitingForDestinations(ctx context.Context, desti
 	return count > 0, nil
 }
 
-// HasActiveRetentionJob reports whether a retention job against the
-// destination is pending, waiting or running.
-func (r *gormJobRepository) HasActiveRetentionJob(ctx context.Context, destinationID uuid.UUID) (bool, error) {
+// maintenanceJobTypes are the per-destination job types (retention sweep,
+// integrity check) dispatched straight to the agent rather than through the
+// backup scheduler's DispatchPending: a pending one can only be in flight, so
+// it is swept together with running jobs.
+var maintenanceJobTypes = []string{"retention", "check"}
+
+// HasActiveJobOfType reports whether a job of jobType against the destination
+// is pending, waiting or running.
+func (r *gormJobRepository) HasActiveJobOfType(ctx context.Context, jobType string, destinationID uuid.UUID) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&db.JobDestination{}).
 		Joins("INNER JOIN jobs ON jobs.id = job_destinations.job_id").
 		Where("jobs.type = ? AND jobs.status IN ? AND job_destinations.destination_id = ?",
-			"retention", []string{"pending", "waiting", "running"}, destinationID).
+			jobType, []string{"pending", "waiting", "running"}, destinationID).
 		Limit(1).
 		Count(&count).Error
 	if err != nil {
-		return false, fmt.Errorf("jobs: has active retention job: %w", err)
+		return false, fmt.Errorf("jobs: has active %s job: %w", jobType, err)
 	}
 	return count > 0, nil
 }

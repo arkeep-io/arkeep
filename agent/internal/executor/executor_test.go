@@ -132,6 +132,43 @@ func TestExecuteRetention_MalformedPayloadFails(t *testing.T) {
 	}
 }
 
+// TestExecuteCheck_FailsBeforeRunningRestic covers the executeCheck paths that
+// end before restic runs: an undeserializable payload, and a check mode the
+// wrapper refuses. The latter must still report a failed destination result,
+// which is what releases the destination's busy gate on the server.
+func TestExecuteCheck_FailsBeforeRunningRestic(t *testing.T) {
+	t.Run("malformed payload", func(t *testing.T) {
+		e := New(nil, nil, nil, zap.NewNop(), "", "")
+		reporter := &fakeReporter{}
+		job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_VERIFY, Payload: []byte("not json")}
+
+		e.executeCheck(context.Background(), job, fakeSink{}, reporter)
+
+		if !slices.Equal(reporter.statuses, []string{"failed"}) {
+			t.Errorf("statuses = %v, want [failed]", reporter.statuses)
+		}
+	})
+
+	t.Run("unknown mode", func(t *testing.T) {
+		e := New(nil, nil, nil, zap.NewNop(), "", "")
+		reporter := &fakeReporter{}
+		payload, _ := json.Marshal(checkPayload{
+			Destination: destinationPayload{DestinationID: "dest-1", Type: "local", RepoURL: "/tmp/repo"},
+			Mode:        "deep",
+		})
+		job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_VERIFY, Payload: payload}
+
+		e.executeCheck(context.Background(), job, fakeSink{}, reporter)
+
+		if !slices.Equal(reporter.statuses, []string{"running", "failed"}) {
+			t.Errorf("statuses = %v, want [running failed]", reporter.statuses)
+		}
+		if got := reporter.destResults["dest-1"]; got.status != "failed" || got.errMsg == "" {
+			t.Errorf("destination result = %+v, want failed with an error", got)
+		}
+	})
+}
+
 // TestResolveSources_RejectsFlagLikeEntries is a regression test for
 // GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: resolveSources is the agent-side
 // defense-in-depth gate that must still reject a flag-like source even if a

@@ -259,8 +259,10 @@ func TestSQLiteMigrationDownUp_WaitingStatus(t *testing.T) {
 		t.Fatalf("sql.DB: %v", err)
 	}
 	m := newSQLiteMigrator(t, sqlDB)
-	if err := m.Steps(-1); err != nil {
-		t.Fatalf("Steps(-1): %v", err)
+	// Migrate to the version right before 000032 rather than one step down,
+	// so later migrations do not shift what this test exercises.
+	if err := m.Migrate(31); err != nil {
+		t.Fatalf("Migrate(31): %v", err)
 	}
 
 	var row struct {

@@ -2,9 +2,11 @@ package connection
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 
+	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -66,6 +68,7 @@ func TestProtoToJob(t *testing.T) {
 		{"backup", "job-1", proto.JobType_JOB_TYPE_BACKUP, false},
 		{"restore", "job-1", proto.JobType_JOB_TYPE_RESTORE, false},
 		{"forget", "job-1", proto.JobType_JOB_TYPE_FORGET, false},
+		{"verify", "job-1", proto.JobType_JOB_TYPE_VERIFY, false},
 		{"unsupported type", "job-1", proto.JobType_JOB_TYPE_UNSPECIFIED, true},
 		{"missing job id", "", proto.JobType_JOB_TYPE_BACKUP, true},
 	}
@@ -80,5 +83,24 @@ func TestProtoToJob(t *testing.T) {
 				t.Errorf("job.Type = %v, want %v", job.Type, tt.jobType)
 			}
 		})
+	}
+}
+
+// TestSnapshotImportPayloadDestination is a regression test for import and
+// sync failing with "an empty password is not allowed": the password used to
+// travel as Env["RESTIC_PASSWORD"], which the env allowlist drops.
+func TestSnapshotImportPayloadDestination(t *testing.T) {
+	var p snapshotImportPayload
+	body := `{"type":"s3","repo_url":"s3:host/bucket","repo_password":"secret","env":{"AWS_ACCESS_KEY_ID":"key"}}`
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	d := p.destination("s3:host/bucket")
+	if d.Password != "secret" {
+		t.Errorf("Password = %q, want %q", d.Password, "secret")
+	}
+	if d.RepoURL != "s3:host/bucket" || d.Type != restic.DestS3 || d.Env["AWS_ACCESS_KEY_ID"] != "key" {
+		t.Errorf("destination = %+v, want the payload's type, repo URL and env", d)
 	}
 }

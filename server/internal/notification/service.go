@@ -27,12 +27,11 @@ import (
 // across the codebase.
 type Service interface {
 	// NotifyJobSucceeded creates a success notification for the given job.
-	// policyName is included in the message body for human readability.
-	NotifyJobSucceeded(ctx context.Context, jobID, policyID uuid.UUID, policyName string) error
+	NotifyJobSucceeded(ctx context.Context, job JobSubject) error
 
 	// NotifyJobFailed creates a failure notification for the given job.
 	// errMsg is the error string from the backup engine, included in the body.
-	NotifyJobFailed(ctx context.Context, jobID, policyID uuid.UUID, policyName, errMsg string) error
+	NotifyJobFailed(ctx context.Context, job JobSubject, errMsg string) error
 
 	// NotifyAgentOffline creates a notification when an agent stops sending
 	// heartbeats and is marked offline by the agent manager.
@@ -134,43 +133,89 @@ func (s *NotificationService) Start(ctx context.Context) {
 // Public typed methods
 // -----------------------------------------------------------------------------
 
-func (s *NotificationService) NotifyJobSucceeded(ctx context.Context, jobID, policyID uuid.UUID, policyName string) error {
-	policyName = sanitizeHeader(policyName)
-	payload := map[string]any{
-		"job_id":      jobID.String(),
-		"policy_id":   policyID.String(),
-		"policy_name": policyName,
+// JobSubject identifies the job a notification is about. Backups and
+// restores are named after their policy; retention sweeps and integrity
+// checks have no policy and are named after their destination.
+type JobSubject struct {
+	JobID           uuid.UUID
+	Type            string    // db.Job.Type: "backup", "restore", "retention", "check"
+	PolicyID        uuid.UUID // uuid.Nil when the job has no policy
+	PolicyName      string
+	DestinationName string
+}
+
+// JobSubjectFrom builds the JobSubject of a job loaded with
+// JobRepository.GetByIDWithDetails.
+func JobSubjectFrom(job *repositories.JobWithNames, dests []repositories.JobDestinationWithName) JobSubject {
+	subject := JobSubject{JobID: job.ID, Type: job.Type, PolicyName: job.PolicyName}
+	if job.PolicyID != nil {
+		subject.PolicyID = *job.PolicyID
 	}
+	// Retention and check jobs run against exactly one destination.
+	if len(dests) == 1 {
+		subject.DestinationName = dests[0].DestinationName
+	}
+	return subject
+}
+
+// describe returns the notification wording for the job: the operation for
+// the title, the name it is known by, and the subject of the body sentence.
+// Backup wording predates the other job types and is kept as is.
+func (j JobSubject) describe() (operation, name, subject string) {
+	switch j.Type {
+	case "retention":
+		name = sanitizeHeader(j.DestinationName)
+		return "Retention", name, fmt.Sprintf("Retention of destination \"%s\"", name)
+	case "check":
+		name = sanitizeHeader(j.DestinationName)
+		return "Integrity check", name, fmt.Sprintf("Integrity check of destination \"%s\"", name)
+	case "restore":
+		name = sanitizeHeader(j.PolicyName)
+		return "Restore", name, fmt.Sprintf("Restore of policy \"%s\"", name)
+	default:
+		name = sanitizeHeader(j.PolicyName)
+		return "Backup", name, fmt.Sprintf("Policy \"%s\"", name)
+	}
+}
+
+func (j JobSubject) payload() map[string]any {
+	return map[string]any{
+		"job_id":           j.JobID.String(),
+		"job_type":         j.Type,
+		"policy_id":        j.PolicyID.String(),
+		"policy_name":      sanitizeHeader(j.PolicyName),
+		"destination_name": sanitizeHeader(j.DestinationName),
+	}
+}
+
+func (s *NotificationService) NotifyJobSucceeded(ctx context.Context, job JobSubject) error {
+	operation, name, subject := job.describe()
 	var override string
-	if p := s.loadPolicy(ctx, policyID); p != nil {
+	if p := s.loadPolicy(ctx, job.PolicyID); p != nil {
 		override = p.NotifyOnSuccess
 	}
 	return s.notify(ctx, event{
 		notifType: "job_success",
-		title:     fmt.Sprintf("Backup completed: %s", policyName),
-		body:      fmt.Sprintf("Policy \"%s\" completed successfully at %s.", policyName, time.Now().UTC().Format(time.RFC3339)),
-		payload:   payload,
+		title:     fmt.Sprintf("%s completed: %s", operation, name),
+		body:      fmt.Sprintf("%s completed successfully at %s.", subject, time.Now().UTC().Format(time.RFC3339)),
+		payload:   job.payload(),
 		override:  override,
 	})
 }
 
-func (s *NotificationService) NotifyJobFailed(ctx context.Context, jobID, policyID uuid.UUID, policyName, errMsg string) error {
-	policyName = sanitizeHeader(policyName)
+func (s *NotificationService) NotifyJobFailed(ctx context.Context, job JobSubject, errMsg string) error {
+	operation, name, subject := job.describe()
 	errMsg = sanitizeHeader(errMsg)
-	payload := map[string]any{
-		"job_id":      jobID.String(),
-		"policy_id":   policyID.String(),
-		"policy_name": policyName,
-		"error":       errMsg,
-	}
+	payload := job.payload()
+	payload["error"] = errMsg
 	var override string
-	if p := s.loadPolicy(ctx, policyID); p != nil {
+	if p := s.loadPolicy(ctx, job.PolicyID); p != nil {
 		override = p.NotifyOnFailure
 	}
 	return s.notify(ctx, event{
 		notifType: "job_failure",
-		title:     fmt.Sprintf("Backup failed: %s", policyName),
-		body:      fmt.Sprintf("Policy \"%s\" failed at %s: %s", policyName, time.Now().UTC().Format(time.RFC3339), errMsg),
+		title:     fmt.Sprintf("%s failed: %s", operation, name),
+		body:      fmt.Sprintf("%s failed at %s: %s", subject, time.Now().UTC().Format(time.RFC3339), errMsg),
 		payload:   payload,
 		override:  override,
 	})

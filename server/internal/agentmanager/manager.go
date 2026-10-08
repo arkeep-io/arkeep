@@ -561,8 +561,8 @@ func (m *Manager) DeliverSnapshotBrowse(report *proto.SnapshotBrowseReport) {
 // agent and blocks until the agent responds via ReportSnapshotImport or the
 // request times out.
 //
-// payloadJSON is the JSON-encoded import payload (type, repo_url, env including
-// RESTIC_PASSWORD). correlationID must be a unique UUID per call.
+// payloadJSON is the JSON-encoded import payload (type, repo_url,
+// repo_password, env). correlationID must be a unique UUID per call.
 //
 // Returns ErrAgentNotConnected if the agent is offline, or
 // ErrSnapshotImportTimeout if the agent does not respond within
