@@ -279,12 +279,22 @@ func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (
 	}
 	agentID := *dest.RetentionAgentID
 
-	tags, err := buildTags(ctx, s.dests, dest.ID)
+	policies, err := s.dests.ListPoliciesByDestination(ctx, dest.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load policies of destination %s: %w", dest.ID, err)
+	}
+	tags, err := buildTags(policies)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build retention tags for destination %s: %w", dest.ID, err)
 	}
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("destination %s has no attached policies to sweep", dest.ID)
+	}
+	// A destination created without importing a repository only has the
+	// password on its policies.
+	password := destutil.RepoPassword(dest, policies)
+	if password == "" {
+		return nil, fmt.Errorf("the repository password of destination %s is unknown", dest.ID)
 	}
 
 	// Checked before anything is persisted: an offline agent means this tick
@@ -326,7 +336,7 @@ func (s *RetentionScheduler) runJob(ctx context.Context, dest *db.Destination) (
 		)
 	}
 
-	err = s.start(ctx, job, dest, tags, s.queue.AdmitNew(job.ID))
+	err = s.start(ctx, job, dest, tags, password, s.queue.AdmitNew(job.ID))
 	if errors.Is(err, destqueue.ErrNotAdmitted) {
 		return job, s.queue.Enqueue(ctx, job.ID)
 	}
@@ -357,15 +367,23 @@ func (s *RetentionScheduler) StartQueued(ctx context.Context, job *db.Job, admit
 		return s.failQueued(ctx, job.ID, "the destination's retention settings changed while this sweep was waiting")
 	}
 
-	tags, err := buildTags(ctx, s.dests, dest.ID)
+	policies, err := s.dests.ListPoliciesByDestination(ctx, dest.ID)
+	if err != nil {
+		return fmt.Errorf("failed to load policies of destination %s: %w", dest.ID, err)
+	}
+	tags, err := buildTags(policies)
 	if err != nil {
 		return fmt.Errorf("failed to build retention tags for destination %s: %w", dest.ID, err)
 	}
 	if len(tags) == 0 {
 		return s.failQueued(ctx, job.ID, "the destination has no attached policies to sweep")
 	}
+	password := destutil.RepoPassword(dest, policies)
+	if password == "" {
+		return s.failQueued(ctx, job.ID, "the repository password of the destination is unknown")
+	}
 
-	return s.start(ctx, job, dest, tags, admit)
+	return s.start(ctx, job, dest, tags, password, admit)
 }
 
 func (s *RetentionScheduler) failQueued(ctx context.Context, jobID uuid.UUID, errMsg string) error {
@@ -377,7 +395,7 @@ func (s *RetentionScheduler) failQueued(ctx context.Context, jobID uuid.UUID, er
 // creates the JobRetentionTag records and dispatches the sweep. When admit
 // refuses, nothing is created or sent and destqueue.ErrNotAdmitted is
 // returned.
-func (s *RetentionScheduler) start(ctx context.Context, job *db.Job, dest *db.Destination, tags []string, admit destqueue.AdmitFunc) error {
+func (s *RetentionScheduler) start(ctx context.Context, job *db.Job, dest *db.Destination, tags []string, password string, admit destqueue.AdmitFunc) error {
 	admitted, err := admit(ctx, []uuid.UUID{dest.ID})
 	if err != nil {
 		return fmt.Errorf("failed to acquire destination busy gate: %w", err)
@@ -401,7 +419,7 @@ func (s *RetentionScheduler) start(ctx context.Context, job *db.Job, dest *db.De
 		}
 	}
 
-	if err := s.dispatch(job, dest, job.AgentID, tags); err != nil {
+	if err := s.dispatch(job, dest, job.AgentID, tags, password); err != nil {
 		if relErr := s.dests.ReleaseBusy(ctx, dest.ID, job.ID); relErr != nil {
 			s.logger.Error("failed to release destination busy gate after dispatch failure",
 				zap.String("destination_id", dest.ID.String()),
@@ -414,18 +432,13 @@ func (s *RetentionScheduler) start(ctx context.Context, job *db.Job, dest *db.De
 	return nil
 }
 
-// buildTags resolves a destination's live policies into the restic tags a
-// retention sweep must cover: one bare "policy:<id>" tag per policy, plus one
+// buildTags resolves a destination's live policies (ListPoliciesByDestination)
+// into the restic tags a retention sweep must cover: one bare "policy:<id>" tag per policy, plus one
 // "policy:<id>:command:<name>" tag per that policy's command sources — the
 // exact same tag set the backup Scheduler builds for a single policy's own
 // dispatch (see scheduler.dispatch), just aggregated across every policy
 // attached to this destination.
-func buildTags(ctx context.Context, dests repositories.DestinationRepository, destinationID uuid.UUID) ([]string, error) {
-	policies, err := dests.ListPoliciesByDestination(ctx, destinationID)
-	if err != nil {
-		return nil, err
-	}
-
+func buildTags(policies []db.Policy) ([]string, error) {
 	tags := make([]string, 0, len(policies))
 	for _, p := range policies {
 		tags = append(tags, fmt.Sprintf("policy:%s", p.ID.String()))
@@ -441,7 +454,7 @@ func buildTags(ctx context.Context, dests repositories.DestinationRepository, de
 	return tags, nil
 }
 
-func (s *RetentionScheduler) dispatch(job *db.Job, dest *db.Destination, agentID uuid.UUID, tags []string) error {
+func (s *RetentionScheduler) dispatch(job *db.Job, dest *db.Destination, agentID uuid.UUID, tags []string, password string) error {
 	payload := retentionSweepPayload{
 		Destination: destinationPayload{
 			DestinationID: dest.ID.String(),
@@ -451,7 +464,7 @@ func (s *RetentionScheduler) dispatch(job *db.Job, dest *db.Destination, agentID
 			Config:        dest.Config,
 			Env:           destutil.BuildEnv(dest),
 		},
-		RepoPassword: string(dest.RepoPassword),
+		RepoPassword: password,
 		Retention: retentionPayload{
 			Last:    dest.RetentionLast,
 			Hourly:  dest.RetentionHourly,

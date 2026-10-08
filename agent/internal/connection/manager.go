@@ -858,9 +858,23 @@ func (send chunkWriter) Write(p []byte) (int, error) {
 // snapshotImportPayload is the JSON body sent by the server inside a
 // JOB_TYPE_IMPORT_SNAPSHOTS JobAssignment.
 type snapshotImportPayload struct {
-	Type    string            `json:"type"`
-	RepoURL string            `json:"repo_url"`
-	Env     map[string]string `json:"env"`
+	Type         string            `json:"type"`
+	RepoURL      string            `json:"repo_url"`
+	RepoPassword string            `json:"repo_password"`
+	Env          map[string]string `json:"env"`
+}
+
+// destination builds the restic destination the payload describes. The
+// password comes from RepoPassword, never from Env: the wrapper drops every
+// Env key that is not a backend variable on its allowlist, RESTIC_PASSWORD
+// included.
+func (p snapshotImportPayload) destination(repoURL string) restic.Destination {
+	return restic.Destination{
+		Type:     restic.DestinationType(p.Type),
+		RepoURL:  repoURL,
+		Password: p.RepoPassword,
+		Env:      p.Env,
+	}
 }
 
 // handleSnapshotImportRequest runs restic snapshots for the given destination
@@ -905,11 +919,7 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 		repoURL = m.exec.TranslateLocalPath(repoURL)
 	}
 
-	dest := restic.Destination{
-		Type:    restic.DestinationType(p.Type),
-		RepoURL: repoURL,
-		Env:     p.Env,
-	}
+	dest := p.destination(repoURL)
 
 	snapshots, err := m.wrapper.Snapshots(ctx, dest)
 	if err != nil {

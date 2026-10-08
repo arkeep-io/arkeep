@@ -304,8 +304,8 @@ func TestSyncDestination(t *testing.T) {
 		if _, err := e.svc.SyncDestination(context.Background(), dest.ID); err != nil {
 			t.Fatalf("SyncDestination: %v", err)
 		}
-		if got := e.lister.lastPayload.Env["RESTIC_PASSWORD"]; got != "dest-secret" {
-			t.Errorf("RESTIC_PASSWORD = %q, want dest-secret", got)
+		if got := e.lister.lastPayload.RepoPassword; got != "dest-secret" {
+			t.Errorf("RepoPassword = %q, want dest-secret", got)
 		}
 	})
 
@@ -322,8 +322,8 @@ func TestSyncDestination(t *testing.T) {
 		if _, err := e.svc.SyncDestination(context.Background(), dest.ID); err != nil {
 			t.Fatalf("SyncDestination: %v", err)
 		}
-		if got := e.lister.lastPayload.Env["RESTIC_PASSWORD"]; got != "policy-secret" {
-			t.Errorf("RESTIC_PASSWORD = %q, want policy-secret", got)
+		if got := e.lister.lastPayload.RepoPassword; got != "policy-secret" {
+			t.Errorf("RepoPassword = %q, want policy-secret", got)
 		}
 	})
 
