@@ -129,7 +129,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	userHandler := NewUserHandler(cfg.Users, cfg.Audit, cfg.Logger)
+	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
 	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
@@ -164,6 +164,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// legitimate user may retry a mistyped code a few times.
 			r.With(RateLimit(NewRateLimiter(10, time.Minute))).
 				Post("/auth/login/2fa", authHandler.LoginTwoFactor)
+
+			// Logout is public so that a session whose access token already
+			// expired can still revoke its refresh token (SEC-13).
+			r.With(RateLimit(NewRateLimiter(20, time.Minute))).
+				Post("/auth/logout", authHandler.Logout)
 
 			// OIDC flow — public because the user is not yet authenticated.
 			// /providers lists enabled providers for the login page SSO buttons.
@@ -207,8 +212,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			r.Get("/dashboard", dashboardHandler.Get)
 			r.Get("/version", versionHandler.Get)
-
-			r.Post("/auth/logout", authHandler.Logout)
 
 			r.Get("/users/me", userHandler.GetMe)
 			r.Patch("/users/me", userHandler.UpdateMe)

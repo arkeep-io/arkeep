@@ -18,14 +18,16 @@ import (
 // any authenticated user.
 type UserHandler struct {
 	repo      repositories.UserRepository
+	refresh   repositories.RefreshTokenRepository
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(repo repositories.UserRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
+func NewUserHandler(repo repositories.UserRepository, refresh repositories.RefreshTokenRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
 	return &UserHandler{
 		repo:      repo,
+		refresh:   refresh,
 		auditRepo: auditRepo,
 		logger:    logger.Named("user_handler"),
 	}
@@ -331,6 +333,9 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 type updateMeRequest struct {
 	DisplayName *string `json:"display_name"`
 	Password    *string `json:"password"`
+	// CurrentPassword is required with Password: a stolen access token alone
+	// must not be enough to take the account over (SEC-10).
+	CurrentPassword string `json:"current_password"`
 }
 
 // UpdateMe handles PATCH /api/v1/users/me.
@@ -369,6 +374,13 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "password cannot be changed for OIDC accounts")
 		return
 	}
+	// 400 rather than 401 for a wrong current password: the GUI treats 401
+	// as an expired session and would retry after a refresh.
+	if req.Password != nil && !auth.VerifyPassword(req.CurrentPassword, string(user.Password)) {
+		logAudit(r, h.auditRepo, h.logger, "user.password_change_failed", "user", user.ID.String(), map[string]any{})
+		ErrBadRequest(w, "current password is incorrect")
+		return
+	}
 
 	if req.DisplayName != nil {
 		if *req.DisplayName == "" {
@@ -395,6 +407,18 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to update current user", zap.String("id", claims.UserID), zap.Error(err))
 		ErrInternal(w)
 		return
+	}
+
+	if req.Password != nil {
+		// Keep the session that changed the password; close every other one.
+		keepHash := ""
+		if cookie, err := r.Cookie(refreshTokenCookie); err == nil {
+			keepHash = auth.HashToken(cookie.Value)
+		}
+		if err := h.refresh.RevokeAllForUserExcept(r.Context(), user.ID, keepHash); err != nil {
+			h.logger.Warn("failed to revoke other sessions after a password change", zap.Error(err))
+		}
+		logAudit(r, h.auditRepo, h.logger, "user.password_changed", "user", user.ID.String(), map[string]any{})
 	}
 
 	Ok(w, userToResponse(user))

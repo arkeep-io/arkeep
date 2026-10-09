@@ -50,7 +50,9 @@ var (
 )
 
 // TwoFactorRequiredError is returned by LocalAuthProvider.Login when the
-// password is correct but the account has two-factor authentication enabled.
+// password is correct, and by OIDCAuthProvider.ExchangeCode when the identity
+// provider authenticated the user, but the account has two-factor
+// authentication enabled.
 // It carries the user ID so the handler can create a challenge without
 // re-reading the user. Authentication is not complete: no token is issued and
 // LastLoginAt is not stamped.
