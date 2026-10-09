@@ -31,10 +31,8 @@ const (
 // OIDC providers. Provider configuration is loaded from the database on each
 // call to allow runtime updates without server restart.
 type OIDCAuthProvider struct {
+	tokenIssuer
 	providerRepo repositories.OIDCProviderRepository
-	userRepo     repositories.UserRepository
-	tokenRepo    repositories.RefreshTokenRepository
-	jwtManager   *JWTManager
 	logger       *zap.Logger
 }
 
@@ -47,10 +45,8 @@ func NewOIDCAuthProvider(
 	logger *zap.Logger,
 ) *OIDCAuthProvider {
 	return &OIDCAuthProvider{
+		tokenIssuer:  tokenIssuer{userRepo: userRepo, tokenRepo: tokenRepo, jwtManager: jwtManager},
 		providerRepo: providerRepo,
-		userRepo:     userRepo,
-		tokenRepo:    tokenRepo,
-		jwtManager:   jwtManager,
 		logger:       logger.Named("oidc_auth"),
 	}
 }
@@ -224,50 +220,6 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)
 }
 
-// RefreshToken delegates to the same logic as LocalAuthProvider — refresh
-// tokens are provider-agnostic once issued.
-func (p *OIDCAuthProvider) RefreshToken(ctx context.Context, rawToken string) (*TokenPair, error) {
-	tokenHash := hashRefreshToken(rawToken)
-
-	stored, err := p.tokenRepo.GetByHash(ctx, tokenHash)
-	if err != nil {
-		if isNotFound(err) {
-			return nil, ErrRefreshTokenNotFound
-		}
-		return nil, fmt.Errorf("auth: fetching refresh token: %w", err)
-	}
-
-	if err := p.tokenRepo.DeleteByHash(ctx, tokenHash); err != nil {
-		return nil, fmt.Errorf("auth: deleting old refresh token: %w", err)
-	}
-
-	user, err := p.userRepo.GetByID(ctx, stored.UserID)
-	if err != nil {
-		if isNotFound(err) {
-			return nil, ErrUserNotFound
-		}
-		return nil, fmt.Errorf("auth: fetching user for token refresh: %w", err)
-	}
-
-	if !user.IsActive {
-		return nil, ErrUserDisabled
-	}
-
-	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)
-}
-
-// Logout invalidates the given refresh token. No OIDC back-channel logout
-// is performed — the session at the identity provider remains active.
-func (p *OIDCAuthProvider) Logout(ctx context.Context, rawToken string) error {
-	tokenHash := hashRefreshToken(rawToken)
-
-	if err := p.tokenRepo.DeleteByHash(ctx, tokenHash); err != nil && !isNotFound(err) {
-		return fmt.Errorf("auth: revoking refresh token on logout: %w", err)
-	}
-
-	return nil
-}
-
 // ListEnabledProviders returns all enabled OIDC provider configurations.
 // Used by the public login endpoint to build the SSO button list.
 func (p *OIDCAuthProvider) ListEnabledProviders(ctx context.Context) ([]*db.OIDCProvider, error) {
@@ -380,36 +332,6 @@ func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDC
 		)
 	}
 	return user, nil
-}
-
-// issueTokenPair is the OIDC equivalent of LocalAuthProvider.issueTokenPair.
-func (p *OIDCAuthProvider) issueTokenPair(ctx context.Context, userID uuid.UUID, email, role string) (*TokenPair, error) {
-	accessToken, err := p.jwtManager.GenerateAccessToken(userID.String(), email, role)
-	if err != nil {
-		return nil, err
-	}
-
-	rawRefresh, err := generateRefreshToken()
-	if err != nil {
-		return nil, fmt.Errorf("auth: generating refresh token: %w", err)
-	}
-
-	expiresAt := time.Now().Add(refreshTokenDuration)
-
-	if err := p.tokenRepo.Create(ctx, &db.RefreshToken{
-		UserID:    userID,
-		TokenHash: hashRefreshToken(rawRefresh),
-		ExpiresAt: expiresAt,
-	}); err != nil {
-		return nil, fmt.Errorf("auth: persisting refresh token: %w", err)
-	}
-
-	return &TokenPair{
-		AccessToken:           accessToken,
-		AccessTokenExpiresAt:  time.Now().Add(accessTokenDuration),
-		RefreshToken:          rawRefresh,
-		RefreshTokenExpiresAt: expiresAt,
-	}, nil
 }
 
 // generateRandomBase64 returns a URL-safe base64-encoded random string of n bytes.

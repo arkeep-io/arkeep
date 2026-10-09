@@ -91,6 +91,10 @@ func (h *setupHandler) Complete(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "name, email, and password are required")
 		return
 	}
+	if err := auth.ValidatePassword(req.Password); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()

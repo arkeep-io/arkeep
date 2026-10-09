@@ -18,10 +18,6 @@ import (
 // resetTokenTTL is how long a password reset link remains valid.
 const resetTokenTTL = time.Hour
 
-// resetMinPasswordLen is the minimum length enforced for a new password set via
-// the reset flow. Matches the frontend validation on the setup/reset forms.
-const resetMinPasswordLen = 8
-
 // genericResetMessage is returned for every password reset request, regardless
 // of whether the email maps to a local account. This prevents attackers from
 // using the endpoint to enumerate registered email addresses.
@@ -201,8 +197,8 @@ func (h *PasswordResetHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "token is required")
 		return
 	}
-	if len(req.Password) < resetMinPasswordLen {
-		ErrBadRequest(w, fmt.Sprintf("password must be at least %d characters", resetMinPasswordLen))
+	if err := auth.ValidatePassword(req.Password); err != nil {
+		ErrBadRequest(w, err.Error())
 		return
 	}
 

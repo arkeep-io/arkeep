@@ -124,6 +124,10 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "password is required")
 		return
 	}
+	if err := auth.ValidatePassword(req.Password); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
 	if req.DisplayName == "" {
 		ErrBadRequest(w, "display_name is required")
 		return
@@ -233,8 +237,8 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		user.IsActive = *req.IsActive
 	}
 	if req.Password != nil {
-		if *req.Password == "" {
-			ErrBadRequest(w, "password cannot be empty")
+		if err := auth.ValidatePassword(*req.Password); err != nil {
+			ErrBadRequest(w, err.Error())
 			return
 		}
 		hashed, err := auth.HashPassword(*req.Password)
@@ -378,8 +382,8 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		user.DisplayName = *req.DisplayName
 	}
 	if req.Password != nil {
-		if *req.Password == "" {
-			ErrBadRequest(w, "password cannot be empty")
+		if err := auth.ValidatePassword(*req.Password); err != nil {
+			ErrBadRequest(w, err.Error())
 			return
 		}
 		hashed, err := auth.HashPassword(*req.Password)

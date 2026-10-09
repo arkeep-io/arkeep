@@ -25,8 +25,9 @@ func TestAuditHandler_List(t *testing.T) {
 		e := newTestEnv(t)
 		// Creating a destination generates an audit record.
 		e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
-			"name": "s3-for-audit",
-			"type": "s3",
+			"name":   "local-for-audit",
+			"type":   "local",
+			"config": `{"path":"/backups"}`,
 		})
 
 		resp := e.get(t, "/api/v1/audit", e.adminToken(t))
