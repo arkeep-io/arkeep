@@ -380,6 +380,8 @@ precedence over environment variables when both are provided.
 | `--base-url` | `ARKEEP_BASE_URL` | — | External URL of the server (e.g. `https://arkeep.example.com`). Used to build links in outbound email (password reset). **Required for self-service password reset**: when unset, reset emails are disabled and users must ask an administrator. Links are never derived from request headers, to prevent password reset poisoning via a forged `Host` / `X-Forwarded-Host`. |
 | `--log-level` | `ARKEEP_LOG_LEVEL` | `info` | Log level (`debug`, `info`, `warn`, `error`) |
 | `--secure-cookies` | `ARKEEP_SECURE_COOKIES` | `false` | Set `Secure` flag on auth cookies (enable in production over HTTPS) |
+| `--trusted-proxies` | `ARKEEP_TRUSTED_PROXIES` | *(loopback and private networks)* | Comma-separated IPs/CIDRs of reverse proxies whose `X-Forwarded-For` is trusted for the client address, used by login rate limits and the audit log. `none` trusts no proxy. Narrow it to your proxy's address if clients can reach the server directly from a private network. |
+| `--metrics-token` | `ARKEEP_METRICS_TOKEN` | *(empty)* | When set, `/metrics` requires `Authorization: Bearer <token>` (Prometheus `authorization` / `bearer_token` scrape option). When empty, `/metrics` is public. |
 | `--telemetry` | `ARKEEP_TELEMETRY` | `true` | Send anonymous usage stats (opt-out) |
 | `--grpc-insecure` | `ARKEEP_GRPC_INSECURE` | `false` | Disable TLS for gRPC transport — development and same-machine deployments only |
 

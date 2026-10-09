@@ -105,17 +105,29 @@ func (m *Metrics) HTTPMiddleware(next http.Handler) http.Handler {
 		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
 
-		// chi.RouteContext is set by chi itself; fall back to request path
-		// if no route was matched (e.g. static assets, /health).
-		route := r.URL.Path
-		if rc := routePattern(r); rc != "" {
-			route = rc
+		// Label values must come from a bounded set (SEC-36): the raw path of
+		// a request that matched no route, or an invented method, would let
+		// any unauthenticated client create a new time series per request.
+		route := routePattern(r)
+		if route == "" {
+			route = "unmatched"
+		}
+		method := r.Method
+		if !standardMethods[method] {
+			method = "OTHER"
 		}
 
 		statusStr := strconv.Itoa(rw.status)
-		m.HTTPRequestsTotal.WithLabelValues(r.Method, route, statusStr).Inc()
-		m.HTTPRequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+		m.HTTPRequestsTotal.WithLabelValues(method, route, statusStr).Inc()
+		m.HTTPRequestDuration.WithLabelValues(method, route).Observe(time.Since(start).Seconds())
 	})
+}
+
+// standardMethods are the HTTP methods recorded as themselves; any other
+// method is recorded as "OTHER".
+var standardMethods = map[string]bool{
+	http.MethodGet: true, http.MethodHead: true, http.MethodPost: true, http.MethodPut: true,
+	http.MethodPatch: true, http.MethodDelete: true, http.MethodOptions: true,
 }
 
 // Handler returns an http.Handler that serves the Prometheus text format for

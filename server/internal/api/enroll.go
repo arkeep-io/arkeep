@@ -80,8 +80,9 @@ func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// clientIP extracts the real client IP from the request, preferring the value
-// set by middleware.RealIP (stored in RemoteAddr after chi processes it).
+// clientIP returns the host part of r.RemoteAddr, which RealIP has already
+// rewritten to the client's address when the request came through a trusted
+// proxy.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

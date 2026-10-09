@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestHTTPMiddleware_ExposesResponseController checks that handlers behind the
@@ -36,5 +37,32 @@ func TestHTTPMiddleware_ExposesResponseController(t *testing.T) {
 	}
 	if flushErr := got[1]; flushErr != nil {
 		t.Errorf("Flush through the middleware: %v", flushErr)
+	}
+}
+
+// TestHTTPMiddleware_BoundedLabels guards against unauthenticated clients
+// creating a new time series per request (SEC-36): paths that match no route
+// and non-standard methods collapse into one label value each.
+func TestHTTPMiddleware_BoundedLabels(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	handler := m.HTTPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/random-1", nil),
+		httptest.NewRequest(http.MethodGet, "/random-2", nil),
+		httptest.NewRequest("BREW", "/random-3", nil),
+		httptest.NewRequest("PURGE", "/random-4", nil),
+	} {
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	if got := testutil.CollectAndCount(m.HTTPRequestsTotal); got != 2 {
+		t.Errorf("arkeep_http_requests_total has %d series, want 2 (GET and OTHER on the unmatched route)", got)
+	}
+	if got := testutil.ToFloat64(m.HTTPRequestsTotal.WithLabelValues(http.MethodGet, "unmatched", "404")); got != 2 {
+		t.Errorf("GET unmatched 404 = %v, want 2", got)
 	}
 }
