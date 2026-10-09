@@ -203,8 +203,9 @@ func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapp
 	}
 }
 
-// Enroll calls the server's enrollment endpoint over HTTP, obtains a CA
-// certificate and a signed client certificate, and writes them to StateDir.
+// Enroll calls the server's enrollment endpoint over HTTP with a CSR for a key
+// it generates, obtains a CA certificate and the signed client certificate,
+// and writes them and the key to StateDir.
 // On success it updates m.cfg so subsequent calls to buildTransportCredentials
 // use the new mTLS credentials.
 //
@@ -214,7 +215,17 @@ func (m *Manager) Enroll(ctx context.Context) error {
 		return fmt.Errorf("enrollment required but --server-http-addr is not set")
 	}
 
-	body, err := json.Marshal(map[string]string{"agent_secret": m.cfg.SharedSecret})
+	if isPlainHTTPRemote(m.cfg.ServerHTTPAddr) {
+		m.logger.Warn("enrolling over plain HTTP: the agent secret travels in clear and the server's CA certificate cannot be authenticated — use an https:// --server-http-addr",
+			zap.String("http_addr", m.cfg.ServerHTTPAddr),
+		)
+	}
+
+	keyPEM, csrPEM, err := newEnrollmentKey()
+	if err != nil {
+		return fmt.Errorf("enroll: %w", err)
+	}
+	body, err := json.Marshal(map[string]string{"agent_secret": m.cfg.SharedSecret, "csr": string(csrPEM)})
 	if err != nil {
 		return fmt.Errorf("enroll: failed to marshal request: %w", err)
 	}
@@ -247,6 +258,13 @@ func (m *Manager) Enroll(ctx context.Context) error {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("enroll: failed to decode response: %w", err)
 	}
+	// A server older than 0.9 ignores the CSR and generates the key itself.
+	if result.ClientKey != "" {
+		keyPEM = []byte(result.ClientKey)
+	}
+	if _, err := tls.X509KeyPair([]byte(result.ClientCert), keyPEM); err != nil {
+		return fmt.Errorf("enroll: the issued certificate does not match the key: %w", err)
+	}
 
 	if err := os.MkdirAll(m.cfg.StateDir, 0750); err != nil {
 		return fmt.Errorf("enroll: failed to create state dir: %w", err)
@@ -262,7 +280,7 @@ func (m *Manager) Enroll(ctx context.Context) error {
 	if err := os.WriteFile(certFile, []byte(result.ClientCert), 0600); err != nil {
 		return fmt.Errorf("enroll: failed to write client cert: %w", err)
 	}
-	if err := os.WriteFile(keyFile, []byte(result.ClientKey), 0600); err != nil {
+	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 		return fmt.Errorf("enroll: failed to write client key: %w", err)
 	}
 
