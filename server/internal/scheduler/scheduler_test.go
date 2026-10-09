@@ -250,6 +250,95 @@ func TestResumeInterrupted_Skips(t *testing.T) {
 	}
 }
 
+// addRestoreJob creates a restore job on the fixture's policy, created offset
+// from the interrupted job. Restores carry the PolicyID of the snapshot they
+// restore, so they share the policy with the backups.
+func addRestoreJob(t *testing.T, gdb *gorm.DB, f *resumeFixture, status string, offset time.Duration) {
+	t.Helper()
+	restore := &db.Job{
+		PolicyID: &f.policy.ID,
+		AgentID:  f.agentID,
+		Type:     "restore",
+		Status:   status,
+	}
+	if err := gdb.Create(restore).Error; err != nil {
+		t.Fatalf("create restore job: %v", err)
+	}
+	if err := gdb.Model(restore).Update("created_at", f.job.CreatedAt.Add(offset)).Error; err != nil {
+		t.Fatalf("set restore created_at: %v", err)
+	}
+}
+
+// TestResumeInterrupted_IgnoresRestores guards against restores of the policy's
+// snapshots blocking the resume of an interrupted backup: a pending restore is
+// not a pending backup, and a later restore does not supersede the backup.
+func TestResumeInterrupted_IgnoresRestores(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		offset time.Duration
+	}{
+		{name: "an older restore is pending", status: "pending", offset: -time.Hour},
+		{name: "a newer restore exists", status: "succeeded", offset: time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, gdb, policies, jobs := newTestScheduler(t)
+			f := newResumeFixture(t, gdb, policies, jobs)
+			addRestoreJob(t, gdb, f, tt.status, tt.offset)
+
+			s.ResumeInterrupted(context.Background(), f.agentID)
+
+			resumed := 0
+			for _, j := range jobsForPolicy(t, gdb, f.policy.ID) {
+				if j.ResumeOfJobID != nil && *j.ResumeOfJobID == f.job.ID {
+					resumed++
+				}
+			}
+			if resumed != 1 {
+				t.Errorf("found %d resume jobs, want 1", resumed)
+			}
+		})
+	}
+}
+
+// TestTriggerNow_PendingRestoreDoesNotBlockBackup guards against a restore
+// waiting for its agent suppressing the policy's backups.
+func TestTriggerNow_PendingRestoreDoesNotBlockBackup(t *testing.T) {
+	s, gdb, policies, jobs := newTestScheduler(t)
+	f := newResumeFixture(t, gdb, policies, jobs)
+	addRestoreJob(t, gdb, f, "pending", time.Minute)
+
+	job, err := s.TriggerNow(context.Background(), f.policy.ID)
+	if err != nil {
+		t.Fatalf("TriggerNow: %v", err)
+	}
+	if job == nil {
+		t.Fatal("TriggerNow returned no job: the pending restore suppressed the backup")
+	}
+	if job.Type != "backup" {
+		t.Errorf("job Type = %q, want \"backup\"", job.Type)
+	}
+}
+
+// TestTriggerNow_PendingBackupStillDeduplicates keeps the original guard: at
+// most one not-yet-started backup per policy.
+func TestTriggerNow_PendingBackupStillDeduplicates(t *testing.T) {
+	s, gdb, policies, jobs := newTestScheduler(t)
+	f := newResumeFixture(t, gdb, policies, jobs)
+	if err := gdb.Model(f.job).Update("status", "pending").Error; err != nil {
+		t.Fatalf("mark job pending: %v", err)
+	}
+
+	job, err := s.TriggerNow(context.Background(), f.policy.ID)
+	if !errors.Is(err, ErrJobAlreadyQueued) {
+		t.Errorf("TriggerNow error = %v, want ErrJobAlreadyQueued", err)
+	}
+	if job != nil {
+		t.Errorf("TriggerNow created job %s, want none: a backup is already pending", job.ID)
+	}
+}
+
 // TestResumeInterrupted_ExhaustedIsReportedOnce guards against notifying on every
 // single reconnection once resume has given up.
 func TestResumeInterrupted_ExhaustedIsReportedOnce(t *testing.T) {
