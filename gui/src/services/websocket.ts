@@ -41,6 +41,9 @@ class ArkeepWebSocketClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private explicitTopics: string[] = []
   private destroyed = false
+  // openedTopics is the topics parameter the current socket was opened with.
+  private openedTopics = ''
+  private resyncQueued = false
 
   // connect opens the WebSocket connection. It is called automatically when
   // the first subscription is added if the socket is not yet open.
@@ -76,16 +79,12 @@ class ArkeepWebSocketClient {
       // No active connection: open fresh with all current topics.
       this.destroyed = false
       this._open()
-    } else if (isNewTopic && this.ws.readyState === WebSocket.OPEN) {
-      // New topic added while already connected: the server only learns about
-      // topics from the URL at connection time, so we must reconnect.
-      // Detach the close handler first to prevent the reconnect scheduler from
-      // firing (we call _open() directly for an immediate reconnect).
-      const stale = this.ws
-      this.ws = null
-      stale.onclose = null
-      stale.close()
-      this._open()
+    } else if (isNewTopic) {
+      // The server only learns about topics from the URL at connection time,
+      // so a new topic needs a reconnect, also while the socket is still
+      // connecting. Subscriptions made in the same tick (a list page
+      // subscribing once per row) share a single reconnect.
+      this._queueResync()
     }
 
     return () => {
@@ -112,7 +111,15 @@ class ArkeepWebSocketClient {
     const url = new URL(`${protocol}//${host}/api/v1/ws`)
     if (token) url.searchParams.set('token', token)
 
-    // Merge explicitly-requested topics with topics derived from active subscriptions
+    const topics = this._topicsParam()
+    if (topics) url.searchParams.set('topics', topics)
+
+    return url.toString()
+  }
+
+  // _topicsParam merges explicitly-requested topics with topics derived from
+  // active subscriptions, as sent in the connection URL.
+  private _topicsParam(): string {
     const allTopics = [
       ...this.explicitTopics,
       ...this.subscriptions.keys(),
@@ -120,12 +127,32 @@ class ArkeepWebSocketClient {
       // Filter out the notifications topic — the server adds it automatically
       (t) => !t.startsWith('notifications:'),
     )
+    return [...new Set(allTopics)].join(',')
+  }
 
-    if (allTopics.length > 0) {
-      url.searchParams.set('topics', [...new Set(allTopics)].join(','))
-    }
+  private _queueResync(): void {
+    if (this.resyncQueued) return
+    this.resyncQueued = true
+    queueMicrotask(() => {
+      this.resyncQueued = false
+      this._resync()
+    })
+  }
 
-    return url.toString()
+  // _resync reopens a connecting or open socket whose URL lacks the current
+  // topics. A closing or closed socket is left alone: its reconnect builds the
+  // URL from the subscriptions at that time.
+  private _resync(): void {
+    const stale = this.ws
+    if (!stale || stale.readyState === WebSocket.CLOSING || stale.readyState === WebSocket.CLOSED) return
+    if (this._topicsParam() === this.openedTopics) return
+
+    // Detach the close handler first to prevent the reconnect scheduler from
+    // firing (we call _open() directly for an immediate reconnect).
+    this.ws = null
+    stale.onclose = null
+    stale.close()
+    this._open()
   }
 
   private _open(): void {
@@ -133,6 +160,7 @@ class ArkeepWebSocketClient {
     if (this.ws?.readyState === WebSocket.CONNECTING) return
 
     try {
+      this.openedTopics = this._topicsParam()
       this.ws = new WebSocket(this._buildURL())
     } catch {
       this._scheduleReconnect()

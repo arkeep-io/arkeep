@@ -230,61 +230,31 @@ type listJobsResponse struct {
 
 // List handles GET /api/v1/jobs.
 // Supports optional filtering by policy_id, agent_id, destination_id, status,
-// and type via query parameters.
+// and type via query parameters; filters combine with AND.
 // Destinations are not included in list responses — use GET /jobs/{id} for details.
 func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 	opts := paginationOpts(r)
 
-	// Optional filters — if both are provided, policy_id takes precedence.
-	if policyID := r.URL.Query().Get("policy_id"); policyID != "" {
-		id, err := parseUUIDString(policyID)
-		if err != nil {
-			ErrBadRequest(w, "invalid policy_id: must be a valid UUID")
-			return
-		}
-		jobs, total, err := h.repo.ListByPolicy(r.Context(), id, opts)
-		if err != nil {
-			h.logger.Error("failed to list jobs by policy", zap.Error(err))
-			ErrInternal(w)
-			return
-		}
-		h.writeJobList(w, jobs, total)
-		return
-	}
-
-	if agentID := r.URL.Query().Get("agent_id"); agentID != "" {
-		id, err := parseUUIDString(agentID)
-		if err != nil {
-			ErrBadRequest(w, "invalid agent_id: must be a valid UUID")
-			return
-		}
-		jobs, total, err := h.repo.ListByAgent(r.Context(), id, opts)
-		if err != nil {
-			h.logger.Error("failed to list jobs by agent", zap.Error(err))
-			ErrInternal(w)
-			return
-		}
-		h.writeJobList(w, jobs, total)
-		return
-	}
-
-	if destinationID := r.URL.Query().Get("destination_id"); destinationID != "" {
-		id, err := parseUUIDString(destinationID)
-		if err != nil {
-			ErrBadRequest(w, "invalid destination_id: must be a valid UUID")
-			return
-		}
-		jobs, total, err := h.repo.ListByDestination(r.Context(), id, opts)
-		if err != nil {
-			h.logger.Error("failed to list jobs by destination", zap.Error(err))
-			ErrInternal(w)
-			return
-		}
-		h.writeJobList(w, jobs, total)
-		return
-	}
-
 	var filter repositories.JobFilter
+	for _, f := range []struct {
+		param string
+		dst   **uuid.UUID
+	}{
+		{"policy_id", &filter.PolicyID},
+		{"agent_id", &filter.AgentID},
+		{"destination_id", &filter.DestinationID},
+	} {
+		v := r.URL.Query().Get(f.param)
+		if v == "" {
+			continue
+		}
+		id, err := parseUUIDString(v)
+		if err != nil {
+			ErrBadRequest(w, "invalid "+f.param+": must be a valid UUID")
+			return
+		}
+		*f.dst = &id
+	}
 
 	if status := r.URL.Query().Get("status"); status != "" {
 		switch status {
@@ -306,18 +276,7 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if filter.Status != "" || filter.Type != "" {
-		jobs, total, err := h.repo.ListFiltered(r.Context(), filter, opts)
-		if err != nil {
-			h.logger.Error("failed to list filtered jobs", zap.Error(err))
-			ErrInternal(w)
-			return
-		}
-		h.writeJobList(w, jobs, total)
-		return
-	}
-
-	jobs, total, err := h.repo.List(r.Context(), opts)
+	jobs, total, err := h.repo.ListFiltered(r.Context(), filter, opts)
 	if err != nil {
 		h.logger.Error("failed to list jobs", zap.Error(err))
 		ErrInternal(w)

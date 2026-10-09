@@ -287,8 +287,11 @@ type PolicyRepository interface {
 // JobFilter restricts the result set returned by JobRepository.ListFiltered.
 // Zero values mean "no filter" for that field.
 type JobFilter struct {
-	Status string // e.g. "pending", "running", "succeeded", "failed", "cancelled"
-	Type   string // e.g. "backup", "restore"
+	Status        string     // e.g. "pending", "running", "succeeded", "failed", "cancelled"
+	Type          string     // e.g. "backup", "restore"
+	PolicyID      *uuid.UUID // jobs of this policy
+	AgentID       *uuid.UUID // jobs run by this agent
+	DestinationID *uuid.UUID // jobs that wrote to or swept this destination
 }
 
 type JobRepository interface {
@@ -304,7 +307,6 @@ type JobRepository interface {
 	ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
 	ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
-	ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
 	ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
 	HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
@@ -342,7 +344,6 @@ type JobRepository interface {
 	CreateRetentionTag(ctx context.Context, t *db.JobRetentionTag) error
 	UpdateRetentionTagStatus(ctx context.Context, jobID, destID uuid.UUID, tag, status string, startedAt, endedAt *time.Time, errMsg string) error
 	ListRetentionTagsByJob(ctx context.Context, jobID uuid.UUID) ([]db.JobRetentionTag, error)
-	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
 
 	// JobLog
 	BulkCreateLogs(ctx context.Context, logs []db.JobLog) error
