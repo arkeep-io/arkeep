@@ -179,6 +179,61 @@ func TestJobHandler_List(t *testing.T) {
 	})
 }
 
+// TestJobHandler_List_CombinedFilters guards against an ID filter silently
+// dropping the status and type filters given with it.
+func TestJobHandler_List_CombinedFilters(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+
+	failed := createDBJobWith(t, e.deps, "backup", "failed")
+	// Same policy and agent as failed, different status and type.
+	for _, jt := range []struct{ typ, status string }{{"backup", "succeeded"}, {"restore", "failed"}} {
+		j := &db.Job{PolicyID: failed.PolicyID, AgentID: failed.AgentID, Type: jt.typ, Status: jt.status}
+		if err := e.deps.jobs.Create(ctx, j); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+	}
+	dest := createDBDestination(t, e.deps, "dest-"+uuid.NewString(), "local")
+	var onDest []uuid.UUID
+	if err := e.deps.gdb.Model(&db.Job{}).Where("policy_id = ?", failed.PolicyID).Pluck("id", &onDest).Error; err != nil {
+		t.Fatalf("load jobs: %v", err)
+	}
+	for _, id := range onDest {
+		if err := e.deps.jobs.CreateDestination(ctx, &db.JobDestination{JobID: id, DestinationID: dest.ID, Status: "pending"}); err != nil {
+			t.Fatalf("create job destination: %v", err)
+		}
+	}
+	createDBJobWith(t, e.deps, "backup", "failed") // other policy, agent and no destination
+
+	tests := []struct {
+		query string
+		want  int64
+	}{
+		{"policy_id=" + failed.PolicyID.String(), 3},
+		{"policy_id=" + failed.PolicyID.String() + "&status=failed", 2},
+		{"policy_id=" + failed.PolicyID.String() + "&status=failed&type=backup", 1},
+		{"agent_id=" + failed.AgentID.String() + "&type=restore", 1},
+		{"destination_id=" + dest.ID.String() + "&status=succeeded", 1},
+		{"destination_id=" + dest.ID.String() + "&agent_id=" + failed.AgentID.String() + "&type=backup", 2},
+		{"status=failed", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			resp := e.get(t, "/api/v1/jobs?"+tt.query, e.adminToken(t))
+			assertStatus(t, resp, http.StatusOK)
+
+			var data struct {
+				Items []any `json:"items"`
+				Total int64 `json:"total"`
+			}
+			decodeData(t, resp, &data)
+			if data.Total != tt.want || int64(len(data.Items)) != tt.want {
+				t.Errorf("total = %d, items = %d, want %d", data.Total, len(data.Items), tt.want)
+			}
+		})
+	}
+}
+
 func TestJobHandler_GetByID(t *testing.T) {
 	t.Run("returns job by UUID", func(t *testing.T) {
 		e := newTestEnv(t)

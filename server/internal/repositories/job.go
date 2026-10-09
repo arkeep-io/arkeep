@@ -434,67 +434,10 @@ func (r *gormJobRepository) ListByPolicy(ctx context.Context, policyID uuid.UUID
 	return rows, total, nil
 }
 
-// ListByDestination returns a paginated list of jobs that touched a given
-// destination (via job_destinations), ordered by creation time descending.
-// Used by the destination detail page's "Recent Retention Runs"/job history,
-// and applies equally to backup jobs that included this destination.
-func (r *gormJobRepository) ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
-	var total int64
-	if err := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Joins("INNER JOIN job_destinations jd ON jd.job_id = jobs.id").
-		Where("jd.destination_id = ?", destinationID).
-		Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("jobs: list by destination count: %w", err)
-	}
-
-	var rows []JobWithNames
-	if err := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Select(listJobsJoin).
-		Joins("INNER JOIN job_destinations jd ON jd.job_id = jobs.id").
-		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
-		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
-		Where("jd.destination_id = ?", destinationID).
-		Limit(opts.Limit).
-		Offset(opts.Offset).
-		Order("jobs.created_at DESC").
-		Scan(&rows).Error; err != nil {
-		return nil, 0, fmt.Errorf("jobs: list by destination: %w", err)
-	}
-
-	return rows, total, nil
-}
-
-// ListByAgent returns a paginated list of jobs for a given agent,
-// with policy and agent names, ordered by creation time descending.
-func (r *gormJobRepository) ListByAgent(ctx context.Context, agentID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error) {
-	var total int64
-	if err := r.db.WithContext(ctx).Model(&db.Job{}).Where("agent_id = ?", agentID).Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("jobs: list by agent count: %w", err)
-	}
-
-	var rows []JobWithNames
-	if err := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Select(listJobsJoin).
-		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
-		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
-		Where("jobs.agent_id = ?", agentID).
-		Limit(opts.Limit).
-		Offset(opts.Offset).
-		Order("jobs.created_at DESC").
-		Scan(&rows).Error; err != nil {
-		return nil, 0, fmt.Errorf("jobs: list by agent: %w", err)
-	}
-
-	return rows, total, nil
-}
-
 // ListByAgentAndStatus returns jobs for an agent that are in the given status,
 // oldest first, with policy and agent names.
 //
-// Filtering in SQL matters here: callers that reach for ListByAgent and filter in
+// Filtering in SQL matters here: callers that list an agent's jobs and filter in
 // Go only ever see the most recent page of jobs, so on an agent with a long
 // history an older job in the wanted status is silently never found.
 // Oldest-first because these are work queues — a pending job created earlier
@@ -530,43 +473,49 @@ func (r *gormJobRepository) HasJobForPolicyAfter(ctx context.Context, policyID u
 	return count > 0, nil
 }
 
-// ListFiltered returns a paginated list of jobs filtered by any combination of
-// status and type. Zero-valued fields in filter are ignored (no constraint added).
+// ListFiltered returns a paginated list of jobs matching every non-zero field
+// of filter. A zero filter lists all jobs.
 func (r *gormJobRepository) ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error) {
-	countQ := r.db.WithContext(ctx).Model(&db.Job{})
-	if filter.Status != "" {
-		countQ = countQ.Where("status = ?", filter.Status)
-	}
-	if filter.Type != "" {
-		countQ = countQ.Where("type = ?", filter.Type)
-	}
-
 	var total int64
-	if err := countQ.Count(&total).Error; err != nil {
+	if err := applyJobFilter(r.db.WithContext(ctx).Model(&db.Job{}), filter).
+		Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list filtered count: %w", err)
 	}
 
-	listQ := r.db.WithContext(ctx).
-		Model(&db.Job{}).
+	var rows []JobWithNames
+	if err := applyJobFilter(r.db.WithContext(ctx).Model(&db.Job{}), filter).
 		Select(listJobsJoin).
 		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
 		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
 		Limit(opts.Limit).
 		Offset(opts.Offset).
-		Order("jobs.created_at DESC")
-	if filter.Status != "" {
-		listQ = listQ.Where("jobs.status = ?", filter.Status)
-	}
-	if filter.Type != "" {
-		listQ = listQ.Where("jobs.type = ?", filter.Type)
-	}
-
-	var rows []JobWithNames
-	if err := listQ.Scan(&rows).Error; err != nil {
+		Order("jobs.created_at DESC").
+		Scan(&rows).Error; err != nil {
 		return nil, 0, fmt.Errorf("jobs: list filtered: %w", err)
 	}
 
 	return rows, total, nil
+}
+
+// applyJobFilter adds a WHERE clause on the jobs table for every non-zero
+// field of filter.
+func applyJobFilter(q *gorm.DB, filter JobFilter) *gorm.DB {
+	if filter.Status != "" {
+		q = q.Where("jobs.status = ?", filter.Status)
+	}
+	if filter.Type != "" {
+		q = q.Where("jobs.type = ?", filter.Type)
+	}
+	if filter.PolicyID != nil {
+		q = q.Where("jobs.policy_id = ?", *filter.PolicyID)
+	}
+	if filter.AgentID != nil {
+		q = q.Where("jobs.agent_id = ?", *filter.AgentID)
+	}
+	if filter.DestinationID != nil {
+		q = q.Where("EXISTS (SELECT 1 FROM job_destinations jd WHERE jd.job_id = jobs.id AND jd.destination_id = ?)", *filter.DestinationID)
+	}
+	return q
 }
 
 // ListByType returns a paginated list of jobs filtered by type ("backup" or
