@@ -42,7 +42,11 @@ func BuildRepoURL(dest *db.Destination) string {
 		var cfg struct {
 			Bucket   string `json:"bucket"`
 			Endpoint string `json:"endpoint"`
-			Path     string `json:"path"`
+			// Prefix is the folder inside the bucket, as the GUI saves it.
+			Prefix string `json:"prefix"`
+			// Path is the legacy name of the same setting, still honoured
+			// when no prefix is set.
+			Path string `json:"path"`
 		}
 		err := json.Unmarshal([]byte(dest.Config), &cfg)
 		// Normalise the slashes the three parts are joined with: an endpoint
@@ -60,6 +64,9 @@ func BuildRepoURL(dest *db.Destination) string {
 				// default for new S3-compatible destinations (e.g. Backblaze
 				// B2), which would otherwise silently point at AWS.
 				endpoint = "s3.amazonaws.com"
+			}
+			if prefix := strings.Trim(strings.TrimSpace(cfg.Prefix), "/"); prefix != "" {
+				return fmt.Sprintf("s3:%s/%s/%s", endpoint, bucket, prefix)
 			}
 			path := strings.TrimSpace(cfg.Path)
 			if !strings.HasPrefix(path, "/") {

@@ -67,6 +67,32 @@ func TestBuildRepoURL(t *testing.T) {
 			want:   "s3:https://s3.example.com/b/x",
 		},
 		{
+			// The GUI stores the folder inside the bucket as "prefix"; it used
+			// to be ignored, so the repository always landed at the bucket root.
+			name:   "s3 prefix",
+			dType:  "s3",
+			config: `{"bucket":"b","endpoint":"s3.example.com","prefix":"backups/"}`,
+			want:   "s3:s3.example.com/b/backups",
+		},
+		{
+			name:   "s3 nested prefix with surrounding slashes and spaces",
+			dType:  "s3",
+			config: `{"bucket":"b","endpoint":"s3.example.com","prefix":" /team/arkeep/ "}`,
+			want:   "s3:s3.example.com/b/team/arkeep",
+		},
+		{
+			name:   "s3 prefix wins over legacy path",
+			dType:  "s3",
+			config: `{"bucket":"b","endpoint":"s3.example.com","prefix":"p","path":"/x"}`,
+			want:   "s3:s3.example.com/b/p",
+		},
+		{
+			name:   "s3 blank prefix falls back to legacy path",
+			dType:  "s3",
+			config: `{"bucket":"b","endpoint":"s3.example.com","prefix":"","path":"/x"}`,
+			want:   "s3:s3.example.com/b/x",
+		},
+		{
 			name:   "s3 bucket of only slashes yields empty",
 			dType:  "s3",
 			config: `{"bucket":"/","endpoint":"s3.example.com"}`,
