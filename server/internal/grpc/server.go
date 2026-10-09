@@ -9,7 +9,9 @@
 // TLS: when TLSCertFile and TLSKeyFile are set in Config, the gRPC listener
 // is wrapped with TLS. In production always provide a certificate — either
 // issued by a trusted CA (Let's Encrypt via Caddy/Nginx) or self-signed.
-// Agents authenticate via a shared token in gRPC metadata (see authInterceptor).
+// Agents authenticate via a shared token in gRPC metadata (see authInterceptor),
+// or with auto-PKI via their own client certificate, which each agent is bound
+// to on registration (see identity.go).
 package grpc
 
 import (
@@ -223,9 +225,10 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 			zap.String("cert", s.tlsCertFile),
 			zap.String("addr", lis.Addr().String()),
 		)
+		s.logger.Warn("agents share one secret and have no client certificate: an agent's identity is not verified, any agent can act as another")
 
 	default:
-		s.logger.Warn("gRPC running without TLS (insecure mode) — do not use in production",
+		s.logger.Warn("gRPC running without TLS (insecure mode) — do not use in production; agent identities are not verified",
 			zap.String("addr", lis.Addr().String()),
 		)
 	}
@@ -340,6 +343,10 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 		}
 
 		if existing != nil {
+			if _, err := s.bindRegistration(ctx, logger, existing); err != nil {
+				return nil, err
+			}
+
 			// The default name is the hostname at first registration. Dockerized
 			// agents used to report their container ID, which changes on every
 			// recreate (#284): keep the name in step with the hostname as long as
@@ -380,6 +387,11 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 	}
 
 	// ── First-time registration ───────────────────────────────────────────────
+	fingerprint, err := s.bindRegistration(ctx, logger, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	// ID is a UUIDv7 generated in the BeforeCreate hook (see db/models.go).
 	// Default display name is the hostname — the user can rename it in the GUI.
 	agent := &db.Agent{
@@ -395,6 +407,12 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
 		logger.Error("register: failed to create agent record", zap.Error(err))
 		return nil, status.Error(codes.Internal, "registration failed")
+	}
+	if fingerprint != "" {
+		if bound, err := s.agentRepo.BindCertFingerprint(ctx, agent.ID, fingerprint); err != nil || !bound {
+			logger.Error("register: failed to bind the new agent to its certificate", zap.Error(err))
+			return nil, status.Error(codes.Internal, "registration failed")
+		}
 	}
 
 	s.cacheCapabilities(agent.ID.String(), req.Capabilities)
@@ -417,9 +435,9 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 // heartbeats it is by definition online, so we can skip a read of the
 // current status and update both fields in a single query.
 func (s *Server) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (*proto.HeartbeatResponse, error) {
-	agentID, err := parseAgentID(req.AgentId)
+	agentID, err := s.authenticateAgent(ctx, req.AgentId)
 	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "invalid agent_id")
+		return nil, err
 	}
 
 	if err := s.agentRepo.UpdateStatus(ctx, agentID, "online", time.Now().UTC()); err != nil {
@@ -455,12 +473,12 @@ func (s *Server) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (*p
 // for its entire session. The method blocks until the stream closes
 // (agent disconnects or context is cancelled), then cleans up.
 func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentService_StreamJobsServer) error {
-	agentID, err := parseAgentID(req.AgentId)
-	if err != nil {
-		return status.Error(codes.InvalidArgument, "invalid agent_id")
-	}
-
 	ctx := stream.Context()
+
+	agentID, err := s.authenticateAgent(ctx, req.AgentId)
+	if err != nil {
+		return err
+	}
 
 	// Look up the agent to get the hostname for logging and to verify the
 	// agent is known before registering its stream in memory.
@@ -592,9 +610,16 @@ func (s *Server) StreamJobs(req *proto.StreamJobsRequest, stream proto.AgentServ
 // It persists the status change to the database so the GUI can display
 // real-time job progress.
 func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport) (*proto.JobStatusResponse, error) {
+	agentID, err := s.authenticateAgent(ctx, req.AgentId)
+	if err != nil {
+		return nil, err
+	}
 	jobID, err := uuid.Parse(req.JobId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid job_id")
+	}
+	if err := s.authorizeJob(ctx, agentID, jobID); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -866,6 +891,13 @@ func (s *Server) StreamLogs(stream proto.AgentService_StreamLogsServer) error {
 				)
 				return status.Error(codes.InvalidArgument, "invalid job_id in log entries")
 			}
+			agentID, authErr := s.authenticateAgent(stream.Context(), entry.AgentId)
+			if authErr != nil {
+				return authErr
+			}
+			if authErr := s.authorizeJob(stream.Context(), agentID, parsed); authErr != nil {
+				return authErr
+			}
 			jobID = parsed
 			jobIDSet = true
 		}
@@ -936,6 +968,10 @@ func clampUint32(n int) uint32 {
 // On success, a Snapshot record is also created so the snapshot appears in
 // the snapshots list without requiring a separate restic catalog scan.
 func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.DestinationStatusReport) (*proto.DestinationStatusResponse, error) {
+	agentID, err := s.authenticateAgent(ctx, req.AgentId)
+	if err != nil {
+		return nil, err
+	}
 	jobID, err := uuid.Parse(req.JobId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid job_id")
@@ -944,6 +980,9 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	destID, err := uuid.Parse(req.DestinationId)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid destination_id")
+	}
+	if err := s.authorizeJobDestination(ctx, agentID, jobID, destID); err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -1154,6 +1193,9 @@ func (s *Server) reportRetentionTagStatus(ctx context.Context, req *proto.Destin
 // to a JOB_TYPE_LIST_VOLUMES request sent via StreamJobs. It delivers the
 // result to the waiting RequestVolumeList call via the agent manager.
 func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListReport) (*proto.VolumeListResponse, error) {
+	if _, err := s.authenticateAgent(ctx, req.AgentId); err != nil {
+		return nil, err
+	}
 	s.agentManager.DeliverVolumeList(req)
 	return &proto.VolumeListResponse{Ok: true}, nil
 }
@@ -1162,6 +1204,9 @@ func (s *Server) ReportVolumeList(ctx context.Context, req *proto.VolumeListRepo
 // response to a JOB_TYPE_LIST_SNAPSHOT_FILES request. It delivers the result
 // to the waiting RequestSnapshotBrowse call via the agent manager.
 func (s *Server) ReportSnapshotBrowse(ctx context.Context, req *proto.SnapshotBrowseReport) (*proto.SnapshotBrowseResponse, error) {
+	if _, err := s.authenticateAgent(ctx, req.AgentId); err != nil {
+		return nil, err
+	}
 	s.agentManager.DeliverSnapshotBrowse(req)
 	return &proto.SnapshotBrowseResponse{Ok: true}, nil
 }
@@ -1174,6 +1219,9 @@ func (s *Server) ReportSnapshotBrowse(ctx context.Context, req *proto.SnapshotBr
 func (s *Server) UploadSnapshotDownload(stream proto.AgentService_UploadSnapshotDownloadServer) error {
 	first, err := stream.Recv()
 	if err != nil {
+		return err
+	}
+	if _, err := s.authenticateAgent(stream.Context(), first.AgentId); err != nil {
 		return err
 	}
 
@@ -1195,6 +1243,9 @@ func (s *Server) UploadSnapshotDownload(stream proto.AgentService_UploadSnapshot
 // a JOB_TYPE_IMPORT_SNAPSHOTS request. It delivers the result to the waiting
 // RequestSnapshotImport call via the agent manager.
 func (s *Server) ReportSnapshotImport(ctx context.Context, req *proto.SnapshotImportReport) (*proto.SnapshotImportResponse, error) {
+	if _, err := s.authenticateAgent(ctx, req.AgentId); err != nil {
+		return nil, err
+	}
 	s.agentManager.DeliverSnapshotImport(req)
 	return &proto.SnapshotImportResponse{Ok: true}, nil
 }
@@ -1210,6 +1261,10 @@ func (s *Server) ReportSnapshotImport(ctx context.Context, req *proto.SnapshotIm
 // (the repo URL is derived purely from the destination record), so it covers
 // every snapshot stored there regardless of which policy or agent produced it.
 func (s *Server) ReportSnapshotReconcile(ctx context.Context, req *proto.SnapshotReconcileReport) (*proto.SnapshotReconcileResponse, error) {
+	agentID, err := s.authenticateAgent(ctx, req.AgentId)
+	if err != nil {
+		return nil, err
+	}
 	destID, err := uuid.Parse(req.DestinationId)
 	if err != nil {
 		s.logger.Warn("ReportSnapshotReconcile: invalid destination_id",
@@ -1217,6 +1272,15 @@ func (s *Server) ReportSnapshotReconcile(ctx context.Context, req *proto.Snapsho
 			zap.Error(err),
 		)
 		return nil, status.Error(codes.InvalidArgument, "invalid destination_id")
+	}
+	// The reconcile evicts snapshot records, so it must come from the agent
+	// that ran a job on this very destination.
+	jobID, err := uuid.Parse(req.JobId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid job_id")
+	}
+	if err := s.authorizeJobDestination(ctx, agentID, jobID, destID); err != nil {
+		return nil, err
 	}
 
 	// Never treat an empty list as "the repository holds no snapshots". The

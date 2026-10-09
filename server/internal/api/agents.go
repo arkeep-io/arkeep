@@ -45,6 +45,7 @@ type agentResponse struct {
 	Status          string  `json:"status"`
 	Labels          string  `json:"labels"`
 	DockerAvailable bool    `json:"docker_available"`
+	IdentityBound   bool    `json:"identity_bound"` // bound to its mTLS client certificate (never without auto-PKI)
 	LastSeenAt      *string `json:"last_seen_at"`
 	CreatedAt       string  `json:"created_at"`
 }
@@ -62,6 +63,7 @@ func agentToResponse(a *db.Agent) agentResponse {
 		Status:          a.Status,
 		Labels:          a.Labels,
 		DockerAvailable: a.DockerAvailable,
+		IdentityBound:   a.CertFingerprint != nil,
 		CreatedAt:       a.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if a.LastSeenAt != nil {
@@ -243,6 +245,32 @@ func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "agent.delete", "agent", id.String(), map[string]any{})
+	NoContent(w)
+}
+
+// ResetIdentity handles POST /api/v1/agents/{id}/reset-identity (admin only).
+// It unbinds the agent from its client certificate, so the next certificate
+// that registers as the agent binds it. Used when an agent re-enrolled and is
+// refused because its new certificate does not match the bound one. A
+// connected agent is unaffected: it rebinds its own certificate when it next
+// registers.
+func (h *AgentHandler) ResetIdentity(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+
+	if err := h.repo.ResetCertFingerprint(r.Context(), id); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to reset agent identity", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "agent.reset_identity", "agent", id.String(), map[string]any{})
 	NoContent(w)
 }
 

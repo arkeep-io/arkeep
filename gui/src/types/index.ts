@@ -119,6 +119,9 @@ export interface Agent {
   status: AgentStatus
   version: string
   docker_available: boolean
+  // identity_bound is true once the agent registered with its mTLS client
+  // certificate; RPCs from any other certificate are refused.
+  identity_bound: boolean
   last_seen_at: string | null
   created_at: string
   updated_at: string

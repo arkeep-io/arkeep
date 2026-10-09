@@ -240,6 +240,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/agents/{id}", agentHandler.GetByID)
 			r.With(RequireRole("admin")).Patch("/agents/{id}", agentHandler.Update)
 			r.With(RequireRole("admin")).Delete("/agents/{id}", agentHandler.Delete)
+			r.With(RequireRole("admin")).Post("/agents/{id}/reset-identity", agentHandler.ResetIdentity)
 			r.With(RequireRole("admin")).Get("/agents/{id}/volumes", agentHandler.ListVolumes)
 
 			// Destinations
