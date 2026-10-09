@@ -370,3 +370,60 @@ func newSQLiteMigrator(t *testing.T, sqlDB *sql.DB) *migrate.Migrate {
 	}
 	return m
 }
+
+// TestSQLiteMigration_S3PrefixReset checks that 000034 drops config.prefix
+// from S3 destinations only, keeps their other keys, and leaves a config that
+// is not valid JSON untouched instead of failing the migration.
+func TestSQLiteMigration_S3PrefixReset(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/prefix.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(33); err != nil {
+		t.Fatalf("Migrate(33): %v", err)
+	}
+
+	rows := map[string]struct{ typ, config, want string }{
+		"s3 with prefix":  {"s3", `{"bucket":"b","endpoint":"e","prefix":"backups/","region":"r"}`, `{"bucket":"b","endpoint":"e","region":"r"}`},
+		"s3 blank prefix": {"s3", `{"bucket":"b","endpoint":"e","prefix":""}`, `{"bucket":"b","endpoint":"e"}`},
+		"s3 no prefix":    {"s3", `{"bucket":"b","endpoint":"e"}`, `{"bucket":"b","endpoint":"e"}`},
+		"s3 invalid json": {"s3", `not json "prefix"`, `not json "prefix"`},
+		"local not s3":    {"local", `{"path":"/r","prefix":"keep"}`, `{"path":"/r","prefix":"keep"}`},
+	}
+	ids := map[string]uuid.UUID{}
+	for name, r := range rows {
+		id := uuid.New()
+		ids[name] = id
+		if err := gdb.Exec(`INSERT INTO destinations (id, name, type, config, credentials, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, '', 1, ?, ?)`,
+			id.String(), name, r.typ, r.config, time.Now(), time.Now()).Error; err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Up: %v", err)
+	}
+
+	for name, r := range rows {
+		var config string
+		if err := gdb.Raw(`SELECT config FROM destinations WHERE id = ?`, ids[name].String()).Scan(&config).Error; err != nil {
+			t.Fatalf("query %s: %v", name, err)
+		}
+		if config != r.want {
+			t.Errorf("%s: config = %s, want %s", name, config, r.want)
+		}
+	}
+}

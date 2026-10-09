@@ -53,7 +53,7 @@ const (
 // Credentials and Config are JSON-decoded from the db.Destination fields
 // before being passed here — the Wrapper works with already-decrypted values.
 type Destination struct {
-	Type     DestinationType
+	Type DestinationType
 	// RepoURL is the restic repository URL, pre-formatted for the destination
 	// type (e.g. "s3:s3.amazonaws.com/bucket", "sftp:user@host:/path",
 	// ":local:/mnt/backup"). For rclone destinations this is the rclone remote
@@ -63,15 +63,15 @@ type Destination struct {
 	// Env holds extra environment variables required by the backend driver
 	// (e.g. AWS_ACCESS_KEY_ID, RCLONE_CONFIG_*). These are added to the
 	// subprocess environment alongside the standard restic variables.
-	Env      map[string]string
+	Env map[string]string
 }
 
 // BackupOptions carries the parameters for a backup run.
 type BackupOptions struct {
 	// Sources is the list of paths or docker-volume references to back up.
-	Sources  []string
+	Sources []string
 	// Tags are attached to the resulting snapshot for filtering.
-	Tags     []string
+	Tags []string
 	// ExcludePatterns are passed to restic as --exclude flags.
 	ExcludePatterns []string
 	// Host is recorded as the snapshot's hostname (--host). Set so a Dockerized
@@ -115,7 +115,7 @@ type SnapshotInfo struct {
 	Hostname string   `json:"hostname"`
 	Username string   `json:"username"`
 	// ShortID is the 8-character abbreviated snapshot ID.
-	ShortID  string   `json:"short_id"`
+	ShortID string `json:"short_id"`
 	// Summary carries the per-snapshot statistics restic records since 0.17.
 	// Absent for snapshots written by older versions, leaving the fields zero.
 	Summary SnapshotSummary `json:"summary"`
@@ -156,25 +156,25 @@ func (p RetentionPolicy) IsEnabled() bool {
 type ProgressEvent struct {
 	// MessageType is "status", "summary", or "error" for backup;
 	// "check-ok" or "check-error" for check operations.
-	MessageType  string  `json:"message_type"`
-	PercentDone  float64 `json:"percent_done"`
-	FilesNew     uint64  `json:"files_new"`
-	FilesDone    uint64  `json:"files_done"`
-	BytesDone    uint64  `json:"bytes_done"`
-	TotalFiles   uint64  `json:"total_files"`
-	TotalBytes   uint64  `json:"total_bytes"`
+	MessageType string  `json:"message_type"`
+	PercentDone float64 `json:"percent_done"`
+	FilesNew    uint64  `json:"files_new"`
+	FilesDone   uint64  `json:"files_done"`
+	BytesDone   uint64  `json:"bytes_done"`
+	TotalFiles  uint64  `json:"total_files"`
+	TotalBytes  uint64  `json:"total_bytes"`
 
 	// Summary-only fields — only present when MessageType == "summary".
 	// SnapshotID is the full SHA256 ID of the snapshot created by this backup run.
-	SnapshotID          string `json:"snapshot_id"`
+	SnapshotID string `json:"snapshot_id"`
 	// TotalBytesProcessed is the total size of all source files examined.
 	TotalBytesProcessed uint64 `json:"total_bytes_processed"`
 	// DataAdded is the number of new bytes added to the repository (deduplicated,
 	// before compression).
-	DataAdded           uint64 `json:"data_added"`
+	DataAdded uint64 `json:"data_added"`
 	// DataAddedPacked is the compressed bytes actually written to the repository
 	// by this backup (deduplicated + compressed) — the real incremental footprint.
-	DataAddedPacked     uint64 `json:"data_added_packed"`
+	DataAddedPacked uint64 `json:"data_added_packed"`
 
 	// Raw is the original JSON line, forwarded as-is to the log stream.
 	Raw string `json:"-"`
@@ -228,6 +228,17 @@ func NewWrapper(extractor *Extractor, logger *zap.Logger) (*Wrapper, error) {
 		rcloneBin: rcloneBin,
 		logger:    logger.Named("restic"),
 	}, nil
+}
+
+// NewWrapperWithBinaries returns a Wrapper that runs the given binaries as-is,
+// skipping extraction. Intended for tests in other packages that need to
+// drive the executor against a fake restic script.
+func NewWrapperWithBinaries(resticBin, rcloneBin string, logger *zap.Logger) *Wrapper {
+	return &Wrapper{
+		resticBin: resticBin,
+		rcloneBin: rcloneBin,
+		logger:    logger.Named("restic"),
+	}
 }
 
 // Init initialises the restic repository at dest if it does not exist yet.
