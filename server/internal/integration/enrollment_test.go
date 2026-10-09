@@ -3,12 +3,17 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -210,5 +215,119 @@ func TestEnrollmentEmptyServerSecret(t *testing.T) {
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403 Forbidden", resp.StatusCode)
+	}
+}
+
+// TestEnrollmentWithCSR verifies enrollment with an agent-generated key
+// (SEC-26): the response carries no private key, and the certificate issued
+// for the CSR works for mTLS with the key the agent kept.
+func TestEnrollmentWithCSR(t *testing.T) {
+	autoCerts, err := grpcserver.EnsureCerts(t.TempDir(), zap.NewNop())
+	if err != nil {
+		t.Fatalf("EnsureCerts: %v", err)
+	}
+	httpSrv := httptest.NewServer(http.HandlerFunc(api.NewEnrollHandler(autoCerts, testAgentSecret, zap.NewNop()).Enroll))
+	defer httpSrv.Close()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest: %v", err)
+	}
+	body, _ := json.Marshal(map[string]string{
+		"agent_secret": testAgentSecret,
+		"csr":          string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})),
+	})
+	resp, err := http.Post(httpSrv.URL, "application/json", bytes.NewReader(body)) //nolint:noctx
+	if err != nil {
+		t.Fatalf("POST enroll: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("enroll status = %d, want 200", resp.StatusCode)
+	}
+	var certs map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&certs); err != nil {
+		t.Fatalf("decode enroll response: %v", err)
+	}
+	if _, ok := certs["client_key"]; ok {
+		t.Error("the response carries a client_key: the private key must stay on the agent")
+	}
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey: %v", err)
+	}
+	clientCert, err := tls.X509KeyPair([]byte(certs["client_cert"]), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	if err != nil {
+		t.Fatalf("the issued certificate does not match the agent's key: %v", err)
+	}
+
+	gdb, err := db.New(db.Config{Driver: "sqlite", DSN: ":memory:", Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	srv := grpcserver.New(
+		grpcserver.Config{AutoCerts: autoCerts},
+		agentmanager.New(zap.NewNop()),
+		repositories.NewAgentRepository(gdb),
+		repositories.NewJobRepository(gdb),
+		repositories.NewSnapshotRepository(gdb),
+		repositories.NewPolicyRepository(gdb),
+		repositories.NewDestinationRepository(gdb),
+		websocket.NewHub(),
+		zap.NewNop(),
+	)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = srv.Serve(ctx, lis) }()
+
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM([]byte(certs["ca_cert"])) {
+		t.Fatal("failed to add CA cert to pool")
+	}
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      caPool,
+		ServerName:   grpcserver.GRPCServerName,
+	})))
+	if err != nil {
+		t.Fatalf("dial mTLS: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := proto.NewAgentServiceClient(conn).Register(context.Background(), &proto.RegisterRequest{Hostname: "csr-agent"}); err != nil {
+		t.Fatalf("Register over mTLS with the CSR certificate: %v", err)
+	}
+}
+
+// TestEnrollmentRejectsBadRequests covers an invalid CSR and an oversized body.
+func TestEnrollmentRejectsBadRequests(t *testing.T) {
+	autoCerts, err := grpcserver.EnsureCerts(t.TempDir(), zap.NewNop())
+	if err != nil {
+		t.Fatalf("EnsureCerts: %v", err)
+	}
+	httpSrv := httptest.NewServer(http.HandlerFunc(api.NewEnrollHandler(autoCerts, testAgentSecret, zap.NewNop()).Enroll))
+	defer httpSrv.Close()
+
+	for name, csr := range map[string]string{
+		"invalid csr": "-----BEGIN CERTIFICATE REQUEST-----\nAAAA\n-----END CERTIFICATE REQUEST-----\n",
+		"oversized":   strings.Repeat("A", 128<<10),
+	} {
+		body, _ := json.Marshal(map[string]string{"agent_secret": testAgentSecret, "csr": csr})
+		resp, err := http.Post(httpSrv.URL, "application/json", bytes.NewReader(body)) //nolint:noctx
+		if err != nil {
+			t.Fatalf("POST enroll (%s): %v", name, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, resp.StatusCode)
+		}
 	}
 }
