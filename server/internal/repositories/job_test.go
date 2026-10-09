@@ -651,3 +651,75 @@ func TestHasJobForPolicyAfter(t *testing.T) {
 		t.Error("did not report the newer job")
 	}
 }
+
+// TestMarkRunningJobsInterrupted_ClosesChildRows guards against an interrupted
+// job leaving its per-tag retention rows and per-command rows unfinished: they
+// would show as still pending or running forever under a job that is over.
+// job_retention_tags has no "interrupted" status, so an unfinished sweep is
+// closed out as "failed" with the job's error.
+func TestMarkRunningJobsInterrupted_ClosesChildRows(t *testing.T) {
+	sweeps := map[string]func(JobRepository, context.Context, uuid.UUID) (int64, error){
+		"all agents": func(r JobRepository, ctx context.Context, _ uuid.UUID) (int64, error) {
+			return r.MarkRunningJobsInterrupted(ctx, "server restarted")
+		},
+		"one agent": func(r JobRepository, ctx context.Context, agentID uuid.UUID) (int64, error) {
+			return r.MarkRunningJobsInterruptedForAgent(ctx, agentID, "server restarted")
+		},
+	}
+	for name, sweep := range sweeps {
+		t.Run(name, func(t *testing.T) {
+			gormDB := newTestDB(t)
+			repo := NewJobRepository(gormDB)
+			f := newJobFixture(t, gormDB)
+			ctx := context.Background()
+
+			retention := &db.Job{AgentID: f.agentID, Type: "retention", Status: "running"}
+			if err := repo.Create(ctx, retention); err != nil {
+				t.Fatalf("Create retention job: %v", err)
+			}
+			for _, tag := range []struct{ tag, status string }{
+				{"policy:a", "succeeded"},
+				{"policy:b", "running"},
+				{"policy:c", "pending"},
+			} {
+				if err := repo.CreateRetentionTag(ctx, &db.JobRetentionTag{JobID: retention.ID, DestinationID: f.destID, Tag: tag.tag, Status: tag.status}); err != nil {
+					t.Fatalf("CreateRetentionTag(%s): %v", tag.tag, err)
+				}
+			}
+
+			backup := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Type: "backup", Status: "running"}
+			if err := repo.Create(ctx, backup); err != nil {
+				t.Fatalf("Create backup job: %v", err)
+			}
+			if err := gormDB.Create(&db.JobDestinationCommand{JobID: backup.ID, DestinationID: f.destID, SourceName: "pgdump", Status: "running"}).Error; err != nil {
+				t.Fatalf("create command row: %v", err)
+			}
+
+			if _, err := sweep(repo, ctx, f.agentID); err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+
+			tags, err := repo.ListRetentionTagsByJob(ctx, retention.ID)
+			if err != nil {
+				t.Fatalf("ListRetentionTagsByJob: %v", err)
+			}
+			want := map[string]string{"policy:a": "succeeded", "policy:b": "failed", "policy:c": "failed"}
+			for _, tg := range tags {
+				if tg.Status != want[tg.Tag] {
+					t.Errorf("tag %s status = %q, want %q", tg.Tag, tg.Status, want[tg.Tag])
+				}
+				if tg.Status == "failed" && (tg.Error != "server restarted" || tg.EndedAt == nil) {
+					t.Errorf("tag %s error = %q, EndedAt = %v; want the job's error and an end time", tg.Tag, tg.Error, tg.EndedAt)
+				}
+			}
+
+			cmds, err := repo.ListDestinationCommandsByJob(ctx, backup.ID)
+			if err != nil {
+				t.Fatalf("ListDestinationCommandsByJob: %v", err)
+			}
+			if len(cmds) != 1 || cmds[0].Status != "interrupted" {
+				t.Errorf("command rows = %+v, want a single \"interrupted\" row", cmds)
+			}
+		})
+	}
+}

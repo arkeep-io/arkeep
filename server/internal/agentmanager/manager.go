@@ -145,19 +145,43 @@ type Manager struct {
 	// registers a channel here. The matching Deliver* method sends on the channel
 	// when the agent RPC arrives.
 	pendingMu                sync.Mutex
-	pendingVolumeLists       map[string]chan VolumeListResult     // keyed by correlation ID
-	pendingSnapshotBrowses   map[string]chan SnapshotBrowseResult // keyed by correlation ID
-	pendingSnapshotImports   map[string]chan SnapshotImportResult // keyed by correlation ID
-	pendingSnapshotDownloads map[string]pendingDownload           // keyed by correlation ID
+	pendingVolumeLists       map[string]pendingCall[VolumeListResult]     // keyed by correlation ID
+	pendingSnapshotBrowses   map[string]pendingCall[SnapshotBrowseResult] // keyed by correlation ID
+	pendingSnapshotImports   map[string]pendingCall[SnapshotImportResult] // keyed by correlation ID
+	pendingSnapshotDownloads map[string]pendingDownload                   // keyed by correlation ID
+}
+
+// pendingCall is a request waiting for its agent's report: the agent it was
+// sent to, and the one-slot channel its result is delivered on.
+type pendingCall[T any] struct {
+	agentID string
+	ch      chan T
+}
+
+// deliver hands result to the call waiting on correlationID, and reports false
+// when none is waiting for it from agentID. The entry is removed before the
+// send, so a duplicate report finds nothing and the send to the one-slot
+// channel can never block.
+func deliver[T any](m *Manager, pending map[string]pendingCall[T], correlationID, agentID string, result T) bool {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+
+	p, ok := pending[correlationID]
+	if !ok || p.agentID != agentID {
+		return false
+	}
+	delete(pending, correlationID)
+	p.ch <- result
+	return true
 }
 
 // New creates a new Manager instance.
 func New(logger *zap.Logger) *Manager {
 	return &Manager{
 		agents:                   make(map[string]*ConnectedAgent),
-		pendingVolumeLists:       make(map[string]chan VolumeListResult),
-		pendingSnapshotBrowses:   make(map[string]chan SnapshotBrowseResult),
-		pendingSnapshotImports:   make(map[string]chan SnapshotImportResult),
+		pendingVolumeLists:       make(map[string]pendingCall[VolumeListResult]),
+		pendingSnapshotBrowses:   make(map[string]pendingCall[SnapshotBrowseResult]),
+		pendingSnapshotImports:   make(map[string]pendingCall[SnapshotImportResult]),
 		pendingSnapshotDownloads: make(map[string]pendingDownload),
 		logger:                   logger.Named("agentmanager"),
 	}
@@ -415,7 +439,7 @@ func (m *Manager) RequestVolumeList(ctx context.Context, agentID, correlationID 
 	// where the agent responds before we start listening.
 	ch := make(chan VolumeListResult, 1)
 	m.pendingMu.Lock()
-	m.pendingVolumeLists[correlationID] = ch
+	m.pendingVolumeLists[correlationID] = pendingCall[VolumeListResult]{agentID: agentID, ch: ch}
 	m.pendingMu.Unlock()
 
 	defer func() {
@@ -457,24 +481,18 @@ func (m *Manager) RequestVolumeList(ctx context.Context, agentID, correlationID 
 // ReportVolumeList RPC from an agent. It matches the report to the waiting
 // RequestVolumeList call via the correlation_id and delivers the result.
 //
-// If no waiter is found (e.g. the REST request already timed out), the
-// report is silently discarded.
+// A report with no waiter from this agent (the REST request already timed
+// out, a duplicate, or another agent's report) is discarded.
 func (m *Manager) DeliverVolumeList(report *proto.VolumeListReport) {
-	m.pendingMu.Lock()
-	ch, ok := m.pendingVolumeLists[report.CorrelationId]
-	m.pendingMu.Unlock()
-
-	if !ok {
-		m.logger.Warn("DeliverVolumeList: no waiter for correlation_id, discarding",
+	result := VolumeListResult{
+		Volumes: report.Volumes,
+		Err:     report.Error,
+	}
+	if !deliver(m, m.pendingVolumeLists, report.CorrelationId, report.AgentId, result) {
+		m.logger.Warn("DeliverVolumeList: no waiter for correlation_id from this agent, discarding",
 			zap.String("correlation_id", report.CorrelationId),
 			zap.String("agent_id", report.AgentId),
 		)
-		return
-	}
-
-	ch <- VolumeListResult{
-		Volumes: report.Volumes,
-		Err:     report.Error,
 	}
 }
 
@@ -499,7 +517,7 @@ func (m *Manager) RequestSnapshotBrowse(ctx context.Context, agentID, correlatio
 
 	ch := make(chan SnapshotBrowseResult, 1)
 	m.pendingMu.Lock()
-	m.pendingSnapshotBrowses[correlationID] = ch
+	m.pendingSnapshotBrowses[correlationID] = pendingCall[SnapshotBrowseResult]{agentID: agentID, ch: ch}
 	m.pendingMu.Unlock()
 
 	defer func() {
@@ -539,21 +557,15 @@ func (m *Manager) RequestSnapshotBrowse(ctx context.Context, agentID, correlatio
 // ReportSnapshotBrowse RPC from an agent. It matches the report to the waiting
 // RequestSnapshotBrowse call via the correlation_id and delivers the result.
 func (m *Manager) DeliverSnapshotBrowse(report *proto.SnapshotBrowseReport) {
-	m.pendingMu.Lock()
-	ch, ok := m.pendingSnapshotBrowses[report.CorrelationId]
-	m.pendingMu.Unlock()
-
-	if !ok {
-		m.logger.Warn("DeliverSnapshotBrowse: no waiter for correlation_id, discarding",
+	result := SnapshotBrowseResult{
+		Entries: report.Entries,
+		Err:     report.Error,
+	}
+	if !deliver(m, m.pendingSnapshotBrowses, report.CorrelationId, report.AgentId, result) {
+		m.logger.Warn("DeliverSnapshotBrowse: no waiter for correlation_id from this agent, discarding",
 			zap.String("correlation_id", report.CorrelationId),
 			zap.String("agent_id", report.AgentId),
 		)
-		return
-	}
-
-	ch <- SnapshotBrowseResult{
-		Entries: report.Entries,
-		Err:     report.Error,
 	}
 }
 
@@ -578,7 +590,7 @@ func (m *Manager) RequestSnapshotImport(ctx context.Context, agentID, correlatio
 
 	ch := make(chan SnapshotImportResult, 1)
 	m.pendingMu.Lock()
-	m.pendingSnapshotImports[correlationID] = ch
+	m.pendingSnapshotImports[correlationID] = pendingCall[SnapshotImportResult]{agentID: agentID, ch: ch}
 	m.pendingMu.Unlock()
 
 	defer func() {
@@ -618,21 +630,15 @@ func (m *Manager) RequestSnapshotImport(ctx context.Context, agentID, correlatio
 // ReportSnapshotImport RPC from an agent. It matches the report to the waiting
 // RequestSnapshotImport call via the correlation_id and delivers the result.
 func (m *Manager) DeliverSnapshotImport(report *proto.SnapshotImportReport) {
-	m.pendingMu.Lock()
-	ch, ok := m.pendingSnapshotImports[report.CorrelationId]
-	m.pendingMu.Unlock()
-
-	if !ok {
-		m.logger.Warn("DeliverSnapshotImport: no waiter for correlation_id, discarding",
-			zap.String("correlation_id", report.CorrelationId),
-			zap.String("agent_id", report.AgentId),
-		)
-		return
-	}
-
-	ch <- SnapshotImportResult{
+	result := SnapshotImportResult{
 		Snapshots:     report.Snapshots,
 		RepoSizeBytes: report.RepoSizeBytes,
 		Err:           report.Error,
+	}
+	if !deliver(m, m.pendingSnapshotImports, report.CorrelationId, report.AgentId, result) {
+		m.logger.Warn("DeliverSnapshotImport: no waiter for correlation_id from this agent, discarding",
+			zap.String("correlation_id", report.CorrelationId),
+			zap.String("agent_id", report.AgentId),
+		)
 	}
 }
