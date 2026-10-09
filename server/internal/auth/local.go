@@ -204,6 +204,18 @@ func (p *LocalAuthProvider) issueTokenPair(ctx context.Context, userID uuid.UUID
 	}, nil
 }
 
+// argon2Slots bounds how many Argon2id derivations run at once. Each one
+// allocates argon2Memory (64 MiB), so a burst of logins or password checks
+// could otherwise exhaust the server's memory (SEC-20); further callers wait.
+var argon2Slots = make(chan struct{}, 4)
+
+// argon2Key derives the Argon2id hash of password with the package parameters.
+func argon2Key(password string, salt []byte) []byte {
+	argon2Slots <- struct{}{}
+	defer func() { <-argon2Slots }()
+	return argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+}
+
 // HashPassword returns an Argon2id hash of the given plaintext password.
 // Exported so the user registration handler can hash passwords without
 // depending on the full auth provider.
@@ -215,7 +227,7 @@ func HashPassword(password string) (string, error) {
 		return "", fmt.Errorf("auth: generating password salt: %w", err)
 	}
 
-	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	hash := argon2Key(password, salt)
 
 	return hex.EncodeToString(salt) + ":" + hex.EncodeToString(hash), nil
 }
@@ -266,7 +278,7 @@ func verifyPassword(password, stored string) bool {
 		return false
 	}
 
-	actual := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	actual := argon2Key(password, salt)
 
 	return constantTimeEqual(actual, expectedHash)
 }

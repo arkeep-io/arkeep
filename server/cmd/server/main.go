@@ -59,6 +59,10 @@ type config struct {
 	secureCookies bool
 	telemetry     bool
 	grpcInsecure  bool
+	// trustedProxies is ARKEEP_TRUSTED_PROXIES (see api.ParseTrustedProxies).
+	trustedProxies string
+	// metricsToken, when set, is required as a bearer token on /metrics.
+	metricsToken string
 }
 
 func main() {
@@ -97,6 +101,8 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Required for self-service password reset emails (disabled when unset)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
+	root.PersistentFlags().StringVar(&cfg.trustedProxies, "trusted-proxies", envOrDefault("ARKEEP_TRUSTED_PROXIES", ""), "Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the client address (default: loopback and private networks; \"none\" to trust none)")
+	root.PersistentFlags().StringVar(&cfg.metricsToken, "metrics-token", envOrDefault("ARKEEP_METRICS_TOKEN", ""), "Bearer token required to read /metrics (unset: /metrics is public)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 
 	return root
@@ -128,6 +134,14 @@ func run(ctx context.Context, cfg *config) error {
 	// would accept any client: refuse to start rather than run open.
 	if cfg.agentSecret == "" {
 		return fmt.Errorf("agent secret is required — set --agent-secret or ARKEEP_AGENT_SECRET (generate one with: openssl rand -hex 24)")
+	}
+
+	trustedProxies, err := api.ParseTrustedProxies(cfg.trustedProxies)
+	if err != nil {
+		return fmt.Errorf("invalid --trusted-proxies / ARKEEP_TRUSTED_PROXIES: %w", err)
+	}
+	if cfg.metricsToken == "" {
+		logger.Warn("/metrics is public: set ARKEEP_METRICS_TOKEN to require a bearer token, or block it at the reverse proxy")
 	}
 
 	// Password reset links are only ever built from the configured base URL,
@@ -462,6 +476,8 @@ func run(ctx context.Context, cfg *config) error {
 		Pinger:             hcPinger,
 		Queue:              destQueue,
 		PublicBaseURL:      cfg.baseURL,
+		TrustedProxies:     trustedProxies,
+		MetricsToken:       cfg.metricsToken,
 		AutoCerts:          autoCerts,
 		AgentSecret:        cfg.agentSecret,
 		ServerVersion:      version,

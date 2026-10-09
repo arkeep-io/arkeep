@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -83,6 +84,14 @@ type RouterConfig struct {
 	// production to prevent Host header injection into reset links.
 	PublicBaseURL string
 
+	// MetricsToken, when set, must be presented as a bearer token to read
+	// /metrics. When empty, /metrics is public.
+	MetricsToken string
+
+	// TrustedProxies are the networks whose X-Forwarded-For is believed when
+	// resolving the client address (see RealIP). Nil trusts no proxy.
+	TrustedProxies []netip.Prefix
+
 	// AutoCerts is the auto-generated PKI used for gRPC mTLS enrollment.
 	AutoCerts *grpccerts.AutoCerts
 
@@ -107,6 +116,8 @@ type RouterConfig struct {
 func NewRouter(cfg RouterConfig) *chi.Mux {
 	r := chi.NewRouter()
 
+	// First, so the request log, rate limits and audit see the client address.
+	r.Use(RealIP(cfg.TrustedProxies, cfg.Logger))
 	r.Use(middleware.RequestID)
 	r.Use(RequestLogger(cfg.Logger))
 	r.Use(middleware.Recoverer)
@@ -141,9 +152,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Get("/health/live", healthHandler.Live)
 	r.Get("/health/ready", healthHandler.Ready)
 
-	// Prometheus metrics endpoint — unauthenticated (protect at network level
-	// or via a reverse proxy in production).
-	r.Mount("/metrics", metrics.Handler())
+	// Prometheus metrics endpoint — public unless a metrics token is set
+	// (SEC-36); otherwise protect it at network level or via a reverse proxy.
+	r.Mount("/metrics", requireBearer(cfg.MetricsToken, metrics.Handler()))
 
 	// OIDC callback — registered at the root so the redirect URI registered
 	// with identity providers does not carry the /api/v1 prefix.
@@ -153,11 +164,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 		// --- Public routes ---
 		r.Group(func(r chi.Router) {
-			// Login and refresh are rate-limited to 5 requests per minute per IP
-			// to prevent brute-force attacks on credentials.
+			// Login is rate-limited to 5 requests per minute per IP to prevent
+			// brute-force attacks on credentials. Refresh has its own budget:
+			// every open tab refreshes on its own, and sharing the login bucket
+			// let a few tabs lock their user out of logging in (SEC-19).
 			loginLimiter := NewRateLimiter(5, time.Minute)
 			r.With(RateLimit(loginLimiter)).Post("/auth/login", authHandler.Login)
-			r.With(RateLimit(loginLimiter)).Post("/auth/refresh", authHandler.Refresh)
+			r.With(RateLimit(NewRateLimiter(30, time.Minute))).Post("/auth/refresh", authHandler.Refresh)
 
 			// Second step of a two-factor login. It gets its own limiter rather
 			// than sharing loginLimiter's cumulative 5/min budget, because a

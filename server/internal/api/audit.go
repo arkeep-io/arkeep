@@ -34,7 +34,7 @@ func logAuditDirect(
 		ResourceType: resType,
 		ResourceID:   resID,
 		Details:      string(detailsJSON),
-		IPAddress:    r.RemoteAddr,
+		IPAddress:    clientIP(r),
 	}
 	if err := repo.Create(r.Context(), entry); err != nil {
 		logger.Error("audit log write failed",
@@ -86,7 +86,7 @@ func logAudit(
 		ResourceType: resType,
 		ResourceID:   resID,
 		Details:      string(detailsJSON),
-		IPAddress:    r.RemoteAddr, // already resolved by middleware.RealIP
+		IPAddress:    clientIP(r), // resolved by RealIP when behind a trusted proxy
 	}
 
 	if err := repo.Create(r.Context(), entry); err != nil {
