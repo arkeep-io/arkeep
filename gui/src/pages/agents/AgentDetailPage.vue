@@ -30,6 +30,7 @@ import {
     RefreshCw,
     PencilLine,
     Trash2,
+    KeyRound,
     WifiOff,
     Cpu,
     MemoryStick,
@@ -127,6 +128,8 @@ const crosshairColor = (_d: unknown, i: number) =>
 const editSheetOpen = ref(false)
 const deleteDialogOpen = ref(false)
 const deleteLoading = ref(false)
+const resetIdentityDialogOpen = ref(false)
+const resetIdentityLoading = ref(false)
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -199,6 +202,23 @@ async function confirmDelete() {
     } finally {
         deleteLoading.value = false
         deleteDialogOpen.value = false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reset identity
+// ---------------------------------------------------------------------------
+
+async function confirmResetIdentity() {
+    resetIdentityLoading.value = true
+    try {
+        await api(`/api/v1/agents/${agentId}/reset-identity`, { method: 'POST' })
+        await fetchAgent()
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to reset agent identity')
+    } finally {
+        resetIdentityLoading.value = false
+        resetIdentityDialogOpen.value = false
     }
 }
 
@@ -341,6 +361,11 @@ onUnmounted(() => {
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Rename
+                </Button>
+                <Button v-if="authStore.isAdmin && mergedAgent.identity_bound" variant="outline" size="sm"
+                    @click="resetIdentityDialogOpen = true">
+                    <KeyRound class="w-4 h-4 mr-1.5" />
+                    Reset identity
                 </Button>
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm"
                     class="text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/5"
@@ -559,6 +584,29 @@ onUnmounted(() => {
                 <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
                 <AlertDialogAction variant="destructive" :disabled="deleteLoading" @click="confirmDelete">
                     {{ deleteLoading ? 'Deleting…' : 'Delete' }}
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
+
+    <!-- Reset identity dialog -->
+    <AlertDialog :open="resetIdentityDialogOpen" @update:open="resetIdentityDialogOpen = $event">
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Reset agent identity?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    <span v-if="mergedAgent">
+                        <strong>{{ mergedAgent.name }}</strong> is bound to the client certificate it
+                        registered with. Resetting lets the next certificate that registers as this
+                        agent take it over. Do this only when the agent was re-enrolled and is now
+                        refused; a connected agent simply binds its own certificate again.
+                    </span>
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel :disabled="resetIdentityLoading">Cancel</AlertDialogCancel>
+                <AlertDialogAction :disabled="resetIdentityLoading" @click="confirmResetIdentity">
+                    {{ resetIdentityLoading ? 'Resetting…' : 'Reset identity' }}
                 </AlertDialogAction>
             </AlertDialogFooter>
         </AlertDialogContent>

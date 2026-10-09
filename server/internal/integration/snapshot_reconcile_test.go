@@ -41,6 +41,10 @@ func newReconcileFixture(t *testing.T) *reconcileFixture {
 	if err := ts.destRepo.Create(context.Background(), dest); err != nil {
 		t.Fatalf("create destination: %v", err)
 	}
+	// The reconcile is accepted only for a destination the job writes to.
+	if err := ts.jobRepo.CreateDestination(context.Background(), &db.JobDestination{JobID: job.ID, DestinationID: dest.ID, Status: "running"}); err != nil {
+		t.Fatalf("create job destination: %v", err)
+	}
 
 	return &reconcileFixture{ts: ts, agent: agent, jobID: job.ID, destID: dest.ID}
 }

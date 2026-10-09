@@ -152,6 +152,17 @@ type AgentRepository interface {
 	List(ctx context.Context, opts ListOptions) ([]db.Agent, int64, error)
 	ListFiltered(ctx context.Context, filter AgentFilter, opts ListOptions) ([]db.Agent, int64, error)
 
+	// GetByCertFingerprint returns the live agent bound to the given client
+	// certificate fingerprint, or ErrNotFound.
+	GetByCertFingerprint(ctx context.Context, fingerprint string) (*db.Agent, error)
+	// BindCertFingerprint binds an unbound agent to a client certificate.
+	// Returns false when the agent is already bound (or does not exist), so
+	// two certificates racing to bind the same agent cannot both win.
+	BindCertFingerprint(ctx context.Context, id uuid.UUID, fingerprint string) (bool, error)
+	// ResetCertFingerprint unbinds an agent: the next certificate that
+	// registers as it binds it again.
+	ResetCertFingerprint(ctx context.Context, id uuid.UUID) error
+
 	// TotalCount returns the count of all non-deleted agents in the database.
 	// Used by telemetry to report the registered agent count regardless of
 	// whether agents are currently connected.

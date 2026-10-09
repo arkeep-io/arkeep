@@ -182,6 +182,49 @@ func (r *gormAgentRepository) ListFiltered(ctx context.Context, filter AgentFilt
 	return agents, total, nil
 }
 
+// GetByCertFingerprint returns the live (non-deleted) agent bound to the
+// given client certificate fingerprint. Returns ErrNotFound if none is.
+func (r *gormAgentRepository) GetByCertFingerprint(ctx context.Context, fingerprint string) (*db.Agent, error) {
+	var agent db.Agent
+	err := r.db.WithContext(ctx).First(&agent, "cert_fingerprint = ?", fingerprint).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("agents: get by cert fingerprint: %w", err)
+	}
+	return &agent, nil
+}
+
+// BindCertFingerprint sets the agent's certificate fingerprint only if it has
+// none, so the first certificate to register as the agent wins and a binding
+// is never silently replaced. Reports whether the binding was made.
+func (r *gormAgentRepository) BindCertFingerprint(ctx context.Context, id uuid.UUID, fingerprint string) (bool, error) {
+	result := r.db.WithContext(ctx).Exec(
+		`UPDATE agents SET cert_fingerprint = ? WHERE id = ? AND cert_fingerprint IS NULL AND deleted_at IS NULL`,
+		fingerprint, id,
+	)
+	if result.Error != nil {
+		return false, fmt.Errorf("agents: bind cert fingerprint: %w", result.Error)
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// ResetCertFingerprint clears the agent's certificate binding. Returns
+// ErrNotFound if the agent does not exist.
+func (r *gormAgentRepository) ResetCertFingerprint(ctx context.Context, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).Exec(
+		`UPDATE agents SET cert_fingerprint = NULL WHERE id = ? AND deleted_at IS NULL`, id,
+	)
+	if result.Error != nil {
+		return fmt.Errorf("agents: reset cert fingerprint: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // GetByHostname retrieves a non-deleted agent by its hostname.
 // Used during agent registration to detect reconnections and avoid creating
 // duplicate records when an agent reconnects without its stored ID.

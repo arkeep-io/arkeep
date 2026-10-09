@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -227,6 +228,43 @@ func TestAgentHandler_Delete(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.del(t, "/api/v1/agents/00000000-0000-0000-0000-000000000001", "")
 		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+func TestAgentHandler_ResetIdentity(t *testing.T) {
+	t.Run("admin unbinds the agent from its certificate", func(t *testing.T) {
+		e := newTestEnv(t)
+		ctx := context.Background()
+		agent := createDBAgent(t, e.deps, "bound-agent")
+		if ok, err := e.deps.agents.BindCertFingerprint(ctx, agent.ID, "fp"); err != nil || !ok {
+			t.Fatalf("BindCertFingerprint = %v, %v", ok, err)
+		}
+
+		resp := e.get(t, "/api/v1/agents/"+agent.ID.String(), e.adminToken(t))
+		var before struct {
+			IdentityBound bool `json:"identity_bound"`
+		}
+		decodeData(t, resp, &before)
+		if !before.IdentityBound {
+			t.Error("identity_bound = false before the reset, want true")
+		}
+
+		resp = e.post(t, "/api/v1/agents/"+agent.ID.String()+"/reset-identity", e.adminToken(t), nil)
+		assertStatus(t, resp, http.StatusNoContent)
+
+		stored, err := e.deps.agents.GetByID(ctx, agent.ID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if stored.CertFingerprint != nil {
+			t.Errorf("CertFingerprint = %q after the reset, want nil", *stored.CertFingerprint)
+		}
+	})
+
+	t.Run("returns 404 for non-existent agent", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/agents/00000000-0000-0000-0000-000000000001/reset-identity", e.adminToken(t), nil)
+		assertStatus(t, resp, http.StatusNotFound)
 	})
 }
 

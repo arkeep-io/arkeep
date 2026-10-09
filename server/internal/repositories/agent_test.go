@@ -113,3 +113,66 @@ func TestListStale_ReturnsOnlyOnlineAgentsPastCutoff(t *testing.T) {
 		t.Errorf("ListStale() returned agent %s, want %s", stale[0].ID, staleID)
 	}
 }
+
+// TestCertFingerprintBinding covers the agent identity binding (SEC-24): the
+// first binding wins, a binding survives a Save of a stale copy, one
+// certificate binds one live agent, and a reset frees the agent to rebind.
+func TestCertFingerprintBinding(t *testing.T) {
+	gdb := newTestDB(t)
+	repo := NewAgentRepository(gdb)
+	ctx := context.Background()
+
+	a := createTestAgent(t, repo, "online", time.Now())
+	b := createTestAgent(t, repo, "online", time.Now())
+
+	stale, err := repo.GetByID(ctx, a)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+
+	if ok, err := repo.BindCertFingerprint(ctx, a, "fp-a"); err != nil || !ok {
+		t.Fatalf("first bind = %v, %v; want true, nil", ok, err)
+	}
+	if ok, err := repo.BindCertFingerprint(ctx, a, "fp-other"); err != nil || ok {
+		t.Errorf("second bind = %v, %v; want false, nil (first binding wins)", ok, err)
+	}
+
+	// A Save of a copy read before the binding must not clear it.
+	stale.Name = "renamed"
+	if err := repo.Update(ctx, stale); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := repo.GetByCertFingerprint(ctx, "fp-a")
+	if err != nil || got.ID != a {
+		t.Fatalf("GetByCertFingerprint(fp-a) = %v, %v; want agent a", got, err)
+	}
+
+	// The same certificate cannot bind a second live agent.
+	if _, err := repo.BindCertFingerprint(ctx, b, "fp-a"); err == nil {
+		t.Error("binding fp-a to a second agent succeeded, want a unique index error")
+	}
+
+	if err := repo.ResetCertFingerprint(ctx, a); err != nil {
+		t.Fatalf("ResetCertFingerprint: %v", err)
+	}
+	if _, err := repo.GetByCertFingerprint(ctx, "fp-a"); err != ErrNotFound {
+		t.Errorf("GetByCertFingerprint after reset error = %v, want ErrNotFound", err)
+	}
+	if ok, err := repo.BindCertFingerprint(ctx, b, "fp-a"); err != nil || !ok {
+		t.Errorf("bind fp-a to b after reset = %v, %v; want true, nil", ok, err)
+	}
+
+	// A soft-deleted agent keeps its fingerprint but does not hold it.
+	if err := repo.Delete(ctx, b); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := repo.GetByCertFingerprint(ctx, "fp-a"); err != ErrNotFound {
+		t.Errorf("GetByCertFingerprint of a deleted agent error = %v, want ErrNotFound", err)
+	}
+	if ok, err := repo.BindCertFingerprint(ctx, a, "fp-a"); err != nil || !ok {
+		t.Errorf("rebinding a deleted agent's certificate = %v, %v; want true, nil", ok, err)
+	}
+	if err := repo.ResetCertFingerprint(ctx, uuid.New()); err != ErrNotFound {
+		t.Errorf("ResetCertFingerprint(unknown) error = %v, want ErrNotFound", err)
+	}
+}
