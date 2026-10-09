@@ -321,15 +321,13 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.Config == "" {
 		req.Config = "{}"
 	}
-	if req.Type == "rclone" {
-		if err := validateRcloneConfig(req.Config); err != nil {
-			ErrBadRequest(w, err.Error())
-			return
-		}
-		if hasNonEmptyCredential(req.Credentials) {
-			ErrBadRequest(w, errRcloneCredentials.Error())
-			return
-		}
+	if err := destutil.ValidateConfig(req.Type, req.Config); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+	if err := destutil.ValidateCredentials(req.Type, req.Credentials); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
 	}
 	if req.RetentionEnabled && req.AppendOnly {
 		ErrBadRequest(w, "retention cannot be enabled on an append-only destination")
@@ -553,18 +551,19 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		dest.Name = *req.Name
 	}
-	// Only what the PATCH changes is validated, so a legacy rclone row can
-	// still be renamed or disabled; BuildRepoURL refuses an invalid remote
-	// at dispatch time regardless, and BuildEnv ignores stored credentials.
-	if dest.Type == "rclone" {
-		if req.Config != nil {
-			if err := validateRcloneConfig(*req.Config); err != nil {
-				ErrBadRequest(w, err.Error())
-				return
-			}
+	// Only what the PATCH changes is validated, so a legacy row can still be
+	// renamed or disabled; BuildRepoURL refuses an invalid rclone remote at
+	// dispatch time regardless, and BuildEnv ignores rclone credentials.
+	// Blank credentials mean "keep the stored ones" and are not validated.
+	if req.Config != nil {
+		if err := destutil.ValidateConfig(dest.Type, *req.Config); err != nil {
+			ErrBadRequest(w, err.Error())
+			return
 		}
-		if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
-			ErrBadRequest(w, errRcloneCredentials.Error())
+	}
+	if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
+		if err := destutil.ValidateCredentials(dest.Type, *req.Credentials); err != nil {
+			ErrBadRequest(w, err.Error())
 			return
 		}
 	}
@@ -713,23 +712,6 @@ func validateCheckSettings(schedule, mode string, subsetPercent int) error {
 		return errors.New("check_subset_percent must be between 1 and 100")
 	}
 	return nil
-}
-
-// errRcloneCredentials rejects credentials on an rclone destination. rclone
-// remotes are configured in rclone.conf on the agent, so there is nothing to
-// store, and the server no longer turns credentials into agent env vars.
-var errRcloneCredentials = errors.New("rclone destinations take no credentials: configure the remote in rclone.conf on the agent")
-
-// validateRcloneConfig rejects an rclone config whose remote is not a plain
-// remote name (see destutil.ValidateRcloneRemote).
-func validateRcloneConfig(config string) error {
-	var cfg struct {
-		Remote string `json:"remote"`
-	}
-	if err := json.Unmarshal([]byte(config), &cfg); err != nil {
-		return errors.New("config must be a JSON object")
-	}
-	return destutil.ValidateRcloneRemote(cfg.Remote)
 }
 
 // hasNonEmptyCredential reports whether the credentials JSON carries at least

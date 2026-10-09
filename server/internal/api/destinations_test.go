@@ -74,7 +74,7 @@ func TestDestinationHandler_Create(t *testing.T) {
 			"name":        "my-s3-bucket",
 			"type":        "s3",
 			"credentials": `{"access_key":"AKIA...","secret_key":"..."}`,
-			"config":      `{"bucket":"backups","region":"us-east-1"}`,
+			"config":      `{"bucket":"backups","endpoint":"s3.amazonaws.com","region":"us-east-1"}`,
 		})
 		assertStatus(t, resp, http.StatusCreated)
 
@@ -114,17 +114,39 @@ func TestDestinationHandler_Create(t *testing.T) {
 	})
 
 	t.Run("accepts all valid destination types", func(t *testing.T) {
-		for _, typ := range []string{"local", "s3", "sftp", "rest", "rclone"} {
+		valid := map[string][2]string{ // type -> config, credentials
+			"local":  {`{"path":"/backups"}`, ``},
+			"s3":     {`{"bucket":"b","endpoint":"s3.example.com"}`, `{"access_key":"a","secret_key":"s"}`},
+			"sftp":   {`{"host":"h","user":"u","path":"/p","port":"22"}`, `{"password":"p"}`},
+			"rest":   {`{"url":"https://rest.example.com/repo"}`, ``},
+			"rclone": {`{"remote":"myremote","path":"bucket"}`, ``},
+		}
+		for typ, v := range valid {
 			e := newTestEnv(t)
-			body := map[string]string{
-				"name": "dest-" + typ,
-				"type": typ,
-			}
-			if typ == "rclone" {
-				body["config"] = `{"remote":"myremote","path":"bucket"}`
-			}
-			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), body)
+			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+				"name":        "dest-" + typ,
+				"type":        typ,
+				"config":      v[0],
+				"credentials": v[1],
+			})
 			assertStatus(t, resp, http.StatusCreated)
+		}
+	})
+
+	// The server used to trust the GUI schema and store any config, so a
+	// request that bypassed the GUI saved a destination that could never run.
+	t.Run("rejects incomplete config and credentials", func(t *testing.T) {
+		e := newTestEnv(t)
+		for _, body := range []map[string]string{
+			{"type": "local", "config": `{}`},
+			{"type": "s3", "config": `{"bucket":"b"}`, "credentials": `{"access_key":"a","secret_key":"s"}`},
+			{"type": "s3", "config": `{"bucket":"b","endpoint":"e"}`, "credentials": `{"access_key":"a"}`},
+			{"type": "sftp", "config": `{"host":"h","user":"u","path":"/p","port":"ssh"}`},
+			{"type": "rest", "config": `{"url":"file:///etc"}`},
+		} {
+			body["name"] = "dest-" + body["type"]
+			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), body)
+			assertStatus(t, resp, http.StatusBadRequest)
 		}
 	})
 

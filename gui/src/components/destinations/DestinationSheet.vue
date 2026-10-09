@@ -90,12 +90,15 @@ const configSchemas: Record<DestType, z.ZodObject<any>> = {
     }),
     sftp: z.object({
         host: z.string().min(1, 'Host is required'),
-        port: z.string().optional(),
+        port: z.string().regex(/^\s*(\d{1,5})?\s*$/, 'Port must be a number')
+            .refine((p) => !p.trim() || (Number(p) >= 1 && Number(p) <= 65535), 'Port must be between 1 and 65535')
+            .optional(),
         user: z.string().min(1, 'Username is required'),
         path: z.string().min(1, 'Path is required'),
     }),
     rest: z.object({
-        url: z.string().url('Must be a valid URL'),
+        url: z.string().url('Must be a valid URL')
+            .refine((u) => /^https?:\/\//i.test(u), 'Must be an http or https URL'),
     }),
     rclone: z.object({
         remote: z.string().min(1, 'Remote name is required'),
