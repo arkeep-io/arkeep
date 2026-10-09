@@ -5,6 +5,7 @@
 //   1. Local: email/password → POST /api/v1/auth/login
 //   2. OIDC:  full-page redirect to /api/v1/auth/oidc/login?provider_id={id}
 //             One button per enabled provider. Buttons hidden when none configured.
+//             A two-factor account comes back to /login?challenge=… for the code.
 
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -142,7 +143,22 @@ async function fetchOIDCProviders(): Promise<void> {
     }
 }
 
-onMounted(fetchOIDCProviders)
+// An OIDC sign-in into an account with two-factor authentication comes back
+// here with ?challenge=<token> instead of a session: resume at the code step,
+// and drop the token from the URL so it is not left in the browser history.
+function resumeOIDCChallenge(): void {
+    const challenge = route.query.challenge
+    if (typeof challenge !== 'string' || !challenge) return
+    challengeToken.value = challenge
+    step.value = 'code'
+    const { challenge: _dropped, ...query } = route.query
+    router.replace({ query })
+}
+
+onMounted(() => {
+    resumeOIDCChallenge()
+    fetchOIDCProviders()
+})
 </script>
 
 <template>

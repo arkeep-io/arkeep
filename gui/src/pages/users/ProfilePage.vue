@@ -117,12 +117,11 @@ async function submitPassword() {
     passwordSuccess.value = false
 
     try {
-        // The PATCH /users/me endpoint accepts a `password` field.
-        // We send the new password; current password verification is handled
-        // server-side via the existing session — no separate field needed.
+        // The server checks the current password and signs out every other
+        // session once the new one is set.
         await api('/api/v1/users/me', {
             method: 'PATCH',
-            body: { password: fieldNewPassword.value },
+            body: { password: fieldNewPassword.value, current_password: fieldCurrentPassword.value },
         })
         fieldCurrentPassword.value = ''
         fieldNewPassword.value = ''
@@ -215,7 +214,7 @@ async function submitPassword() {
                         Password changes must be made there.
                     </template>
                     <template v-else>
-                        Choose a strong password of at least 8 characters.
+                        Choose a strong password of at least 8 characters. Your other sessions will be signed out.
                     </template>
                 </p>
             </div>

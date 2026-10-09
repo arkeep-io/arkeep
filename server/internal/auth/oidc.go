@@ -211,6 +211,13 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, ErrUserDisabled
 	}
 
+	// The IdP proved the first factor only: an account with two-factor
+	// authentication still owes its second one (SEC-06). As for a local login,
+	// LastLoginAt is not stamped until the challenge is completed.
+	if user.TwoFactorEnabled {
+		return nil, &TwoFactorRequiredError{UserID: user.ID}
+	}
+
 	// Update LastLoginAt. Non-fatal: a failure here should not block the login.
 	now := time.Now()
 	user.LastLoginAt = &now

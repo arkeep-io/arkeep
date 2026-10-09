@@ -147,12 +147,22 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Logout handles POST /api/v1/auth/logout.
+// Logout handles POST /api/v1/auth/logout. The route is public: the refresh
+// cookie is what ends the session, and it must be revoked even when the
+// access token has already expired, or the session would outlive the logout
+// on a shared machine (SEC-13). A valid access token, when sent, is revoked
+// too and identifies the user for the audit log.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	// Revoke the current access token immediately so it cannot be reused
-	// within its remaining TTL window, even from another device or tab.
-	if claims := claimsFromCtx(r.Context()); claims != nil && claims.ID != "" {
-		h.svc.RevokeAccessToken(claims.ID, claims.ExpiresAt.Time)
+	var claims *auth.Claims
+	if raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		if c, err := h.svc.ValidateAccessToken(raw); err == nil {
+			claims = c
+			// Revoke the access token immediately so it cannot be reused
+			// within its remaining TTL window, even from another device or tab.
+			if claims.ID != "" {
+				h.svc.RevokeAccessToken(claims.ID, claims.ExpiresAt.Time)
+			}
+		}
 	}
 
 	cookie, err := r.Cookie(refreshTokenCookie)
@@ -166,7 +176,11 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.clearRefreshCookie(w)
-	logAudit(r, h.auditRepo, h.logger, "auth.logout", "user", "", map[string]any{})
+	if claims != nil {
+		if uid, err := uuid.Parse(claims.UserID); err == nil {
+			logAuditDirect(r, h.auditRepo, h.logger, uid, claims.Email, "auth.logout", "user", "", map[string]any{})
+		}
+	}
 	NoContent(w)
 }
 
@@ -311,6 +325,19 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			ErrUnauthorized(w)
 			return
 		}
+		// A two-factor account completes its login on the login page's code
+		// step, with the same challenge a local login gets.
+		var twoFactor *auth.TwoFactorRequiredError
+		if errors.As(err, &twoFactor) {
+			raw, err := h.createTwoFactorChallenge(r.Context(), twoFactor.UserID)
+			if err != nil {
+				h.logger.Error("OIDC login: creating the 2fa challenge failed", zap.Error(err))
+				ErrInternal(w)
+				return
+			}
+			http.Redirect(w, r, "/login?challenge="+url.QueryEscape(raw), http.StatusFound)
+			return
+		}
 		// The browser is mid-redirect here, so a JSON error would leave the
 		// user on a raw API response: send them to the callback page, which
 		// shows the reason. Both messages are safe to disclose.
@@ -343,37 +370,39 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // -----------------------------------------------------------------------------
 
 // startTwoFactorChallenge issues the interim challenge after a correct password
-// on a two-factor account. Any outstanding challenge for the user is deleted
-// first, so only the newest login attempt can be completed.
+// on a two-factor account and returns it to the client.
 func (h *AuthHandler) startTwoFactorChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
-	ctx := r.Context()
+	raw, err := h.createTwoFactorChallenge(r.Context(), userID)
+	if err != nil {
+		h.logger.Error("2fa login: creating the challenge failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	Ok(w, loginResponse{TwoFactorRequired: true, ChallengeToken: raw})
+}
 
+// createTwoFactorChallenge persists a new challenge for a user whose first
+// factor was accepted and returns its raw token. Any outstanding challenge
+// for the user is deleted first, so only the newest login attempt can be
+// completed.
+func (h *AuthHandler) createTwoFactorChallenge(ctx context.Context, userID uuid.UUID) (string, error) {
 	// GenerateResetToken is the package's generic 32-byte opaque token helper;
 	// the name reflects its first caller, not a restriction.
 	raw, err := auth.GenerateResetToken()
 	if err != nil {
-		h.logger.Error("2fa login: challenge token generation failed", zap.Error(err))
-		ErrInternal(w)
-		return
+		return "", fmt.Errorf("generate challenge token: %w", err)
 	}
-
 	if err := h.challenges.DeleteByUserID(ctx, userID); err != nil {
-		h.logger.Error("2fa login: clearing old challenges failed", zap.Error(err))
-		ErrInternal(w)
-		return
+		return "", fmt.Errorf("clear old challenges: %w", err)
 	}
-
 	if err := h.challenges.Create(ctx, &db.TwoFactorChallenge{
 		UserID:    userID,
 		TokenHash: auth.HashToken(raw),
 		ExpiresAt: time.Now().Add(twoFactorChallengeTTL),
 	}); err != nil {
-		h.logger.Error("2fa login: persisting challenge failed", zap.Error(err))
-		ErrInternal(w)
-		return
+		return "", fmt.Errorf("persist challenge: %w", err)
 	}
-
-	Ok(w, loginResponse{TwoFactorRequired: true, ChallengeToken: raw})
+	return raw, nil
 }
 
 type loginTwoFactorRequest struct {

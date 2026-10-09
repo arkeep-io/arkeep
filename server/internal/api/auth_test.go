@@ -97,10 +97,34 @@ func TestAuthHandler_Logout(t *testing.T) {
 		assertStatus(t, resp, http.StatusNoContent)
 	})
 
-	t.Run("returns 401 when not authenticated", func(t *testing.T) {
+	// A session idle for longer than the access token TTL has only its refresh
+	// cookie left: logout must still revoke it (SEC-13).
+	t.Run("revokes the refresh token without an access token", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBUser(t, e.deps, "idle@example.com", "user")
+		loginResp := e.post(t, "/api/v1/auth/login", "", map[string]string{
+			"email":    "idle@example.com",
+			"password": "test-password-123",
+		})
+		assertStatus(t, loginResp, http.StatusOK)
+		var refreshCookie *http.Cookie
+		for _, c := range loginResp.Cookies() {
+			if c.Name == refreshTokenCookie {
+				refreshCookie = c
+			}
+		}
+		if refreshCookie == nil {
+			t.Fatal("no refresh cookie set after login")
+		}
+
+		assertStatus(t, e.postWithCookie(t, "/api/v1/auth/logout", "", refreshCookie, nil), http.StatusNoContent)
+		assertStatus(t, e.postWithCookie(t, "/api/v1/auth/refresh", "", refreshCookie, nil), http.StatusUnauthorized)
+	})
+
+	t.Run("returns 204 with neither token nor cookie", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/auth/logout", "", nil)
-		assertStatus(t, resp, http.StatusUnauthorized)
+		assertStatus(t, resp, http.StatusNoContent)
 	})
 
 	t.Run("clears the refresh cookie on logout", func(t *testing.T) {
@@ -130,6 +154,9 @@ func TestAuthHandler_Logout(t *testing.T) {
 
 		logoutResp := e.postWithCookie(t, "/api/v1/auth/logout", loginData.AccessToken, refreshCookie, nil)
 		assertStatus(t, logoutResp, http.StatusNoContent)
+
+		// The access token sent with the logout is revoked at once.
+		assertStatus(t, e.get(t, "/api/v1/users/me", loginData.AccessToken), http.StatusUnauthorized)
 
 		// The response should set the cookie with MaxAge=-1 to clear it.
 		for _, c := range logoutResp.Cookies() {
