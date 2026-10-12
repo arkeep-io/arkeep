@@ -24,6 +24,7 @@ import (
 type PolicyHandler struct {
 	repo      repositories.PolicyRepository
 	agentRepo repositories.AgentRepository
+	jobRepo   repositories.JobRepository
 	destRepo  repositories.DestinationRepository
 	scheduler *scheduler.Scheduler
 	pinger    *healthcheck.Pinger // may be nil
@@ -32,10 +33,11 @@ type PolicyHandler struct {
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, pinger *healthcheck.Pinger, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, jobRepo repositories.JobRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, pinger *healthcheck.Pinger, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
 		agentRepo: agentRepo,
+		jobRepo:   jobRepo,
 		destRepo:  destRepo,
 		scheduler: sched,
 		pinger:    pinger,
@@ -79,6 +81,40 @@ type policyResponse struct {
 	LastRunAt         *string                     `json:"last_run_at"`
 	NextRunAt         *string                     `json:"next_run_at"`
 	CreatedAt         string                      `json:"created_at"`
+	// RecentJobs holds the policy's latest backup runs, newest first. Only
+	// the list endpoint fills it; it is omitted elsewhere.
+	RecentJobs []policyRecentJobResponse `json:"recent_jobs,omitempty"`
+}
+
+// recentJobsPerPolicy is how many of a policy's latest backup runs the
+// policies list returns, for the run history shown next to each policy.
+const recentJobsPerPolicy = 5
+
+// policyRecentJobResponse is a compact view of one of a policy's recent
+// backup jobs: enough to show its outcome and link to it.
+type policyRecentJobResponse struct {
+	ID        string  `json:"id"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"created_at"`
+	StartedAt *string `json:"started_at"`
+	EndedAt   *string `json:"ended_at"`
+}
+
+func recentJobToResponse(j *db.Job) policyRecentJobResponse {
+	resp := policyRecentJobResponse{
+		ID:        j.ID.String(),
+		Status:    j.Status,
+		CreatedAt: j.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if j.StartedAt != nil {
+		s := j.StartedAt.UTC().Format(time.RFC3339)
+		resp.StartedAt = &s
+	}
+	if j.EndedAt != nil {
+		s := j.EndedAt.UTC().Format(time.RFC3339)
+		resp.EndedAt = &s
+	}
+	return resp
 }
 
 // policyToResponse converts a db.Policy and its associated PolicyDestination
@@ -184,9 +220,26 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The latest runs of the whole page of policies, in one query.
+	policyIDs := make([]uuid.UUID, len(policies))
+	for i := range policies {
+		policyIDs[i] = policies[i].ID
+	}
+	recentJobs, err := h.jobRepo.ListRecentBackupsByPolicies(r.Context(), policyIDs, recentJobsPerPolicy)
+	if err != nil {
+		h.logger.Error("failed to list recent policy jobs", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
 	items := make([]policyResponse, len(policies))
 	for i := range policies {
 		items[i] = policyToResponse(&policies[i], nil, agentNameByID[policies[i].AgentID.String()]).forReader(r)
+		jobs := recentJobs[policies[i].ID]
+		items[i].RecentJobs = make([]policyRecentJobResponse, len(jobs))
+		for k := range jobs {
+			items[i].RecentJobs[k] = recentJobToResponse(&jobs[k])
+		}
 	}
 
 	Ok(w, listPoliciesResponse{Items: items, Total: total})

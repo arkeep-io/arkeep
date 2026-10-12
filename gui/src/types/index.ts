@@ -229,6 +229,17 @@ export interface Policy {
   next_run_at: string | null
   created_at: string
   updated_at: string
+  // Latest backup runs, newest first (at most 5). Only the list endpoint
+  // returns them; absent when the policy has never run.
+  recent_jobs?: PolicyRecentJob[]
+}
+
+export interface PolicyRecentJob {
+  id: string
+  status: JobStatus
+  created_at: string
+  started_at: string | null
+  ended_at: string | null
 }
 
 // ─── Job ──────────────────────────────────────────────────────────────────────

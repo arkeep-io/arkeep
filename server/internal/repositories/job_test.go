@@ -799,3 +799,70 @@ func TestListPendingBefore(t *testing.T) {
 		t.Errorf("ListPendingBefore = %v, want [older, old]", got)
 	}
 }
+
+// TestListRecentBackupsByPolicies: each policy gets its own latest backups,
+// newest first and capped at perPolicy; restores are left out.
+func TestListRecentBackupsByPolicies(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	other := &db.Policy{AgentID: f.agentID, Name: "other", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := NewPolicyRepository(gormDB).Create(ctx, other); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+	idle := &db.Policy{AgentID: f.agentID, Name: "idle", Schedule: "0 * * * *", Sources: `["/"]`}
+	if err := NewPolicyRepository(gormDB).Create(ctx, idle); err != nil {
+		t.Fatalf("Create policy: %v", err)
+	}
+
+	base := time.Now().UTC().Add(-time.Hour)
+	create := func(policyID uuid.UUID, jobType, status string, offset time.Duration) *db.Job {
+		t.Helper()
+		job := &db.Job{PolicyID: &policyID, AgentID: f.agentID, Type: jobType, Status: status}
+		job.CreatedAt = base.Add(offset)
+		if err := repo.Create(ctx, job); err != nil {
+			t.Fatalf("Create job: %v", err)
+		}
+		return job
+	}
+
+	// Seven backups for the first policy: only the five latest come back.
+	var want []uuid.UUID
+	for i := range 7 {
+		job := create(f.policyID, "backup", "succeeded", time.Duration(i)*time.Minute)
+		if i >= 2 {
+			want = append([]uuid.UUID{job.ID}, want...)
+		}
+	}
+	// A restore newer than every backup must not count.
+	create(f.policyID, "restore", "failed", time.Hour)
+	otherJob := create(other.ID, "backup", "failed", 0)
+
+	got, err := repo.ListRecentBackupsByPolicies(ctx, []uuid.UUID{f.policyID, other.ID, idle.ID}, 5)
+	if err != nil {
+		t.Fatalf("ListRecentBackupsByPolicies: %v", err)
+	}
+
+	jobs := got[f.policyID]
+	if len(jobs) != len(want) {
+		t.Fatalf("policy jobs = %d, want %d", len(jobs), len(want))
+	}
+	for i := range want {
+		if jobs[i].ID != want[i] {
+			t.Errorf("jobs[%d] = %s, want %s (newest first)", i, jobs[i].ID, want[i])
+		}
+	}
+	if o := got[other.ID]; len(o) != 1 || o[0].ID != otherJob.ID || o[0].Status != "failed" {
+		t.Errorf("other policy jobs = %+v, want the single failed backup", o)
+	}
+	if _, ok := got[idle.ID]; ok {
+		t.Errorf("policy without jobs present in result")
+	}
+
+	empty, err := repo.ListRecentBackupsByPolicies(ctx, nil, 5)
+	if err != nil || len(empty) != 0 {
+		t.Errorf("no policies: got %v, %v; want empty map, nil", empty, err)
+	}
+}

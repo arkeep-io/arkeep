@@ -73,6 +73,55 @@ func TestPolicyHandler_List(t *testing.T) {
 	})
 }
 
+// TestPolicyHandler_ListRecentJobs: the list carries each policy's latest
+// backup runs, newest first, for the run history column.
+func TestPolicyHandler_ListRecentJobs(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	agentID := createDBAgent(t, e.deps, "test-agent").ID
+	busy := createDBPolicy(t, e.deps, "a-busy", agentID)
+	createDBPolicy(t, e.deps, "b-idle", agentID)
+
+	base := time.Now().UTC().Add(-time.Hour)
+	statuses := []string{"succeeded", "failed", "succeeded", "succeeded", "failed", "pending"}
+	for i, status := range statuses {
+		job := &db.Job{PolicyID: &busy.ID, AgentID: agentID, Type: "backup", Status: status}
+		job.CreatedAt = base.Add(time.Duration(i) * time.Minute)
+		if err := e.deps.jobs.Create(ctx, job); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+	}
+
+	resp := e.get(t, "/api/v1/policies", e.adminToken(t))
+	assertStatus(t, resp, http.StatusOK)
+
+	var data struct {
+		Items []struct {
+			Name       string `json:"name"`
+			RecentJobs []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"recent_jobs"`
+		} `json:"items"`
+	}
+	decodeData(t, resp, &data)
+	if len(data.Items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(data.Items))
+	}
+
+	var got []string
+	for _, j := range data.Items[0].RecentJobs {
+		got = append(got, j.Status)
+	}
+	want := []string{"pending", "failed", "succeeded", "succeeded", "failed"}
+	if !slices.Equal(got, want) {
+		t.Errorf("%s recent statuses = %v, want %v", data.Items[0].Name, got, want)
+	}
+	if n := len(data.Items[1].RecentJobs); n != 0 {
+		t.Errorf("%s recent jobs = %d, want 0", data.Items[1].Name, n)
+	}
+}
+
 // TestPolicyHandler_ListSortByAgent: the policies list sorts by the agent's
 // name on ?sort=agent (issue #320), and by policy name by default.
 func TestPolicyHandler_ListSortByAgent(t *testing.T) {
