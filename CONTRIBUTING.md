@@ -24,6 +24,9 @@ This document covers everything you need to get your changes merged.
   idea or bug is already being tracked.
 - For non-trivial changes, open an issue first to discuss the approach before writing code.
   This avoids wasted effort if the direction doesn't fit the project.
+- Read the [Architecture Decision Records](docs/adr/README.md): they explain the
+  choices your change must respect. A change that introduces or reverses an
+  architectural decision comes with a new ADR (copy [the template](docs/adr/template.md)).
 
 ---
 
