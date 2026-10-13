@@ -91,3 +91,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: without it GoReleaser still renders the AUR PKGBUILD
+          # but skips pushing it (see aurs in .goreleaser.yml).
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

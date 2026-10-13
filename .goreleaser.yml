@@ -100,6 +100,44 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
+# Publishes the agent archives as the AUR package arkeep-agent-bin. GoReleaser
+# picks every Linux architecture pacman knows (x86_64, aarch64, armv7h) from
+# the agent archives. The PKGBUILD is always generated in dist/; it is only
+# pushed when AUR_SSH_PRIVATE_KEY is set, and never for pre-releases.
+aurs:
+  - name: arkeep-agent-bin
+    ids: [agent]
+    homepage: "https://github.com/arkeep-io/arkeep"
+    description: "Arkeep backup agent (restic-based), prebuilt binary"
+    license: "Apache-2.0"
+    private_key: '{{ envOrDefault "AUR_SSH_PRIVATE_KEY" "" }}'
+    git_url: "ssh://aur@aur.archlinux.org/arkeep-agent-bin.git"
+    skip_upload: '{{ if isEnvSet "AUR_SSH_PRIVATE_KEY" }}auto{{ else }}true{{ end }}'
+    provides: [arkeep-agent]
+    conflicts: [arkeep-agent]
+    optdepends:
+      - "docker: automatic container and volume discovery"
+    backup:
+      - etc/arkeep/agent.env
+    install: ./packaging/aur/arkeep-agent.install
+    commit_msg_template: "Update to {{ .Version }}"
+    # GoReleaser re-indents every line of this script, so it cannot contain
+    # heredocs.
+    package: |-
+      install -Dm755 ./arkeep-agent "${pkgdir}/usr/bin/arkeep-agent"
+      install -Dm644 ./LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+
+      # The upstream unit targets /usr/local/bin.
+      sed 's#/usr/local/bin/arkeep-agent#/usr/bin/arkeep-agent#' ./deploy/systemd/arkeep-agent.service \
+        | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/systemd/system/arkeep-agent.service"
+
+      printf '%s\n' 'u arkeep-agent - "Arkeep Backup Agent" /var/lib/arkeep-agent' \
+        | install -Dm644 /dev/stdin "${pkgdir}/usr/lib/sysusers.d/arkeep-agent.conf"
+
+      # Holds the agent secret: readable by root only (systemd loads it as root).
+      printf '%s\n' 'ARKEEP_SERVER_ADDR=localhost:9090' 'ARKEEP_AGENT_SECRET=' 'ARKEEP_SERVER_HTTP_ADDR=http://localhost:8080/' \
+        | install -Dm600 /dev/stdin "${pkgdir}/etc/arkeep/agent.env"
+
 # dockers_v2 builds one multi-platform image per entry with buildx and
 # pushes the manifest list directly, replacing the deprecated dockers +
 # docker_manifests pair. Binaries are placed in the build context under

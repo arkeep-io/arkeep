@@ -47,10 +47,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-# Add the agent user to the docker group for Docker socket access.
-# Required for automatic container and volume discovery.
-# If Docker is not installed you can remove this line.
-SupplementaryGroups=docker
+# Lets the unprivileged agent (and the restic processes it spawns) read every
+# file it is asked to back up, regardless of ownership and permissions.
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+# Docker socket access, required for automatic container and volume
+# discovery, comes from the docker group in the system group database:
+#   usermod -aG docker arkeep-agent
 
 StateDirectory=arkeep-agent
 

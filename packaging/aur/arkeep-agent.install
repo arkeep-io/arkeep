@@ -1,0 +1,10 @@
+post_install() {
+  cat <<'EOF'
+==> Set ARKEEP_SERVER_ADDR and ARKEEP_AGENT_SECRET in /etc/arkeep/agent.env,
+==> then start the agent: systemctl enable --now arkeep-agent
+==>
+==> For Docker container and volume discovery, add the agent to the docker
+==> group and restart it:
+==>   usermod -aG docker arkeep-agent && systemctl restart arkeep-agent
+EOF
+}

@@ -353,6 +353,9 @@ ARKEEP_AGENT_SECRET=your-agent-secret
 EOF
 sudo chmod 600 /etc/arkeep/agent.env
 
+# Optional: Docker container and volume discovery
+sudo usermod -aG docker arkeep-agent
+
 sudo systemctl enable --now arkeep-agent
 sudo journalctl -u arkeep-agent -f
 ```
