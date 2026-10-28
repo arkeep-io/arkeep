@@ -43,6 +43,8 @@ type UserRepository interface {
 	Update(ctx context.Context, user *db.User) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.User, int64, error)
+	// CountActiveAdmins returns how many active users hold the admin role.
+	CountActiveAdmins(ctx context.Context) (int64, error)
 }
 
 // -----------------------------------------------------------------------------

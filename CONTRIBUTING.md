@@ -170,7 +170,7 @@ task test:gui      # run GUI tests only
   code they test (`foo_test.go` alongside `foo.go`).
 - **GUI:** Vitest for unit tests. Place test files in `__tests__/` next to the component or
   composable being tested.
-- Tests must pass on CI before a PR can be merged. The CI matrix runs tests on `ubuntu-latest`.
+- Tests must pass on CI before a PR can be merged. The CI matrix runs tests on `ubuntu-26.04`.
 
 ---
 

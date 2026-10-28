@@ -518,3 +518,80 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 		t.Fatalf("Up again: %v", err)
 	}
 }
+
+// TestSQLiteMigration_OIDCSessionLimit checks that 000038 gives the open
+// sessions of OIDC-linked accounts a deadline 12 hours after the upgrade that
+// reads back as a time, and leaves revoked tokens and local accounts without
+// one.
+func TestSQLiteMigration_OIDCSessionLimit(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/session.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(37); err != nil {
+		t.Fatalf("Migrate(37): %v", err)
+	}
+
+	oidcUser := &User{Email: "oidc@test.local", DisplayName: "O", Role: "user", IsActive: true, OIDCProvider: uuid.NewString(), OIDCSub: "sub"}
+	localUser := &User{Email: "local@test.local", DisplayName: "L", Role: "user", IsActive: true}
+	for _, u := range []*User{oidcUser, localUser} {
+		if err := gdb.Create(u).Error; err != nil {
+			t.Fatalf("create user %s: %v", u.Email, err)
+		}
+	}
+
+	now := time.Now()
+	rows := map[string]struct {
+		userID       uuid.UUID
+		revokedAt    *time.Time
+		wantDeadline bool
+	}{
+		"open oidc session":    {oidcUser.ID, nil, true},
+		"revoked oidc session": {oidcUser.ID, &now, false},
+		"local session":        {localUser.ID, nil, false},
+	}
+	ids := map[string]uuid.UUID{}
+	for name, r := range rows {
+		id := uuid.New()
+		ids[name] = id
+		if err := gdb.Exec(`INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, revoked_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			id.String(), r.userID.String(), name, now.Add(7*24*time.Hour), r.revokedAt, now, now).Error; err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	before := time.Now().Truncate(time.Second)
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Up: %v", err)
+	}
+	after := time.Now()
+
+	for name, r := range rows {
+		var token RefreshToken
+		if err := gdb.First(&token, "id = ?", ids[name].String()).Error; err != nil {
+			t.Fatalf("query %s: %v", name, err)
+		}
+		got := token.SessionExpiresAt
+		switch {
+		case !r.wantDeadline && got != nil:
+			t.Errorf("%s: session_expires_at = %v, want NULL", name, *got)
+		case r.wantDeadline && got == nil:
+			t.Errorf("%s: session_expires_at = NULL, want a deadline", name)
+		case r.wantDeadline && (got.Before(before.Add(12*time.Hour)) || got.After(after.Add(12*time.Hour))):
+			t.Errorf("%s: session_expires_at = %v, want 12 hours after the upgrade", name, *got)
+		}
+	}
+}

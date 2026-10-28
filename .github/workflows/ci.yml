@@ -12,7 +12,7 @@ jobs:
   # ─── Go tests ───────────────────────────────────────────────────────────────
   test-go:
     name: Test Go
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -59,7 +59,7 @@ jobs:
   # modules listed in go.work" error.
   lint-go:
     name: Lint Go
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         module: [shared, server, agent]
@@ -90,7 +90,7 @@ jobs:
   # hardware.
   build-agent-embedded:
     name: Build agent (embedded targets)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 
@@ -111,7 +111,7 @@ jobs:
   # ─── GUI ────────────────────────────────────────────────────────────────────
   test-gui:
     name: Test GUI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
 

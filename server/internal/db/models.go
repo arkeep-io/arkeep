@@ -73,6 +73,10 @@ type RefreshToken struct {
 	RevokedAt *time.Time
 	UserAgent string
 	IPAddress string
+	// SessionExpiresAt is the absolute deadline of an OIDC session, copied on
+	// every rotation so refreshing cannot extend it. nil = no deadline (local
+	// logins).
+	SessionExpiresAt *time.Time
 }
 
 // PasswordResetToken stores a hashed, single-use token for the self-service
@@ -100,6 +104,9 @@ type TwoFactorChallenge struct {
 	Attempts  int        `gorm:"not null;default:0"`
 	ExpiresAt time.Time  `gorm:"not null"`
 	UsedAt    *time.Time // nil = still usable
+	// SessionExpiresAt carries the OIDC session deadline to the tokens issued
+	// once the code is verified. nil for local logins.
+	SessionExpiresAt *time.Time
 }
 
 // RecoveryCode is a single-use fallback credential issued when a user enables
@@ -124,6 +131,18 @@ type OIDCProvider struct {
 	ClientSecret EncryptedString `gorm:"type:text;not null"`
 	Scopes       string          `gorm:"not null;default:'openid email profile'"` // space-separated
 	Enabled      bool            `gorm:"not null;default:false"`
+	// GroupsClaim names the ID token / UserInfo claim holding the user's
+	// groups. Required when AllowedGroups or AdminGroups is set.
+	GroupsClaim string `gorm:"not null;default:''"`
+	// AllowedGroups restricts sign-in to members of at least one of these
+	// groups; empty allows every user of the IdP.
+	AllowedGroups string `gorm:"not null;default:''"` // comma-separated
+	// AdminGroups grants the admin role to their members and the user role to
+	// everyone else, re-evaluated on every login; empty leaves roles alone.
+	AdminGroups string `gorm:"not null;default:''"` // comma-separated
+	// SessionMaxHours caps how long a session started through this provider
+	// lasts before the user must sign in at the IdP again.
+	SessionMaxHours int `gorm:"not null;default:12"`
 }
 
 // TableName overrides GORM's default naming convention, which would produce

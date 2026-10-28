@@ -59,9 +59,10 @@ func (s *AuthService) LoginLocal(ctx context.Context, req LoginRequest) (*TokenP
 
 // IssueTokenPairForUser completes a login for a user whose credentials have
 // already been verified. Used to finish two-factor authentication once the
-// second factor has been accepted.
-func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *db.User) (*TokenPair, error) {
-	return s.local.IssueTokenPair(ctx, user)
+// second factor has been accepted. sessionExpiresAt is the OIDC session
+// deadline carried by the two-factor challenge, nil for a local login.
+func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *db.User, sessionExpiresAt *time.Time) (*TokenPair, error) {
+	return s.local.IssueTokenPair(ctx, user, sessionExpiresAt)
 }
 
 // AuthorizationURL generates the OIDC authorization URL for the given provider.

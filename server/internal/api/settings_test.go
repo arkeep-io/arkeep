@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/arkeep-io/arkeep/server/internal/notification"
+	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
 func TestSettingsHandler_ListOIDC(t *testing.T) {
@@ -623,5 +625,106 @@ func TestSettingsHandler_JobQueue(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.get(t, "/api/v1/settings/jobs-queue", e.userToken(t))
 		assertStatus(t, resp, http.StatusForbidden)
+	})
+}
+
+// TestSettingsHandler_OIDCAccessFields covers the group restrictions and
+// session cap of an OIDC provider (issue #277): normalisation of the group
+// lists, the groups claim required by any group, the session cap bounds and
+// its default, and an update that omits the cap keeping the stored one.
+// The subtests share one server, since a test server is slow to start.
+func TestSettingsHandler_OIDCAccessFields(t *testing.T) {
+	e := newTestEnv(t)
+	base := func(extra map[string]any) map[string]any {
+		body := map[string]any{
+			"name":          "IdP",
+			"issuer":        "https://idp.example.com",
+			"client_id":     "cid",
+			"client_secret": "sec",
+		}
+		for k, v := range extra {
+			body[k] = v
+		}
+		return body
+	}
+	type accessData struct {
+		ID              string `json:"id"`
+		GroupsClaim     string `json:"groups_claim"`
+		AllowedGroups   string `json:"allowed_groups"`
+		AdminGroups     string `json:"admin_groups"`
+		SessionMaxHours int    `json:"session_max_hours"`
+	}
+
+	t.Run("create normalises the fields and defaults the session cap", func(t *testing.T) {
+		resp := e.post(t, "/api/v1/settings/oidc", e.adminToken(t), base(map[string]any{
+			"groups_claim":   " groups ",
+			"allowed_groups": " arkeep-users ,, Arkeep Ops ",
+			"admin_groups":   "arkeep-admins,",
+		}))
+		assertStatus(t, resp, http.StatusCreated)
+		var got accessData
+		decodeData(t, resp, &got)
+		want := accessData{ID: got.ID, GroupsClaim: "groups", AllowedGroups: "arkeep-users, Arkeep Ops", AdminGroups: "arkeep-admins", SessionMaxHours: 12}
+		if got != want {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	invalid := []struct {
+		name  string
+		extra map[string]any
+	}{
+		{"allowed groups without groups claim", map[string]any{"allowed_groups": "arkeep-users"}},
+		{"admin groups without groups claim", map[string]any{"groups_claim": "  ", "admin_groups": "arkeep-admins"}},
+		{"session cap below 1", map[string]any{"session_max_hours": 0}},
+		{"session cap above the refresh token lifetime", map[string]any{"session_max_hours": 169}},
+	}
+	for _, tt := range invalid {
+		t.Run("create rejects "+tt.name, func(t *testing.T) {
+			resp := e.post(t, "/api/v1/settings/oidc", e.adminToken(t), base(tt.extra))
+			assertStatus(t, resp, http.StatusBadRequest)
+		})
+	}
+
+	t.Run("blank group entries need no groups claim", func(t *testing.T) {
+		resp := e.post(t, "/api/v1/settings/oidc", e.adminToken(t), base(map[string]any{"allowed_groups": " , "}))
+		assertStatus(t, resp, http.StatusCreated)
+	})
+
+	t.Run("update sets the fields and an omitted cap keeps the stored one", func(t *testing.T) {
+		createResp := e.post(t, "/api/v1/settings/oidc", e.adminToken(t), base(map[string]any{"session_max_hours": 8}))
+		assertStatus(t, createResp, http.StatusCreated)
+		var created accessData
+		decodeData(t, createResp, &created)
+
+		update := base(map[string]any{"groups_claim": "roles", "admin_groups": "admins"})
+		delete(update, "client_secret")
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/oidc/"+created.ID, e.adminToken(t), update)
+		assertStatus(t, resp, http.StatusOK)
+		var got accessData
+		decodeData(t, resp, &got)
+		want := accessData{ID: created.ID, GroupsClaim: "roles", AdminGroups: "admins", SessionMaxHours: 8}
+		if got != want {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+
+		update["session_max_hours"] = 200
+		resp = e.doJSON(t, "PUT", "/api/v1/settings/oidc/"+created.ID, e.adminToken(t), update)
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		// The audit entry records who can sign in and for how long.
+		entries, _, err := e.deps.audit.List(context.Background(),
+			repositories.AuditFilter{Action: "settings.oidc.update"}, repositories.ListOptions{Limit: 10})
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("audit List = %d entries, %v; want 1", len(entries), err)
+		}
+		var details map[string]any
+		if err := json.Unmarshal([]byte(entries[0].Details), &details); err != nil {
+			t.Fatalf("audit details: %v", err)
+		}
+		if details["groups_claim"] != "roles" || details["admin_groups"] != "admins" ||
+			details["allowed_groups"] != "" || details["session_max_hours"] != float64(8) {
+			t.Errorf("audit details = %v, want the group settings and session cap", details)
+		}
 	})
 }

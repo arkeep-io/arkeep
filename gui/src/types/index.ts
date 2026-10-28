@@ -457,6 +457,10 @@ export interface OIDCProvider {
   callback_url: string // read-only, computed by the server
   scopes: string
   enabled: boolean
+  groups_claim: string // claim holding the user's groups
+  allowed_groups: string // comma-separated; empty = every user of the IdP
+  admin_groups: string // comma-separated; empty = roles managed in Arkeep
+  session_max_hours: number // 1–168, hours before signing in at the IdP again
   created_at: string
   updated_at: string
 }

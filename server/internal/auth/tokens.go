@@ -42,6 +42,11 @@ func (p *tokenIssuer) RefreshToken(ctx context.Context, rawToken string) (*Token
 	if time.Now().After(stored.ExpiresAt) {
 		return nil, ErrTokenExpired
 	}
+	// An OIDC session ends at its deadline however often it was refreshed:
+	// the user must sign in at the IdP again, where the groups are re-checked.
+	if stored.SessionExpiresAt != nil && time.Now().After(*stored.SessionExpiresAt) {
+		return nil, ErrTokenExpired
+	}
 
 	user, err := p.userRepo.GetByID(ctx, stored.UserID)
 	if err != nil {
@@ -55,7 +60,7 @@ func (p *tokenIssuer) RefreshToken(ctx context.Context, rawToken string) (*Token
 		return nil, ErrUserDisabled
 	}
 
-	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)
+	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role, stored.SessionExpiresAt)
 }
 
 // Logout invalidates the given refresh token.
@@ -72,8 +77,10 @@ func (p *tokenIssuer) Logout(ctx context.Context, rawToken string) error {
 }
 
 // issueTokenPair generates a new access token and refresh token, persists the
-// refresh token hash, and returns both as a TokenPair.
-func (p *tokenIssuer) issueTokenPair(ctx context.Context, userID uuid.UUID, email, role string) (*TokenPair, error) {
+// refresh token hash, and returns both as a TokenPair. sessionExpiresAt is the
+// absolute deadline of an OIDC session, nil for none: the refresh token never
+// outlives it.
+func (p *tokenIssuer) issueTokenPair(ctx context.Context, userID uuid.UUID, email, role string, sessionExpiresAt *time.Time) (*TokenPair, error) {
 	accessToken, err := p.jwtManager.GenerateAccessToken(userID.String(), email, role)
 	if err != nil {
 		return nil, err
@@ -85,11 +92,15 @@ func (p *tokenIssuer) issueTokenPair(ctx context.Context, userID uuid.UUID, emai
 	}
 
 	expiresAt := time.Now().Add(refreshTokenDuration)
+	if sessionExpiresAt != nil && sessionExpiresAt.Before(expiresAt) {
+		expiresAt = *sessionExpiresAt
+	}
 
 	if err := p.tokenRepo.Create(ctx, &db.RefreshToken{
-		UserID:    userID,
-		TokenHash: hashRefreshToken(rawRefresh),
-		ExpiresAt: expiresAt,
+		UserID:           userID,
+		TokenHash:        hashRefreshToken(rawRefresh),
+		ExpiresAt:        expiresAt,
+		SessionExpiresAt: sessionExpiresAt,
 	}); err != nil {
 		return nil, fmt.Errorf("auth: persisting refresh token: %w", err)
 	}

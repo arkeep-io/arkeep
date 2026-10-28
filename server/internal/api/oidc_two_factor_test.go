@@ -22,10 +22,12 @@ import (
 )
 
 // fakeIdP is a minimal OpenID Connect provider: discovery, JWKS and a token
-// endpoint that answers every code with an ID token for sub.
+// endpoint that answers every code with an ID token for sub, carrying groups
+// as the "groups" claim when it is not nil.
 type fakeIdP struct {
 	*httptest.Server
-	sub string
+	sub    string
+	groups any
 }
 
 func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
@@ -53,11 +55,15 @@ func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
 		}}})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
-		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		claims := jwt.MapClaims{
 			"iss": idp.URL, "aud": clientID, "sub": idp.sub,
 			"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
 			"email": idp.sub + "@example.com", "email_verified": true, "name": idp.sub,
-		})
+		}
+		if idp.groups != nil {
+			claims["groups"] = idp.groups
+		}
+		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 		tok.Header["kid"] = "k1"
 		signed, err := tok.SignedString(key)
 		if err != nil {

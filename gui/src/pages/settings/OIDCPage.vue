@@ -75,22 +75,54 @@ const formClientId = ref('')
 const formClientSecret = ref('')
 const formScopes = ref('openid email profile')
 const formEnabled = ref(true)
+const formGroupsClaim = ref('')
+const formAllowedGroups = ref('')
+const formAdminGroups = ref('')
+const formSessionMaxHours = ref<string | number>(12)
 const formErrors = ref<Record<string, string>>({})
 const formSubmitting = ref(false)
 const formError = ref<string | null>(null)
+
+// Group restrictions and session cap, validated as the server does.
+const accessShape = {
+    groups_claim: z.string(),
+    allowed_groups: z.string(),
+    admin_groups: z.string(),
+    session_max_hours: z.coerce.number()
+        .int('Must be a whole number of hours')
+        .min(1, 'Must be between 1 and 168 hours')
+        .max(168, 'Must be between 1 and 168 hours'),
+}
+
+const hasGroups = (list: string) => list.split(',').some((g) => g.trim() !== '')
+
+function requireGroupsClaim(
+    data: { groups_claim: string; allowed_groups: string; admin_groups: string },
+    ctx: z.RefinementCtx,
+) {
+    if (!data.groups_claim.trim() && (hasGroups(data.allowed_groups) || hasGroups(data.admin_groups))) {
+        ctx.addIssue({
+            code: 'custom',
+            path: ['groups_claim'],
+            message: 'Groups claim is required when allowed or admin groups are set',
+        })
+    }
+}
 
 const createSchema = z.object({
     name: z.string().min(1, 'Name is required'),
     issuer: z.string().url('Must be a valid URL'),
     client_id: z.string().min(1, 'Client ID is required'),
     client_secret: z.string().min(1, 'Client secret is required'),
-})
+    ...accessShape,
+}).superRefine(requireGroupsClaim)
 
 const editSchema = z.object({
     name: z.string().min(1, 'Name is required'),
     issuer: z.string().url('Must be a valid URL'),
     client_id: z.string().min(1, 'Client ID is required'),
-})
+    ...accessShape,
+}).superRefine(requireGroupsClaim)
 
 function resetForm() {
     formName.value = ''
@@ -99,6 +131,10 @@ function resetForm() {
     formClientSecret.value = ''
     formScopes.value = 'openid email profile'
     formEnabled.value = true
+    formGroupsClaim.value = ''
+    formAllowedGroups.value = ''
+    formAdminGroups.value = ''
+    formSessionMaxHours.value = 12
     formErrors.value = {}
     formError.value = null
 }
@@ -119,6 +155,10 @@ function openEditSheet(provider: OIDCProvider) {
     formClientSecret.value = ''
     formScopes.value = provider.scopes || 'openid email profile'
     formEnabled.value = provider.enabled
+    formGroupsClaim.value = provider.groups_claim
+    formAllowedGroups.value = provider.allowed_groups
+    formAdminGroups.value = provider.admin_groups
+    formSessionMaxHours.value = provider.session_max_hours
     formErrors.value = {}
     formError.value = null
     sheetOpen.value = true
@@ -137,6 +177,10 @@ function validateForm(): boolean {
         issuer: formIssuer.value,
         client_id: formClientId.value,
         client_secret: formClientSecret.value,
+        groups_claim: formGroupsClaim.value,
+        allowed_groups: formAllowedGroups.value,
+        admin_groups: formAdminGroups.value,
+        session_max_hours: formSessionMaxHours.value,
     })
     if (!result.success) {
         for (const issue of result.error.issues) {
@@ -160,6 +204,10 @@ async function submitForm() {
             client_id: formClientId.value,
             scopes: formScopes.value || 'openid email profile',
             enabled: formEnabled.value,
+            groups_claim: formGroupsClaim.value,
+            allowed_groups: formAllowedGroups.value,
+            admin_groups: formAdminGroups.value,
+            session_max_hours: Number(formSessionMaxHours.value),
         }
 
         if (formClientSecret.value) {
@@ -374,6 +422,66 @@ onMounted(fetchOIDC)
                         <p class="text-xs text-muted-foreground">
                             Space-separated. Defaults to <span class="font-mono">openid email profile</span>.
                         </p>
+                    </Field>
+
+                    <Separator />
+
+                    <div>
+                        <p class="text-sm font-medium">Access control</p>
+                        <p class="text-xs text-muted-foreground">
+                            Restrict sign-in and assign roles from the groups the identity provider reports.
+                            Group names must match exactly what the provider sends.
+                        </p>
+                    </div>
+
+                    <Field>
+                        <FieldLabel for="form-groups-claim">
+                            Groups claim <span class="text-muted-foreground font-normal">(optional)</span>
+                        </FieldLabel>
+                        <Input id="form-groups-claim" v-model="formGroupsClaim" placeholder="groups"
+                            autocomplete="off"
+                            :class="formErrors.groups_claim ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <p class="text-xs text-muted-foreground">
+                            Name of the ID token or UserInfo claim listing the user's groups.
+                            Required when allowed or admin groups are set.
+                        </p>
+                        <FieldError v-if="formErrors.groups_claim">{{ formErrors.groups_claim }}</FieldError>
+                    </Field>
+
+                    <Field>
+                        <FieldLabel for="form-allowed-groups">
+                            Allowed groups <span class="text-muted-foreground font-normal">(optional)</span>
+                        </FieldLabel>
+                        <Input id="form-allowed-groups" v-model="formAllowedGroups" placeholder="arkeep-users"
+                            autocomplete="off" />
+                        <p class="text-xs text-muted-foreground">
+                            Comma-separated. Only members of one of these groups, or of an admin group, can sign in.
+                            Leave empty to allow every user of the provider.
+                        </p>
+                    </Field>
+
+                    <Field>
+                        <FieldLabel for="form-admin-groups">
+                            Admin groups <span class="text-muted-foreground font-normal">(optional)</span>
+                        </FieldLabel>
+                        <Input id="form-admin-groups" v-model="formAdminGroups" placeholder="arkeep-admins"
+                            autocomplete="off" />
+                        <p class="text-xs text-muted-foreground">
+                            Comma-separated. Members get the admin role and everyone else the user role,
+                            re-evaluated on every login. Leave empty to manage roles in Arkeep.
+                        </p>
+                    </Field>
+
+                    <Field>
+                        <FieldLabel for="form-session-max-hours">Session duration (hours)</FieldLabel>
+                        <Input id="form-session-max-hours" v-model="formSessionMaxHours" type="number" min="1"
+                            max="168"
+                            :class="formErrors.session_max_hours ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <p class="text-xs text-muted-foreground">
+                            How long a session lasts before the user must sign in at the provider again,
+                            where the groups are checked. Between 1 and 168.
+                        </p>
+                        <FieldError v-if="formErrors.session_max_hours">{{ formErrors.session_max_hours }}</FieldError>
                     </Field>
 
                     <Separator />

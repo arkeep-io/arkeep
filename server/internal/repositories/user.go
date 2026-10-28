@@ -121,6 +121,17 @@ func (r *gormUserRepository) List(ctx context.Context, opts ListOptions) ([]db.U
 	return users, total, nil
 }
 
+// CountActiveAdmins returns how many active users hold the admin role.
+func (r *gormUserRepository) CountActiveAdmins(ctx context.Context) (int64, error) {
+	var n int64
+	if err := r.db.WithContext(ctx).Model(&db.User{}).
+		Where("role = ? AND is_active = ?", "admin", true).
+		Count(&n).Error; err != nil {
+		return 0, fmt.Errorf("users: count active admins: %w", err)
+	}
+	return n, nil
+}
+
 // -----------------------------------------------------------------------------
 // gormRefreshTokenRepository
 // -----------------------------------------------------------------------------

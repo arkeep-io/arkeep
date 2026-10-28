@@ -18,7 +18,7 @@ jobs:
   # ─── Refresh README sponsor avatars ─────────────────────────────────────────
   update:
     name: Update README sponsors
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # Always start from main: a manual run dispatched from develop would
       # otherwise carry unreleased develop changes into the PR against main.

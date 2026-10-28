@@ -329,7 +329,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		// step, with the same challenge a local login gets.
 		var twoFactor *auth.TwoFactorRequiredError
 		if errors.As(err, &twoFactor) {
-			raw, err := h.createTwoFactorChallenge(r.Context(), twoFactor.UserID)
+			raw, err := h.createTwoFactorChallenge(r.Context(), twoFactor.UserID, twoFactor.SessionExpiresAt)
 			if err != nil {
 				h.logger.Error("OIDC login: creating the 2fa challenge failed", zap.Error(err))
 				ErrInternal(w)
@@ -345,6 +345,8 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, auth.ErrOIDCLinkRefused):
 			reason = strings.TrimPrefix(err.Error(), "auth: ")
+		case errors.Is(err, auth.ErrOIDCGroupDenied):
+			reason = strings.TrimPrefix(auth.ErrOIDCGroupDenied.Error(), "auth: ")
 		case errors.Is(err, auth.ErrProviderNotFound):
 			reason = "this sign-in provider is not available"
 		}
@@ -372,7 +374,7 @@ func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // startTwoFactorChallenge issues the interim challenge after a correct password
 // on a two-factor account and returns it to the client.
 func (h *AuthHandler) startTwoFactorChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
-	raw, err := h.createTwoFactorChallenge(r.Context(), userID)
+	raw, err := h.createTwoFactorChallenge(r.Context(), userID, nil)
 	if err != nil {
 		h.logger.Error("2fa login: creating the challenge failed", zap.Error(err))
 		ErrInternal(w)
@@ -384,8 +386,9 @@ func (h *AuthHandler) startTwoFactorChallenge(w http.ResponseWriter, r *http.Req
 // createTwoFactorChallenge persists a new challenge for a user whose first
 // factor was accepted and returns its raw token. Any outstanding challenge
 // for the user is deleted first, so only the newest login attempt can be
-// completed.
-func (h *AuthHandler) createTwoFactorChallenge(ctx context.Context, userID uuid.UUID) (string, error) {
+// completed. sessionExpiresAt is the OIDC session deadline the tokens issued
+// after the code must keep, nil for a local login.
+func (h *AuthHandler) createTwoFactorChallenge(ctx context.Context, userID uuid.UUID, sessionExpiresAt *time.Time) (string, error) {
 	// GenerateResetToken is the package's generic 32-byte opaque token helper;
 	// the name reflects its first caller, not a restriction.
 	raw, err := auth.GenerateResetToken()
@@ -396,9 +399,10 @@ func (h *AuthHandler) createTwoFactorChallenge(ctx context.Context, userID uuid.
 		return "", fmt.Errorf("clear old challenges: %w", err)
 	}
 	if err := h.challenges.Create(ctx, &db.TwoFactorChallenge{
-		UserID:    userID,
-		TokenHash: auth.HashToken(raw),
-		ExpiresAt: time.Now().Add(twoFactorChallengeTTL),
+		UserID:           userID,
+		TokenHash:        auth.HashToken(raw),
+		ExpiresAt:        time.Now().Add(twoFactorChallengeTTL),
+		SessionExpiresAt: sessionExpiresAt,
 	}); err != nil {
 		return "", fmt.Errorf("persist challenge: %w", err)
 	}
@@ -473,7 +477,7 @@ func (h *AuthHandler) LoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("2fa login: marking challenge used failed", zap.Error(err))
 	}
 
-	pair, err := h.svc.IssueTokenPairForUser(ctx, user)
+	pair, err := h.svc.IssueTokenPairForUser(ctx, user, challenge.SessionExpiresAt)
 	if err != nil {
 		h.logger.Error("2fa login: issuing tokens failed", zap.Error(err))
 		ErrInternal(w)

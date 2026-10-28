@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -157,10 +158,23 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 	}
 	emailVerified := claimIsTrue(claims.EmailVerified)
 
+	// The groups claim is named by the admin and its value may be a list, a
+	// string or an object, so it is read from the raw claims.
+	needGroups := cfg.AllowedGroups != "" || cfg.AdminGroups != ""
+	var groups []string
+	groupsFound := false
+	if needGroups {
+		var rawClaims map[string]any
+		if err := idToken.Claims(&rawClaims); err != nil {
+			return nil, fmt.Errorf("auth: extracting OIDC claims: %w", err)
+		}
+		groups, groupsFound = groupsFromClaim(rawClaims[cfg.GroupsClaim])
+	}
+
 	// Many providers (e.g. Zitadel, Keycloak) only guarantee sub in the ID
-	// token and return email/name via the UserInfo endpoint. Fetch UserInfo as
-	// a fallback whenever either field is missing.
-	if claims.Email == "" || claims.Name == "" {
+	// token and return email/name/groups via the UserInfo endpoint. Fetch
+	// UserInfo as a fallback whenever one of them is missing.
+	if claims.Email == "" || claims.Name == "" || (needGroups && !groupsFound) {
 		userInfo, uiErr := oidcProvider.UserInfo(ctx, oauth2.StaticTokenSource(oauth2Token))
 		if uiErr != nil {
 			p.logger.Warn("OIDC userinfo fetch failed, proceeding with ID token claims only",
@@ -182,6 +196,12 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 				if claims.Name == "" {
 					claims.Name = uiClaims.Name
 				}
+				if needGroups && !groupsFound {
+					var uiRaw map[string]any
+					if userInfo.Claims(&uiRaw) == nil {
+						groups, groupsFound = groupsFromClaim(uiRaw[cfg.GroupsClaim])
+					}
+				}
 			}
 		}
 	}
@@ -198,7 +218,26 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		claims.Name = claims.Sub
 	}
 
-	user, err := p.findOrProvisionUser(ctx, cfg, claims.Sub, claims.Email, emailVerified, claims.Name)
+	// The group check runs before any account is provisioned or linked, so a
+	// user outside the allowed groups never gets one.
+	if needGroups && !groupsFound {
+		p.logger.Warn("OIDC groups claim not present, check the client scope or claim mapper on the identity provider",
+			zap.String("provider", cfg.ID.String()),
+			zap.String("claim", cfg.GroupsClaim),
+		)
+	}
+	allowed, role := decideGroups(cfg.AllowedGroups, cfg.AdminGroups, groups)
+	if !allowed {
+		p.logger.Warn("OIDC login denied: user is not a member of an allowed group",
+			zap.String("provider", cfg.ID.String()),
+			zap.String("sub", claims.Sub),
+			zap.Strings("groups", groups),
+		)
+		p.revokeSessions(ctx, cfg.ID.String(), claims.Sub)
+		return nil, ErrOIDCGroupDenied
+	}
+
+	user, err := p.findOrProvisionUser(ctx, cfg, claims.Sub, claims.Email, emailVerified, claims.Name, role)
 	if err != nil {
 		return nil, err
 	}
@@ -207,11 +246,15 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		return nil, ErrUserDisabled
 	}
 
+	// The session must pass through the IdP again after SessionMaxHours, so
+	// that the groups are re-checked.
+	sessionExpiresAt := time.Now().Add(time.Duration(cfg.SessionMaxHours) * time.Hour)
+
 	// The IdP proved the first factor only: an account with two-factor
 	// authentication still owes its second one (SEC-06). As for a local login,
 	// LastLoginAt is not stamped until the challenge is completed.
 	if user.TwoFactorEnabled {
-		return nil, &TwoFactorRequiredError{UserID: user.ID}
+		return nil, &TwoFactorRequiredError{UserID: user.ID, SessionExpiresAt: &sessionExpiresAt}
 	}
 
 	// Update LastLoginAt. Non-fatal: a failure here should not block the login.
@@ -224,7 +267,7 @@ func (p *OIDCAuthProvider) ExchangeCode(ctx context.Context, req OIDCCallbackReq
 		)
 	}
 
-	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role)
+	return p.issueTokenPair(ctx, user.ID, user.Email, user.Role, &sessionExpiresAt)
 }
 
 // ListEnabledProviders returns all enabled OIDC provider configurations.
@@ -278,10 +321,12 @@ func (p *OIDCAuthProvider) loadConfig(ctx context.Context, providerID uuid.UUID,
 //     adopted for this OIDC provider so that no duplicate is created, but only
 //     when canLinkByEmail allows it (verified email, not an admin, not
 //     already linked to another provider).
-//  3. Neither found — JIT-provision a new account with role "user".
+//  3. Neither found — JIT-provision a new account with role "user", or the
+//     role granted by the provider's admin groups.
 //
-// Email and display name are synced from the IdP on every login.
-func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDCProvider, sub, email string, emailVerified bool, displayName string) (*db.User, error) {
+// Email and display name are synced from the IdP on every login. role is the
+// role granted by the provider's admin groups, or "" to leave it unchanged.
+func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDCProvider, sub, email string, emailVerified bool, displayName, role string) (*db.User, error) {
 	// 1. Fast path: returning OIDC user.
 	user, err := p.userRepo.GetByOIDC(ctx, cfg.ID.String(), sub)
 	if err != nil && !isNotFound(err) {
@@ -297,10 +342,14 @@ func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDC
 
 		if isNotFound(err) {
 			// 3. New user — provision.
+			newRole := "user"
+			if role != "" {
+				newRole = role
+			}
 			newUser := &db.User{
 				Email:        email,
 				DisplayName:  displayName,
-				Role:         "user",
+				Role:         newRole,
 				IsActive:     true,
 				OIDCProvider: cfg.ID.String(),
 				OIDCSub:      sub,
@@ -329,16 +378,144 @@ func (p *OIDCAuthProvider) findOrProvisionUser(ctx context.Context, cfg *db.OIDC
 		user.OIDCSub = sub
 	}
 
+	roleChanged := false
+	if role != "" && role != user.Role {
+		if roleChanged, err = p.canChangeRole(ctx, user); err != nil {
+			return nil, err
+		}
+		if roleChanged {
+			p.logger.Info("changing role from OIDC admin groups",
+				zap.String("user_id", user.ID.String()),
+				zap.String("from", user.Role),
+				zap.String("to", role),
+			)
+			user.Role = role
+		}
+	}
+
 	// Update email and display name in case they changed at the IdP.
 	user.Email = email
 	user.DisplayName = displayName
 	if updateErr := p.userRepo.Update(ctx, user); updateErr != nil {
+		// The tokens about to be issued carry user.Role: a role change that
+		// was not saved must not reach them.
+		if roleChanged {
+			return nil, fmt.Errorf("auth: saving role from OIDC admin groups: %w", updateErr)
+		}
 		p.logger.Warn("failed to update user profile from OIDC claims",
 			zap.String("user_id", user.ID.String()),
 			zap.Error(updateErr),
 		)
 	}
 	return user, nil
+}
+
+// canChangeRole reports whether the role of user may be changed by the
+// provider's admin groups. Demoting the last active admin is refused, so a
+// change at the IdP cannot leave Arkeep without an administrator.
+func (p *OIDCAuthProvider) canChangeRole(ctx context.Context, user *db.User) (bool, error) {
+	if user.Role != "admin" || !user.IsActive {
+		return true, nil
+	}
+	n, err := p.userRepo.CountActiveAdmins(ctx)
+	if err != nil {
+		return false, fmt.Errorf("auth: counting active admins: %w", err)
+	}
+	if n <= 1 {
+		p.logger.Warn("not demoting the last active admin despite OIDC admin groups",
+			zap.String("user_id", user.ID.String()),
+		)
+		return false, nil
+	}
+	return true, nil
+}
+
+// revokeSessions ends every session of the account linked to this OIDC
+// identity, so a user removed from the allowed groups also loses the sessions
+// open in other browsers. Only the account already linked to (provider, sub)
+// is touched: matching by email would let a denied IdP account end someone
+// else's sessions. Failures are logged, the login is denied regardless.
+func (p *OIDCAuthProvider) revokeSessions(ctx context.Context, providerID, sub string) {
+	user, err := p.userRepo.GetByOIDC(ctx, providerID, sub)
+	if err != nil {
+		if !isNotFound(err) {
+			p.logger.Warn("failed to look up OIDC user to revoke sessions", zap.Error(err))
+		}
+		return
+	}
+	if err := p.tokenRepo.RevokeAllForUser(ctx, user.ID); err != nil {
+		p.logger.Warn("failed to revoke sessions of denied OIDC user",
+			zap.String("user_id", user.ID.String()),
+			zap.Error(err),
+		)
+	}
+}
+
+// decideGroups applies a provider's group settings to the groups a user
+// holds. Members of an admin group are always allowed. allowed is false when
+// allowedGroups is set and the user is in none of them nor in an admin group.
+// role is "admin" or "user" when adminGroups is set, "" otherwise.
+func decideGroups(allowedGroups, adminGroups string, userGroups []string) (allowed bool, role string) {
+	allowedList := SplitGroups(allowedGroups)
+	adminList := SplitGroups(adminGroups)
+
+	isAdmin := hasAnyGroup(userGroups, adminList)
+	allowed = len(allowedList) == 0 || isAdmin || hasAnyGroup(userGroups, allowedList)
+
+	if len(adminList) > 0 {
+		role = "user"
+		if isAdmin {
+			role = "admin"
+		}
+	}
+	return allowed, role
+}
+
+// SplitGroups splits a comma-separated list of group names, trimming spaces
+// around each name and dropping empty entries.
+func SplitGroups(s string) []string {
+	var groups []string
+	for _, g := range strings.Split(s, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			groups = append(groups, g)
+		}
+	}
+	return groups
+}
+
+// hasAnyGroup reports whether userGroups contains at least one of want.
+// Names are compared exactly.
+func hasAnyGroup(userGroups, want []string) bool {
+	for _, w := range want {
+		if slices.Contains(userGroups, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// groupsFromClaim reads the groups claim, which IdPs shape differently: a
+// list of names (Keycloak, Authentik), a single name, or an object whose keys
+// are the names (Zitadel's project roles). found is false when the claim is
+// absent or holds no group.
+func groupsFromClaim(v any) (groups []string, found bool) {
+	switch c := v.(type) {
+	case []any:
+		for _, g := range c {
+			if s, ok := g.(string); ok && s != "" {
+				groups = append(groups, s)
+			}
+		}
+	case string:
+		if c != "" {
+			groups = []string{c}
+		}
+	case map[string]any:
+		for k := range c {
+			groups = append(groups, k)
+		}
+	}
+	return groups, len(groups) > 0
 }
 
 // generateRandomBase64 returns a URL-safe base64-encoded random string of n bytes.
