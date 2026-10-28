@@ -24,6 +24,9 @@ This document covers everything you need to get your changes merged.
   idea or bug is already being tracked.
 - For non-trivial changes, open an issue first to discuss the approach before writing code.
   This avoids wasted effort if the direction doesn't fit the project.
+- Read the [Architecture Decision Records](docs/adr/README.md): they explain the
+  choices your change must respect. A change that introduces or reverses an
+  architectural decision comes with a new ADR (copy [the template](docs/adr/template.md)).
 
 ---
 
@@ -59,7 +62,7 @@ task build:server   # builds GUI first, then compiles Go with GUI embedded
 - Sentinel errors are defined per package (`var ErrNotFound = errors.New(...)`).
 - Use `uuid.NewV7()` (time-ordered) for all new ID generation — never `uuid.New()`.
 - **Do not use `gorm.Preload`** — all relations are loaded with explicit queries in the repository layer.
-- **Do not add GORM soft delete** to new models — only `agents` and `policies` use it.
+- **Do not add GORM soft delete** to new models — only `agents`, `policies` and `destinations` use it.
 - The `EncryptedString` type is cast with `db.EncryptedString(value)`, not `.String()`.
 - Table-driven tests with the standard `testing` package — no external test frameworks.
 - Run `task lint` before submitting. All `golangci-lint` checks must pass.

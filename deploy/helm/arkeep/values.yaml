@@ -16,9 +16,9 @@ nameOverride: ""
 fullnameOverride: ""
 
 # ─── Replicas ─────────────────────────────────────────────────────────────────
-# WARNING: SQLite supports only replicaCount: 1 (ReadWriteOnce PVC cannot be
-# mounted by more than one pod simultaneously). Switch to config.dbDriver: postgres
-# before increasing replicas.
+# WARNING: keep replicaCount: 1, with SQLite and PostgreSQL alike. The server
+# keeps the connected-agent registry and download tickets in memory, so several
+# replicas would not share them (see docs/adr/0005).
 
 replicaCount: 1
 
