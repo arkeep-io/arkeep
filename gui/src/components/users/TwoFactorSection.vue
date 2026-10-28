@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, useTemplateRef } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
 import QRCode from 'qrcode'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { PinInput, PinInputGroup, PinInputSlot } from '@/components/ui/pin-input'
 import {
@@ -50,9 +53,23 @@ const enrollDialogOpen = ref(false)
 const enrollStep = ref<'qr' | 'verify'>('qr')
 const setupData = ref<TwoFactorSetupResponse | null>(null)
 const qrDataUrl = ref('')
-const verifyCode = ref<string[]>([])
 const enrollError = ref<string | null>(null)
 const enrollSubmitting = ref(false)
+const verifyPinEl = useTemplateRef<HTMLElement>('verifyPin')
+
+// The section holds three small forms (the code that confirms enrollment and
+// the password that confirms disabling or regenerating): each field names
+// the form it belongs to, since useField would otherwise attach to the last
+// form created in the component.
+const verifyForm = useForm({
+    validationSchema: toTypedSchema(z.object({
+        code: z.array(z.string()).refine((c) => c.join('').length === 6, 'Enter all 6 digits'),
+    })),
+    initialValues: { code: [] as string[] },
+})
+// The code is checked on submit only, as on the login page.
+const { value: verifyCode, errorMessage: verifyCodeError } =
+    useField<string[]>('code', undefined, { form: verifyForm, validateOnValueUpdate: false })
 
 async function startEnrollment(): Promise<void> {
     enrollError.value = null
@@ -63,7 +80,7 @@ async function startEnrollment(): Promise<void> {
         })
         setupData.value = res.data
         qrDataUrl.value = await QRCode.toDataURL(res.data.otpauth_url, { width: 200, margin: 1 })
-        verifyCode.value = []
+        verifyForm.resetForm()
         enrollStep.value = 'qr'
         enrollDialogOpen.value = true
     } catch (e: any) {
@@ -78,20 +95,17 @@ function cancelEnrollment(): void {
     enrollStep.value = 'qr'
     setupData.value = null
     qrDataUrl.value = ''
-    verifyCode.value = []
+    verifyForm.resetForm()
     enrollError.value = null
 }
 
-async function submitVerify(): Promise<void> {
-    const code = verifyCode.value.join('')
-    if (code.length !== 6) return
-
+const submitVerify = verifyForm.handleSubmit(async (values) => {
     enrollError.value = null
     enrollSubmitting.value = true
     try {
         const res = await api<ApiResponse<TwoFactorRecoveryCodesResponse>>('/api/v1/auth/2fa/verify', {
             method: 'POST',
-            body: { code },
+            body: { code: values.code.join('') },
         })
         if (auth.user) auth.user.two_factor_enabled = true
         enrollDialogOpen.value = false
@@ -103,10 +117,15 @@ async function submitVerify(): Promise<void> {
         await fetchStatus()
     } catch (e: any) {
         enrollError.value = apiErrorMessage(e, 'Invalid code.')
-    } finally {
         enrollSubmitting.value = false
+        // Clear the rejected code and put the cursor back on the first digit.
+        verifyCode.value = []
+        await nextTick()
+        verifyPinEl.value?.querySelector<HTMLInputElement>('[data-slot="pin-input-slot"]')?.focus()
+        return
     }
-}
+    enrollSubmitting.value = false
+})
 
 // ---------------------------------------------------------------------------
 // Recovery codes dialog — shown once after verify or regenerate
@@ -136,59 +155,67 @@ function downloadRecoveryCodes(): void {
 // Disable
 // ---------------------------------------------------------------------------
 
+// passwordFormSchema is the current password that confirms a sensitive
+// change; the server checks it.
+const passwordFormSchema = toTypedSchema(z.object({
+    password: z.string().min(1, 'Password is required'),
+}))
+
 const disableDialogOpen = ref(false)
-const disablePassword = ref('')
 const disableError = ref<string | null>(null)
-const disableLoading = ref(false)
 const showDisablePassword = ref(false)
 
+const disableForm = useForm({ validationSchema: passwordFormSchema, initialValues: { password: '' } })
+const { isSubmitting: disableLoading } = disableForm
+const { value: disablePassword, errorMessage: disablePasswordError } =
+    useField<string>('password', undefined, { form: disableForm })
+
 function openDisableDialog(): void {
-    disablePassword.value = ''
+    disableForm.resetForm()
     disableError.value = null
     disableDialogOpen.value = true
 }
 
-async function confirmDisable(): Promise<void> {
+const confirmDisable = disableForm.handleSubmit(async (values) => {
     disableError.value = null
-    disableLoading.value = true
     try {
         await api('/api/v1/auth/2fa/disable', {
             method: 'POST',
-            body: { password: disablePassword.value },
+            body: { password: values.password },
         })
         if (auth.user) auth.user.two_factor_enabled = false
         disableDialogOpen.value = false
         await fetchStatus()
     } catch (e: any) {
         disableError.value = apiErrorMessage(e, 'Incorrect password.')
-    } finally {
-        disableLoading.value = false
     }
-}
+})
 
 // ---------------------------------------------------------------------------
 // Regenerate recovery codes
 // ---------------------------------------------------------------------------
 
 const regenerateDialogOpen = ref(false)
-const regeneratePassword = ref('')
 const regenerateError = ref<string | null>(null)
-const regenerateLoading = ref(false)
 const showRegeneratePassword = ref(false)
 
+const regenerateForm = useForm({ validationSchema: passwordFormSchema, initialValues: { password: '' } })
+const { isSubmitting: regenerateLoading } = regenerateForm
+const { value: regeneratePassword, errorMessage: regeneratePasswordError } =
+    useField<string>('password', undefined, { form: regenerateForm })
+
 function openRegenerateDialog(): void {
-    regeneratePassword.value = ''
+    regenerateForm.resetForm()
     regenerateError.value = null
     regenerateDialogOpen.value = true
 }
 
-async function confirmRegenerate(): Promise<void> {
+const confirmRegenerate = regenerateForm.handleSubmit(async (values) => {
     regenerateError.value = null
-    regenerateLoading.value = true
     try {
         const res = await api<ApiResponse<TwoFactorRecoveryCodesResponse>>('/api/v1/auth/2fa/recovery-codes/regenerate', {
             method: 'POST',
-            body: { password: regeneratePassword.value },
+            body: { password: values.password },
         })
         regenerateDialogOpen.value = false
         recoveryCodes.value = res.data.recovery_codes
@@ -196,10 +223,8 @@ async function confirmRegenerate(): Promise<void> {
         await fetchStatus()
     } catch (e: any) {
         regenerateError.value = apiErrorMessage(e, 'Incorrect password.')
-    } finally {
-        regenerateLoading.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -284,11 +309,15 @@ async function confirmRegenerate(): Promise<void> {
 
             <FieldGroup v-else>
                 <Field class="items-center">
-                    <PinInput v-model="verifyCode" otp class="w-full" @complete="submitVerify">
-                        <PinInputGroup class="w-full justify-between">
-                            <PinInputSlot v-for="i in 6" :key="i" :index="i - 1" />
-                        </PinInputGroup>
-                    </PinInput>
+                    <div ref="verifyPin" class="w-full">
+                        <PinInput v-model="verifyCode" otp class="w-full" :disabled="enrollSubmitting"
+                            @complete="submitVerify()">
+                            <PinInputGroup class="w-full justify-between">
+                                <PinInputSlot v-for="i in 6" :key="i" :index="i - 1" />
+                            </PinInputGroup>
+                        </PinInput>
+                    </div>
+                    <FieldError v-if="verifyCodeError">{{ verifyCodeError }}</FieldError>
                 </Field>
             </FieldGroup>
 
@@ -299,7 +328,7 @@ async function confirmRegenerate(): Promise<void> {
                 </template>
                 <template v-else>
                     <Button variant="outline" :disabled="enrollSubmitting" @click="enrollStep = 'qr'">Back</Button>
-                    <Button :disabled="enrollSubmitting || verifyCode.join('').length !== 6" @click="submitVerify">
+                    <Button :disabled="enrollSubmitting" @click="submitVerify()">
                         <Loader2 v-if="enrollSubmitting" class="size-4 animate-spin" />
                         {{ enrollSubmitting ? 'Verifying…' : 'Verify' }}
                     </Button>
@@ -353,7 +382,9 @@ async function confirmRegenerate(): Promise<void> {
                     <div class="relative">
                         <Input id="disable-password" v-model="disablePassword"
                             :type="showDisablePassword ? 'text' : 'password'" autocomplete="current-password"
-                            class="pr-10" @keydown.enter.prevent="confirmDisable" />
+                            class="pr-10"
+                            :class="disablePasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''"
+                            @keydown.enter.prevent="confirmDisable()" />
                         <button type="button"
                             class="absolute transition-colors -translate-y-1/2 right-3 top-1/2 text-muted-foreground hover:text-foreground"
                             :aria-label="showDisablePassword ? 'Hide password' : 'Show password'"
@@ -362,11 +393,12 @@ async function confirmRegenerate(): Promise<void> {
                             <Eye v-else class="size-4" />
                         </button>
                     </div>
+                    <FieldError v-if="disablePasswordError">{{ disablePasswordError }}</FieldError>
                 </Field>
             </FieldGroup>
             <DialogFooter>
                 <Button variant="outline" :disabled="disableLoading" @click="disableDialogOpen = false">Cancel</Button>
-                <Button variant="destructive" :disabled="disableLoading || !disablePassword" @click="confirmDisable">
+                <Button variant="destructive" :disabled="disableLoading" @click="confirmDisable()">
                     <Loader2 v-if="disableLoading" class="size-4 animate-spin" />
                     {{ disableLoading ? 'Disabling…' : 'Disable' }}
                 </Button>
@@ -396,7 +428,9 @@ async function confirmRegenerate(): Promise<void> {
                     <div class="relative">
                         <Input id="regenerate-password" v-model="regeneratePassword"
                             :type="showRegeneratePassword ? 'text' : 'password'" autocomplete="current-password"
-                            class="pr-10" @keydown.enter.prevent="confirmRegenerate" />
+                            class="pr-10"
+                            :class="regeneratePasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''"
+                            @keydown.enter.prevent="confirmRegenerate()" />
                         <button type="button"
                             class="absolute transition-colors -translate-y-1/2 right-3 top-1/2 text-muted-foreground hover:text-foreground"
                             :aria-label="showRegeneratePassword ? 'Hide password' : 'Show password'"
@@ -405,11 +439,12 @@ async function confirmRegenerate(): Promise<void> {
                             <Eye v-else class="size-4" />
                         </button>
                     </div>
+                    <FieldError v-if="regeneratePasswordError">{{ regeneratePasswordError }}</FieldError>
                 </Field>
             </FieldGroup>
             <DialogFooter>
                 <Button variant="outline" :disabled="regenerateLoading" @click="regenerateDialogOpen = false">Cancel</Button>
-                <Button :disabled="regenerateLoading || !regeneratePassword" @click="confirmRegenerate">
+                <Button :disabled="regenerateLoading" @click="confirmRegenerate()">
                     <Loader2 v-if="regenerateLoading" class="size-4 animate-spin" />
                     {{ regenerateLoading ? 'Regenerating…' : 'Regenerate' }}
                 </Button>

@@ -24,9 +24,9 @@ import {
     FieldSeparator,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { PinInput, PinInputGroup, PinInputSlot } from '@/components/ui/pin-input'
-import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, Moon, Sun } from '@lucide/vue'
+import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
+import TwoFactorCodeForm from '@/components/users/TwoFactorCodeForm.vue'
 import type { OIDCProviderSummary } from '@/types'
 
 // Respect the user's OS "reduce motion" preference for the decorative login video.
@@ -41,7 +41,10 @@ const schema = toTypedSchema(
     }),
 )
 
-const { handleSubmit, isSubmitting } = useForm({ validationSchema: schema })
+const { handleSubmit, isSubmitting } = useForm({
+    validationSchema: schema,
+    initialValues: { email: '', password: '' },
+})
 
 const { value: emailValue, errorMessage: emailError } = useField<string>('email')
 const { value: passwordValue, errorMessage: passwordError } = useField<string>('password')
@@ -61,10 +64,6 @@ const oidcLoadingId = ref<string | null>(null)
 
 const step = ref<'credentials' | 'code'>('credentials')
 const challengeToken = ref('')
-const useRecoveryCode = ref(false)
-const pinValue = ref<string[]>([])
-const recoveryCodeValue = ref('')
-const isVerifying = ref(false)
 
 // Enabled OIDC providers fetched on mount — one button rendered per entry.
 const oidcProviders = ref<OIDCProviderSummary[]>([])
@@ -90,37 +89,9 @@ const onSubmit = handleSubmit(async (values) => {
     }
 })
 
-async function onSubmitCode(): Promise<void> {
-    serverError.value = null
-    const code = useRecoveryCode.value ? recoveryCodeValue.value.trim() : pinValue.value.join('')
-    if (!code) {
-        serverError.value = useRecoveryCode.value ? 'Enter your recovery code' : 'Enter the 6-digit code'
-        return
-    }
-    if (!useRecoveryCode.value && code.length !== 6) {
-        serverError.value = 'Enter all 6 digits'
-        return
-    }
-
-    isVerifying.value = true
-    try {
-        await auth.completeTwoFactor(challengeToken.value, code)
-        router.push(redirectTo.value)
-    } catch {
-        serverError.value = useRecoveryCode.value
-            ? 'Invalid or already-used recovery code'
-            : 'Invalid or expired code'
-    } finally {
-        isVerifying.value = false
-    }
-}
-
 function backToCredentials(): void {
     step.value = 'credentials'
     challengeToken.value = ''
-    useRecoveryCode.value = false
-    pinValue.value = []
-    recoveryCodeValue.value = ''
     serverError.value = null
 }
 
@@ -267,70 +238,8 @@ onMounted(() => {
                         </form>
 
                         <!-- Two-factor code form -->
-                        <form v-else class="p-6 md:p-8" novalidate @submit.prevent="onSubmitCode">
-                            <FieldGroup>
-                                <!-- Title -->
-                                <div class="flex flex-col items-center gap-2 text-center">
-                                    <h1 class="text-2xl font-bold">Two-factor authentication</h1>
-                                    <p class="text-sm text-muted-foreground text-balance">
-                                        {{ useRecoveryCode
-                                            ? 'Enter one of your recovery codes'
-                                            : 'Enter the 6-digit code from your authenticator app' }}
-                                    </p>
-                                </div>
-
-                                <!-- Server error -->
-                                <Transition enter-active-class="transition-all duration-200"
-                                    enter-from-class="-translate-y-1 opacity-0"
-                                    leave-active-class="transition-all duration-150"
-                                    leave-to-class="-translate-y-1 opacity-0">
-                                    <Alert v-if="serverError" variant="destructive">
-                                        <AlertCircle class="size-4" />
-                                        <AlertDescription>{{ serverError }}</AlertDescription>
-                                    </Alert>
-                                </Transition>
-
-                                <!-- TOTP code -->
-                                <Field v-if="!useRecoveryCode">
-                                    <PinInput v-model="pinValue" otp class="w-full" @complete="onSubmitCode">
-                                        <PinInputGroup class="w-full justify-between">
-                                            <PinInputSlot v-for="i in 6" :key="i" :index="i - 1" />
-                                        </PinInputGroup>
-                                    </PinInput>
-                                </Field>
-
-                                <!-- Recovery code -->
-                                <Field v-else>
-                                    <FieldLabel for="recovery-code">Recovery code</FieldLabel>
-                                    <Input id="recovery-code" v-model="recoveryCodeValue" type="text"
-                                        placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="one-time-code" autofocus
-                                        spellcheck="false" />
-                                </Field>
-
-                                <!-- Submit -->
-                                <Field>
-                                    <Button type="submit" class="w-full" :disabled="isVerifying">
-                                        <Loader2 v-if="isVerifying" class="size-4 animate-spin" />
-                                        {{ isVerifying ? 'Verifying…' : 'Verify' }}
-                                    </Button>
-                                </Field>
-
-                                <!-- Toggle between TOTP and recovery code -->
-                                <button type="button"
-                                    class="text-sm text-muted-foreground hover:text-foreground hover:underline"
-                                    @click="useRecoveryCode = !useRecoveryCode">
-                                    {{ useRecoveryCode ? 'Use your authenticator app instead' : 'Use a recovery code instead' }}
-                                </button>
-
-                                <!-- Back to sign in -->
-                                <button type="button"
-                                    class="inline-flex items-center justify-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-                                    @click="backToCredentials">
-                                    <ArrowLeft class="size-4" />
-                                    Back to sign in
-                                </button>
-                            </FieldGroup>
-                        </form>
+                        <TwoFactorCodeForm v-else :challenge-token="challengeToken"
+                            @verified="router.push(redirectTo)" @back="backToCredentials" />
 
                         <!-- Decorative panel -->
                         <div class="relative hidden bg-black md:block overflow-hidden">

@@ -55,6 +55,7 @@ import { useField, useFieldArray, useForm } from 'vee-validate'
 import { computed, ref, watch } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import * as z from 'zod'
+import { integerInRange, isHttpURL, MAX_HOOK_TIMEOUT_SECS, MIN_REPO_PASSWORD_LENGTH } from '@/lib/validation'
 
 const authStore = useAuthStore()
 
@@ -232,23 +233,25 @@ const sourceItemSchema = z.object({
   }
 })
 
+const hookTimeoutSchema = integerInRange(0, MAX_HOOK_TIMEOUT_SECS)
+
+// The timeout is checked only on an enabled hook: a disabled one is hidden
+// and never sent.
 const hookFieldSchema = z.object({
   enabled: z.boolean(),
   name: z.string().optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
-  timeout_secs: z.coerce.number().int().min(0).optional(),
-})
-
-// isPingURL mirrors the server's healthcheck.ValidateURL: absolute http(s) URL.
-function isPingURL(v: string): boolean {
-  try {
-    const u = new URL(v)
-    return (u.protocol === 'http:' || u.protocol === 'https:') && u.host !== ''
-  } catch {
-    return false
+  // Checked in superRefine. Not a z.union: @vee-validate/zod reads zod 3
+  // union errors and fails on zod 4 ones.
+  timeout_secs: z.unknown(),
+}).superRefine((hook, ctx) => {
+  if (!hook.enabled) return
+  const result = hookTimeoutSchema.safeParse(hook.timeout_secs)
+  if (!result.success) {
+    ctx.addIssue({ code: 'custom', path: ['timeout_secs'], message: result.error.issues[0]!.message })
   }
-}
+})
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -276,16 +279,25 @@ const schema = z.object({
   resume_interrupted: z.boolean(),
   notify_on_success: z.enum(['inherit', 'always', 'never']),
   notify_on_failure: z.enum(['inherit', 'always', 'never']),
-  healthcheck_url: z.string().trim().refine(v => v === '' || isPingURL(v), 'Must be an http(s) URL'),
+  healthcheck_url: z.string().trim().refine(v => v === '' || isHttpURL(v), 'Must be an http(s) URL'),
 }).superRefine((data, ctx) => {
+  // A docker-volume row keeps its ticked volumes outside the form values
+  // (selectedVolumes); a name typed in the manual fallback input is its path.
+  data.sources.forEach((s, idx) => {
+    if (s.type !== 'docker-volume') return
+    const ticked = selectedVolumes.value[String(idx)]?.size ?? 0
+    if (ticked === 0 && !s.path.trim()) {
+      ctx.addIssue({ code: 'custom', path: ['sources', idx, 'path'], message: 'Select at least one volume or enter its name' })
+    }
+  })
   if (!isEdit.value) {
     if (data.use_destination_password) {
       // Password resolved server-side from the selected destination(s).
-    } else if (!data.repo_password || data.repo_password.length < 8) {
+    } else if (!data.repo_password || data.repo_password.length < MIN_REPO_PASSWORD_LENGTH) {
       ctx.addIssue({
         code: "custom",
         path: ['repo_password'],
-        message: 'Repository password must be at least 8 characters',
+        message: `Repository password must be at least ${MIN_REPO_PASSWORD_LENGTH} characters`,
       })
     }
     if (data.repo_password !== data.repo_password_confirm) {
@@ -296,11 +308,11 @@ const schema = z.object({
       })
     }
   } else if (data.repo_password && data.repo_password.length > 0) {
-    if (data.repo_password.length < 8) {
+    if (data.repo_password.length < MIN_REPO_PASSWORD_LENGTH) {
       ctx.addIssue({
         code: "custom",
         path: ['repo_password'],
-        message: 'Repository password must be at least 8 characters',
+        message: `Repository password must be at least ${MIN_REPO_PASSWORD_LENGTH} characters`,
       })
     }
     if (data.repo_password !== data.repo_password_confirm) {
@@ -319,9 +331,17 @@ type FormValues = z.infer<typeof schema>
 // Form setup
 // ---------------------------------------------------------------------------
 
-const { handleSubmit, resetForm, setValues } = useForm<FormValues>({
+const { handleSubmit, resetForm, setValues, errors } = useForm<FormValues>({
   validationSchema: toTypedSchema(schema),
+  initialValues: defaultValues(),
 })
+
+// sourceError returns the validation error of one field of source row idx.
+// Source rows are a field array, so their errors are read from the form's
+// error bag (keys like "sources[0].path") rather than from useField.
+function sourceError(idx: number, field: 'path' | 'label'): string | undefined {
+  return (errors.value as Record<string, string | undefined>)[`sources[${idx}].${field}`]
+}
 
 // General
 const { value: nameValue, errorMessage: nameError } = useField<string>('name')
@@ -523,13 +543,13 @@ const { value: hookPreEnabled } = useField<boolean>('hook_pre.enabled')
 const { value: hookPreName } = useField<string>('hook_pre.name')
 const { value: hookPreCommand } = useField<string>('hook_pre.command')
 const { value: hookPreArgs } = useField<string[]>('hook_pre.args')
-const { value: hookPreTimeout } = useField<number>('hook_pre.timeout_secs')
+const { value: hookPreTimeout, errorMessage: hookPreTimeoutError } = useField<number | string>('hook_pre.timeout_secs')
 
 const { value: hookPostEnabled } = useField<boolean>('hook_post.enabled')
 const { value: hookPostName } = useField<string>('hook_post.name')
 const { value: hookPostCommand } = useField<string>('hook_post.command')
 const { value: hookPostArgs } = useField<string[]>('hook_post.args')
-const { value: hookPostTimeout } = useField<number>('hook_post.timeout_secs')
+const { value: hookPostTimeout, errorMessage: hookPostTimeoutError } = useField<number | string>('hook_post.timeout_secs')
 
 function addHookPreArg() { hookPreArgs.value = [...(hookPreArgs.value ?? []), ''] }
 function removeHookPreArg(idx: number) { hookPreArgs.value = (hookPreArgs.value ?? []).filter((_, i) => i !== idx) }
@@ -795,23 +815,11 @@ function serialiseHook(hook: z.infer<typeof hookFieldSchema>): string {
     name: hook.name ?? '',
     command: hook.command,
     args: hook.args ?? [],
-    timeout_secs: hook.timeout_secs ?? 30,
+    timeout_secs: Number(hook.timeout_secs ?? 30),
   })
 }
 
 const onSubmit = handleSubmit(async (values) => {
-  // Validate that every docker-volume source has at least one volume selected.
-  for (let idx = 0; idx < values.sources.length; idx++) {
-    const s = values.sources[idx]
-    if (s?.type === 'docker-volume') {
-      const sel = selectedVolumes.value[String(idx)]
-      if (!sel || sel.size === 0) {
-        submitError.value = `Source ${idx + 1}: select at least one Docker volume.`
-        return
-      }
-    }
-  }
-
   if (!isEdit.value && !values.use_destination_password) {
     const hasWrongPassword = Object.values(repoCheckByDest.value).some(c => c.status === 'wrong_password')
     if (hasWrongPassword) {
@@ -970,6 +978,7 @@ function onOpenChange(value: boolean) {
             class="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
             No sources added. Click <strong>Add Source</strong> to begin.
           </div>
+          <FieldError v-if="errors.sources">{{ errors.sources }}</FieldError>
 
           <div v-for="(field, idx) in sourceFields" :key="field.key" class="flex flex-col gap-3 rounded-md border p-3">
             <div class="flex items-center justify-between">
@@ -1022,7 +1031,9 @@ function onOpenChange(value: boolean) {
               <Input :id="`source-label-${idx}`" :model-value="(field.value as any).label as string" class="w-full"
                 :disabled="!authStore.isAdmin && (field.value as any).type === 'command'"
                 :placeholder="(field.value as any).type === 'command' ? 'e.g. postgres-dump' : 'e.g. postgres-data'"
+                :class="sourceError(idx, 'label') ? 'border-destructive focus-visible:ring-destructive/30' : ''"
                 @update:model-value="(field.value as any).label = $event" />
+              <FieldError v-if="sourceError(idx, 'label')">{{ sourceError(idx, 'label') }}</FieldError>
             </div>
 
             <!-- Path / Volumes / Command — full width -->
@@ -1110,6 +1121,7 @@ function onOpenChange(value: boolean) {
                 <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
                   class="font-mono w-full" placeholder="pg_dump -U postgres mydb | gzip"
                   :disabled="!authStore.isAdmin"
+                  :class="sourceError(idx, 'path') ? 'border-destructive focus-visible:ring-destructive/30' : ''"
                   @update:model-value="(field.value as any).path = $event" />
                 <p class="text-xs text-muted-foreground">
                   Runs on the agent; its output is streamed directly into the backup — no
@@ -1121,8 +1133,10 @@ function onOpenChange(value: boolean) {
               <template v-else>
                 <Input :id="`source-path-${idx}`" :model-value="(field.value as any).path as string"
                   class="font-mono w-full" placeholder="e.g. /var/lib/data"
+                  :class="sourceError(idx, 'path') ? 'border-destructive focus-visible:ring-destructive/30' : ''"
                   @update:model-value="(field.value as any).path = $event" />
               </template>
+              <FieldError v-if="sourceError(idx, 'path')">{{ sourceError(idx, 'path') }}</FieldError>
             </div>
           </div>
 
@@ -1223,7 +1237,7 @@ function onOpenChange(value: boolean) {
               </div>
             </div>
           </div>
-          <p v-if="orderedDestIdsError" class="text-sm text-destructive">{{ orderedDestIdsError }}</p>
+          <FieldError v-if="orderedDestIdsError">{{ orderedDestIdsError }}</FieldError>
 
           <Separator />
 
@@ -1342,7 +1356,11 @@ function onOpenChange(value: boolean) {
                       </div>
                       <div class="flex flex-col gap-1.5">
                         <Label for="hook-pre-timeout" class="text-sm">Timeout (sec)</Label>
-                        <Input id="hook-pre-timeout" v-model="hookPreTimeout" type="number" min="0" :disabled="!authStore.isAdmin" />
+                        <Input id="hook-pre-timeout" v-model="hookPreTimeout" type="number" min="0"
+                          :max="MAX_HOOK_TIMEOUT_SECS" :disabled="!authStore.isAdmin"
+                          :class="hookPreTimeoutError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <p class="text-xs text-muted-foreground">0 uses the agent default (5 minutes).</p>
+                        <FieldError v-if="hookPreTimeoutError">{{ hookPreTimeoutError }}</FieldError>
                       </div>
                     </div>
                     <div class="flex flex-col gap-1.5">
@@ -1393,7 +1411,11 @@ function onOpenChange(value: boolean) {
                       </div>
                       <div class="flex flex-col gap-1.5">
                         <Label for="hook-post-timeout" class="text-sm">Timeout (sec)</Label>
-                        <Input id="hook-post-timeout" v-model="hookPostTimeout" type="number" min="0" :disabled="!authStore.isAdmin" />
+                        <Input id="hook-post-timeout" v-model="hookPostTimeout" type="number" min="0"
+                          :max="MAX_HOOK_TIMEOUT_SECS" :disabled="!authStore.isAdmin"
+                          :class="hookPostTimeoutError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <p class="text-xs text-muted-foreground">0 uses the agent default (5 minutes).</p>
+                        <FieldError v-if="hookPostTimeoutError">{{ hookPostTimeoutError }}</FieldError>
                       </div>
                     </div>
                     <div class="flex flex-col gap-1.5">

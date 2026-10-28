@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
+import { FieldError } from '@/components/ui/field'
+import { integerInRange } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,11 +19,19 @@ import type { ApiResponse, SnapshotSyncSettings } from '@/types'
 // ---------------------------------------------------------------------------
 
 const loading = ref(false)
-const submitting = ref(false)
 const submitError = ref<string | null>(null)
 const success = ref(false)
 
-const settings = ref<SnapshotSyncSettings>({ interval_hours: 0 })
+// Mirrors maxSnapshotSyncIntervalHours on the server (30 days). An empty
+// field is an error rather than 0, which disables the sync.
+const { handleSubmit, resetForm, isSubmitting } = useForm({
+    validationSchema: toTypedSchema(z.object({
+        interval_hours: integerInRange(0, 720),
+    })),
+    initialValues: { interval_hours: 0 },
+})
+
+const { value: intervalHours, errorMessage: intervalHoursError } = useField<number | string>('interval_hours')
 
 // ---------------------------------------------------------------------------
 // Fetch
@@ -28,7 +41,7 @@ async function fetchSettings() {
     loading.value = true
     try {
         const res = await api<ApiResponse<SnapshotSyncSettings>>('/api/v1/settings/snapshot-sync')
-        settings.value = res.data
+        resetForm({ values: res.data })
     } finally {
         loading.value = false
     }
@@ -40,24 +53,21 @@ onMounted(fetchSettings)
 // Submit
 // ---------------------------------------------------------------------------
 
-async function submit() {
-    submitting.value = true
+const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
 
     try {
         await api('/api/v1/settings/snapshot-sync', {
             method: 'PUT',
-            body: { interval_hours: Number(settings.value.interval_hours) || 0 },
+            body: { interval_hours: values.interval_hours },
         })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save snapshot sync settings')
-    } finally {
-        submitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -83,7 +93,7 @@ async function submit() {
     </template>
 
     <!-- Form -->
-    <form v-else novalidate @submit.prevent="submit">
+    <form v-else novalidate @submit="submit">
         <div class="flex flex-col gap-6">
 
             <!-- Alerts -->
@@ -111,16 +121,16 @@ async function submit() {
                     Destinations with no agent online, or busy with a backup, are retried on the next run.
                     Maximum 720 (30 days); 0 disables the periodic sync.
                 </p>
-                <Input id="interval_hours" type="number" min="0" :max="720" class="max-w-40"
-                    :model-value="settings.interval_hours"
-                    @update:model-value="settings.interval_hours = Number($event)" />
+                <Input id="interval_hours" v-model="intervalHours" type="number" min="0" :max="720"
+                    class="max-w-40" :class="intervalHoursError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                <FieldError v-if="intervalHoursError">{{ intervalHoursError }}</FieldError>
             </div>
 
             <!-- ── Submit ──────────────────────────────────────────────────── -->
             <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="submitting">
-                    <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                    {{ submitting ? 'Saving…' : 'Save Settings' }}
+                <Button type="submit" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
                 </Button>
             </div>
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -357,6 +358,11 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "retention cannot be enabled on an append-only destination")
 		return
 	}
+	if err := validateRetentionKeep(req.RetentionEnabled, req.RetentionLast, req.RetentionHourly, req.RetentionDaily,
+		req.RetentionWeekly, req.RetentionMonthly, req.RetentionYearly); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
 	if req.RetentionSchedule != "" {
 		if err := validateSchedule(req.RetentionSchedule); err != nil {
 			ErrBadRequest(w, err.Error())
@@ -669,6 +675,15 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		dest.RetentionYearly = *req.RetentionYearly
 	}
 	dest.RetentionEnabled = effectiveRetentionEnabled
+	// Checked only when the request changes retention, so a destination saved
+	// before these rules existed can still be edited otherwise.
+	if retentionTouched {
+		if err := validateRetentionKeep(dest.RetentionEnabled, dest.RetentionLast, dest.RetentionHourly, dest.RetentionDaily,
+			dest.RetentionWeekly, dest.RetentionMonthly, dest.RetentionYearly); err != nil {
+			ErrBadRequest(w, err.Error())
+			return
+		}
+	}
 
 	if req.CheckEnabled != nil {
 		dest.CheckEnabled = *req.CheckEnabled
@@ -713,6 +728,28 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched})
 	Ok(w, h.singleDestinationResponse(r.Context(), dest))
+}
+
+// maxRetentionKeep caps each retention keep value. The GUI enforces the same
+// range.
+const maxRetentionKeep = 1000
+
+// validateRetentionKeep validates the keep-last/hourly/daily/weekly/monthly/
+// yearly values of a destination's retention. An enabled retention needs at
+// least one of them above 0: with none, restic forget is run without a rule
+// and removes nothing.
+func validateRetentionKeep(enabled bool, keep ...int) error {
+	anyRule := false
+	for _, k := range keep {
+		if k < 0 || k > maxRetentionKeep {
+			return fmt.Errorf("retention keep values must be between 0 and %d", maxRetentionKeep)
+		}
+		anyRule = anyRule || k > 0
+	}
+	if enabled && !anyRule {
+		return errors.New("retention needs at least one keep value above 0")
+	}
+	return nil
 }
 
 // defaultCheckSubsetPercent is the share of pack data a "subset" integrity

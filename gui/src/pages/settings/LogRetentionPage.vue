@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
+import { FieldError } from '@/components/ui/field'
+import { integerInRange } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,16 +20,25 @@ import type { ApiResponse, LogRetentionSettings } from '@/types'
 // ---------------------------------------------------------------------------
 
 const loading = ref(false)
-const submitting = ref(false)
 const pruning = ref(false)
 const submitError = ref<string | null>(null)
 const success = ref(false)
 const pruneMessage = ref<string | null>(null)
 
-const settings = ref<LogRetentionSettings>({
-    info_days: 0,
-    warn_error_days: 0,
+// Mirrors maxRetentionDays on the server (10 years). An empty field is an
+// error rather than 0, which keeps the lines forever.
+const retentionDays = integerInRange(0, 3650)
+
+const { handleSubmit, resetForm, isSubmitting } = useForm({
+    validationSchema: toTypedSchema(z.object({
+        info_days: retentionDays,
+        warn_error_days: retentionDays,
+    })),
+    initialValues: { info_days: 0, warn_error_days: 0 },
 })
+
+const { value: infoDays, errorMessage: infoDaysError } = useField<number | string>('info_days')
+const { value: warnErrorDays, errorMessage: warnErrorDaysError } = useField<number | string>('warn_error_days')
 
 // ---------------------------------------------------------------------------
 // Fetch
@@ -34,7 +48,7 @@ async function fetchSettings() {
     loading.value = true
     try {
         const res = await api<ApiResponse<LogRetentionSettings>>('/api/v1/settings/logs')
-        settings.value = res.data
+        resetForm({ values: res.data })
     } finally {
         loading.value = false
     }
@@ -46,8 +60,7 @@ onMounted(fetchSettings)
 // Submit
 // ---------------------------------------------------------------------------
 
-async function submit() {
-    submitting.value = true
+const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
 
@@ -55,18 +68,16 @@ async function submit() {
         await api('/api/v1/settings/logs', {
             method: 'PUT',
             body: {
-                info_days: Number(settings.value.info_days) || 0,
-                warn_error_days: Number(settings.value.warn_error_days) || 0,
+                info_days: values.info_days,
+                warn_error_days: values.warn_error_days,
             },
         })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save log retention settings')
-    } finally {
-        submitting.value = false
     }
-}
+})
 
 // ---------------------------------------------------------------------------
 // Manual prune
@@ -116,7 +127,7 @@ async function pruneNow() {
     </template>
 
     <!-- Form -->
-    <form v-else novalidate @submit.prevent="submit">
+    <form v-else novalidate @submit="submit">
         <div class="flex flex-col gap-6">
 
             <!-- Alerts -->
@@ -152,9 +163,9 @@ async function pruneNow() {
                         Deletes <code>info</code> log lines older than this many days. These are the bulk
                         of the logs. 0 keeps them forever.
                     </p>
-                    <Input id="info_days" type="number" min="0" :max="3650" class="max-w-40"
-                        :model-value="settings.info_days"
-                        @update:model-value="settings.info_days = Number($event)" />
+                    <Input id="info_days" v-model="infoDays" type="number" min="0" :max="3650"
+                        class="max-w-40" :class="infoDaysError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                    <FieldError v-if="infoDaysError">{{ infoDaysError }}</FieldError>
                 </div>
 
                 <div class="flex flex-col gap-2 rounded-lg border px-4 py-3">
@@ -163,17 +174,17 @@ async function pruneNow() {
                         Deletes <code>warn</code> and <code>error</code> log lines older than this many days.
                         Leave at 0 to keep them forever (recommended — they are few and the most useful).
                     </p>
-                    <Input id="warn_error_days" type="number" min="0" :max="3650" class="max-w-40"
-                        :model-value="settings.warn_error_days"
-                        @update:model-value="settings.warn_error_days = Number($event)" />
+                    <Input id="warn_error_days" v-model="warnErrorDays" type="number" min="0" :max="3650"
+                        class="max-w-40" :class="warnErrorDaysError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                    <FieldError v-if="warnErrorDaysError">{{ warnErrorDaysError }}</FieldError>
                 </div>
             </div>
 
             <!-- ── Submit ──────────────────────────────────────────────────── -->
             <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="submitting">
-                    <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                    {{ submitting ? 'Saving…' : 'Save Settings' }}
+                <Button type="submit" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
                 </Button>
             </div>
 

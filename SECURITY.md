@@ -103,7 +103,17 @@ Arkeep uses two tokens per session:
 | Token | TTL | Storage | Revocation |
 |-------|-----|---------|------------|
 | Access token (JWT) | 15 minutes | Browser memory only | Immediate via in-memory denylist |
-| Refresh token | 7 days | `httpOnly` cookie | Immediate via database deletion |
+| Refresh token | 7 days, rotated on use | `httpOnly` cookie | Immediate via database deletion |
+
+**OIDC sessions** also have an absolute lifetime, set per provider (`session_max_hours`,
+1 to 168 hours, 12 by default). It is stored on the refresh token, kept on every
+rotation and carried through the two-factor step, so a session in use still ends and
+the user must sign in at the identity provider again, where its allowed groups are
+checked again. A login refused because the user is in none of the provider's allowed
+groups (or the groups claim is missing) also revokes every refresh token of the account
+already linked to that identity. A user removed from a group at the provider therefore
+keeps access until their current session ends; to cut it at once, deactivate the user in
+Arkeep as well. See [ADR 0012](docs/adr/0012-oidc-group-based-access-and-absolute-session-lifetime.md).
 
 **On logout**, both tokens are revoked simultaneously: the refresh token is deleted from
 the database and the access token's JTI is added to an in-memory denylist. Any

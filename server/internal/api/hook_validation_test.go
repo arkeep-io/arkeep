@@ -143,3 +143,28 @@ func TestValidateHookCommand(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateHookTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		hook    string
+		wantErr bool
+	}{
+		{"no hook", "", false},
+		{"plain command", "pg_dump mydb", false},
+		{"no timeout", `{"command":"echo"}`, false},
+		{"agent default", `{"command":"echo","timeout_secs":0}`, false},
+		{"upper bound", `{"command":"echo","timeout_secs":86400}`, false},
+		{"above the bound", `{"command":"echo","timeout_secs":86401}`, true},
+		{"negative", `{"command":"echo","timeout_secs":-1}`, true},
+		{"not a whole number", `{"command":"echo","timeout_secs":1.5}`, true},
+		{"not a number", `{"command":"echo","timeout_secs":"30"}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateHookTimeout(tt.hook); (err != nil) != tt.wantErr {
+				t.Errorf("validateHookTimeout(%q) error = %v, wantErr %v", tt.hook, err, tt.wantErr)
+			}
+		})
+	}
+}

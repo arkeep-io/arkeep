@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
+import { integerInRange } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,84 +21,88 @@ import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, SMTPSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
-// Form state
+// Form
 // ---------------------------------------------------------------------------
 
 const loading = ref(false)
 const smtpExists = ref(false)
-const submitting = ref(false)
 const submitError = ref<string | null>(null)
 const success = ref(false)
 
-// Connection
-const smtpHost = ref('')
-const smtpPort = ref<number>(587)
-const smtpTLS = ref(false)
-
-// Auth
-const smtpAuthEnabled = ref(false)
-const smtpUsername = ref('')
-const smtpPassword = ref('')
-
-// From / recipients
-const smtpFrom = ref('')
-const smtpFromName = ref('')
-const smtpRecipients = ref<string[]>([])
-const recipientInput = ref('')
-const recipientError = ref('')
-
-const errors = ref<Record<string, string>>({})
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
-const schema = computed(() =>
+const schema = toTypedSchema(
     z.object({
         host: z.string().min(1, 'Host is required'),
-        port: z
-            .number()
-            .int()
-            .min(1, 'Port must be between 1 and 65535')
-            .max(65535, 'Port must be between 1 and 65535'),
-        from: z.string().email('Must be a valid email address'),
-    })
+        port: integerInRange(1, 65535),
+        tls: z.boolean(),
+        auth_enabled: z.boolean(),
+        username: z.string(),
+        password: z.string(),
+        from: z.email('Must be a valid email address'),
+        from_name: z.string(),
+        recipients: z.array(z.string()),
+        // The address being typed in the recipients input: checked when it is
+        // added to the list, not on submit.
+        recipient_input: z.string(),
+    }),
 )
 
-function validate(): boolean {
-    errors.value = {}
-    const result = schema.value.safeParse({
-        host: smtpHost.value,
-        port: smtpPort.value,
-        from: smtpFrom.value,
-    })
-    if (!result.success) {
-        for (const issue of result.error.issues) {
-            errors.value[String(issue.path[0])] = issue.message
-        }
-        return false
+function defaultValues() {
+    return {
+        host: '',
+        port: 587,
+        tls: false,
+        auth_enabled: false,
+        username: '',
+        password: '',
+        from: '',
+        from_name: '',
+        recipients: [] as string[],
+        recipient_input: '',
     }
-    return true
 }
+
+const { handleSubmit, resetForm, isSubmitting } = useForm({
+    validationSchema: schema,
+    initialValues: defaultValues(),
+})
+
+// Connection
+const { value: smtpHost, errorMessage: hostError } = useField<string>('host')
+const { value: smtpPort, errorMessage: portError } = useField<number | string>('port')
+const { value: smtpTLS } = useField<boolean>('tls')
+
+// Auth
+const { value: smtpAuthEnabled } = useField<boolean>('auth_enabled')
+const { value: smtpUsername } = useField<string>('username')
+const { value: smtpPassword } = useField<string>('password')
+
+// From / recipients
+const { value: smtpFrom, errorMessage: fromError } = useField<string>('from')
+const { value: smtpFromName } = useField<string>('from_name')
+const { value: smtpRecipients } = useField<string[]>('recipients')
+const {
+    value: recipientInput,
+    errorMessage: recipientError,
+    setErrors: setRecipientError,
+} = useField<string>('recipient_input', undefined, { validateOnValueUpdate: false })
 
 // ---------------------------------------------------------------------------
 // Recipients
 // ---------------------------------------------------------------------------
 
 function addRecipient() {
-    recipientError.value = ''
+    setRecipientError([])
     const email = recipientInput.value.trim()
     if (!email) return
-    const parsed = z.string().email().safeParse(email)
-    if (!parsed.success) {
-        recipientError.value = 'Invalid email address'
+    if (!z.email().safeParse(email).success) {
+        setRecipientError('Invalid email address')
         return
     }
     if (smtpRecipients.value.includes(email)) {
-        recipientError.value = 'Already in the list'
+        setRecipientError('Already in the list')
         return
     }
-    smtpRecipients.value.push(email)
+    smtpRecipients.value = [...smtpRecipients.value, email]
     recipientInput.value = ''
 }
 
@@ -113,15 +120,19 @@ async function fetchSMTP() {
         const res = await api<ApiResponse<SMTPSettings>>('/api/v1/settings/smtp')
         const s = res.data
         smtpExists.value = true
-        smtpHost.value = s.host ?? ''
-        smtpPort.value = s.port ?? 587
-        smtpTLS.value = s.tls ?? false
-        smtpUsername.value = s.username ?? ''
-        smtpPassword.value = ''
-        smtpAuthEnabled.value = !!s.username
-        smtpFrom.value = s.from ?? ''
-        smtpFromName.value = s.from_name ?? ''
-        smtpRecipients.value = s.recipients ?? []
+        resetForm({
+            values: {
+                ...defaultValues(),
+                host: s.host ?? '',
+                port: s.port ?? 587,
+                tls: s.tls ?? false,
+                auth_enabled: !!s.username,
+                username: s.username ?? '',
+                from: s.from ?? '',
+                from_name: s.from_name ?? '',
+                recipients: s.recipients ?? [],
+            },
+        })
     } catch (e: any) {
         if (e?.status === 404 || e?.response?.status === 404) {
             smtpExists.value = false
@@ -137,10 +148,7 @@ onMounted(fetchSMTP)
 // Submit
 // ---------------------------------------------------------------------------
 
-async function submit() {
-    if (!validate()) return
-
-    submitting.value = true
+const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
 
@@ -148,14 +156,14 @@ async function submit() {
         await api('/api/v1/settings/smtp', {
             method: 'PUT',
             body: {
-                host: smtpHost.value,
-                port: smtpPort.value,
-                tls: smtpTLS.value,
-                username: smtpAuthEnabled.value ? smtpUsername.value : '',
-                password: smtpAuthEnabled.value ? smtpPassword.value : '',
-                from: smtpFrom.value,
-                from_name: smtpFromName.value,
-                recipients: smtpRecipients.value,
+                host: values.host,
+                port: values.port,
+                tls: values.tls,
+                username: values.auth_enabled ? values.username : '',
+                password: values.auth_enabled ? values.password : '',
+                from: values.from,
+                from_name: values.from_name,
+                recipients: values.recipients,
             },
         })
         smtpExists.value = true
@@ -164,10 +172,8 @@ async function submit() {
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save SMTP settings')
-    } finally {
-        submitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -198,7 +204,7 @@ async function submit() {
     </template>
 
     <!-- Form -->
-    <form v-else novalidate @submit.prevent="submit">
+    <form v-else novalidate @submit="submit">
         <FieldGroup class="flex flex-col gap-6">
 
             <!-- Alerts -->
@@ -226,14 +232,14 @@ async function submit() {
                     <Field class="col-span-2">
                         <FieldLabel for="smtp-host">Host</FieldLabel>
                         <Input id="smtp-host" v-model="smtpHost" placeholder="smtp.example.com" autocomplete="off"
-                            :class="errors.host ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="errors.host">{{ errors.host }}</FieldError>
+                            :class="hostError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="hostError">{{ hostError }}</FieldError>
                     </Field>
                     <Field>
                         <FieldLabel for="smtp-port">Port</FieldLabel>
-                        <Input id="smtp-port" v-model.number="smtpPort" type="number" placeholder="587"
-                            :class="errors.port ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="errors.port">{{ errors.port }}</FieldError>
+                        <Input id="smtp-port" v-model="smtpPort" type="number" placeholder="587"
+                            :class="portError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="portError">{{ portError }}</FieldError>
                     </Field>
                 </div>
 
@@ -288,9 +294,9 @@ async function submit() {
             <Field>
                 <FieldLabel for="smtp-from">From Address</FieldLabel>
                 <Input id="smtp-from" v-model="smtpFrom" placeholder="arkeep@example.com" autocomplete="off"
-                    :class="errors.from ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                    :class="fromError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                 <p class="text-xs text-muted-foreground">The sender address shown in notification emails.</p>
-                <FieldError v-if="errors.from">{{ errors.from }}</FieldError>
+                <FieldError v-if="fromError">{{ fromError }}</FieldError>
             </Field>
 
             <!-- ── From name ───────────────────────────────────────────────── -->
@@ -334,7 +340,7 @@ async function submit() {
                             placeholder="admin@company.com" autocomplete="off"
                             :class="recipientError ? 'border-destructive focus-visible:ring-destructive/30' : ''"
                             @keydown.enter.prevent="addRecipient" />
-                        <p v-if="recipientError" class="mt-1 text-xs text-destructive">{{ recipientError }}</p>
+                        <FieldError v-if="recipientError" class="mt-1">{{ recipientError }}</FieldError>
                     </div>
                     <Button type="button" variant="outline" @click="addRecipient">Add</Button>
                 </div>
@@ -342,9 +348,9 @@ async function submit() {
 
             <!-- ── Submit ──────────────────────────────────────────────────── -->
             <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="submitting">
-                    <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                    {{ submitting ? 'Saving…' : 'Save Settings' }}
+                <Button type="submit" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
                 </Button>
             </div>
 

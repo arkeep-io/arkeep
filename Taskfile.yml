@@ -91,7 +91,7 @@ tasks:
   # ─── Test ───────────────────────────────────────────────────────────────────
   test:
     desc: Run all tests
-    deps: [test:shared, test:server, test:agent]
+    deps: [test:shared, test:server, test:agent, test:gui]
 
   test:shared:
     desc: Run shared tests
@@ -107,6 +107,11 @@ tasks:
     desc: Run agent tests
     dir: agent
     cmd: go test -v -count=1 ./...
+
+  test:gui:
+    desc: Run GUI tests
+    dir: gui
+    cmd: pnpm test
 
   # ─── Proto ──────────────────────────────────────────────────────────────────
   proto:

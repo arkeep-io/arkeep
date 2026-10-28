@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
+import { passwordSchema } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,38 +35,33 @@ const userInitials = computed(() =>
 const isOIDC = computed(() => auth.user?.is_oidc ?? false)
 
 // ---------------------------------------------------------------------------
-// Profile form state
+// Profile form
 // ---------------------------------------------------------------------------
 
-const profileSubmitting = ref(false)
-const profileError = ref<string | null>(null)
-const profileSuccess = ref(false)
-const profileErrors = ref<Record<string, string>>({})
-
-const fieldDisplayName = ref(auth.user?.display_name ?? '')
-
-const profileSchema = z.object({
-    display_name: z.string().min(1, 'Display name is required'),
+// The page holds two forms: each field names the form it belongs to, since
+// useField would otherwise attach to the last form created in the component.
+const profileForm = useForm({
+    validationSchema: toTypedSchema(z.object({
+        display_name: z.string().min(1, 'Display name is required'),
+    })),
+    initialValues: { display_name: auth.user?.display_name ?? '' },
 })
 
-async function submitProfile() {
-    profileErrors.value = {}
-    const result = profileSchema.safeParse({ display_name: fieldDisplayName.value })
-    if (!result.success) {
-        for (const issue of result.error.issues) {
-            profileErrors.value[String(issue.path[0])] = issue.message
-        }
-        return
-    }
+const { value: fieldDisplayName, errorMessage: displayNameError } =
+    useField<string>('display_name', undefined, { form: profileForm })
 
-    profileSubmitting.value = true
+const { isSubmitting: profileSubmitting } = profileForm
+const profileError = ref<string | null>(null)
+const profileSuccess = ref(false)
+
+const submitProfile = profileForm.handleSubmit(async (values) => {
     profileError.value = null
     profileSuccess.value = false
 
     try {
         const res = await api<ApiResponse<User>>('/api/v1/users/me', {
             method: 'PATCH',
-            body: { display_name: fieldDisplayName.value },
+            body: { display_name: values.display_name },
         })
         // Update the store so the sidebar and NavUser reflect the change immediately.
         if (auth.user) auth.user.display_name = res.data.display_name
@@ -71,48 +69,37 @@ async function submitProfile() {
         setTimeout(() => { profileSuccess.value = false }, 3000)
     } catch (e: any) {
         profileError.value = apiErrorMessage(e, 'Failed to update profile.')
-    } finally {
-        profileSubmitting.value = false
     }
-}
-
-// ---------------------------------------------------------------------------
-// Password form state (local accounts only)
-// ---------------------------------------------------------------------------
-
-const passwordSubmitting = ref(false)
-const passwordError = ref<string | null>(null)
-const passwordSuccess = ref(false)
-const passwordErrors = ref<Record<string, string>>({})
-
-const fieldCurrentPassword = ref('')
-const fieldNewPassword = ref('')
-const fieldConfirmPassword = ref('')
-
-const passwordSchema = z.object({
-    current_password: z.string().min(1, 'Current password is required'),
-    new_password: z.string().min(8, 'New password must be at least 8 characters'),
-    confirm_password: z.string(),
-}).refine((d) => d.new_password === d.confirm_password, {
-    message: 'Passwords do not match',
-    path: ['confirm_password'],
 })
 
-async function submitPassword() {
-    passwordErrors.value = {}
-    const result = passwordSchema.safeParse({
-        current_password: fieldCurrentPassword.value,
-        new_password: fieldNewPassword.value,
-        confirm_password: fieldConfirmPassword.value,
-    })
-    if (!result.success) {
-        for (const issue of result.error.issues) {
-            passwordErrors.value[String(issue.path[0])] = issue.message
-        }
-        return
-    }
+// ---------------------------------------------------------------------------
+// Password form (local accounts only)
+// ---------------------------------------------------------------------------
 
-    passwordSubmitting.value = true
+const passwordForm = useForm({
+    validationSchema: toTypedSchema(z.object({
+        current_password: z.string().min(1, 'Current password is required'),
+        new_password: passwordSchema,
+        confirm_password: z.string(),
+    }).refine((d) => d.new_password === d.confirm_password, {
+        message: 'Passwords do not match',
+        path: ['confirm_password'],
+    })),
+    initialValues: { current_password: '', new_password: '', confirm_password: '' },
+})
+
+const { value: fieldCurrentPassword, errorMessage: currentPasswordError } =
+    useField<string>('current_password', undefined, { form: passwordForm })
+const { value: fieldNewPassword, errorMessage: newPasswordError } =
+    useField<string>('new_password', undefined, { form: passwordForm })
+const { value: fieldConfirmPassword, errorMessage: confirmPasswordError } =
+    useField<string>('confirm_password', undefined, { form: passwordForm })
+
+const { isSubmitting: passwordSubmitting } = passwordForm
+const passwordError = ref<string | null>(null)
+const passwordSuccess = ref(false)
+
+const submitPassword = passwordForm.handleSubmit(async (values) => {
     passwordError.value = null
     passwordSuccess.value = false
 
@@ -121,19 +108,15 @@ async function submitPassword() {
         // session once the new one is set.
         await api('/api/v1/users/me', {
             method: 'PATCH',
-            body: { password: fieldNewPassword.value, current_password: fieldCurrentPassword.value },
+            body: { password: values.new_password, current_password: values.current_password },
         })
-        fieldCurrentPassword.value = ''
-        fieldNewPassword.value = ''
-        fieldConfirmPassword.value = ''
+        passwordForm.resetForm()
         passwordSuccess.value = true
         setTimeout(() => { passwordSuccess.value = false }, 3000)
     } catch (e: any) {
         passwordError.value = apiErrorMessage(e, 'Failed to update password.')
-    } finally {
-        passwordSubmitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -165,7 +148,7 @@ async function submitPassword() {
                 </p>
             </div>
 
-            <form novalidate @submit.prevent="submitProfile">
+            <form novalidate @submit="submitProfile">
                 <FieldGroup class="flex flex-col gap-4">
 
                     <Transition enter-active-class="transition-all duration-200"
@@ -189,8 +172,8 @@ async function submitPassword() {
                     <Field>
                         <FieldLabel for="display-name">Display Name</FieldLabel>
                         <Input id="display-name" v-model="fieldDisplayName" placeholder="Jane Doe" autocomplete="off"
-                            :class="profileErrors.display_name ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="profileErrors.display_name">{{ profileErrors.display_name }}</FieldError>
+                            :class="displayNameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="displayNameError">{{ displayNameError }}</FieldError>
                     </Field>
 
                     <div class="flex justify-end">
@@ -224,7 +207,7 @@ async function submitPassword() {
                 Password is managed by your identity provider.
             </div>
 
-            <form v-else novalidate @submit.prevent="submitPassword">
+            <form v-else novalidate @submit="submitPassword">
                 <FieldGroup class="flex flex-col gap-4">
 
                     <Transition enter-active-class="transition-all duration-200"
@@ -249,9 +232,8 @@ async function submitPassword() {
                         <FieldLabel for="current-password">Current Password</FieldLabel>
                         <Input id="current-password" v-model="fieldCurrentPassword" type="password"
                             autocomplete="current-password"
-                            :class="passwordErrors.current_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="passwordErrors.current_password">{{ passwordErrors.current_password
-                            }}</FieldError>
+                            :class="currentPasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="currentPasswordError">{{ currentPasswordError }}</FieldError>
                     </Field>
 
                     <div class="grid grid-cols-2 gap-3">
@@ -259,16 +241,15 @@ async function submitPassword() {
                             <FieldLabel for="new-password">New Password</FieldLabel>
                             <Input id="new-password" v-model="fieldNewPassword" type="password"
                                 autocomplete="new-password"
-                                :class="passwordErrors.new_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="passwordErrors.new_password">{{ passwordErrors.new_password }}</FieldError>
+                                :class="newPasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="newPasswordError">{{ newPasswordError }}</FieldError>
                         </Field>
                         <Field>
                             <FieldLabel for="confirm-password">Confirm Password</FieldLabel>
                             <Input id="confirm-password" v-model="fieldConfirmPassword" type="password"
                                 autocomplete="new-password"
-                                :class="passwordErrors.confirm_password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="passwordErrors.confirm_password">{{ passwordErrors.confirm_password
-                                }}</FieldError>
+                                :class="confirmPasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="confirmPasswordError">{{ confirmPasswordError }}</FieldError>
                         </Field>
                     </div>
 

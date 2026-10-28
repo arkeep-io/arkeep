@@ -36,7 +36,10 @@ const schema = toTypedSchema(
     }),
 )
 
-const { handleSubmit, isSubmitting } = useForm({ validationSchema: schema })
+const { handleSubmit, isSubmitting } = useForm({
+    validationSchema: schema,
+    initialValues: { email: '' },
+})
 const { value: emailValue, errorMessage: emailError } = useField<string>('email')
 
 // ─── State ────────────────────────────────────────────────────────────────────

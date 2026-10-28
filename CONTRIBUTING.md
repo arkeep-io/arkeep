@@ -77,6 +77,20 @@ task build:server   # builds GUI first, then compiles Go with GUI embedded
 - `api<T>()` is the HTTP client (`services/api.ts`) — use it for all API calls.
 - Run `task lint` before submitting.
 
+#### Forms
+
+- Every form is validated with vee-validate: `useForm({ validationSchema: toTypedSchema(schema), initialValues })`
+  with a zod schema, one `useField()` per field, and `handleSubmit` on submit.
+- Declare `initialValues` for every field, so an untouched field fails with its own message rather
+  than zod's generic type error.
+- Show a field's error under it with `FieldError` and a red border on the input. Keep the `Alert`
+  at the top of the form for errors returned by the server.
+- When a component holds several forms, bind each field to its form: `useField(name, undefined, { form })`.
+- Shared rules live in `src/lib/validation.ts` and mirror a server rule — the server stays the
+  authority, so change both together. Number inputs use `integerInRange(min, max)`: an empty field
+  is an error, and `0` must be typed when it disables a feature.
+- Every form has a component test (see [Testing](#testing)).
+
 ### Commits
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format:
@@ -168,8 +182,12 @@ task test:gui      # run GUI tests only
 
 - **Go:** table-driven tests with the standard `testing` package. Place test files next to the
   code they test (`foo_test.go` alongside `foo.go`).
-- **GUI:** Vitest for unit tests. Place test files in `__tests__/` next to the component or
-  composable being tested.
+- **GUI:** Vitest with Vue Test Utils and jsdom. Place test files next to the code they test
+  (`Foo.test.ts` alongside `Foo.vue`). Mount pages and components with `mountPage` from
+  `src/test/mount.ts`, submit with `submitForm`, and replace the HTTP client with
+  `vi.mock('@/services/api', …)` — see an existing form test. A `beforeEach` callback must not
+  return a value: Vitest runs a returned function as teardown, so write
+  `beforeEach(() => { vi.mocked(api).mockReset() })`, with braces.
 - Tests must pass on CI before a PR can be merged. The CI matrix runs tests on `ubuntu-26.04`.
 
 ---

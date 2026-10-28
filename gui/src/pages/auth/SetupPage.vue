@@ -13,6 +13,7 @@ import { useRouter } from 'vue-router'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
+import { passwordSchema } from '@/lib/validation'
 import { useSetupStore } from '@/stores/setup'
 import { useAuthStore } from '@/stores/auth'
 import { api, apiErrorMessage } from '@/services/api'
@@ -35,7 +36,7 @@ const schema = toTypedSchema(
     z.object({
         name: z.string().min(1, 'Name is required'),
         email: z.email('Enter a valid email address'),
-        password: z.string().min(8, 'Password must be at least 8 characters'),
+        password: passwordSchema,
         confirmPassword: z.string().min(1, 'Please confirm your password'),
     }).refine((data) => data.password === data.confirmPassword, {
         message: 'Passwords do not match',
@@ -43,7 +44,12 @@ const schema = toTypedSchema(
     }),
 )
 
-const { handleSubmit, isSubmitting } = useForm({ validationSchema: schema })
+// Fields start empty rather than undefined, so an untouched field fails with
+// its own message instead of zod's generic type error.
+const { handleSubmit, isSubmitting } = useForm({
+    validationSchema: schema,
+    initialValues: { name: '', email: '', password: '', confirmPassword: '' },
+})
 
 const { value: nameValue, errorMessage: nameError } = useField<string>('name')
 const { value: emailValue, errorMessage: emailError } = useField<string>('email')

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
+import { isHttpURL } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,72 +20,91 @@ import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, NotificationSettings, WebhookSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
-// State
+// Form
 // ---------------------------------------------------------------------------
 
 const loading = ref(false)
-const submitting = ref(false)
 const submitError = ref<string | null>(null)
 const success = ref(false)
-
-const settings = ref<NotificationSettings>({
-    job_success: true,
-    job_failure: true,
-    agent_offline: true,
-    agent_online: false,
-})
 
 // Webhook — see the Notifications guide in the docs (arkeep.io/docs/guides/notifications/),
 // which already documents this as living on this page.
 const webhookExists = ref(false)
-const webhookEnabled = ref(false)
-const webhookUrl = ref('')
-const webhookSecret = ref('')
-const webhookUrlError = ref('')
 
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
+// The webhook URL is checked only when the webhook is enabled: a disabled
+// webhook is saved without one.
+const schema = toTypedSchema(
+    z.object({
+        job_success: z.boolean(),
+        job_failure: z.boolean(),
+        agent_offline: z.boolean(),
+        agent_online: z.boolean(),
+        webhook_enabled: z.boolean(),
+        webhook_url: z.string(),
+        webhook_secret: z.string(),
+    }).superRefine((data, ctx) => {
+        if (data.webhook_enabled && !isHttpURL(data.webhook_url.trim())) {
+            ctx.addIssue({ code: 'custom', path: ['webhook_url'], message: 'Must be an http(s) URL' })
+        }
+    }),
+)
 
-function validate(): boolean {
-    webhookUrlError.value = ''
-    if (!webhookEnabled.value) return true
-    const result = z.string().url().safeParse(webhookUrl.value)
-    if (!result.success) {
-        webhookUrlError.value = 'Must be a valid URL'
-        return false
-    }
-    return true
-}
+const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
+    validationSchema: schema,
+    initialValues: {
+        job_success: true,
+        job_failure: true,
+        agent_offline: true,
+        agent_online: false,
+        webhook_enabled: false,
+        webhook_url: '',
+        webhook_secret: '',
+    },
+})
+
+const { value: jobSuccess } = useField<boolean>('job_success')
+const { value: jobFailure } = useField<boolean>('job_failure')
+const { value: agentOffline } = useField<boolean>('agent_offline')
+const { value: agentOnline } = useField<boolean>('agent_online')
+const { value: webhookEnabled } = useField<boolean>('webhook_enabled')
+const { value: webhookUrl, errorMessage: webhookUrlError } = useField<string>('webhook_url')
+const { value: webhookSecret } = useField<string>('webhook_secret')
 
 // ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------
 
-async function fetchSettings() {
+async function fetchSettings(): Promise<NotificationSettings> {
     const res = await api<ApiResponse<NotificationSettings>>('/api/v1/settings/notifications')
-    settings.value = res.data
+    return res.data
 }
 
-async function fetchWebhook() {
+// fetchWebhook returns the stored webhook, or null when none is configured.
+async function fetchWebhook(): Promise<WebhookSettings | null> {
     try {
         const res = await api<ApiResponse<WebhookSettings>>('/api/v1/settings/webhook')
-        const s = res.data
         webhookExists.value = true
-        webhookUrl.value = s.url ?? ''
-        webhookSecret.value = ''
-        webhookEnabled.value = s.enabled ?? false
+        return res.data
     } catch (e: any) {
         if (e?.status === 404 || e?.response?.status === 404) {
             webhookExists.value = false
         }
+        return null
     }
 }
 
 async function fetchAll() {
     loading.value = true
     try {
-        await Promise.all([fetchSettings(), fetchWebhook()])
+        const [events, webhook] = await Promise.all([fetchSettings(), fetchWebhook()])
+        resetForm({
+            values: {
+                ...events,
+                webhook_enabled: webhook?.enabled ?? false,
+                webhook_url: webhook?.url ?? '',
+                webhook_secret: '',
+            },
+        })
     } finally {
         loading.value = false
     }
@@ -94,10 +116,7 @@ onMounted(fetchAll)
 // Submit
 // ---------------------------------------------------------------------------
 
-async function submit() {
-    if (!validate()) return
-
-    submitting.value = true
+const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
 
@@ -105,27 +124,30 @@ async function submit() {
         await Promise.all([
             api('/api/v1/settings/notifications', {
                 method: 'PUT',
-                body: settings.value,
+                body: {
+                    job_success: values.job_success,
+                    job_failure: values.job_failure,
+                    agent_offline: values.agent_offline,
+                    agent_online: values.agent_online,
+                },
             }),
             api('/api/v1/settings/webhook', {
                 method: 'PUT',
                 body: {
-                    url: webhookEnabled.value ? webhookUrl.value : '',
-                    secret: webhookSecret.value,
-                    enabled: webhookEnabled.value,
+                    url: values.webhook_enabled ? values.webhook_url.trim() : '',
+                    secret: values.webhook_secret,
+                    enabled: values.webhook_enabled,
                 },
             }),
         ])
         webhookExists.value = true
-        webhookSecret.value = ''
+        setValues({ webhook_secret: '' }, false)
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save notification settings')
-    } finally {
-        submitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -155,7 +177,7 @@ async function submit() {
     </template>
 
     <!-- Form -->
-    <form v-else novalidate @submit.prevent="submit">
+    <form v-else novalidate @submit="submit">
         <div class="flex flex-col gap-6">
 
             <!-- Alerts -->
@@ -186,7 +208,7 @@ async function submit() {
                             Send a notification when a backup job fails.
                         </p>
                     </div>
-                    <Switch :model-value="settings.job_failure" @update:model-value="settings.job_failure = $event" />
+                    <Switch :model-value="jobFailure" @update:model-value="jobFailure = $event" />
                 </div>
 
                 <div class="flex items-center justify-between rounded-lg border px-4 py-3">
@@ -196,7 +218,7 @@ async function submit() {
                             Send a notification when a backup job completes successfully.
                         </p>
                     </div>
-                    <Switch :model-value="settings.job_success" @update:model-value="settings.job_success = $event" />
+                    <Switch :model-value="jobSuccess" @update:model-value="jobSuccess = $event" />
                 </div>
             </div>
 
@@ -213,8 +235,8 @@ async function submit() {
                             Send a notification when an agent stops responding.
                         </p>
                     </div>
-                    <Switch :model-value="settings.agent_offline"
-                        @update:model-value="settings.agent_offline = $event" />
+                    <Switch :model-value="agentOffline"
+                        @update:model-value="agentOffline = $event" />
                 </div>
 
                 <div class="flex items-center justify-between rounded-lg border px-4 py-3">
@@ -224,8 +246,8 @@ async function submit() {
                             Send a notification when an agent reconnects. Off by default.
                         </p>
                     </div>
-                    <Switch :model-value="settings.agent_online"
-                        @update:model-value="settings.agent_online = $event" />
+                    <Switch :model-value="agentOnline"
+                        @update:model-value="agentOnline = $event" />
                 </div>
             </div>
 
@@ -272,9 +294,9 @@ async function submit() {
 
             <!-- ── Submit ──────────────────────────────────────────────────── -->
             <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="submitting">
-                    <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                    {{ submitting ? 'Saving…' : 'Save Settings' }}
+                <Button type="submit" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
                 </Button>
             </div>
 

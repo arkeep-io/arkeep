@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
+import { FieldError } from '@/components/ui/field'
+import { integerInRange } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,11 +22,18 @@ const MAX_TIMEOUT_MINUTES = 30 * 24 * 60
 // ---------------------------------------------------------------------------
 
 const loading = ref(false)
-const submitting = ref(false)
 const submitError = ref<string | null>(null)
 const success = ref(false)
 
-const settings = ref<JobQueueSettings>({ timeout_minutes: 1440 })
+// An empty field is an error rather than 0, which lets jobs wait forever.
+const { handleSubmit, resetForm, isSubmitting } = useForm({
+    validationSchema: toTypedSchema(z.object({
+        timeout_minutes: integerInRange(0, MAX_TIMEOUT_MINUTES),
+    })),
+    initialValues: { timeout_minutes: 1440 },
+})
+
+const { value: timeoutMinutes, errorMessage: timeoutMinutesError } = useField<number | string>('timeout_minutes')
 
 // ---------------------------------------------------------------------------
 // Fetch
@@ -31,7 +43,7 @@ async function fetchSettings() {
     loading.value = true
     try {
         const res = await api<ApiResponse<JobQueueSettings>>('/api/v1/settings/jobs-queue')
-        settings.value = res.data
+        resetForm({ values: res.data })
     } finally {
         loading.value = false
     }
@@ -43,24 +55,21 @@ onMounted(fetchSettings)
 // Submit
 // ---------------------------------------------------------------------------
 
-async function submit() {
-    submitting.value = true
+const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
 
     try {
         await api('/api/v1/settings/jobs-queue', {
             method: 'PUT',
-            body: { timeout_minutes: Number(settings.value.timeout_minutes) || 0 },
+            body: { timeout_minutes: values.timeout_minutes },
         })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save job queue settings')
-    } finally {
-        submitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -85,7 +94,7 @@ async function submit() {
     </template>
 
     <!-- Form -->
-    <form v-else novalidate @submit.prevent="submit">
+    <form v-else novalidate @submit="submit">
         <div class="flex flex-col gap-6">
 
             <!-- Alerts -->
@@ -113,16 +122,16 @@ async function submit() {
                     pending because its agent is offline or never picked it up — is marked as failed and
                     reported like any other failed backup. 1440 is 24 hours. 0 lets jobs wait indefinitely.
                 </p>
-                <Input id="timeout_minutes" type="number" min="0" :max="MAX_TIMEOUT_MINUTES" class="max-w-40"
-                    :model-value="settings.timeout_minutes"
-                    @update:model-value="settings.timeout_minutes = Number($event)" />
+                <Input id="timeout_minutes" v-model="timeoutMinutes" type="number" min="0" :max="MAX_TIMEOUT_MINUTES"
+                    class="max-w-40" :class="timeoutMinutesError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                <FieldError v-if="timeoutMinutesError">{{ timeoutMinutesError }}</FieldError>
             </div>
 
             <!-- ── Submit ──────────────────────────────────────────────────── -->
             <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="submitting">
-                    <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                    {{ submitting ? 'Saving…' : 'Save Settings' }}
+                <Button type="submit" :disabled="isSubmitting">
+                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
                 </Button>
             </div>
 

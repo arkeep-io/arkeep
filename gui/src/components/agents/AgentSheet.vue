@@ -52,6 +52,7 @@ const schema = toTypedSchema(
 
 const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
     validationSchema: schema,
+    initialValues: { name: '' },
 })
 
 const { value: name, errorMessage: nameError } = useField<string>('name')

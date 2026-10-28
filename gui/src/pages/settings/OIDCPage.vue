@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
+import { integerInRange } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -69,149 +72,113 @@ const sheetOpen = ref(false)
 const sheetMode = ref<'create' | 'edit'>('create')
 const editingProvider = ref<OIDCProvider | null>(null)
 
-const formName = ref('')
-const formIssuer = ref('')
-const formClientId = ref('')
-const formClientSecret = ref('')
-const formScopes = ref('openid email profile')
-const formEnabled = ref(true)
-const formGroupsClaim = ref('')
-const formAllowedGroups = ref('')
-const formAdminGroups = ref('')
-const formSessionMaxHours = ref<string | number>(12)
-const formErrors = ref<Record<string, string>>({})
-const formSubmitting = ref(false)
 const formError = ref<string | null>(null)
-
-// Group restrictions and session cap, validated as the server does.
-const accessShape = {
-    groups_claim: z.string(),
-    allowed_groups: z.string(),
-    admin_groups: z.string(),
-    session_max_hours: z.coerce.number()
-        .int('Must be a whole number of hours')
-        .min(1, 'Must be between 1 and 168 hours')
-        .max(168, 'Must be between 1 and 168 hours'),
-}
 
 const hasGroups = (list: string) => list.split(',').some((g) => g.trim() !== '')
 
-function requireGroupsClaim(
-    data: { groups_claim: string; allowed_groups: string; admin_groups: string },
-    ctx: z.RefinementCtx,
-) {
-    if (!data.groups_claim.trim() && (hasGroups(data.allowed_groups) || hasGroups(data.admin_groups))) {
-        ctx.addIssue({
-            code: 'custom',
-            path: ['groups_claim'],
-            message: 'Groups claim is required when allowed or admin groups are set',
-        })
+// The client secret is required on create only: on edit, blank keeps the
+// stored one. Group restrictions and session cap are validated as the server
+// does.
+const schema = computed(() => toTypedSchema(
+    z.object({
+        name: z.string().min(1, 'Name is required'),
+        issuer: z.url('Must be a valid URL'),
+        client_id: z.string().min(1, 'Client ID is required'),
+        client_secret: sheetMode.value === 'create'
+            ? z.string().min(1, 'Client secret is required')
+            : z.string(),
+        scopes: z.string(),
+        enabled: z.boolean(),
+        groups_claim: z.string(),
+        allowed_groups: z.string(),
+        admin_groups: z.string(),
+        session_max_hours: integerInRange(1, 168),
+    }).superRefine((data, ctx) => {
+        if (!data.groups_claim.trim() && (hasGroups(data.allowed_groups) || hasGroups(data.admin_groups))) {
+            ctx.addIssue({
+                code: 'custom',
+                path: ['groups_claim'],
+                message: 'Groups claim is required when allowed or admin groups are set',
+            })
+        }
+    }),
+))
+
+// formValues returns the form values for provider, or the defaults of a new
+// provider.
+function formValues(provider: OIDCProvider | null = null) {
+    return {
+        name: provider?.name ?? '',
+        issuer: provider?.issuer ?? '',
+        client_id: provider?.client_id ?? '',
+        client_secret: '',
+        scopes: provider?.scopes || 'openid email profile',
+        enabled: provider?.enabled ?? true,
+        groups_claim: provider?.groups_claim ?? '',
+        allowed_groups: provider?.allowed_groups ?? '',
+        admin_groups: provider?.admin_groups ?? '',
+        session_max_hours: provider?.session_max_hours ?? 12,
     }
 }
 
-const createSchema = z.object({
-    name: z.string().min(1, 'Name is required'),
-    issuer: z.string().url('Must be a valid URL'),
-    client_id: z.string().min(1, 'Client ID is required'),
-    client_secret: z.string().min(1, 'Client secret is required'),
-    ...accessShape,
-}).superRefine(requireGroupsClaim)
+const { handleSubmit, resetForm, isSubmitting: formSubmitting } = useForm({
+    validationSchema: schema,
+    initialValues: formValues(),
+})
 
-const editSchema = z.object({
-    name: z.string().min(1, 'Name is required'),
-    issuer: z.string().url('Must be a valid URL'),
-    client_id: z.string().min(1, 'Client ID is required'),
-    ...accessShape,
-}).superRefine(requireGroupsClaim)
-
-function resetForm() {
-    formName.value = ''
-    formIssuer.value = ''
-    formClientId.value = ''
-    formClientSecret.value = ''
-    formScopes.value = 'openid email profile'
-    formEnabled.value = true
-    formGroupsClaim.value = ''
-    formAllowedGroups.value = ''
-    formAdminGroups.value = ''
-    formSessionMaxHours.value = 12
-    formErrors.value = {}
-    formError.value = null
-}
+const { value: formName, errorMessage: nameError } = useField<string>('name')
+const { value: formIssuer, errorMessage: issuerError } = useField<string>('issuer')
+const { value: formClientId, errorMessage: clientIdError } = useField<string>('client_id')
+const { value: formClientSecret, errorMessage: clientSecretError } = useField<string>('client_secret')
+const { value: formScopes } = useField<string>('scopes')
+const { value: formEnabled } = useField<boolean>('enabled')
+const { value: formGroupsClaim, errorMessage: groupsClaimError } = useField<string>('groups_claim')
+const { value: formAllowedGroups } = useField<string>('allowed_groups')
+const { value: formAdminGroups } = useField<string>('admin_groups')
+const { value: formSessionMaxHours, errorMessage: sessionMaxHoursError } = useField<number | string>('session_max_hours')
 
 function openCreateSheet() {
     sheetMode.value = 'create'
     editingProvider.value = null
-    resetForm()
+    resetForm({ values: formValues() })
+    formError.value = null
     sheetOpen.value = true
 }
 
 function openEditSheet(provider: OIDCProvider) {
     sheetMode.value = 'edit'
     editingProvider.value = provider
-    formName.value = provider.name
-    formIssuer.value = provider.issuer
-    formClientId.value = provider.client_id
-    formClientSecret.value = ''
-    formScopes.value = provider.scopes || 'openid email profile'
-    formEnabled.value = provider.enabled
-    formGroupsClaim.value = provider.groups_claim
-    formAllowedGroups.value = provider.allowed_groups
-    formAdminGroups.value = provider.admin_groups
-    formSessionMaxHours.value = provider.session_max_hours
-    formErrors.value = {}
+    resetForm({ values: formValues(provider) })
     formError.value = null
     sheetOpen.value = true
 }
 
 function onSheetOpenChange(value: boolean) {
-    if (!value) resetForm()
+    if (!value) {
+        resetForm({ values: formValues() })
+        formError.value = null
+    }
     sheetOpen.value = value
 }
 
-function validateForm(): boolean {
-    formErrors.value = {}
-    const schema = sheetMode.value === 'create' ? createSchema : editSchema
-    const result = schema.safeParse({
-        name: formName.value,
-        issuer: formIssuer.value,
-        client_id: formClientId.value,
-        client_secret: formClientSecret.value,
-        groups_claim: formGroupsClaim.value,
-        allowed_groups: formAllowedGroups.value,
-        admin_groups: formAdminGroups.value,
-        session_max_hours: formSessionMaxHours.value,
-    })
-    if (!result.success) {
-        for (const issue of result.error.issues) {
-            formErrors.value[String(issue.path[0])] = issue.message
-        }
-        return false
-    }
-    return true
-}
-
-async function submitForm() {
-    if (!validateForm()) return
-
-    formSubmitting.value = true
+const submitForm = handleSubmit(async (values) => {
     formError.value = null
 
     try {
         const body: Record<string, unknown> = {
-            name: formName.value,
-            issuer: formIssuer.value,
-            client_id: formClientId.value,
-            scopes: formScopes.value || 'openid email profile',
-            enabled: formEnabled.value,
-            groups_claim: formGroupsClaim.value,
-            allowed_groups: formAllowedGroups.value,
-            admin_groups: formAdminGroups.value,
-            session_max_hours: Number(formSessionMaxHours.value),
+            name: values.name,
+            issuer: values.issuer,
+            client_id: values.client_id,
+            scopes: values.scopes || 'openid email profile',
+            enabled: values.enabled,
+            groups_claim: values.groups_claim,
+            allowed_groups: values.allowed_groups,
+            admin_groups: values.admin_groups,
+            session_max_hours: values.session_max_hours,
         }
 
-        if (formClientSecret.value) {
-            body.client_secret = formClientSecret.value
+        if (values.client_secret) {
+            body.client_secret = values.client_secret
         }
 
         if (sheetMode.value === 'create') {
@@ -224,10 +191,8 @@ async function submitForm() {
         await fetchOIDC()
     } catch (e: any) {
         formError.value = apiErrorMessage(e, 'Failed to save provider')
-    } finally {
-        formSubmitting.value = false
     }
-}
+})
 
 // ---------------------------------------------------------------------------
 // Delete dialog
@@ -362,7 +327,7 @@ onMounted(fetchOIDC)
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="py-6 px-4" novalidate @submit.prevent="submitForm">
+            <form class="py-6 px-4" novalidate @submit="submitForm">
                 <FieldGroup class="flex flex-col gap-4">
 
                     <Transition enter-active-class="transition-all duration-200"
@@ -377,28 +342,28 @@ onMounted(fetchOIDC)
                     <Field>
                         <FieldLabel for="form-name">Display Name</FieldLabel>
                         <Input id="form-name" v-model="formName" placeholder="e.g. Company SSO" autocomplete="off"
-                            :class="formErrors.name ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="formErrors.name">{{ formErrors.name }}</FieldError>
+                            :class="nameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="nameError">{{ nameError }}</FieldError>
                     </Field>
 
                     <Field>
                         <FieldLabel for="form-issuer">Issuer URL</FieldLabel>
                         <Input id="form-issuer" v-model="formIssuer"
                             placeholder="https://accounts.google.com" autocomplete="off"
-                            :class="formErrors.issuer ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            :class="issuerError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                         <p class="text-xs text-muted-foreground">
                             Base URL of the identity provider. Endpoints are discovered automatically
                             from <span class="font-mono">/.well-known/openid-configuration</span>.
                         </p>
-                        <FieldError v-if="formErrors.issuer">{{ formErrors.issuer }}</FieldError>
+                        <FieldError v-if="issuerError">{{ issuerError }}</FieldError>
                     </Field>
 
                     <div class="grid grid-cols-2 gap-3">
                         <Field>
                             <FieldLabel for="form-client-id">Client ID</FieldLabel>
                             <Input id="form-client-id" v-model="formClientId" autocomplete="off"
-                                :class="formErrors.client_id ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="formErrors.client_id">{{ formErrors.client_id }}</FieldError>
+                                :class="clientIdError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="clientIdError">{{ clientIdError }}</FieldError>
                         </Field>
                         <Field>
                             <FieldLabel for="form-client-secret">
@@ -408,8 +373,8 @@ onMounted(fetchOIDC)
                             </FieldLabel>
                             <Input id="form-client-secret" v-model="formClientSecret" type="password"
                                 :placeholder="sheetMode === 'edit' ? '(unchanged)' : ''" autocomplete="new-password"
-                                :class="formErrors.client_secret ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="formErrors.client_secret">{{ formErrors.client_secret }}</FieldError>
+                                :class="clientSecretError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="clientSecretError">{{ clientSecretError }}</FieldError>
                         </Field>
                     </div>
 
@@ -440,12 +405,12 @@ onMounted(fetchOIDC)
                         </FieldLabel>
                         <Input id="form-groups-claim" v-model="formGroupsClaim" placeholder="groups"
                             autocomplete="off"
-                            :class="formErrors.groups_claim ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            :class="groupsClaimError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                         <p class="text-xs text-muted-foreground">
                             Name of the ID token or UserInfo claim listing the user's groups.
                             Required when allowed or admin groups are set.
                         </p>
-                        <FieldError v-if="formErrors.groups_claim">{{ formErrors.groups_claim }}</FieldError>
+                        <FieldError v-if="groupsClaimError">{{ groupsClaimError }}</FieldError>
                     </Field>
 
                     <Field>
@@ -476,12 +441,12 @@ onMounted(fetchOIDC)
                         <FieldLabel for="form-session-max-hours">Session duration (hours)</FieldLabel>
                         <Input id="form-session-max-hours" v-model="formSessionMaxHours" type="number" min="1"
                             max="168"
-                            :class="formErrors.session_max_hours ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            :class="sessionMaxHoursError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                         <p class="text-xs text-muted-foreground">
                             How long a session lasts before the user must sign in at the provider again,
                             where the groups are checked. Between 1 and 168.
                         </p>
-                        <FieldError v-if="formErrors.session_max_hours">{{ formErrors.session_max_hours }}</FieldError>
+                        <FieldError v-if="sessionMaxHoursError">{{ sessionMaxHoursError }}</FieldError>
                     </Field>
 
                     <Separator />

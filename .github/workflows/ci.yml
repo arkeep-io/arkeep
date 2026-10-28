@@ -133,3 +133,6 @@ jobs:
 
       - name: Build (includes vue-tsc type check)
         run: cd gui && pnpm build
+
+      - name: Test
+        run: cd gui && pnpm test

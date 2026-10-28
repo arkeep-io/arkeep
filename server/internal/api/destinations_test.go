@@ -96,6 +96,22 @@ func TestDestinationHandler_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("returns 400 for invalid retention keep values", func(t *testing.T) {
+		e := newTestEnv(t)
+		for _, retention := range []map[string]any{
+			{"retention_daily": -1},
+			{"retention_daily": 1001},
+			{"retention_enabled": true, "retention_daily": 0, "retention_weekly": 0, "retention_monthly": 0, "retention_yearly": 0},
+		} {
+			body := map[string]any{"name": "local", "type": "local", "config": `{"path":"/backups"}`}
+			for k, v := range retention {
+				body[k] = v
+			}
+			resp := e.post(t, "/api/v1/destinations", e.adminToken(t), body)
+			assertStatus(t, resp, http.StatusBadRequest)
+		}
+	})
+
 	t.Run("returns 400 when name is missing", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
@@ -415,6 +431,28 @@ func TestDestinationHandler_Update(t *testing.T) {
 		}
 	})
 
+	t.Run("checks retention keep values only when retention changes", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := createDBDestination(t, e.deps, "legacy", "s3")
+		// A destination saved before the keep rules were checked: retention
+		// on, no keep value.
+		if err := e.deps.gdb.Model(&db.Destination{}).Where("id = ?", dest.ID).Updates(map[string]any{
+			"retention_enabled": true, "retention_last": 0, "retention_hourly": 0, "retention_daily": 0,
+			"retention_weekly": 0, "retention_monthly": 0, "retention_yearly": 0,
+		}).Error; err != nil {
+			t.Fatalf("seed retention: %v", err)
+		}
+
+		name := "renamed"
+		resp := e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{"name": &name})
+		assertStatus(t, resp, http.StatusOK)
+
+		for _, value := range []int{0, -1} {
+			resp = e.patch(t, "/api/v1/destinations/"+dest.ID.String(), e.adminToken(t), map[string]any{"retention_daily": value})
+			assertStatus(t, resp, http.StatusBadRequest)
+		}
+	})
+
 	t.Run("returns 404 for non-existent destination", func(t *testing.T) {
 		e := newTestEnv(t)
 		name := "x"
@@ -542,4 +580,27 @@ func TestDestinationHandler_Delete(t *testing.T) {
 		resp := e.del(t, "/api/v1/destinations/00000000-0000-0000-0000-000000000001", "")
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
+}
+
+func TestValidateRetentionKeep(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		keep    []int
+		wantErr bool
+	}{
+		{"disabled with no rule", false, []int{0, 0, 0, 0, 0, 0}, false},
+		{"enabled with a rule", true, []int{0, 0, 7, 0, 0, 0}, false},
+		{"upper bound", true, []int{1000, 0, 0, 0, 0, 0}, false},
+		{"enabled with no rule", true, []int{0, 0, 0, 0, 0, 0}, true},
+		{"negative", false, []int{-1, 0, 0, 0, 0, 0}, true},
+		{"above the bound", false, []int{0, 0, 0, 0, 0, 1001}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateRetentionKeep(tt.enabled, tt.keep...); (err != nil) != tt.wantErr {
+				t.Errorf("validateRetentionKeep(%v, %v) error = %v, wantErr %v", tt.enabled, tt.keep, err, tt.wantErr)
+			}
+		})
+	}
 }

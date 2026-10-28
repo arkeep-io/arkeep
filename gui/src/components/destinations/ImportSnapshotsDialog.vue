@@ -4,6 +4,9 @@
 // destination; this covers repointing or re-scanning an existing one — the last
 // step when migrating a repository between storage providers.
 import { ref, watch, computed } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
 import { api, apiErrorMessage } from '@/services/api'
 import { summariseImport } from '@/lib/importSummary'
 import type { ApiResponse, Destination, ImportDestinationRequest, ImportDestinationResponse } from '@/types'
@@ -31,21 +34,26 @@ const emit = defineEmits<{
     imported: []
 }>()
 
-const agentId = ref('')
-const agentError = ref('')
-const repoPassword = ref('')
-const passwordError = ref('')
+// The password is the one of an existing repository, so it has no minimum
+// length: only its presence is checked.
+const { handleSubmit, resetForm, isSubmitting: submitting } = useForm({
+    validationSchema: toTypedSchema(z.object({
+        agent_id: z.string().min(1, 'Please select an agent.'),
+        repo_password: z.string().min(1, 'Repository password is required.'),
+    })),
+    initialValues: { agent_id: '', repo_password: '' },
+})
+
+const { value: agentId, errorMessage: agentError } = useField<string>('agent_id')
+const { value: repoPassword, errorMessage: passwordError } = useField<string>('repo_password')
+
 const submitError = ref<string | null>(null)
-const submitting = ref(false)
 const result = ref<ImportDestinationResponse | null>(null)
 
 const summary = computed(() => (result.value ? summariseImport(result.value) : null))
 
 function reset() {
-    agentId.value = ''
-    agentError.value = ''
-    repoPassword.value = ''
-    passwordError.value = ''
+    resetForm()
     submitError.value = null
     result.value = null
 }
@@ -58,19 +66,14 @@ function onOpenChange(value: boolean) {
     emit('update:open', value)
 }
 
-async function onSubmit() {
+const onSubmit = handleSubmit(async (values) => {
     if (!props.destination) return
 
-    agentError.value = agentId.value ? '' : 'Please select an agent.'
-    passwordError.value = repoPassword.value ? '' : 'Repository password is required.'
-    if (agentError.value || passwordError.value) return
-
-    submitting.value = true
     submitError.value = null
     try {
         const body: ImportDestinationRequest = {
-            agent_id: agentId.value,
-            repo_password: repoPassword.value,
+            agent_id: values.agent_id,
+            repo_password: values.repo_password,
         }
         const res = await api<ApiResponse<ImportDestinationResponse>>(
             `/api/v1/destinations/${props.destination.id}/import`,
@@ -80,10 +83,8 @@ async function onSubmit() {
         emit('imported')
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to import snapshots.')
-    } finally {
-        submitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -112,7 +113,7 @@ async function onSubmit() {
                 </div>
             </div>
 
-            <form v-else class="space-y-4" novalidate @submit.prevent="onSubmit">
+            <form v-else class="space-y-4" novalidate @submit="onSubmit">
                 <Field>
                     <FieldLabel for="import-dialog-agent">Agent</FieldLabel>
                     <AsyncCombobox
@@ -120,7 +121,7 @@ async function onSubmit() {
                         :model-value="agentId"
                         placeholder="Select an agent"
                         :class="agentError ? '[&_button]:border-destructive [&_button]:focus-visible:ring-destructive/30' : ''"
-                        @update:model-value="agentId = $event; agentError = ''"
+                        @update:model-value="agentId = $event"
                     />
                     <FieldError v-if="agentError">{{ agentError }}</FieldError>
                 </Field>
@@ -133,7 +134,6 @@ async function onSubmit() {
                         autocomplete="off"
                         placeholder="Restic repository password"
                         :class="passwordError ? 'border-destructive focus-visible:ring-destructive/30' : ''"
-                        @input="passwordError = ''"
                     />
                     <FieldError v-if="passwordError">{{ passwordError }}</FieldError>
                     <p class="text-muted-foreground text-xs">
@@ -150,7 +150,7 @@ async function onSubmit() {
                 <Button v-if="summary" @click="onOpenChange(false)">Done</Button>
                 <template v-else>
                     <Button variant="outline" :disabled="submitting" @click="onOpenChange(false)">Cancel</Button>
-                    <Button :disabled="submitting" @click="onSubmit">
+                    <Button :disabled="submitting" @click="onSubmit()">
                         <Loader2 v-if="submitting" class="mr-2 size-4 animate-spin" />
                         {{ submitting ? 'Importing…' : 'Import' }}
                     </Button>

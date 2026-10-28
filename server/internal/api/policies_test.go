@@ -263,6 +263,14 @@ func TestPolicyHandler_Create(t *testing.T) {
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
 
+	t.Run("returns 400 when repo_password is too short", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["repo_password"] = "1234567"
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
 	t.Run("returns 400 when a source is flag-like, even for an admin", func(t *testing.T) {
 		// Regression test for GHSA-263g-c333-jcjq / GHSA-75rg-4ppf-pq7g: sources
 		// are rejected for looking like a restic flag, not gated by admin
@@ -484,6 +492,20 @@ func TestPolicyHandler_Update(t *testing.T) {
 		decodeData(t, resp, &data)
 		if data.Name != "updated" {
 			t.Errorf("name = %q, want updated", data.Name)
+		}
+	})
+
+	t.Run("returns 400 when setting a short repo_password", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "test-agent").ID
+		policy := createDBPolicy(t, e.deps, "policy", agentID)
+
+		// An empty password would leave the policy unable to open its repository.
+		for _, pw := range []string{"", "1234567"} {
+			resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
+				"repo_password": &pw,
+			})
+			assertStatus(t, resp, http.StatusBadRequest)
 		}
 	})
 

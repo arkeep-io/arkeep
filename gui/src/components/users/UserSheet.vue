@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useForm, useField } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
 import {
     Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle,
@@ -16,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { AlertCircle, Loader2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
+import { passwordSchema } from '@/lib/validation'
 import type { User } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -41,46 +44,60 @@ const emit = defineEmits<{
 const isEdit = computed(() => props.user !== null)
 
 // ---------------------------------------------------------------------------
-// Form state
+// Form
 // ---------------------------------------------------------------------------
 
-const submitting = ref(false)
-const submitError = ref<string | null>(null)
-
-const fieldEmail = ref('')
-const fieldDisplayName = ref('')
-const fieldPassword = ref('')
-const fieldRole = ref<'admin' | 'user'>('user')
-const fieldIsActive = ref(true)
-const fieldErrors = ref<Record<string, string>>({})
-
-// ---------------------------------------------------------------------------
-// Validation schemas
-// ---------------------------------------------------------------------------
+// Email and password are set on create only: in edit mode the email is shown
+// read-only and the password is changed by the user from the Profile page.
+const roleSchema = z.enum(['admin', 'user'])
 
 const createSchema = z.object({
-    email: z.string().email('Must be a valid email address'),
+    email: z.email('Must be a valid email address'),
     display_name: z.string().min(1, 'Display name is required'),
-    password: z.string().min(8, 'Password must be at least 8 characters'),
-    role: z.enum(['admin', 'user']),
+    password: passwordSchema,
+    role: roleSchema,
+    is_active: z.boolean(),
 })
 
 const editSchema = z.object({
+    email: z.string(),
     display_name: z.string().min(1, 'Display name is required'),
-    role: z.enum(['admin', 'user']),
+    password: z.string(),
+    role: roleSchema,
+    is_active: z.boolean(),
 })
+
+const { handleSubmit, resetForm, isSubmitting } = useForm({
+    validationSchema: computed(() => toTypedSchema(isEdit.value ? editSchema : createSchema)),
+    initialValues: formValues(),
+})
+
+const { value: fieldEmail, errorMessage: emailError } = useField<string>('email')
+const { value: fieldDisplayName, errorMessage: displayNameError } = useField<string>('display_name')
+const { value: fieldPassword, errorMessage: passwordError } = useField<string>('password')
+const { value: fieldRole } = useField<'admin' | 'user'>('role')
+const { value: fieldIsActive } = useField<boolean>('is_active')
+
+const submitError = ref<string | null>(null)
+
+// formValues returns the form values for the current user, or empty ones for
+// a new user.
+function formValues() {
+    return {
+        email: props.user?.email ?? '',
+        display_name: props.user?.display_name ?? '',
+        password: '',
+        role: (props.user?.role as 'admin' | 'user') ?? 'user',
+        is_active: props.user?.is_active ?? true,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Reset / populate form when sheet opens or user changes
 // ---------------------------------------------------------------------------
 
 function reset() {
-    fieldEmail.value = props.user?.email ?? ''
-    fieldDisplayName.value = props.user?.display_name ?? ''
-    fieldPassword.value = ''
-    fieldRole.value = (props.user?.role as 'admin' | 'user') ?? 'user'
-    fieldIsActive.value = props.user?.is_active ?? true
-    fieldErrors.value = {}
+    resetForm({ values: formValues() })
     submitError.value = null
 }
 
@@ -96,59 +113,29 @@ function onOpenChange(val: boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
-function validate(): boolean {
-    fieldErrors.value = {}
-    const schema = isEdit.value ? editSchema : createSchema
-    const data = isEdit.value
-        ? { display_name: fieldDisplayName.value, role: fieldRole.value }
-        : {
-            email: fieldEmail.value,
-            display_name: fieldDisplayName.value,
-            password: fieldPassword.value,
-            role: fieldRole.value,
-        }
-
-    const result = schema.safeParse(data)
-    if (!result.success) {
-        for (const issue of result.error.issues) {
-            fieldErrors.value[String(issue.path[0])] = issue.message
-        }
-        return false
-    }
-    return true
-}
-
-// ---------------------------------------------------------------------------
 // Submit
 // ---------------------------------------------------------------------------
 
-async function onSubmit() {
-    if (!validate()) return
-    submitting.value = true
+const onSubmit = handleSubmit(async (values) => {
     submitError.value = null
     try {
         if (isEdit.value && props.user) {
             await api(`/api/v1/users/${props.user.id}`, {
                 method: 'PATCH',
                 body: {
-                    display_name: fieldDisplayName.value,
-                    role: fieldRole.value,
-                    is_active: fieldIsActive.value,
-                    // Only send password if the admin typed a new one
-                    ...(fieldPassword.value ? { password: fieldPassword.value } : {}),
+                    display_name: values.display_name,
+                    role: values.role,
+                    is_active: values.is_active,
                 },
             })
         } else {
             await api('/api/v1/users', {
                 method: 'POST',
                 body: {
-                    email: fieldEmail.value,
-                    display_name: fieldDisplayName.value,
-                    password: fieldPassword.value,
-                    role: fieldRole.value,
+                    email: values.email,
+                    display_name: values.display_name,
+                    password: values.password,
+                    role: values.role,
                 },
             })
         }
@@ -156,10 +143,8 @@ async function onSubmit() {
         emit('saved')
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save user.')
-    } finally {
-        submitting.value = false
     }
-}
+})
 </script>
 
 <template>
@@ -172,7 +157,7 @@ async function onSubmit() {
                 </SheetDescription>
             </SheetHeader>
 
-            <form class="py-6 px-4" novalidate @submit.prevent="onSubmit">
+            <form class="py-6 px-4" novalidate @submit="onSubmit">
                 <FieldGroup class="flex flex-col gap-4">
 
                     <!-- Error banner -->
@@ -190,8 +175,8 @@ async function onSubmit() {
                         <FieldLabel for="user-email">Email</FieldLabel>
                         <Input id="user-email" v-model="fieldEmail" type="email" placeholder="user@example.com"
                             autocomplete="off"
-                            :class="fieldErrors.email ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="fieldErrors.email">{{ fieldErrors.email }}</FieldError>
+                            :class="emailError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="emailError">{{ emailError }}</FieldError>
                     </Field>
 
                     <!-- Email read-only in edit mode -->
@@ -205,8 +190,8 @@ async function onSubmit() {
                         <FieldLabel for="user-display-name">Display Name</FieldLabel>
                         <Input id="user-display-name" v-model="fieldDisplayName" placeholder="Jane Doe"
                             autocomplete="off"
-                            :class="fieldErrors.display_name ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                        <FieldError v-if="fieldErrors.display_name">{{ fieldErrors.display_name }}</FieldError>
+                            :class="displayNameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="displayNameError">{{ displayNameError }}</FieldError>
                     </Field>
 
                     <!-- Password — create only; in edit mode the admin cannot set the password here.
@@ -216,8 +201,8 @@ async function onSubmit() {
                             <FieldLabel for="user-password">Password</FieldLabel>
                             <Input id="user-password" v-model="fieldPassword" type="password"
                                 autocomplete="new-password"
-                                :class="fieldErrors.password ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="fieldErrors.password">{{ fieldErrors.password }}</FieldError>
+                                :class="passwordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="passwordError">{{ passwordError }}</FieldError>
                         </Field>
                     </template>
 
@@ -245,13 +230,13 @@ async function onSubmit() {
                     </div>
 
                     <SheetFooter class="mt-2 px-0">
-                        <Button type="button" variant="outline" :disabled="submitting"
+                        <Button type="button" variant="outline" :disabled="isSubmitting"
                             @click="emit('update:open', false)">
                             Cancel
                         </Button>
-                        <Button type="submit" :disabled="submitting">
-                            <Loader2 v-if="submitting" class="size-4 animate-spin" />
-                            {{ submitting ? 'Saving…' : (isEdit ? 'Save Changes' : 'Create User') }}
+                        <Button type="submit" :disabled="isSubmitting">
+                            <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
+                            {{ isSubmitting ? 'Saving…' : (isEdit ? 'Save Changes' : 'Create User') }}
                         </Button>
                     </SheetFooter>
 
