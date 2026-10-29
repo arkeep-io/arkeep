@@ -13,24 +13,25 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27"
+          go-version-file: go.work
 
       # Node >= 25 no longer bundles corepack. pnpm/action-setup installs the
       # version pinned by packageManager in gui/package.json, and must run
       # before setup-node so its pnpm cache lookup can find the binary.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           package_json_file: gui/package.json
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "26"
+          node-version-file: .nvmrc
           cache: "pnpm"
           cache-dependency-path: gui/pnpm-lock.yaml
 
@@ -38,20 +39,20 @@ jobs:
       # Without them, building linux/arm64 images on the amd64 runner fails
       # with "exec format error".
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -84,10 +85,10 @@ jobs:
           echo "CONTRIBUTORS=${contributors}" >> "$GITHUB_ENV"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: '~> v2'
+          version: v2.18.3
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

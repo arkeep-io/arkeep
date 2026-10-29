@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# update-deps-pins.sh — refresh agent/scripts/deps.json, the pinned versions and
+# SHA-256 digests of the restic and rclone archives embedded in the agent
+# (ADR 0013).
+#
+# For each tool it downloads the upstream SHA256SUMS file, verifies its GPG
+# signature against the maintainer key pinned below (by full fingerprint), and
+# records the digests of the archives download_deps.go fetches.
+#
+# Usage:
+#   agent/scripts/update-deps-pins.sh                 # latest upstream releases
+#   agent/scripts/update-deps-pins.sh 0.19.1 1.75.2   # explicit restic, rclone versions
+#
+# Without explicit versions, a release younger than MIN_RELEASE_AGE_DAYS
+# (default 7, the same cooldown as Dependabot) is skipped and the version
+# currently pinned in deps.json is kept.
+#
+# Requires: bash, curl, gpg, python3. Used by .github/workflows/deps-pins.yml.
+set -euo pipefail
+
+# Release signing keys. Changing one of these is a security decision: check
+# the new key through the project's own channels before updating it.
+RESTIC_KEY=CF8F18F2844575973F79D4E191A6868BD3F7A907  # Alexander Neumann <alexander@bumpern.de>
+RCLONE_KEY=FBF737ECE9F8AB18604BD2AC93935E02FF3B54FA  # Nick Craig-Wood <nick@craig-wood.com>
+
+# Archives embedded in the agent. Must match releasePlatforms in download_deps.go.
+RESTIC_ASSETS=(linux_amd64.bz2 linux_arm64.bz2 linux_arm.bz2 linux_mips.bz2 linux_mipsle.bz2 darwin_amd64.bz2 darwin_arm64.bz2 windows_amd64.zip)
+RCLONE_ASSETS=(linux-amd64 linux-arm64 linux-arm linux-mips linux-mipsle osx-amd64 osx-arm64 windows-amd64)
+
+here="$(cd "$(dirname "$0")" && pwd)"
+out="$here/deps.json"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+export GNUPGHOME="$work/gnupg"
+mkdir -m 700 "$GNUPGHOME"
+
+# latest_or_current <github repo> <tool key in deps.json> — prints the latest
+# release version if it is at least MIN_RELEASE_AGE_DAYS old, else the version
+# already pinned.
+latest_or_current() {
+  curl -fsSL ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+    "https://api.github.com/repos/$1/releases/latest" |
+    python3 -c '
+import datetime, json, os, sys
+release = json.load(sys.stdin)
+key, pins = sys.argv[1], sys.argv[2]
+min_age = int(os.environ.get("MIN_RELEASE_AGE_DAYS", "7"))
+published = datetime.datetime.fromisoformat(release["published_at"].replace("Z", "+00:00"))
+age = (datetime.datetime.now(datetime.timezone.utc) - published).days
+latest = release["tag_name"].lstrip("v")
+if age >= min_age or not os.path.exists(pins):
+    print(latest)
+else:
+    print(f"{key} {latest} is {age} days old, keeping the pinned version", file=sys.stderr)
+    print(json.load(open(pins))[key]["version"])
+' "$2" "$out"
+}
+
+restic_version="${1:-$(latest_or_current restic/restic restic)}"
+rclone_version="${2:-$(latest_or_current rclone/rclone rclone)}"
+
+fetch_key() {
+  local fpr=$1
+  for server in hkps://keys.openpgp.org hkps://keyserver.ubuntu.com; do
+    gpg --batch --quiet --keyserver "$server" --recv-keys "$fpr" 2>/dev/null && return 0
+  done
+  echo "error: cannot fetch GPG key $fpr" >&2
+  return 1
+}
+
+# verify <expected primary fingerprint> <gpg --verify args...>
+# Succeeds only for a good signature made by the expected key (or its subkey).
+verify() {
+  local fpr=$1; shift
+  local status
+  status="$(gpg --batch --status-fd 1 --verify "$@" 2>/dev/null || true)"
+  if ! grep -Eq "^\[GNUPG:\] VALIDSIG [0-9A-F]+ .* ${fpr}\$" <<<"$status"; then
+    echo "error: signature not made by $fpr" >&2
+    return 1
+  fi
+}
+
+# digest <sums file> <archive name> — prints the SHA-256 listed for the archive.
+digest() {
+  local sum
+  sum="$(awk -v f="$2" '$2 == f || $2 == "*"f { print $1 }' "$1")"
+  if [[ ! "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "error: no SHA-256 for $2" >&2
+    return 1
+  fi
+  echo "$sum"
+}
+
+echo "restic $restic_version, rclone $rclone_version"
+fetch_key "$RESTIC_KEY"
+fetch_key "$RCLONE_KEY"
+
+curl -fsSL -o "$work/restic.sums" "https://github.com/restic/restic/releases/download/v${restic_version}/SHA256SUMS"
+curl -fsSL -o "$work/restic.sums.asc" "https://github.com/restic/restic/releases/download/v${restic_version}/SHA256SUMS.asc"
+verify "$RESTIC_KEY" "$work/restic.sums.asc" "$work/restic.sums"
+
+# rclone's SHA256SUMS is clearsigned: verify it, then read the signed content.
+curl -fsSL -o "$work/rclone.sums.asc" "https://downloads.rclone.org/v${rclone_version}/SHA256SUMS"
+verify "$RCLONE_KEY" "$work/rclone.sums.asc"
+gpg --batch --quiet --output "$work/rclone.sums" --decrypt "$work/rclone.sums.asc" 2>/dev/null
+
+{
+  for a in "${RESTIC_ASSETS[@]}"; do
+    f="restic_${restic_version}_${a}"
+    echo "$f $(digest "$work/restic.sums" "$f")"
+  done
+  for a in "${RCLONE_ASSETS[@]}"; do
+    f="rclone-v${rclone_version}-${a}.zip"
+    echo "$f $(digest "$work/rclone.sums" "$f")"
+  done
+} >"$work/pins"
+
+python3 - "$restic_version" "$rclone_version" "$work/pins" "$out" <<'EOF'
+import json, sys
+restic, rclone, pins, out = sys.argv[1:]
+sha = dict(line.split() for line in open(pins))
+doc = {
+    "_comment": "Generated by update-deps-pins.sh from GPG-verified upstream SHA256SUMS. Do not edit by hand (ADR 0013).",
+    "restic": {"version": restic, "sha256": {k: v for k, v in sha.items() if k.startswith("restic_")}},
+    "rclone": {"version": rclone, "sha256": {k: v for k, v in sha.items() if k.startswith("rclone-")}},
+}
+with open(out, "w") as f:
+    json.dump(doc, f, indent=2, sort_keys=True)
+    f.write("\n")
+EOF
+
+echo "updated $out"

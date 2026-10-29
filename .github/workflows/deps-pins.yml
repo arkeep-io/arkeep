@@ -1,0 +1,88 @@
+name: Dependency pins
+
+# Refreshes the pins Dependabot cannot track (ADR 0013) and opens one pull
+# request against develop when something changed:
+#   - restic and rclone versions and SHA-256 digests (agent/scripts/deps.json),
+#     from GPG-verified upstream SHA256SUMS, with a 7-day release cooldown;
+#   - the Arkeep release used by the Helm chart (appVersion) and the compose
+#     examples (image tags), set to the latest Arkeep release.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday at 06:00 UTC, before Dependabot's run
+  release:
+    types: [released]     # follow a new release right away (not prereleases)
+
+# All writes go through DEPS_PR_TOKEN when it is set, so that the pull request
+# triggers the required CI checks (pull requests opened with GITHUB_TOKEN do
+# not). Without it, GITHUB_TOKEN opens the pull request and CI must be
+# triggered by hand.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: deps-pins
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update dependency pins
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: develop
+          persist-credentials: false
+
+      - name: Update restic and rclone pins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: agent/scripts/update-deps-pins.sh
+
+      - name: Update Helm appVersion and compose image tags to the latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "unexpected latest release tag: $tag" >&2
+            exit 1
+          fi
+          sed -i -E "s/^appVersion: .*/appVersion: \"${tag}\"/" deploy/helm/arkeep/Chart.yaml
+          sed -i -E "s#(ghcr\.io/arkeep-io/arkeep-(server|agent)):v[0-9]+\.[0-9]+\.[0-9]+#\1:${tag}#" \
+            deploy/docker/docker-compose*.yml
+
+      - name: Check pins
+        run: scripts/check-pins.sh
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ secrets.DEPS_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          base: develop
+          branch: chore/deps-pins
+          delete-branch: true
+          add-paths: |
+            agent/scripts/deps.json
+            deploy/helm/arkeep/Chart.yaml
+            deploy/docker/docker-compose*.yml
+          commit-message: "chore(deps): update restic, rclone and Arkeep release pins"
+          committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          title: "chore(deps): update restic, rclone and Arkeep release pins"
+          labels: dependencies
+          body: |
+            Automated refresh of the pins Dependabot does not track (ADR 0013).
+
+            - `agent/scripts/deps.json`: restic and rclone versions and archive
+              SHA-256 digests, taken from the upstream `SHA256SUMS` after
+              verifying their GPG signature against the maintainers' pinned key
+              fingerprints. Releases younger than 7 days are not proposed yet.
+            - `deploy/helm/arkeep/Chart.yaml` (`appVersion`) and the Arkeep
+              image tags in `deploy/docker/docker-compose*.yml`: set to the
+              latest Arkeep release.
+
+            Review the upstream release notes before merging:
+            [restic](https://github.com/restic/restic/releases) ·
+            [rclone](https://rclone.org/changelog/).

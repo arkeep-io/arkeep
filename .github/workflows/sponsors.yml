@@ -22,8 +22,9 @@ jobs:
     steps:
       # Always start from main: a manual run dispatched from develop would
       # otherwise carry unreleased develop changes into the PR against main.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           ref: main
 
       # SPONSORS_PAT reads arkeep-io's sponsorships: GITHUB_TOKEN has no access
@@ -37,7 +38,7 @@ jobs:
       # with ?size=120 for a sharp 60px avatar on HiDPI screens. Every
       # placeholder is HTML-escaped (the action rewrites {{{ }}} to {{ }}).
       - name: Generate sponsor avatars
-        uses: JamesIves/github-sponsors-readme-action@v1
+        uses: JamesIves/github-sponsors-readme-action@02650b8cd445fc16dfef73195f9c406dce041623 # v1.6.1
         with:
           token: ${{ secrets.SPONSORS_PAT }}
           file: README.md
@@ -53,7 +54,7 @@ jobs:
       # The commit subject is excluded from the release changelog in
       # .goreleaser.yml.
       - name: Open sponsors PR
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.SPONSORS_PR_PAT }}
           base: main

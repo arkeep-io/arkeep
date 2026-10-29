@@ -54,4 +54,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0010](0010-per-destination-locks-and-fifo-queue.md) | Per-destination locks and a FIFO waiting queue | Accepted |
 | [0011](0011-go-monorepo-conventional-commits-goreleaser.md) | Go monorepo, Conventional Commits and GoReleaser releases | Accepted |
 | [0012](0012-oidc-group-based-access-and-absolute-session-lifetime.md) | Restrict OIDC sign-in by group and cap OIDC session lifetime | Proposed |
-| [0013](0013-pin-and-verify-every-dependency.md) | Pin and verify every dependency | Proposed |
+| [0013](0013-pin-and-verify-every-dependency.md) | Pin and verify every dependency | Accepted |

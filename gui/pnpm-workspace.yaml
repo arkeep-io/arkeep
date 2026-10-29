@@ -16,3 +16,6 @@ minimumReleaseAgeExclude:
   - zod@4.6.6
   - '@tanstack/virtual-core@3.19.0'
   - '@lucide/vue@1.63.0'
+
+# ADR 0013: dependencies are added with their exact version (no ^ or ~ range).
+savePrefix: ''

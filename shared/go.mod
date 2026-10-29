@@ -2,6 +2,8 @@ module github.com/arkeep-io/arkeep/shared
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12

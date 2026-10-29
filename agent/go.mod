@@ -2,6 +2,8 @@ module github.com/arkeep-io/arkeep/agent
 
 go 1.27.0
 
+toolchain go1.27.3
+
 require (
 	github.com/arkeep-io/arkeep/shared v0.0.0-20261028140030-e012ec8610fc
 	github.com/containerd/errdefs v1.0.0
