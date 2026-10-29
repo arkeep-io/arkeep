@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -46,9 +47,9 @@ func TestAgentRegistration(t *testing.T) {
 
 	waitForAgentStatus(t, ts.agentRepo, agentID, "online")
 
-	if !ts.agentMgr.IsConnected(agentID) {
-		t.Error("agentMgr.IsConnected = false, want true after StreamJobs")
-	}
+	// StreamJobs marks the agent online in the DB before it registers the
+	// stream in memory, so the in-memory state is polled too.
+	pollUntil(t, 3*time.Second, func() bool { return ts.agentMgr.IsConnected(agentID) })
 
 	// ── Step 4: Close stream → agent goes offline ─────────────────────────────
 

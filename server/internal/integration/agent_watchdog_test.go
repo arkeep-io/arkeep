@@ -24,11 +24,11 @@ func TestStaleAgentWatchdog_MarksOfflineAndRecoversOrphans(t *testing.T) {
 	_, cancelStream := agent.openStream(t)
 	defer cancelStream()
 	waitForAgentStatus(t, ts.agentRepo, agentID, "online")
+	// StreamJobs marks the agent online in the DB before it registers the
+	// stream in memory, so the in-memory state is polled too.
+	pollUntil(t, 3*time.Second, func() bool { return ts.agentMgr.IsConnected(agentID) })
 
 	agentUUID := mustParseUUID(t, agentID)
-	if !ts.agentMgr.IsConnected(agentID) {
-		t.Fatal("agent should be registered in agentManager after StreamJobs opens")
-	}
 
 	// Create a job and drive it to "running", simulating one in flight when the
 	// agent went silent.
