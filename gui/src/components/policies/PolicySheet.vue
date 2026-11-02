@@ -307,21 +307,6 @@ const schema = z.object({
         message: 'Passwords do not match',
       })
     }
-  } else if (data.repo_password && data.repo_password.length > 0) {
-    if (data.repo_password.length < MIN_REPO_PASSWORD_LENGTH) {
-      ctx.addIssue({
-        code: "custom",
-        path: ['repo_password'],
-        message: `Repository password must be at least ${MIN_REPO_PASSWORD_LENGTH} characters`,
-      })
-    }
-    if (data.repo_password !== data.repo_password_confirm) {
-      ctx.addIssue({
-        code: "custom",
-        path: ['repo_password_confirm'],
-        message: 'Passwords do not match',
-      })
-    }
   }
 })
 
@@ -866,10 +851,10 @@ const onSubmit = handleSubmit(async (values) => {
     if (authStore.isAdmin) body.healthcheck_url = values.healthcheck_url
 
     if (isEdit.value) {
-      // PATCH: enabled, optional new password, destinations, and agent (to allow reassignment)
+      // PATCH: enabled, destinations, and agent (to allow reassignment). The
+      // repository password cannot be changed after creation.
       body.enabled = values.enabled
       body.agent_id = values.agent_id
-      if (values.repo_password) body.repo_password = values.repo_password
       body.destinations = destinationsPayload
     } else {
       // POST-only: agent, password (required unless resolved from the

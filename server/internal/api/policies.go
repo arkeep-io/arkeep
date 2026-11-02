@@ -402,6 +402,9 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 // updatePolicyRequest is the JSON body for PATCH /api/v1/policies/{id}.
 // All fields are optional — only non-nil values are applied.
 // Destinations replaces the full set when non-empty; omitting it leaves destinations unchanged.
+// RepoPassword is accepted only to refuse it with a clear message: the stored
+// password is the key of the restic repository, and replacing it without
+// changing the repository's key would break every backup.
 type updatePolicyRequest struct {
 	Name              *string                   `json:"name"`
 	AgentID           *string                   `json:"agent_id"`
@@ -500,11 +503,8 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		policy.Sources = *req.Sources
 	}
 	if req.RepoPassword != nil {
-		if err := validateRepoPassword(*req.RepoPassword); err != nil {
-			ErrBadRequest(w, err.Error())
-			return
-		}
-		policy.RepoPassword = db.EncryptedString(*req.RepoPassword)
+		ErrBadRequest(w, "repo_password cannot be changed after the policy is created")
+		return
 	}
 	if req.HookPreBackup != nil {
 		if err := validateHookCommand(*req.HookPreBackup); err != nil {

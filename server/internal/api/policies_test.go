@@ -495,17 +495,27 @@ func TestPolicyHandler_Update(t *testing.T) {
 		}
 	})
 
-	t.Run("returns 400 when setting a short repo_password", func(t *testing.T) {
+	t.Run("refuses to change repo_password", func(t *testing.T) {
 		e := newTestEnv(t)
 		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "policy", agentID)
+		stored := string(policy.RepoPassword)
 
-		// An empty password would leave the policy unable to open its repository.
-		for _, pw := range []string{"", "1234567"} {
+		// The stored password is the key of the restic repository: replacing
+		// it without changing the repository's key breaks every backup.
+		for _, pw := range []string{"", "1234567", "a-valid-new-password"} {
 			resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
 				"repo_password": &pw,
 			})
 			assertStatus(t, resp, http.StatusBadRequest)
+		}
+
+		got, err := e.deps.policies.GetByID(context.Background(), policy.ID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if string(got.RepoPassword) != stored {
+			t.Errorf("repo_password changed to %q, want %q", got.RepoPassword, stored)
 		}
 	})
 
