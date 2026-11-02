@@ -235,6 +235,53 @@ func TestAgentHandler_Delete(t *testing.T) {
 		assertStatus(t, resp, http.StatusNoContent)
 	})
 
+	t.Run("refused while policies or destinations depend on the agent", func(t *testing.T) {
+		e := newTestEnv(t)
+		ctx := context.Background()
+		admin := e.adminToken(t)
+		agent := createDBAgent(t, e.deps, "in-use")
+		policy := createDBPolicy(t, e.deps, "laptop", agent.ID)
+		dest := createDBDestination(t, e.deps, "offsite", "s3")
+		dest.RetentionAgentID = &agent.ID
+		if err := e.deps.dests.Update(ctx, dest); err != nil {
+			t.Fatalf("set maintenance agent: %v", err)
+		}
+		// A deleted policy does not keep the agent in use.
+		gone := createDBPolicy(t, e.deps, "gone", agent.ID)
+		if err := e.deps.policies.Delete(ctx, gone.ID); err != nil {
+			t.Fatalf("delete policy: %v", err)
+		}
+
+		resp := e.get(t, "/api/v1/agents/"+agent.ID.String()+"/usage", admin)
+		assertStatus(t, resp, http.StatusOK)
+		var usage struct {
+			Policies     []struct{ ID, Name string } `json:"policies"`
+			Destinations []struct{ ID, Name string } `json:"destinations"`
+		}
+		decodeData(t, resp, &usage)
+		if len(usage.Policies) != 1 || usage.Policies[0].ID != policy.ID.String() || usage.Policies[0].Name != "laptop" {
+			t.Errorf("usage policies = %+v, want only laptop", usage.Policies)
+		}
+		if len(usage.Destinations) != 1 || usage.Destinations[0].ID != dest.ID.String() {
+			t.Errorf("usage destinations = %+v, want only offsite", usage.Destinations)
+		}
+
+		assertStatus(t, e.del(t, "/api/v1/agents/"+agent.ID.String(), admin), http.StatusConflict)
+		if _, err := e.deps.agents.GetByID(ctx, agent.ID); err != nil {
+			t.Fatalf("the agent was deleted: %v", err)
+		}
+
+		// Once nothing depends on it, it can go.
+		if err := e.deps.policies.Delete(ctx, policy.ID); err != nil {
+			t.Fatalf("delete policy: %v", err)
+		}
+		dest.RetentionAgentID = nil
+		if err := e.deps.dests.Update(ctx, dest); err != nil {
+			t.Fatalf("clear maintenance agent: %v", err)
+		}
+		assertStatus(t, e.del(t, "/api/v1/agents/"+agent.ID.String(), admin), http.StatusNoContent)
+	})
+
 	t.Run("returns 403 for non-admin user", func(t *testing.T) {
 		e := newTestEnv(t)
 		agent := createDBAgent(t, e.deps, "protected-agent")

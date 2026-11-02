@@ -41,6 +41,7 @@ import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
+import AgentDeleteDialog from '@/components/agents/AgentDeleteDialog.vue'
 import {
     ChartContainer,
     ChartCrosshair,
@@ -127,7 +128,6 @@ const crosshairColor = (_d: unknown, i: number) =>
 
 const editSheetOpen = ref(false)
 const deleteDialogOpen = ref(false)
-const deleteLoading = ref(false)
 const resetIdentityDialogOpen = ref(false)
 const resetIdentityLoading = ref(false)
 
@@ -192,18 +192,6 @@ function subscribe() {
 // Delete
 // ---------------------------------------------------------------------------
 
-async function confirmDelete() {
-    deleteLoading.value = true
-    try {
-        await api(`/api/v1/agents/${agentId}`, { method: 'DELETE' })
-        router.push('/agents')
-    } catch (e: any) {
-        error.value = apiErrorMessage(e, 'Failed to delete agent')
-    } finally {
-        deleteLoading.value = false
-        deleteDialogOpen.value = false
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Reset identity
@@ -569,25 +557,8 @@ onUnmounted(() => {
         @update:open="editSheetOpen = $event" @saved="fetchAgent" />
 
     <!-- Delete dialog -->
-    <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
-        <AlertDialogContent>
-            <AlertDialogHeader>
-                <AlertDialogTitle>Delete agent?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    <span v-if="mergedAgent">
-                        <strong>{{ mergedAgent.name }}</strong> will be soft-deleted. Existing jobs
-                        and snapshots will be retained.
-                    </span>
-                </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-                <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" :disabled="deleteLoading" @click="confirmDelete">
-                    {{ deleteLoading ? 'Deleting…' : 'Delete' }}
-                </AlertDialogAction>
-            </AlertDialogFooter>
-        </AlertDialogContent>
-    </AlertDialog>
+    <AgentDeleteDialog :open="deleteDialogOpen" :agent="mergedAgent" @update:open="deleteDialogOpen = $event"
+        @deleted="router.push('/agents')" />
 
     <!-- Reset identity dialog -->
     <AlertDialog :open="resetIdentityDialogOpen" @update:open="resetIdentityDialogOpen = $event">
