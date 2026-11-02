@@ -66,7 +66,7 @@ func (p *OIDCAuthProvider) Login(_ context.Context, _ LoginRequest) (*TokenPair,
 
 // AuthorizationURL generates the OIDC authorization URL for the given provider.
 // callbackURL is the redirect URI registered with the identity provider
-// (computed server-side as {base_url}/api/v1/auth/oidc/callback).
+// (computed server-side as {base_url}/auth/oidc/callback).
 // The caller must store state and codeVerifier in short-lived session cookies
 // before redirecting the user.
 func (p *OIDCAuthProvider) AuthorizationURL(ctx context.Context, providerID uuid.UUID, callbackURL string) (url, state, codeVerifier string, err error) {

@@ -136,7 +136,7 @@ type RecoveryCode struct {
 
 // OIDCProvider stores the configuration for an external OIDC identity provider.
 // ClientSecret is encrypted at rest. Multiple providers are supported.
-// The callback URL is computed server-side as {base_url}/api/v1/auth/oidc/callback
+// The callback URL is computed server-side as {base_url}/auth/oidc/callback
 // and is not stored in the database.
 type OIDCProvider struct {
 	Base

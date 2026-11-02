@@ -302,7 +302,8 @@ func (h *AuthHandler) OIDCLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
-// OIDCCallback handles GET /api/v1/auth/oidc/callback.
+// OIDCCallback handles GET /auth/oidc/callback (registered at the root, outside
+// /api/v1, so the redirect URI configured at the identity provider is short).
 // Completes the Authorization Code + PKCE flow using the provider ID, state,
 // and verifier stored in the session cookies set by OIDCLogin.
 func (h *AuthHandler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
