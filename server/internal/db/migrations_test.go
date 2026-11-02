@@ -545,15 +545,19 @@ func TestSQLiteMigration_OIDCSessionLimit(t *testing.T) {
 		t.Fatalf("Migrate(37): %v", err)
 	}
 
-	oidcUser := &User{Email: "oidc@test.local", DisplayName: "O", Role: "user", IsActive: true, OIDCProvider: uuid.NewString(), OIDCSub: "sub"}
-	localUser := &User{Email: "local@test.local", DisplayName: "L", Role: "user", IsActive: true}
+	// Users are inserted with plain SQL, as the schema stands at 000037: the
+	// User model has columns added by later migrations.
+	now := time.Now()
+	oidcUser := &User{Email: "oidc@test.local", OIDCProvider: uuid.NewString()}
+	localUser := &User{Email: "local@test.local"}
 	for _, u := range []*User{oidcUser, localUser} {
-		if err := gdb.Create(u).Error; err != nil {
+		u.ID = uuid.New()
+		if err := gdb.Exec(`INSERT INTO users (id, email, display_name, role, is_active, oidc_provider, oidc_sub, created_at, updated_at) VALUES (?, ?, 'U', 'user', true, ?, ?, ?, ?)`,
+			u.ID.String(), u.Email, u.OIDCProvider, u.OIDCProvider, now, now).Error; err != nil {
 			t.Fatalf("create user %s: %v", u.Email, err)
 		}
 	}
 
-	now := time.Now()
 	rows := map[string]struct {
 		userID       uuid.UUID
 		revokedAt    *time.Time
