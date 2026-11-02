@@ -91,6 +91,7 @@ export interface User {
   two_factor_enabled: boolean
   last_login_at: string | null
   created_at: string
+  must_change_password: boolean // set by an admin's Set password
 }
 
 // ─── Two-factor authentication ────────────────────────────────────────────────
@@ -531,6 +532,9 @@ export interface TokenResponse {
   access_token?: string
   expires_in?: number
   two_factor_required?: boolean
+  // The account must set a new password before a session is issued; the
+  // challenge_token goes to /auth/login/password with it.
+  password_change_required?: boolean
   challenge_token?: string
 }
 

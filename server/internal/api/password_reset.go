@@ -240,6 +240,8 @@ func (h *PasswordResetHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user.Password = db.EncryptedString(hash)
+	// The user chose this password: an admin's "must change" is satisfied.
+	user.MustChangePassword = false
 	if err := h.users.Update(ctx, user); err != nil {
 		h.logger.Error("password reset: updating password failed", zap.Error(err))
 		ErrInternal(w)

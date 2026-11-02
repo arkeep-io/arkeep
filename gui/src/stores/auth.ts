@@ -23,11 +23,16 @@ import { ofetch } from 'ofetch'
 import type { User, ApiResponse, TokenResponse } from '@/types'
 import { router } from '@/router'
 
+// PasswordChangeStep is returned instead of a session when the account must
+// set a new password (an admin's Set password): call completePasswordChange().
+export type PasswordChangeStep = { passwordChangeRequired: true; challengeToken: string }
+
 // LoginOutcome is what login() resolves to instead of throwing: a two-factor
 // account needs a second call to completeTwoFactor() before a session exists.
 export type LoginOutcome =
-  | { twoFactorRequired: false }
+  | { twoFactorRequired: false; passwordChangeRequired?: false }
   | { twoFactorRequired: true; challengeToken: string }
+  | ({ twoFactorRequired: false } & PasswordChangeStep)
 
 export const useAuthStore = defineStore('auth', () => {
   // ─── State ──────────────────────────────────────────────────────────────────
@@ -65,6 +70,9 @@ export const useAuthStore = defineStore('auth', () => {
     if (res.data.two_factor_required) {
       return { twoFactorRequired: true, challengeToken: res.data.challenge_token! }
     }
+    if (res.data.password_change_required) {
+      return { twoFactorRequired: false, passwordChangeRequired: true, challengeToken: res.data.challenge_token! }
+    }
     await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
     return { twoFactorRequired: false }
   }
@@ -74,11 +82,29 @@ export const useAuthStore = defineStore('auth', () => {
   // deliberately answers a wrong/expired code with 400, not 401, so api()'s
   // 401-refresh-retry interceptor can't swallow the error — see
   // server/internal/api/auth.go's LoginTwoFactor.
-  async function completeTwoFactor(challengeToken: string, code: string): Promise<void> {
+  // After the code, an account that must set a new password resolves with a
+  // PasswordChangeStep instead of a session.
+  async function completeTwoFactor(challengeToken: string, code: string): Promise<PasswordChangeStep | undefined> {
     const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/login/2fa', {
       method: 'POST',
       credentials: 'include',
       body: { challenge_token: challengeToken, code },
+    })
+    if (res.data.password_change_required) {
+      return { passwordChangeRequired: true, challengeToken: res.data.challenge_token! }
+    }
+    await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
+    return undefined
+  }
+
+  // completePasswordChange finishes a login that returned a PasswordChangeStep:
+  // it sets the new password and establishes the session. Raw ofetch for the
+  // same reason as completeTwoFactor (the server answers errors with 400).
+  async function completePasswordChange(challengeToken: string, password: string): Promise<void> {
+    const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/login/password', {
+      method: 'POST',
+      credentials: 'include',
+      body: { challenge_token: challengeToken, password },
     })
     await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
   }
@@ -179,6 +205,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     login,
     completeTwoFactor,
+    completePasswordChange,
     logout,
     refresh,
     initialize,

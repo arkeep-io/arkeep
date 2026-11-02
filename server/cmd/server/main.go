@@ -211,6 +211,7 @@ func run(ctx context.Context, cfg *config) error {
 	auditRepo := repositories.NewAuditRepository(gormDB)
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
+	passwordChangeRepo := repositories.NewPasswordChangeChallengeRepository(gormDB)
 	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
 
 	// The initial admin can only be created within api.SetupWindow of this
@@ -473,6 +474,7 @@ func run(ctx context.Context, cfg *config) error {
 		ResetTokens:        resetTokenRepo,
 		RefreshTokens:      refreshTokenRepo,
 		Challenges:         challengeRepo,
+		PasswordChanges:    passwordChangeRepo,
 		RecoveryCodes:      recoveryCodeRepo,
 		Mailer:             notifService,
 		Pinger:             hcPinger,
