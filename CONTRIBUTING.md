@@ -118,64 +118,76 @@ test: add unit tests for retention policy scheduler
 
 ### Adding a New Destination Type
 
-Destination types are defined in three places. Follow these steps to add a new one:
-
 **1. Database — add the type string**
 
-In `server/internal/db/migrations/`, add a new migration that updates the `CHECK` constraint
-on `destinations.type` to include your new type string (e.g. `'azure'`).
+In `server/internal/db/migrations/`, add a migration that updates the `CHECK` constraint on
+`destinations.type` to include your new type string (e.g. `'azure'`). Changing a `CHECK`
+constraint needs separate files for SQLite and PostgreSQL (see the `sqlite/` and `postgres/`
+folders).
 
-**2. Server — credential handling**
+**2. Server — repository URL, environment and validation**
 
-In `server/internal/api/` (destinations handler), add a case for your new type to:
-- `validateDestinationCredentials()` — validate required fields
-- `buildDestinationEnv()` — map credentials to the environment variables Restic/Rclone expects
+In `server/internal/destutil/destutil.go`:
+- `BuildRepoURL()` — build the restic repository URL from the destination config.
+- `BuildEnv()` — map credentials to a **fixed** set of Restic/Rclone environment variables. Never
+  pass user-supplied keys through: restic and rclone honour variables such as
+  `RESTIC_PASSWORD_COMMAND` or `LD_PRELOAD` that run commands on the agent.
 
-**3. Agent — Restic/Rclone mapping**
+In `server/internal/destutil/validate.go`, add the required fields of the new type to
+`ValidateConfig()` and `ValidateCredentials()`, mirroring the GUI schema: the server is the
+authority, not the GUI. Then add the type to `validDestinationTypes` in
+`server/internal/api/destinations.go`.
 
-In `agent/internal/restic/wrapper.go`:
-- Add a new `DestinationType` constant (e.g. `DestAzure DestinationType = "azure"`).
-- Update `buildCmd()` to set the correct `RESTIC_REPOSITORY` format and any backend-specific
-  environment variables for your destination type.
+**3. Agent — environment allowlist**
+
+Add every environment variable the new type needs to `allowedDestEnv` in
+`agent/internal/restic/env.go`. The agent drops any other key before running restic.
 
 **4. GUI — destination form**
 
 In `gui/src/components/destinations/DestinationSheet.vue`:
-- Add your type to the type selector.
-- Add a conditional form section (using `v-if="form.type === 'azure'"`) with the required credential fields.
-- Add a matching entry to the `destinationTypeLabels` map.
+- Add the type to the `DEST_TYPES` list (value and label for the type selector).
+- Add a conditional form section with its credential fields.
 
 **5. Tests**
 
-Add at least one test in `agent/internal/restic/` that verifies the repository URL format
-and environment variable mapping for your new type.
+Add tests in `server/internal/destutil/` (repository URL, environment variables, validation) and
+in `agent/internal/restic/` (environment allowlist).
 
 ---
 
 ### Adding a New Source Type
 
-Source types define what gets backed up. The current types are `directory` and `docker-volume`.
+Source types define what gets backed up. The current types are `directory`, `docker-volume` and
+`command`.
 
-**1. Agent — executor**
+**1. Server — flattening the sources**
 
-In `agent/internal/executor/`, update `buildSourcesList()` to handle your new source type prefix
-(e.g. `pg-database://`). This function translates the JSON sources array from the server into
-the list of paths passed to `restic.Backup()`.
+In `server/internal/policyutil/sources.go`, update `SourcePaths()` (the paths passed to the
+regular restic invocation) and/or add a dedicated extractor like `CommandSources()`, depending on
+whether the type produces a path or something else entirely.
 
-If your source type requires a pre-backup step (like `pg_dump`), implement it as a pre-backup
-hook rather than a new source type — see `agent/internal/hooks/` for the hooks runner.
+**2. Agent — executor**
 
-**2. Server — policy form**
+In `agent/internal/executor/executor.go`, update `resolveSources()` for a path-shaped type
+(prefix convention, e.g. `docker-volume://`), or add its own dispatch in `executeBackup()` for a
+type that is not a filesystem path at all (like `command`).
+
+**3. GUI — policy form**
 
 In `gui/src/components/policies/PolicySheet.vue`:
-- Add your type to the source type selector.
-- Add the corresponding form fields and any validation logic.
-- Update the JSON serialization in `buildSourcesJSON()` to produce the format the agent expects.
+- Add the type to `SOURCE_TYPES` and the type selector.
+- Add the form fields and their validation to `sourceItemSchema`.
+- The JSON serialization in `onSubmit` already passes `{type, path, label}` through for any type
+  other than `docker-volume`; only special-case it if the new type needs it.
 
-**3. Server — scheduler**
-
-In `server/internal/scheduler/scheduler.go`, update `buildSourcesList()` if the server needs to
-transform your source type before sending it to the agent via gRPC.
+If the source needs a pre-backup step whose result *is* a path worth backing up (e.g. exporting to
+a file first), a pre-backup hook (`agent/internal/hooks/`) is still the right tool. For data that
+should stream into restic without touching disk (e.g. `pg_dump` through restic's
+`--stdin-from-command`), use the `command` source type: see `CommandSources()`,
+`BackupFromCommand()` in `agent/internal/restic/wrapper.go`, and the admin-only gating in
+`server/internal/api/policies.go` (a command source runs a shell command on the agent, like a
+hook).
 
 ---
 
