@@ -96,6 +96,45 @@ func TestDestinationHandler_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("integrity check defaults", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			check        map[string]any
+			wantEnabled  bool
+			wantSchedule string
+		}{
+			{"omitted: on, weekly", nil, true, "0 3 * * 0"},
+			{"explicitly off", map[string]any{"check_enabled": false}, false, ""},
+			{"on without schedule: manual only", map[string]any{"check_enabled": true}, true, ""},
+			{"on with schedule", map[string]any{"check_enabled": true, "check_schedule": "0 4 * * *"}, true, "0 4 * * *"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				e := newTestEnv(t)
+				body := map[string]any{"name": "local", "type": "local", "config": `{"path":"/backups"}`}
+				for k, v := range tt.check {
+					body[k] = v
+				}
+				resp := e.post(t, "/api/v1/destinations", e.adminToken(t), body)
+				assertStatus(t, resp, http.StatusCreated)
+
+				var data struct {
+					CheckEnabled       bool   `json:"check_enabled"`
+					CheckSchedule      string `json:"check_schedule"`
+					CheckMode          string `json:"check_mode"`
+					CheckSubsetPercent int    `json:"check_subset_percent"`
+				}
+				decodeData(t, resp, &data)
+				if data.CheckEnabled != tt.wantEnabled || data.CheckSchedule != tt.wantSchedule {
+					t.Errorf("check = %v %q, want %v %q", data.CheckEnabled, data.CheckSchedule, tt.wantEnabled, tt.wantSchedule)
+				}
+				if data.CheckMode != "subset" || data.CheckSubsetPercent != 5 {
+					t.Errorf("check mode = %q %d%%, want subset 5%%", data.CheckMode, data.CheckSubsetPercent)
+				}
+			})
+		}
+	})
+
 	t.Run("returns 400 for invalid retention keep values", func(t *testing.T) {
 		e := newTestEnv(t)
 		for _, retention := range []map[string]any{
