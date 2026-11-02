@@ -49,9 +49,9 @@ const (
 	// password has to do it before starting over.
 	passwordChangeChallengeTTL = 10 * time.Minute
 
-	// invalidPasswordChangeMessage is identical for an unknown, expired or
+	// invalidChangeChallengeMessage is identical for an unknown, expired or
 	// consumed challenge.
-	invalidPasswordChangeMessage = "invalid or expired request, sign in again"
+	invalidChangeChallengeMessage = "invalid or expired request, sign in again"
 )
 
 // totpCodePattern distinguishes a six-digit TOTP value from a recovery code.
@@ -624,7 +624,7 @@ func (h *AuthHandler) LoginPasswordChange(w http.ResponseWriter, r *http.Request
 	challenge, err := h.passwordChanges.GetUnusedByHash(ctx, auth.HashToken(req.ChallengeToken))
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			ErrBadRequest(w, invalidPasswordChangeMessage)
+			ErrBadRequest(w, invalidChangeChallengeMessage)
 			return
 		}
 		h.logger.Error("password change login: challenge lookup failed", zap.Error(err))
@@ -632,14 +632,14 @@ func (h *AuthHandler) LoginPasswordChange(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if time.Now().After(challenge.ExpiresAt) {
-		ErrBadRequest(w, invalidPasswordChangeMessage)
+		ErrBadRequest(w, invalidChangeChallengeMessage)
 		return
 	}
 
 	user, err := h.users.GetByID(ctx, challenge.UserID)
 	if err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			ErrBadRequest(w, invalidPasswordChangeMessage)
+			ErrBadRequest(w, invalidChangeChallengeMessage)
 			return
 		}
 		h.logger.Error("password change login: user lookup failed", zap.Error(err))
@@ -652,7 +652,7 @@ func (h *AuthHandler) LoginPasswordChange(w http.ResponseWriter, r *http.Request
 	}
 	// The flag may have been cleared meanwhile (password reset by email).
 	if !user.MustChangePassword || user.OIDCProvider != "" {
-		ErrBadRequest(w, invalidPasswordChangeMessage)
+		ErrBadRequest(w, invalidChangeChallengeMessage)
 		return
 	}
 	// Checked before the challenge is consumed, so the user can try again.
@@ -665,7 +665,7 @@ func (h *AuthHandler) LoginPasswordChange(w http.ResponseWriter, r *http.Request
 	// one gets past this point.
 	if err := h.passwordChanges.Consume(ctx, challenge.ID); err != nil {
 		if errors.Is(err, repositories.ErrNotFound) {
-			ErrBadRequest(w, invalidPasswordChangeMessage)
+			ErrBadRequest(w, invalidChangeChallengeMessage)
 			return
 		}
 		h.logger.Error("password change login: consuming the challenge failed", zap.Error(err))
