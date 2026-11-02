@@ -345,3 +345,29 @@ func TestStartQueued_MaintenanceAgentChanged_Fails(t *testing.T) {
 		t.Errorf("job status = %q, want \"failed\"", got.Status)
 	}
 }
+
+// TestEligible: a disabled destination is paused, so it gets no scheduled
+// check; Run Check Now (TriggerNow) does not go through eligible.
+func TestEligible(t *testing.T) {
+	base := db.Destination{Enabled: true, CheckEnabled: true, CheckSchedule: "0 3 * * 0"}
+	tests := []struct {
+		name   string
+		modify func(d *db.Destination)
+		want   bool
+	}{
+		{"scheduled", func(d *db.Destination) {}, true},
+		{"destination disabled", func(d *db.Destination) { d.Enabled = false }, false},
+		{"check off", func(d *db.Destination) { d.CheckEnabled = false }, false},
+		{"no schedule", func(d *db.Destination) { d.CheckSchedule = "" }, false},
+		{"append-only", func(d *db.Destination) { d.AppendOnly = true }, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := base
+			tt.modify(&d)
+			if got := eligible(&d); got != tt.want {
+				t.Errorf("eligible = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

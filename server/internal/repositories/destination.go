@@ -212,12 +212,12 @@ func (r *gormDestinationRepository) PolicyCountsByDestination(ctx context.Contex
 }
 
 // ListWithRetentionSchedule returns every enabled, non-append-only
-// destination with a configured retention schedule — the set the retention
-// scheduler registers a gocron job for on Start.
+// destination with retention enabled and a configured retention schedule —
+// the set the retention scheduler registers a gocron job for on Start.
 func (r *gormDestinationRepository) ListWithRetentionSchedule(ctx context.Context) ([]db.Destination, error) {
 	var destinations []db.Destination
 	err := r.db.WithContext(ctx).
-		Where("retention_enabled = ? AND append_only = ? AND retention_schedule != ''", true, false).
+		Where("enabled = ? AND retention_enabled = ? AND append_only = ? AND retention_schedule != ''", true, true, false).
 		Find(&destinations).Error
 	if err != nil {
 		return nil, fmt.Errorf("destinations: list with retention schedule: %w", err)
@@ -225,14 +225,14 @@ func (r *gormDestinationRepository) ListWithRetentionSchedule(ctx context.Contex
 	return destinations, nil
 }
 
-// ListWithCheckSchedule returns every destination with integrity checks
-// enabled and a configured schedule — the set the check scheduler registers a
-// gocron job for on Start. Append-only destinations are included: restic
-// check only reads the repository.
+// ListWithCheckSchedule returns every enabled destination with integrity
+// checks enabled and a configured schedule — the set the check scheduler
+// registers a gocron job for on Start. Append-only destinations are included:
+// restic check only reads the repository.
 func (r *gormDestinationRepository) ListWithCheckSchedule(ctx context.Context) ([]db.Destination, error) {
 	var destinations []db.Destination
 	err := r.db.WithContext(ctx).
-		Where("check_enabled = ? AND check_schedule != ''", true).
+		Where("enabled = ? AND check_enabled = ? AND check_schedule != ''", true, true).
 		Find(&destinations).Error
 	if err != nil {
 		return nil, fmt.Errorf("destinations: list with check schedule: %w", err)

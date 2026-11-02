@@ -28,7 +28,8 @@ type ListOptions struct {
 // all queries that return this type.
 type PolicyDestinationWithName struct {
 	db.PolicyDestination
-	DestinationName string
+	DestinationName    string
+	DestinationEnabled bool
 }
 
 // -----------------------------------------------------------------------------

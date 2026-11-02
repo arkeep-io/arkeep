@@ -361,3 +361,29 @@ func TestTriggerNow_DestinationBusy_Queues(t *testing.T) {
 		t.Errorf("destination locks = %+v, %v; want only %s (held by the started sweep)", locks, err, job.ID)
 	}
 }
+
+// TestEligible: a disabled destination is paused, so it gets no scheduled
+// sweep; Run Retention Now (TriggerNow) does not go through eligible.
+func TestEligible(t *testing.T) {
+	base := db.Destination{Enabled: true, RetentionEnabled: true, RetentionSchedule: "0 3 * * *"}
+	tests := []struct {
+		name   string
+		modify func(d *db.Destination)
+		want   bool
+	}{
+		{"scheduled", func(d *db.Destination) {}, true},
+		{"destination disabled", func(d *db.Destination) { d.Enabled = false }, false},
+		{"retention off", func(d *db.Destination) { d.RetentionEnabled = false }, false},
+		{"append-only", func(d *db.Destination) { d.AppendOnly = true }, false},
+		{"no schedule", func(d *db.Destination) { d.RetentionSchedule = "" }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := base
+			tt.modify(&d)
+			if got := eligible(&d); got != tt.want {
+				t.Errorf("eligible = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

@@ -1093,7 +1093,7 @@ function onOpenChange(value: boolean) {
                             <div>
                                 <p class="text-sm font-medium">Enabled</p>
                                 <p class="text-muted-foreground text-xs">
-                                    Disabled destinations are skipped during backup jobs.
+                                    Disabled destinations are skipped by backups, snapshot sync and scheduled retention and checks.
                                 </p>
                             </div>
                             <Switch :model-value="enabled" @update:model-value="enabled = $event" />
