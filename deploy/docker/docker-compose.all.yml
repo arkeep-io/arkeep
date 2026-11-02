@@ -12,7 +12,7 @@
 
 services:
   server:
-    image: ghcr.io/arkeep-io/arkeep-server:latest
+    image: ghcr.io/arkeep-io/arkeep-server:v0.9.1
     container_name: arkeep-server
     restart: unless-stopped
     ports:
@@ -45,7 +45,7 @@ services:
       start_period: 10s
 
   agent:
-    image: ghcr.io/arkeep-io/arkeep-agent:latest
+    image: ghcr.io/arkeep-io/arkeep-agent:v0.9.1
     container_name: arkeep-agent
     restart: unless-stopped
     depends_on:
@@ -106,7 +106,7 @@ services:
 
   # ── Optional: PostgreSQL ────────────────────────────────────────────────────
   # postgres:
-  #   image: postgres:16-alpine
+  #   image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
   #   container_name: arkeep-postgres
   #   restart: unless-stopped
   #   environment:

@@ -50,6 +50,14 @@ To build a production binary with the GUI embedded:
 task build:server   # builds GUI first, then compiles Go with GUI embedded
 ```
 
+Toolchains and tools are pinned ([ADR 0013](docs/adr/0013-pin-and-verify-every-dependency.md)):
+Go follows the `toolchain` in `go.work` (fetched automatically by `go`), Node follows `.nvmrc`, pnpm
+follows `packageManager` in `gui/package.json`, and protoc must be the version used in CI (29.3). Task,
+protoc-gen-go, protoc-gen-go-grpc, govulncheck and gosec are pinned in `tools/go.mod`: install them with
+`cd tools && GOWORK=off go install tool`, then `task tools:install` keeps them in sync. Dependabot and a
+weekly workflow propose updates; `task deps:update`, `task deps:pins:update` and `task deps:vulncheck` do
+the same locally.
+
 ---
 
 ## Project Conventions

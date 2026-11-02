@@ -1,10 +1,25 @@
+# Dependency updates (ADR 0013 — docs/adr/0013-pin-and-verify-every-dependency.md).
+#
+# Every ecosystem is pinned exactly (versions, commit SHAs, image digests);
+# Dependabot keeps those pins current with one grouped pull request per
+# ecosystem and per week. The cooldown lets a new release age 7 days before it
+# is proposed, so a hijacked release is usually yanked first. Security updates
+# are not subject to the cooldown.
+#
+# Not covered here: restic and rclone (agent/scripts/deps.json) and the Helm
+# appVersion, refreshed by .github/workflows/deps-pins.yml.
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    directory: "/server"
+    directories:
+      - "/server"
+      - "/agent"
+      - "/shared"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     groups:
@@ -12,27 +27,18 @@ updates:
         patterns:
           - "*"
 
+  # Development and CI tools (protoc plugins, govulncheck, gosec, Task).
   - package-ecosystem: "gomod"
-    directory: "/agent"
+    directory: "/tools"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     groups:
-      all-go-deps:
-        patterns:
-          - "*"
-
-  - package-ecosystem: "gomod"
-    directory: "/shared"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels:
-      - "dependencies"
-    groups:
-      all-go-deps:
+      go-tools:
         patterns:
           - "*"
 
@@ -41,6 +47,10 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+    # package.json lists exact versions: keep them exact.
+    versioning-strategy: increase
     labels:
       - "dependencies"
     groups:
@@ -48,27 +58,58 @@ updates:
         patterns:
           - "*"
 
+  # Base images of the Dockerfiles, pinned as tag@digest.
   - package-ecosystem: "docker"
-    directory: "/server"
+    directories:
+      - "/server"
+      - "/agent"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
+    groups:
+      base-images:
+        patterns:
+          - "*"
 
-  - package-ecosystem: "docker"
-    directory: "/agent"
+  # Images in the deployment examples: PostgreSQL by tag@digest, Arkeep by
+  # release tag (bumped here when a new Arkeep release is published).
+  - package-ecosystem: "docker-compose"
+    directory: "/deploy/docker"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
+    labels:
+      - "dependencies"
+    groups:
+      compose-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "helm"
+    directory: "/deploy/helm/arkeep"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
 
+  # Actions are pinned by commit SHA; Dependabot updates the SHA and the
+  # version comment together.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     labels:
       - "dependencies"
     groups:

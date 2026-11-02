@@ -10,7 +10,7 @@
 
 services:
   agent:
-    image: ghcr.io/arkeep-io/arkeep-agent:latest
+    image: ghcr.io/arkeep-io/arkeep-agent:v0.9.1
     container_name: arkeep-agent
     restart: unless-stopped
     environment:
