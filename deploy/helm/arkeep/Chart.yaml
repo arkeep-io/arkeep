@@ -2,10 +2,13 @@ apiVersion: v2
 name: arkeep
 description: Centralized backup management for self-hosted infrastructure
 type: application
+# Placeholder for installs from a clone. A release publishes the chart with
+# version and appVersion taken from its tag (ADR 0014).
 version: 0.1.0
 # Arkeep release deployed by default (image tag). Kept in sync with the latest
 # release by .github/workflows/deps-pins.yml (ADR 0013), like the compose examples.
 appVersion: "v0.9.1"
+icon: https://arkeep.io/apple-touch-icon.png
 
 keywords:
   - backup
@@ -13,7 +16,7 @@ keywords:
   - self-hosted
   - infrastructure
 
-home: https://github.com/arkeep-io/arkeep
+home: https://arkeep.io
 sources:
   - https://github.com/arkeep-io/arkeep
 
