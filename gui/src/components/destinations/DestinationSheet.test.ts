@@ -93,6 +93,54 @@ describe('DestinationSheet', () => {
     expect(wrapper.text()).toContain('Port must be between 1 and 65535')
   })
 
+  describe('SFTP', () => {
+    // fillSFTP fills the connection fields of a new SFTP destination.
+    async function fillSFTP(wrapper: Wrapper) {
+      await selectType(wrapper, 'sftp')
+      await wrapper.find('#dest-name').setValue('Box')
+      await wrapper.find('#sftp-host').setValue('box.example.com')
+      await wrapper.find('#sftp-user').setValue('backup')
+      await wrapper.find('#sftp-path').setValue('/srv/restic')
+      await pickMaintenanceAgent(wrapper)
+    }
+
+    it('requires a password or a private key', async () => {
+      const wrapper = await openSheet()
+      await fillSFTP(wrapper)
+      await submitForm(wrapper)
+
+      expect(wrapper.text()).toContain('Enter a password or a private key')
+      expect(savedBody()).toBeUndefined()
+    })
+
+    it('warns while no host key is set and sends the one entered', async () => {
+      const wrapper = await openSheet()
+      await fillSFTP(wrapper)
+      await wrapper.find('#sftp-password').setValue('secret')
+      expect(wrapper.find('[data-testid="sftp-host-key-warning"]').exists()).toBe(true)
+
+      await wrapper.find('#sftp-host-key').setValue('  box.example.com ssh-ed25519 AAAAkey  ')
+      expect(wrapper.find('[data-testid="sftp-host-key-warning"]').exists()).toBe(false)
+      await submitForm(wrapper)
+
+      const config = JSON.parse(String(savedBody()?.config))
+      expect(config).toMatchObject({ host: 'box.example.com', host_key: 'box.example.com ssh-ed25519 AAAAkey' })
+      expect(JSON.parse(String(savedBody()?.credentials))).toMatchObject({ password: 'secret' })
+    })
+
+    it('loads the stored host key and keeps blank credentials on edit', async () => {
+      const wrapper = await openSheet({
+        ...s3Destination, type: 'sftp',
+        config: JSON.stringify({ host: 'box.example.com', port: '', user: 'backup', path: '/srv/restic', host_key: 'box.example.com ssh-ed25519 AAAAkey' }),
+      } as unknown as Destination)
+      expect((wrapper.find('#sftp-host-key').element as HTMLTextAreaElement).value).toBe('box.example.com ssh-ed25519 AAAAkey')
+      await submitForm(wrapper)
+
+      expect(wrapper.text()).not.toContain('Enter a password or a private key')
+      expect(savedBody()).not.toHaveProperty('credentials')
+    })
+  })
+
   it('creates a local destination with valid values', async () => {
     const wrapper = await openSheet()
     await wrapper.find('#dest-name').setValue('NAS')

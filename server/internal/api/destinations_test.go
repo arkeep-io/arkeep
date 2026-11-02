@@ -112,6 +112,17 @@ func TestDestinationHandler_Create(t *testing.T) {
 		}
 	})
 
+	t.Run("an SFTP destination needs a password or a private key", func(t *testing.T) {
+		e := newTestEnv(t)
+		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{
+			"name":        "sftp",
+			"type":        "sftp",
+			"config":      `{"host":"h","user":"u","path":"/p","port":"22"}`,
+			"credentials": `{"password":"","private_key":""}`,
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
 	t.Run("returns 400 when name is missing", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/destinations", e.adminToken(t), map[string]string{

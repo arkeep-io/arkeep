@@ -7,6 +7,13 @@ import "strings"
 // "arkeepsftp").
 const sftpRcloneEnvPrefix = "RCLONE_CONFIG_ARKEEPSFTP_"
 
+// sftpKnownHostsEnv carries the known_hosts content of an SFTP destination
+// with a pinned host key (destutil.SFTPKnownHostsEnv on the server). It is not
+// an rclone variable: buildCmd writes the content to a private file and sets
+// rclone's KNOWN_HOSTS_FILE to it. KNOWN_HOSTS_FILE itself is not allowed, so
+// the server can never point rclone at a file of its choosing.
+const sftpKnownHostsEnv = "ARKEEP_SFTP_KNOWN_HOSTS"
+
 // allowedDestEnv lists every backend env var the server may legitimately send
 // in Destination.Env. Anything else is dropped before restic runs: restic and
 // rclone honour variables such as RESTIC_PASSWORD_COMMAND, RESTIC_REPOSITORY
@@ -28,6 +35,7 @@ var allowedDestEnv = map[string]bool{
 	sftpRcloneEnvPrefix + "PORT":    true,
 	sftpRcloneEnvPrefix + "KEY_PEM": true,
 	sftpRcloneEnvPrefix + "PASS":    true,
+	sftpKnownHostsEnv:               true,
 }
 
 // filterDestEnv splits env into the allowed variables and the names of the
