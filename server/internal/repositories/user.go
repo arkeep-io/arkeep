@@ -132,6 +132,17 @@ func (r *gormUserRepository) CountActiveAdmins(ctx context.Context) (int64, erro
 	return n, nil
 }
 
+func (r *gormUserRepository) ListActiveAdmins(ctx context.Context) ([]db.User, error) {
+	var users []db.User
+	if err := r.db.WithContext(ctx).
+		Where("role = ? AND is_active = ?", "admin", true).
+		Order("created_at ASC").
+		Find(&users).Error; err != nil {
+		return nil, fmt.Errorf("users: list active admins: %w", err)
+	}
+	return users, nil
+}
+
 // -----------------------------------------------------------------------------
 // gormRefreshTokenRepository
 // -----------------------------------------------------------------------------

@@ -293,9 +293,10 @@ type event struct {
 //     On failure the row stays pending and will be retried by the background
 //     retrier (Start).
 func (s *NotificationService) notify(ctx context.Context, ev event) error {
-	admins, _, err := s.userRepo.List(ctx, repositories.ListOptions{Limit: 100, Offset: 0})
+	// Every active admin, however many users there are.
+	admins, err := s.userRepo.ListActiveAdmins(ctx)
 	if err != nil {
-		return fmt.Errorf("notification: failed to list users: %w", err)
+		return fmt.Errorf("notification: failed to list admins: %w", err)
 	}
 
 	payloadJSON, err := json.Marshal(ev.payload)
@@ -311,9 +312,6 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 
 	for i := range admins {
 		u := &admins[i]
-		if u.Role != "admin" || !u.IsActive {
-			continue
-		}
 
 		n := &db.Notification{
 			UserID:  u.ID,
