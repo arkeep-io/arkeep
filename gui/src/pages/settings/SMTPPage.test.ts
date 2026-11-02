@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mountPage, submitForm } from '@/test/mount'
+import { mountPage, settle, submitForm } from '@/test/mount'
 import { api } from '@/services/api'
 import SMTPPage from './SMTPPage.vue'
 
@@ -76,6 +76,48 @@ describe('SMTPPage', () => {
     expect(putBody()).toEqual({
       host: 'smtp.example.com', port: 465, tls: true, username: 'mailer', password: 'secret',
       from: 'arkeep@example.com', from_name: 'Arkeep', recipients: ['ops@example.com', 'dev@example.com'],
+    })
+  })
+
+  describe('send test email', () => {
+    // clickTest presses Send test email, with the test endpoint answering
+    // answer (or rejecting with it when it is an Error).
+    async function clickTest(wrapper: Awaited<ReturnType<typeof openPage>>, answer: unknown) {
+      const base = vi.mocked(api).getMockImplementation()!
+      vi.mocked(api).mockImplementation((url: string, opts?: { method?: string }) => {
+        if (url === '/api/v1/settings/smtp/test') return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer)
+        return base(url, opts)
+      })
+      await wrapper.findAll('button').find((b) => b.text() === 'Send test email')!.trigger('click')
+      await settle()
+    }
+    const testBody = () => vi.mocked(api).mock.calls.find(([u]) => u === '/api/v1/settings/smtp/test')?.[1]?.body
+
+    it('sends the form values, unsaved, and says where the email went', async () => {
+      const wrapper = await openPage(saved)
+      await wrapper.find('#smtp-host').setValue('smtp.other.com')
+      await wrapper.find('#smtp-password').setValue('typed')
+      await clickTest(wrapper, { data: { sent_to: 'admin@example.com' } })
+
+      expect(testBody()).toMatchObject({ host: 'smtp.other.com', username: 'mailer', password: 'typed' })
+      expect(putBody()).toBeUndefined()
+      expect(wrapper.find('[data-testid="smtp-test-result"]').text()).toBe('Test email sent to admin@example.com.')
+    })
+
+    it('shows why the test failed', async () => {
+      const wrapper = await openPage(saved)
+      const refusal = Object.assign(new Error('422'), { data: { error: { message: 'smtp auth: 535 bad credentials' } } })
+      await clickTest(wrapper, refusal)
+
+      expect(wrapper.find('[data-testid="smtp-test-result"]').text()).toBe('smtp auth: 535 bad credentials')
+    })
+
+    it('validates the form before testing', async () => {
+      const wrapper = await openPage(null)
+      await clickTest(wrapper, { data: { sent_to: 'x' } })
+
+      expect(wrapper.text()).toContain('Host is required')
+      expect(testBody()).toBeUndefined()
     })
   })
 })

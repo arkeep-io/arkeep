@@ -29,6 +29,8 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodPatch, "/api/v1/policies/" + id},
 		{http.MethodPost, "/api/v1/jobs/" + id + "/cancel"},
 		{http.MethodGet, "/api/v1/snapshots/" + id + "/browse"},
+		{http.MethodPost, "/api/v1/settings/smtp/test"},
+		{http.MethodPost, "/api/v1/settings/webhook/test"},
 	}
 
 	e := newTestEnv(t)

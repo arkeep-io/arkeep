@@ -500,6 +500,59 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// TestSMTP handles POST /api/v1/settings/smtp/test (admin only). It sends a
+// test email with the values of the form, saved or not, to the signed-in admin
+// only, so it cannot be used to mail anyone else. A blank password means the
+// stored one, but only for the stored server: it is never sent to another host.
+func (h *SettingsHandler) TestSMTP(w http.ResponseWriter, r *http.Request) {
+	var req upsertSMTPRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := validateUpsertSMTP(&req); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+	claims := claimsFromCtx(r.Context())
+	if claims == nil || claims.Email == "" {
+		ErrUnauthorized(w)
+		return
+	}
+
+	password := req.Password
+	if req.Username != "" && password == "" {
+		stored, err := h.settingsRepo.GetMany(r.Context(), "smtp.")
+		if err != nil {
+			h.logger.Error("failed to load smtp settings", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		idx := settingsToMap(stored)
+		if idx[notification.KeySMTPHost] != req.Host {
+			ErrBadRequest(w, "enter the password to test a server other than the saved one")
+			return
+		}
+		password = idx[notification.KeySMTPPassword]
+	}
+
+	err := notification.SendTestEmail(r.Context(), notification.SMTPConfig{
+		Host:     req.Host,
+		Port:     req.Port,
+		Username: req.Username,
+		Password: password,
+		From:     req.From,
+		FromName: req.FromName,
+		TLS:      req.TLS,
+	}, claims.Email)
+	logAudit(r, h.auditRepo, h.logger, "settings.smtp.test", "settings", "",
+		map[string]any{"host": req.Host, "port": req.Port, "ok": err == nil})
+	if err != nil {
+		ErrUnprocessable(w, err.Error())
+		return
+	}
+	Ok(w, map[string]string{"sent_to": claims.Email})
+}
+
 func validateUpsertSMTP(req *upsertSMTPRequest) error {
 	if req.Host == "" {
 		return errors.New("host is required")
@@ -597,6 +650,43 @@ func (h *SettingsHandler) UpsertWebhook(w http.ResponseWriter, r *http.Request) 
 		Secret:  "***",
 		Enabled: req.Enabled,
 	})
+}
+
+// TestWebhook handles POST /api/v1/settings/webhook/test (admin only). It posts
+// a "test" event to the URL of the form, saved or not, signed like real events.
+// A blank secret means the stored one: it is an HMAC key and never leaves the
+// server, so it can sign a request to any URL.
+func (h *SettingsHandler) TestWebhook(w http.ResponseWriter, r *http.Request) {
+	var req upsertWebhookRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.Enabled = true // a URL is required for a test, enabled or not
+	if err := validateUpsertWebhook(&req); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+
+	secret := req.Secret
+	if secret == "" {
+		stored, err := h.settingsRepo.Get(r.Context(), notification.KeyWebhookSecret)
+		if err != nil && !errors.Is(err, repositories.ErrNotFound) {
+			h.logger.Error("failed to load webhook secret", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		if stored != nil {
+			secret = string(stored.Value)
+		}
+	}
+
+	err := notification.SendTestWebhook(r.Context(), notification.WebhookConfig{URL: req.URL, Secret: secret})
+	logAudit(r, h.auditRepo, h.logger, "settings.webhook.test", "settings", "", map[string]any{"ok": err == nil})
+	if err != nil {
+		ErrUnprocessable(w, err.Error())
+		return
+	}
+	Ok(w, map[string]bool{"ok": true})
 }
 
 func validateUpsertWebhook(req *upsertWebhookRequest) error {

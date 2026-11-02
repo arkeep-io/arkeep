@@ -313,10 +313,14 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				// SMTP configuration
 				r.Get("/settings/smtp", settingsHandler.GetSMTP)
 				r.Put("/settings/smtp", settingsHandler.UpsertSMTP)
+				// Test sends reach out to a server of the admin's choice: rate
+				// limited so they cannot become a way to send mail or requests.
+				r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/settings/smtp/test", settingsHandler.TestSMTP)
 
 				// Webhook configuration
 				r.Get("/settings/webhook", settingsHandler.GetWebhook)
 				r.Put("/settings/webhook", settingsHandler.UpsertWebhook)
+				r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/settings/webhook/test", settingsHandler.TestWebhook)
 
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
