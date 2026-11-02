@@ -160,11 +160,13 @@ is not the account owner.
 
 ### Metrics endpoint
 
-The `/metrics` endpoint (Prometheus text format) is **unauthenticated** and accessible on the same port as the HTTP API (default `:8080`). It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
+The `/metrics` endpoint (Prometheus text format) is served on the same port as the HTTP API (default `:8080`). By default it is **unauthenticated**. It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
 
 However, the endpoint can reveal information about your deployment (number of agents, job frequency, error rates) that you may not want public.
 
-**Recommendation:** restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
+**Recommendation:** set `ARKEEP_METRICS_TOKEN` (or `--metrics-token`). `/metrics` then answers `401` unless the request carries `Authorization: Bearer <token>`; the token is compared in constant time. Configure the same token in your Prometheus scrape job (`authorization.credentials`).
+
+You can also, or instead, restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
 
 ```nginx
 location /metrics {
