@@ -45,6 +45,8 @@ type UserRepository interface {
 	List(ctx context.Context, opts ListOptions) ([]db.User, int64, error)
 	// CountActiveAdmins returns how many active users hold the admin role.
 	CountActiveAdmins(ctx context.Context) (int64, error)
+	// ListActiveAdmins returns every active user holding the admin role.
+	ListActiveAdmins(ctx context.Context) ([]db.User, error)
 }
 
 // -----------------------------------------------------------------------------
