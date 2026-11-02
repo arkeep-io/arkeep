@@ -5,6 +5,10 @@ on:
     - cron: "0 8 * * 1"   # every Monday at 08:00 UTC
   push:
     branches: [main]
+  # Vulnerability checks also gate pull requests (ADR 0013). The container
+  # scan, which builds both images, only runs on main and weekly.
+  pull_request:
+    branches: [main, develop]
 
 permissions: read-all
 
@@ -17,27 +21,30 @@ jobs:
       matrix:
         module: [shared, server, agent]
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.27"
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
 
       - name: Download agent deps (restic + rclone) for agent module
         if: matrix.module == 'agent'
         run: cd agent && go run ./scripts/download_deps.go
 
-      # Installed via `go install` instead of the securego/gosec Docker action:
+      # Installed from tools/go.mod instead of the securego/gosec Docker action:
       # the action's image bundles its own Go (with GOTOOLCHAIN=local) and
       # cannot load packages when go.work requires a newer Go version.
       #
-      # Pinned to a master commit until a tagged release ships it: v2.29.0
-      # bundles golang.org/x/tools v0.49.0, which cannot read the export data
-      # (version 5) written by Go 1.27.2 ("export data version 5 is greater
-      # than maximum supported version 4"). This commit bumps x/tools to
-      # v0.51.0. Switch back to a release tag once one is available.
+      # tools/go.mod pins gosec to a master commit until a tagged release ships
+      # it: v2.29.0 bundles golang.org/x/tools v0.49.0, which cannot read the
+      # export data (version 5) written by Go 1.27 ("export data version 5
+      # is greater than maximum supported version 4"). Switch back to a release
+      # tag once one is available.
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.29.1-0.20261009120814-7b1b5cebe007
+        working-directory: tools
+        run: GOWORK=off go install github.com/securego/gosec/v2/cmd/gosec
 
       # Run from inside the module: `gosec ./<module>/...` from the workspace
       # root resolves the packages but analyzes 0 files.
@@ -55,21 +62,78 @@ jobs:
           -exclude-rules='internal/hooks/runner\.go:G204;internal/restic/wrapper\.go:G204;internal/restic/extractor\.go:G302;internal/api/auth\.go:G124,G710'
           ./...
 
+  # ─── Go known vulnerabilities ───────────────────────────────────────────────
+  # govulncheck reports vulnerabilities in code paths Arkeep actually calls and
+  # fails the job on any of them; findings in unused code are informational.
+  govulncheck:
+    name: Go Vulnerability Check
+    runs-on: ubuntu-26.04
+    strategy:
+      matrix:
+        module: [shared, server, agent]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+
+      - name: Download agent deps (restic + rclone) for agent module
+        if: matrix.module == 'agent'
+        run: cd agent && go run ./scripts/download_deps.go
+
+      - name: Install govulncheck
+        working-directory: tools
+        run: GOWORK=off go install golang.org/x/vuln/cmd/govulncheck
+
+      - name: Run govulncheck on ${{ matrix.module }}
+        working-directory: ${{ matrix.module }}
+        run: govulncheck ./...
+
+  # ─── npm known vulnerabilities ──────────────────────────────────────────────
+  pnpm-audit:
+    name: npm Vulnerability Check
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: gui/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # Fails on high and critical advisories in production and development
+      # dependencies alike: build tools run with the same privileges as the
+      # rest of the build.
+      - name: Audit GUI dependencies
+        working-directory: gui
+        run: pnpm audit --audit-level high
+
   # ─── Container vulnerability scan ───────────────────────────────────────────
   trivy:
     name: Container Vulnerability Scan
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Download agent deps (restic + rclone)
         run: cd agent && go run ./scripts/download_deps.go
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build server image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: server/Dockerfile
@@ -78,7 +142,7 @@ jobs:
           push: false
 
       - name: Build agent image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: agent/Dockerfile
@@ -87,7 +151,7 @@ jobs:
           push: false
 
       - name: Scan server image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: arkeep-server:scan
           format: table
@@ -96,7 +160,7 @@ jobs:
           version: v0.76.1
 
       - name: Scan agent image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: arkeep-agent:scan
           format: table

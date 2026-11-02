@@ -3,11 +3,13 @@
 #   docker build -f server/Dockerfile -t arkeep-server .
 
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
-FROM node:26-alpine AS gui-builder
+FROM node:26.9.0-alpine3.24@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070 AS gui-builder
 
 # Node >= 25 no longer bundles corepack; install it to get the pnpm version
-# pinned by the packageManager field in gui/package.json.
-RUN npm install -g corepack && corepack enable
+# pinned by the packageManager field in gui/package.json. Corepack checks
+# pnpm against the sha512 recorded there; corepack itself is pinned exactly
+# and npm checks it against the registry's integrity hash (ADR 0013).
+RUN npm install -g corepack@0.36.0 && corepack enable
 
 WORKDIR /src/gui
 
@@ -18,7 +20,7 @@ COPY gui/ ./
 RUN pnpm build
 
 # ─── Stage 2: build server ────────────────────────────────────────────────────
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 
 RUN apk add --no-cache git
 
@@ -49,7 +51,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
     ./cmd/server
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM alpine:3.24
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 RUN apk upgrade --no-cache && \
     apk add --no-cache ca-certificates tzdata && \

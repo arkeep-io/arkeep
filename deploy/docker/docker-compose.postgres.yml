@@ -12,7 +12,7 @@
 
 services:
   server:
-    image: ghcr.io/arkeep-io/arkeep-server:latest
+    image: ghcr.io/arkeep-io/arkeep-server:v0.9.1
     container_name: arkeep-server
     restart: unless-stopped
     depends_on:
@@ -67,7 +67,7 @@ services:
       start_period: 10s
 
   postgres:
-    image: postgres:17-alpine
+    image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     container_name: arkeep-postgres
     restart: unless-stopped
     environment:

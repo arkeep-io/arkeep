@@ -9,26 +9,48 @@ on:
 permissions: read-all
 
 jobs:
+  # ─── Dependency pinning (ADR 0013) ──────────────────────────────────────────
+  pins:
+    name: Check dependency pins
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check dependency pins
+        run: scripts/check-pins.sh
+
   # ─── Go tests ───────────────────────────────────────────────────────────────
   test-go:
     name: Test Go
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.27"
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
           cache-dependency-path: |
             server/go.sum
             agent/go.sum
             shared/go.sum
 
-      - name: Install protoc
+      # protoc publishes no signature or attestation: its digest was recorded
+      # from the release asset when it was pinned (ADR 0013). The Go code
+      # generators come from tools/go.mod, verified by tools/go.sum.
+      - name: Install protoc and code generators
+        env:
+          PROTOC_VERSION: "29.3"
+          PROTOC_SHA256: 3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          curl -fsSL -o "$RUNNER_TEMP/protoc.zip" \
+            "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          echo "${PROTOC_SHA256}  $RUNNER_TEMP/protoc.zip" | sha256sum -c -
+          sudo unzip -q -o "$RUNNER_TEMP/protoc.zip" -d /usr/local bin/protoc 'include/*'
+          cd tools && GOWORK=off go install tool
 
       - name: Generate proto
         run: |
@@ -64,20 +86,22 @@ jobs:
       matrix:
         module: [shared, server, agent]
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.27"
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
 
       - name: Download agent deps (restic + rclone) for agent module
         if: matrix.module == 'agent'
         run: cd agent && go run ./scripts/download_deps.go
 
       - name: Lint ${{ matrix.module }}
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          version: v2.14.0
           working-directory: ${{ matrix.module }}
         env:
           GOTOOLCHAIN: auto
@@ -92,11 +116,13 @@ jobs:
     name: Build agent (embedded targets)
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.27"
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
 
       - name: Download agent deps (restic + rclone) for all release platforms
         run: cd agent && go run ./scripts/download_deps.go --all-platforms
@@ -113,18 +139,20 @@ jobs:
     name: Test GUI
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Node >= 25 no longer bundles corepack. pnpm/action-setup installs the
       # version pinned by packageManager in gui/package.json, and must run
       # before setup-node so its pnpm cache lookup can find the binary.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           package_json_file: gui/package.json
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "26"
+          node-version-file: .nvmrc
           cache: "pnpm"
           cache-dependency-path: gui/pnpm-lock.yaml
 

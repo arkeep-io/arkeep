@@ -9,12 +9,8 @@ vars:
     sh: date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown"
   LDFLAGS: "-s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.BUILD_DATE}}"
 
-  # Versions of embedded third-party binaries.
-  # Update these when you want to ship a newer restic or rclone.
-  # NOTE: these vars are kept here for documentation purposes — the actual
-  # version constants live in scripts/download_deps.go and must be kept in sync.
-  RESTIC_VERSION: "0.19.1"
-  RCLONE_VERSION: "1.75.2"
+  # Versions and SHA-256 digests of the embedded restic and rclone binaries
+  # live in agent/scripts/deps.json (task deps:pins:update).
 
 tasks:
   # ─── Build ──────────────────────────────────────────────────────────────────
@@ -60,6 +56,45 @@ tasks:
     desc: Download rclone binary for the current platform (delegates to the shared Go script)
     dir: agent
     cmd: go run ./scripts/download_deps.go
+
+  # ─── Dependency maintenance (ADR 0013) ──────────────────────────────────────
+  # Day to day, Dependabot and .github/workflows/deps-pins.yml keep every pin
+  # current with weekly pull requests. These tasks do the same by hand.
+  tools:install:
+    desc: Install the pinned development tools (protoc plugins, govulncheck, gosec, Task) into GOBIN
+    dir: tools
+    env: { GOWORK: "off" }
+    cmd: go install tool
+
+  deps:pins:check:
+    desc: Fail if a dependency is not pinned as required by ADR 0013
+    cmd: bash scripts/check-pins.sh
+
+  deps:pins:update:
+    desc: Update restic and rclone to their latest releases (7-day cooldown), with GPG-verified SHA-256 pins
+    cmd: bash agent/scripts/update-deps-pins.sh
+
+  deps:vulncheck:
+    desc: Check Go modules and GUI dependencies for known vulnerabilities
+    cmds:
+      # Built from tools/go.mod: "go tool -modfile" is not allowed in workspace mode.
+      - cd tools && GOWORK=off go build -o ../bin/tools/ golang.org/x/vuln/cmd/govulncheck
+      - for: [shared, server, agent]
+        cmd: cd {{.ITEM}} && ../bin/tools/govulncheck ./...
+      - cd gui && pnpm audit --audit-level high
+
+  deps:update:
+    desc: Bump every Go and npm dependency to its latest version, then re-check pins and vulnerabilities
+    # Base images, compose images and actions are bumped by Dependabot (their
+    # digests and SHAs are resolved against the registries), and restic/rclone
+    # by deps:pins:update.
+    cmds:
+      - for: [shared, server, agent]
+        cmd: cd {{.ITEM}} && go get -u ./... && go mod tidy
+      - cd tools && GOWORK=off go get -u tool && GOWORK=off go mod tidy
+      - cd gui && pnpm update --latest
+      - task: deps:pins:check
+      - task: deps:vulncheck
 
   # ─── Run (development) ──────────────────────────────────────────────────────
   run:server:

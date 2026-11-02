@@ -1,7 +1,7 @@
 # 0013. Pin and verify every dependency
 
-- **Status:** Proposed
-- **Date:** 2026-10-28
+- **Status:** Accepted
+- **Date:** 2026-10-29
 - **Deciders:** Arkeep maintainers
 
 ## Context
