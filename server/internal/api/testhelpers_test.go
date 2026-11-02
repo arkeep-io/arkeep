@@ -407,7 +407,7 @@ func createDBUser(t *testing.T, deps *testDeps, email, role string) uuid.UUID {
 // createDBAgent inserts an agent record and returns it.
 func createDBAgent(t *testing.T, deps *testDeps, name string) *db.Agent {
 	t.Helper()
-	a := &db.Agent{Name: name, Status: "offline", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "offline"}
 	if err := deps.agents.Create(context.Background(), a); err != nil {
 		t.Fatalf("createDBAgent: %v", err)
 	}

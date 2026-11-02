@@ -12,7 +12,7 @@ import (
 // newTestAgent creates a minimal agent for tests in this file.
 func newTestAgentForRetention(t *testing.T, agentRepo AgentRepository, name string) *db.Agent {
 	t.Helper()
-	a := &db.Agent{Name: name, Status: "offline", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "offline"}
 	if err := agentRepo.Create(context.Background(), a); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}

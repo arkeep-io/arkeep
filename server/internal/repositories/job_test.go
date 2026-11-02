@@ -32,7 +32,7 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Insert the parent rows required by FK constraints.
-	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestListDestinationCommandsByJob_ResolvesDestinationName(t *testing.T) {
 	jobID := uuid.New()
 	now := time.Now().UTC()
 
-	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestUpdateDestinationStatus_Idempotent(t *testing.T) {
 	jobID := uuid.New()
 	now := time.Now().UTC()
 
-	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}
@@ -217,7 +217,7 @@ func seedJobWithLogs(t *testing.T, gormDB *gorm.DB, repo JobRepository, logs []d
 	t.Helper()
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline"}
 	agentRepo := NewAgentRepository(gormDB)
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
@@ -335,7 +335,7 @@ func newJobFixture(t *testing.T, gormDB *gorm.DB) jobFixture {
 	t.Helper()
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "online"}
 	if err := NewAgentRepository(gormDB).Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}

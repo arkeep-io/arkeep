@@ -35,7 +35,7 @@ func TestSQLiteMigrationsDownUp_InterruptedStatus(t *testing.T) {
 	// An interrupted job with an interrupted destination row: only the migrated
 	// CHECK constraints allow these values, and the down migration has to fold
 	// them back into 'failed' before narrowing the constraint again.
-	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	agent := &Agent{Name: "agent", Status: "online"}
 	if err := gdb.Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestSQLiteMigrationsDownUp_SkippedStatus(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	agent := &Agent{Name: "agent", Status: "online"}
 	if err := gdb.Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestSQLiteMigrationDownUp_WaitingStatus(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	agent := &Agent{Name: "agent", Status: "online"}
 	if err := gdb.Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestInterruptedStatusIsAccepted(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	agent := &Agent{Name: "agent", Status: "online"}
 	if err := gdb.Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 		t.Fatalf("Migrate(35): %v", err)
 	}
 
-	agent := &Agent{Name: "agent", Status: "online", Labels: "{}"}
+	agent := &Agent{Name: "agent", Status: "online"}
 	if err := gdb.Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -597,5 +597,53 @@ func TestSQLiteMigration_OIDCSessionLimit(t *testing.T) {
 		case r.wantDeadline && (got.Before(before.Add(12*time.Hour)) || got.After(after.Add(12*time.Hour))):
 			t.Errorf("%s: session_expires_at = %v, want 12 hours after the upgrade", name, *got)
 		}
+	}
+}
+
+// TestSQLiteMigration_DropAgentLabels checks that 000040 drops agents.labels
+// with agents present, and that its down migration brings the column back.
+func TestSQLiteMigration_DropAgentLabels(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/labels.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := gdb.Create(&Agent{Name: "agent", Status: "online"}).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	hasLabels := func() bool {
+		return gdb.Migrator().HasColumn(&Agent{}, "labels")
+	}
+	if hasLabels() {
+		t.Fatal("agents.labels still exists after the migrations")
+	}
+
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Steps(-1); err != nil {
+		t.Fatalf("down 000040: %v", err)
+	}
+	if !hasLabels() {
+		t.Error("down migration did not restore agents.labels")
+	}
+	if err := m.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if hasLabels() {
+		t.Error("agents.labels exists again after Up")
+	}
+	var n int64
+	if err := gdb.Model(&Agent{}).Count(&n).Error; err != nil || n != 1 {
+		t.Errorf("agents = %d (%v), want the row kept", n, err)
 	}
 }

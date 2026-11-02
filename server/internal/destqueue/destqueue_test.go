@@ -119,7 +119,7 @@ func newEnv(t *testing.T) *env {
 
 func (e *env) agent(name string) *db.Agent {
 	e.t.Helper()
-	a := &db.Agent{Name: name, Status: "online", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "online"}
 	if err := repositories.NewAgentRepository(e.gdb).Create(context.Background(), a); err != nil {
 		e.t.Fatalf("create agent: %v", err)
 	}
