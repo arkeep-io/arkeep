@@ -428,7 +428,9 @@ onMounted(fetchSnapshots)
                     <span v-if="snapshotToDelete">
                         Snapshot
                         <span class="font-mono">{{ abbreviate(snapshotToDelete.restic_snapshot_id) }}</span>
-                        will be permanently removed. This action cannot be undone.
+                        will be removed from Arkeep's list. Its data stays in the repository, and the
+                        next snapshot sync adds it back as imported. To delete snapshots from the
+                        repository, use retention.
                     </span>
                 </AlertDialogDescription>
             </AlertDialogHeader>
