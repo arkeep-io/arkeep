@@ -60,6 +60,9 @@ type User struct {
 	// pending enrollment that was never confirmed.
 	TOTPSecret       EncryptedString `gorm:"type:text"`
 	TwoFactorEnabled bool            `gorm:"not null;default:false"`
+	// MustChangePassword stops a local login before any session is issued
+	// and asks for a new password. Set by an admin with Set password.
+	MustChangePassword bool `gorm:"not null;default:false"`
 }
 
 // RefreshToken stores a hashed refresh token associated with a user session.
@@ -107,6 +110,18 @@ type TwoFactorChallenge struct {
 	// SessionExpiresAt carries the OIDC session deadline to the tokens issued
 	// once the code is verified. nil for local logins.
 	SessionExpiresAt *time.Time
+}
+
+// PasswordChangeChallenge is the short-lived interim state of a login whose
+// account must change its password: the password (and the second factor, when
+// enabled) has been verified, but no session is issued until a new password is
+// set. Only the SHA-256 hash of the token is stored. It is single-use (UsedAt).
+type PasswordChangeChallenge struct {
+	Base
+	UserID    uuid.UUID  `gorm:"type:text;not null;index"`
+	TokenHash string     `gorm:"not null;index"` // SHA-256 hex of the raw token
+	ExpiresAt time.Time  `gorm:"not null"`
+	UsedAt    *time.Time // nil = still usable
 }
 
 // RecoveryCode is a single-use fallback credential issued when a user enables

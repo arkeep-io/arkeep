@@ -72,3 +72,15 @@ type TwoFactorRequiredError struct {
 func (e *TwoFactorRequiredError) Error() string {
 	return "two-factor authentication required"
 }
+
+// PasswordChangeRequiredError is returned by LocalAuthProvider.Login when the
+// password is correct but an admin requires a new one (MustChangePassword).
+// Authentication is not complete: no token is issued and LastLoginAt is not
+// stamped until the new password is set.
+type PasswordChangeRequiredError struct {
+	UserID uuid.UUID
+}
+
+func (e *PasswordChangeRequiredError) Error() string {
+	return "password change required"
+}

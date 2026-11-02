@@ -44,6 +44,14 @@ const (
 	// invalidTwoFactorMessage is deliberately identical for an unknown,
 	// expired, consumed or burned challenge and for a wrong code.
 	invalidTwoFactorMessage = "invalid or expired code"
+
+	// passwordChangeChallengeTTL is how long a login that must set a new
+	// password has to do it before starting over.
+	passwordChangeChallengeTTL = 10 * time.Minute
+
+	// invalidChangeChallengeMessage is identical for an unknown, expired or
+	// consumed challenge.
+	invalidChangeChallengeMessage = "invalid or expired request, sign in again"
 )
 
 // totpCodePattern distinguishes a six-digit TOTP value from a recovery code.
@@ -55,9 +63,11 @@ type AuthHandler struct {
 	users         repositories.UserRepository
 	challenges    repositories.TwoFactorChallengeRepository
 	recoveryCodes repositories.RecoveryCodeRepository
-	auditRepo     repositories.AuditRepository
-	logger        *zap.Logger
-	secure        bool // true in production (HTTPS), false in development
+	// passwordChanges holds the step of a login that must set a new password.
+	passwordChanges repositories.PasswordChangeChallengeRepository
+	auditRepo       repositories.AuditRepository
+	logger          *zap.Logger
+	secure          bool // true in production (HTTPS), false in development
 }
 
 // NewAuthHandler creates a new AuthHandler.
@@ -66,18 +76,20 @@ func NewAuthHandler(
 	users repositories.UserRepository,
 	challenges repositories.TwoFactorChallengeRepository,
 	recoveryCodes repositories.RecoveryCodeRepository,
+	passwordChanges repositories.PasswordChangeChallengeRepository,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
 	secure bool,
 ) *AuthHandler {
 	return &AuthHandler{
-		svc:           svc,
-		users:         users,
-		challenges:    challenges,
-		recoveryCodes: recoveryCodes,
-		auditRepo:     auditRepo,
-		logger:        logger.Named("auth_handler"),
-		secure:        secure,
+		svc:             svc,
+		users:           users,
+		challenges:      challenges,
+		recoveryCodes:   recoveryCodes,
+		passwordChanges: passwordChanges,
+		auditRepo:       auditRepo,
+		logger:          logger.Named("auth_handler"),
+		secure:          secure,
 	}
 }
 
@@ -99,6 +111,11 @@ type loginResponse struct {
 	// client posts ChallengeToken back to /auth/login/2fa with the code.
 	TwoFactorRequired bool   `json:"two_factor_required,omitempty"`
 	ChallengeToken    string `json:"challenge_token,omitempty"`
+
+	// PasswordChangeRequired is set, with ChallengeToken, when the account must
+	// set a new password before a session is issued. The client posts the
+	// token back to /auth/login/password with the new password.
+	PasswordChangeRequired bool `json:"password_change_required,omitempty"`
 }
 
 // Login handles POST /api/v1/auth/login.
@@ -121,6 +138,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		var twoFactor *auth.TwoFactorRequiredError
 		if errors.As(err, &twoFactor) {
 			h.startTwoFactorChallenge(w, r, twoFactor.UserID)
+			return
+		}
+		var passwordChange *auth.PasswordChangeRequiredError
+		if errors.As(err, &passwordChange) {
+			h.startPasswordChangeChallenge(w, r, passwordChange.UserID)
 			return
 		}
 		if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, auth.ErrUserDisabled) {
@@ -477,6 +499,18 @@ func (h *AuthHandler) LoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("2fa login: marking challenge used failed", zap.Error(err))
 	}
 
+	if usedRecovery {
+		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+			"auth.2fa.recovery_used", "user", user.ID.String(), map[string]any{})
+	}
+
+	// The second factor is verified, but a local account that must set a new
+	// password gets no session yet.
+	if user.MustChangePassword && user.OIDCProvider == "" {
+		h.startPasswordChangeChallenge(w, r, user.ID)
+		return
+	}
+
 	pair, err := h.svc.IssueTokenPairForUser(ctx, user, challenge.SessionExpiresAt)
 	if err != nil {
 		h.logger.Error("2fa login: issuing tokens failed", zap.Error(err))
@@ -487,8 +521,6 @@ func (h *AuthHandler) LoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 	method := "totp"
 	if usedRecovery {
 		method = "recovery_code"
-		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
-			"auth.2fa.recovery_used", "user", user.ID.String(), map[string]any{})
 	}
 	logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
 		"auth.login", "user", user.ID.String(), map[string]any{"email": user.Email, "method": method})
@@ -534,6 +566,143 @@ func (h *AuthHandler) registerFailedAttempt(ctx context.Context, challenge *db.T
 	if err := h.challenges.IncrementAttempts(ctx, challenge.ID); err != nil {
 		h.logger.Warn("2fa login: incrementing attempts failed", zap.Error(err))
 	}
+}
+
+// -----------------------------------------------------------------------------
+// Password change at login (after an admin's Set password)
+// -----------------------------------------------------------------------------
+
+// startPasswordChangeChallenge issues the interim step of a login whose
+// account must set a new password: the credentials (and the second factor,
+// when enabled) are verified, but no session is issued yet. Any outstanding
+// challenge for the user is deleted first.
+func (h *AuthHandler) startPasswordChangeChallenge(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	raw, err := auth.GenerateResetToken()
+	if err == nil {
+		err = h.passwordChanges.DeleteByUserID(r.Context(), userID)
+	}
+	if err == nil {
+		err = h.passwordChanges.Create(r.Context(), &db.PasswordChangeChallenge{
+			UserID:    userID,
+			TokenHash: auth.HashToken(raw),
+			ExpiresAt: time.Now().Add(passwordChangeChallengeTTL),
+		})
+	}
+	if err != nil {
+		h.logger.Error("password change login: creating the challenge failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	Ok(w, loginResponse{PasswordChangeRequired: true, ChallengeToken: raw})
+}
+
+type loginPasswordChangeRequest struct {
+	ChallengeToken string `json:"challenge_token"`
+	Password       string `json:"password"`
+}
+
+// LoginPasswordChange handles POST /api/v1/auth/login/password. It completes
+// a login stopped by MustChangePassword: it sets the new password, clears the
+// flag and issues the session. Failures return 400, not 401, for the same
+// reason as LoginTwoFactor.
+func (h *AuthHandler) LoginPasswordChange(w http.ResponseWriter, r *http.Request) {
+	var req loginPasswordChangeRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.ChallengeToken == "" {
+		ErrBadRequest(w, "challenge_token is required")
+		return
+	}
+	if err := auth.ValidatePassword(req.Password); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+
+	ctx := r.Context()
+
+	challenge, err := h.passwordChanges.GetUnusedByHash(ctx, auth.HashToken(req.ChallengeToken))
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidChangeChallengeMessage)
+			return
+		}
+		h.logger.Error("password change login: challenge lookup failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	if time.Now().After(challenge.ExpiresAt) {
+		ErrBadRequest(w, invalidChangeChallengeMessage)
+		return
+	}
+
+	user, err := h.users.GetByID(ctx, challenge.UserID)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidChangeChallengeMessage)
+			return
+		}
+		h.logger.Error("password change login: user lookup failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	if !user.IsActive {
+		ErrUnauthorized(w)
+		return
+	}
+	// The flag may have been cleared meanwhile (password reset by email).
+	if !user.MustChangePassword || user.OIDCProvider != "" {
+		ErrBadRequest(w, invalidChangeChallengeMessage)
+		return
+	}
+	// Checked before the challenge is consumed, so the user can try again.
+	if auth.VerifyPassword(req.Password, string(user.Password)) {
+		ErrBadRequest(w, "choose a password different from the one you were given")
+		return
+	}
+
+	// Consume the challenge first: of two requests with the same token, only
+	// one gets past this point.
+	if err := h.passwordChanges.Consume(ctx, challenge.ID); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidChangeChallengeMessage)
+			return
+		}
+		h.logger.Error("password change login: consuming the challenge failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	hashed, err := auth.HashPassword(req.Password)
+	if err != nil {
+		h.logger.Error("password change login: hashing the password failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	user.Password = db.EncryptedString(hashed)
+	user.MustChangePassword = false
+	if err := h.users.Update(ctx, user); err != nil {
+		h.logger.Error("password change login: updating the password failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+		"user.password_changed", "user", user.ID.String(), map[string]any{"required": true})
+
+	pair, err := h.svc.IssueTokenPairForUser(ctx, user, nil)
+	if err != nil {
+		h.logger.Error("password change login: issuing tokens failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
+		"auth.login", "user", user.ID.String(), map[string]any{"email": user.Email})
+
+	h.setRefreshCookie(w, pair.RefreshToken, pair.RefreshTokenExpiresAt)
+	Ok(w, loginResponse{
+		AccessToken: pair.AccessToken,
+		ExpiresIn:   int(time.Until(pair.AccessTokenExpiresAt).Seconds()),
+	})
 }
 
 // -----------------------------------------------------------------------------

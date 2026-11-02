@@ -152,6 +152,17 @@ revokes every other active session for the account except the one used to enroll
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.
 
+### Passwords set by an administrator
+
+An administrator can set another local user's password (`POST /api/v1/users/{id}/password`),
+never their own and never an OIDC account's. It revokes every session of the user and
+is recorded in the audit log. With "require a new password", the login stops after the
+password and the second factor and issues no session: it returns a single-use challenge,
+valid for 10 minutes and stored as a SHA-256 hash, which only
+`POST /api/v1/auth/login/password` accepts, together with a new password different from
+the one the administrator set. The challenge is consumed atomically before the password
+is written, so it cannot be used twice.
+
 ### Health endpoints
 
 `GET /health/live` and `GET /health/ready` are unauthenticated and accessible on the HTTP port (default `:8080`). They do not expose credentials or user data.

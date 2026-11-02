@@ -17,19 +17,21 @@ import (
 // RequireRole("admin") in the router. The /users/me routes are accessible by
 // any authenticated user.
 type UserHandler struct {
-	repo      repositories.UserRepository
-	refresh   repositories.RefreshTokenRepository
-	auditRepo repositories.AuditRepository
-	logger    *zap.Logger
+	repo            repositories.UserRepository
+	refresh         repositories.RefreshTokenRepository
+	passwordChanges repositories.PasswordChangeChallengeRepository
+	auditRepo       repositories.AuditRepository
+	logger          *zap.Logger
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(repo repositories.UserRepository, refresh repositories.RefreshTokenRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
+func NewUserHandler(repo repositories.UserRepository, refresh repositories.RefreshTokenRepository, passwordChanges repositories.PasswordChangeChallengeRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
 	return &UserHandler{
-		repo:      repo,
-		refresh:   refresh,
-		auditRepo: auditRepo,
-		logger:    logger.Named("user_handler"),
+		repo:            repo,
+		refresh:         refresh,
+		passwordChanges: passwordChanges,
+		auditRepo:       auditRepo,
+		logger:          logger.Named("user_handler"),
 	}
 }
 
@@ -50,6 +52,9 @@ type userResponse struct {
 	TwoFactorEnabled bool    `json:"two_factor_enabled"`
 	LastLoginAt      *string `json:"last_login_at"`
 	CreatedAt        string  `json:"created_at"`
+
+	// MustChangePassword: the user has to set a new password at next sign-in.
+	MustChangePassword bool `json:"must_change_password"`
 }
 
 // userToResponse converts a db.User to a userResponse.
@@ -63,6 +68,8 @@ func userToResponse(u *db.User) userResponse {
 		IsOIDC:           u.OIDCProvider != "",
 		TwoFactorEnabled: u.TwoFactorEnabled,
 		CreatedAt:        u.CreatedAt.UTC().Format(time.RFC3339),
+
+		MustChangePassword: u.MustChangePassword,
 	}
 	if u.LastLoginAt != nil {
 		s := u.LastLoginAt.UTC().Format(time.RFC3339)
@@ -190,12 +197,12 @@ func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateUserRequest is the JSON body for PATCH /api/v1/users/{id} (admin only).
-// All fields are optional. Password triggers a rehash if provided.
+// All fields are optional. The password is not one of them: an admin sets it
+// with SetPassword, which revokes the user's sessions and is audited.
 type updateUserRequest struct {
 	DisplayName *string `json:"display_name"`
 	Role        *string `json:"role"`
 	IsActive    *bool   `json:"is_active"`
-	Password    *string `json:"password"`
 }
 
 // Update handles PATCH /api/v1/users/{id} (admin only).
@@ -238,19 +245,6 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.IsActive != nil {
 		user.IsActive = *req.IsActive
 	}
-	if req.Password != nil {
-		if err := auth.ValidatePassword(*req.Password); err != nil {
-			ErrBadRequest(w, err.Error())
-			return
-		}
-		hashed, err := auth.HashPassword(*req.Password)
-		if err != nil {
-			h.logger.Error("failed to hash password", zap.Error(err))
-			ErrInternal(w)
-			return
-		}
-		user.Password = db.EncryptedString(hashed)
-	}
 
 	if err := h.repo.Update(r.Context(), user); err != nil {
 		h.logger.Error("failed to update user", zap.String("id", id.String()), zap.Error(err))
@@ -259,6 +253,83 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "user.update", "user", id.String(), map[string]any{"email": user.Email, "role": user.Role})
+	Ok(w, userToResponse(user))
+}
+
+// setPasswordRequest is the JSON body for POST /api/v1/users/{id}/password.
+type setPasswordRequest struct {
+	Password string `json:"password"`
+	// MustChange makes the user set a new password at next sign-in.
+	MustChange bool `json:"must_change"`
+}
+
+// SetPassword handles POST /api/v1/users/{id}/password (admin only). It sets
+// another local user's password — e.g. when they forgot it and no SMTP server
+// is configured for the reset link — and revokes all of that user's sessions,
+// like AdminReset does for two-factor. Refused on the admin's own account (the
+// Profile page asks for the current password) and on OIDC accounts (the
+// identity provider owns their password).
+func (h *UserHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	claims := claimsFromCtx(r.Context())
+	if claims != nil && claims.UserID == id.String() {
+		ErrBadRequest(w, "change your own password from your profile")
+		return
+	}
+
+	var req setPasswordRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if err := auth.ValidatePassword(req.Password); err != nil {
+		ErrBadRequest(w, err.Error())
+		return
+	}
+
+	ctx := r.Context()
+	user, err := h.repo.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to load user for set password", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	if user.OIDCProvider != "" {
+		ErrBadRequest(w, "password cannot be set for OIDC accounts")
+		return
+	}
+
+	hashed, err := auth.HashPassword(req.Password)
+	if err != nil {
+		h.logger.Error("failed to hash password", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	user.Password = db.EncryptedString(hashed)
+	user.MustChangePassword = req.MustChange
+	if err := h.repo.Update(ctx, user); err != nil {
+		h.logger.Error("failed to set user password", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	// Whoever signed in with the old password keeps no session, and a password
+	// change step started before this one cannot complete.
+	if err := h.refresh.RevokeAllForUser(ctx, user.ID); err != nil {
+		h.logger.Warn("failed to revoke sessions after set password", zap.Error(err))
+	}
+	if err := h.passwordChanges.DeleteByUserID(ctx, user.ID); err != nil {
+		h.logger.Warn("failed to clear password change challenges after set password", zap.Error(err))
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "user.password_set", "user", user.ID.String(),
+		map[string]any{"email": user.Email, "must_change": req.MustChange})
 	Ok(w, userToResponse(user))
 }
 
@@ -405,6 +476,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user.Password = db.EncryptedString(hashed)
+		user.MustChangePassword = false
 	}
 
 	if err := h.repo.Update(r.Context(), user); err != nil {

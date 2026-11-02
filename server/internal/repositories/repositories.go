@@ -99,6 +99,24 @@ type TwoFactorChallengeRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// PasswordChangeChallengeRepository
+// -----------------------------------------------------------------------------
+
+// PasswordChangeChallengeRepository stores the interim step of a login that
+// must set a new password before a session is issued.
+type PasswordChangeChallengeRepository interface {
+	Create(ctx context.Context, challenge *db.PasswordChangeChallenge) error
+	// GetUnusedByHash returns an unconsumed challenge matching the hash.
+	// Expiry is checked by the caller. Returns ErrNotFound if none matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.PasswordChangeChallenge, error)
+	// Consume marks the challenge used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all outstanding challenges for a user.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
 // RecoveryCodeRepository
 // -----------------------------------------------------------------------------
 

@@ -54,6 +54,10 @@ type RouterConfig struct {
 	Challenges    repositories.TwoFactorChallengeRepository
 	RecoveryCodes repositories.RecoveryCodeRepository
 
+	// PasswordChanges holds the login step of an account that must set a new
+	// password before a session is issued.
+	PasswordChanges repositories.PasswordChangeChallengeRepository
+
 	// LogRetention triggers an on-demand job_logs prune (Settings → Log
 	// Retention "run now"). Satisfied by *logretention.Service. Optional — if
 	// nil, the manual-prune endpoint responds 503.
@@ -132,7 +136,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// --- Initialize handlers ---
 	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
-	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.Audit, cfg.Logger, cfg.Secure)
+	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.PasswordChanges, cfg.Audit, cfg.Logger, cfg.Secure)
 	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	var enrollHandler *EnrollHandler
@@ -144,7 +148,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
+	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
 	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
@@ -181,6 +185,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// legitimate user may retry a mistyped code a few times.
 			r.With(RateLimit(NewRateLimiter(10, time.Minute))).
 				Post("/auth/login/2fa", authHandler.LoginTwoFactor)
+
+			// New password of a login whose account must change it, after an
+			// admin's Set password. Its own limiter, like the 2FA step.
+			r.With(RateLimit(NewRateLimiter(10, time.Minute))).
+				Post("/auth/login/password", authHandler.LoginPasswordChange)
 
 			// Logout is public so that a session whose access token already
 			// expired can still revoke its refresh token (SEC-13).
@@ -302,6 +311,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Patch("/users/{id}", userHandler.Update)
 				r.Delete("/users/{id}", userHandler.Delete)
 				r.Post("/users/{id}/2fa/reset", twoFactorHandler.AdminReset)
+				r.Post("/users/{id}/password", userHandler.SetPassword)
 
 				// OIDC provider configuration (multiple providers supported)
 				r.Get("/settings/oidc", settingsHandler.ListOIDC)
