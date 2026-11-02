@@ -15,7 +15,6 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 	routes := []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/v1/agents"},
 		{http.MethodPatch, "/api/v1/agents/" + id},
 		{http.MethodGet, "/api/v1/agents/" + id + "/volumes"},
 		{http.MethodPost, "/api/v1/agents/" + id + "/reset-identity"},

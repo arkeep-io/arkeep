@@ -98,53 +98,12 @@ func TestAgentHandler_List(t *testing.T) {
 	})
 }
 
-func TestAgentHandler_Create(t *testing.T) {
-	t.Run("returns 201 with valid name", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{
-			"name": "my-backup-agent",
-		})
-		assertStatus(t, resp, http.StatusCreated)
-
-		var data struct {
-			ID     string `json:"id"`
-			Name   string `json:"name"`
-			Status string `json:"status"`
-		}
-		decodeData(t, resp, &data)
-		if data.Name != "my-backup-agent" {
-			t.Errorf("name = %q, want %q", data.Name, "my-backup-agent")
-		}
-		if data.Status != "offline" {
-			t.Errorf("status = %q, want offline", data.Status)
-		}
-		if data.ID == "" {
-			t.Error("id is empty")
-		}
-	})
-
-	t.Run("returns 400 when name is empty", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{
-			"name": "",
-		})
-		assertStatus(t, resp, http.StatusBadRequest)
-	})
-
-	t.Run("returns 400 on unknown fields", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{
-			"name":    "agent",
-			"unknown": "field",
-		})
-		assertStatus(t, resp, http.StatusBadRequest)
-	})
-
-	t.Run("returns 401 without token", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", "", map[string]string{"name": "agent"})
-		assertStatus(t, resp, http.StatusUnauthorized)
-	})
+// TestAgentHandler_NoPlaceholderCreate: agents register themselves over gRPC.
+// The old POST /agents created a placeholder no agent could ever claim.
+func TestAgentHandler_NoPlaceholderCreate(t *testing.T) {
+	e := newTestEnv(t)
+	resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{"name": "placeholder"})
+	assertStatus(t, resp, http.StatusMethodNotAllowed)
 }
 
 func TestAgentHandler_GetByID(t *testing.T) {

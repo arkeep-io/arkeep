@@ -243,7 +243,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			// Agents
 			r.Get("/agents", agentHandler.List)
-			r.With(RequireRole("admin")).Post("/agents", agentHandler.Create)
 			r.Get("/agents/{id}", agentHandler.GetByID)
 			r.With(RequireRole("admin")).Patch("/agents/{id}", agentHandler.Update)
 			r.With(RequireRole("admin")).Delete("/agents/{id}", agentHandler.Delete)

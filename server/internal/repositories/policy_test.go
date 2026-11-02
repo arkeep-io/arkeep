@@ -39,7 +39,7 @@ func TestActivePoliciesCount(t *testing.T) {
 	agentRepo := NewAgentRepository(gdb)
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}

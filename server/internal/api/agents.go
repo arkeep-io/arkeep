@@ -43,7 +43,6 @@ type agentResponse struct {
 	Arch            string  `json:"arch"`
 	Version         string  `json:"version"`
 	Status          string  `json:"status"`
-	Labels          string  `json:"labels"`
 	DockerAvailable bool    `json:"docker_available"`
 	IdentityBound   bool    `json:"identity_bound"` // bound to its mTLS client certificate (never without auto-PKI)
 	LastSeenAt      *string `json:"last_seen_at"`
@@ -61,7 +60,6 @@ func agentToResponse(a *db.Agent) agentResponse {
 		Arch:            a.Arch,
 		Version:         a.Version,
 		Status:          a.Status,
-		Labels:          a.Labels,
 		DockerAvailable: a.DockerAvailable,
 		IdentityBound:   a.CertFingerprint != nil,
 		CreatedAt:       a.CreatedAt.UTC().Format(time.RFC3339),
@@ -111,50 +109,6 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	Ok(w, listAgentsResponse{Items: items, Total: total})
 }
 
-// createAgentRequest is the JSON body expected by POST /api/v1/agents.
-//
-// Agents use an auto-discovery model: when the agent binary starts, it
-// connects via gRPC and the server upserts the record using the hostname
-// reported by the agent itself. This REST endpoint exists so that admins
-// can pre-create a named placeholder before the agent connects for the
-// first time — useful for inventory purposes.
-//
-// Hostname and all system metadata are populated by the agent on first
-// gRPC connection (Register RPC) and updated on every subsequent reconnect.
-type createAgentRequest struct {
-	Name string `json:"name"`
-}
-
-// Create handles POST /api/v1/agents.
-// Pre-creates a named agent placeholder. The agent populates hostname,
-// OS, arch, version and status automatically when it connects via gRPC.
-func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req createAgentRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
-	if req.Name == "" {
-		ErrBadRequest(w, "name is required")
-		return
-	}
-
-	agent := &db.Agent{
-		Name:   req.Name,
-		Status: "offline",
-		Labels: "{}",
-	}
-
-	if err := h.repo.Create(r.Context(), agent); err != nil {
-		h.logger.Error("failed to create agent", zap.Error(err))
-		ErrInternal(w)
-		return
-	}
-
-	logAudit(r, h.auditRepo, h.logger, "agent.create", "agent", agent.ID.String(), map[string]any{"name": agent.Name})
-	Created(w, agentToResponse(agent))
-}
-
 // GetByID handles GET /api/v1/agents/{id}.
 func (h *AgentHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
@@ -179,8 +133,7 @@ func (h *AgentHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 // updateAgentRequest is the JSON body expected by PATCH /api/v1/agents/{id}.
 // All fields are optional — only non-nil values are applied.
 type updateAgentRequest struct {
-	Name   *string `json:"name"`
-	Labels *string `json:"labels"`
+	Name *string `json:"name"`
 }
 
 // Update handles PATCH /api/v1/agents/{id}.
@@ -212,9 +165,6 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		agent.Name = *req.Name
-	}
-	if req.Labels != nil {
-		agent.Labels = *req.Labels
 	}
 
 	if err := h.repo.Update(r.Context(), agent); err != nil {

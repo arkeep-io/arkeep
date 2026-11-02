@@ -66,7 +66,7 @@ func newResumeFixture(t *testing.T, gdb *gorm.DB, policies repositories.PolicyRe
 	t.Helper()
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Status: "online"}
 	if err := repositories.NewAgentRepository(gdb).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -474,7 +474,7 @@ func (q *queueFixture) dispatchAs(agentID uuid.UUID, dests ...*db.Destination) *
 // agent creates a second agent with a live stream.
 func (q *queueFixture) agent(name string) uuid.UUID {
 	q.t.Helper()
-	a := &db.Agent{Name: name, Status: "online", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "online"}
 	if err := repositories.NewAgentRepository(q.gdb).Create(context.Background(), a); err != nil {
 		q.t.Fatalf("create agent: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestScheduledRunAdvancesNextRunAt(t *testing.T) {
 	s, gdb, policies, _ := newTestScheduler(t)
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Status: "online"}
 	if err := repositories.NewAgentRepository(gdb).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestNextScheduledRunAt_UsesSchedulerLocation(t *testing.T) {
 func newSchedulePolicy(t *testing.T, gdb *gorm.DB, policies repositories.PolicyRepository, schedule string) *db.Policy {
 	t.Helper()
 	ctx := context.Background()
-	agent := &db.Agent{Name: "agent-" + uuid.Must(uuid.NewV7()).String(), Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "agent-" + uuid.Must(uuid.NewV7()).String(), Status: "online"}
 	if err := repositories.NewAgentRepository(gdb).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
