@@ -172,6 +172,17 @@ func (r *gormDestinationRepository) ListFiltered(ctx context.Context, filter Des
 // to sweep) and by the one-time migration backfill (which treats the
 // earliest-attached policy as the source of truth when a destination is
 // shared).
+func (r *gormDestinationRepository) ListByMaintenanceAgent(ctx context.Context, agentID uuid.UUID) ([]db.Destination, error) {
+	var destinations []db.Destination
+	if err := r.db.WithContext(ctx).
+		Where("retention_agent_id = ?", agentID).
+		Order("name ASC").
+		Find(&destinations).Error; err != nil {
+		return nil, fmt.Errorf("destinations: list by maintenance agent: %w", err)
+	}
+	return destinations, nil
+}
+
 func (r *gormDestinationRepository) ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error) {
 	var policies []db.Policy
 	err := r.db.WithContext(ctx).

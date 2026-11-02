@@ -143,7 +143,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	if cfg.AutoCerts != nil {
 		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	}
-	agentHandler := NewAgentHandler(cfg.Agents, cfg.AgentManager, cfg.Audit, cfg.Logger)
+	agentHandler := NewAgentHandler(cfg.Agents, cfg.Policies, cfg.Destinations, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.CheckScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
@@ -256,6 +256,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RequireRole("admin")).Patch("/agents/{id}", agentHandler.Update)
 			r.With(RequireRole("admin")).Delete("/agents/{id}", agentHandler.Delete)
 			r.With(RequireRole("admin")).Post("/agents/{id}/reset-identity", agentHandler.ResetIdentity)
+			r.With(RequireRole("admin")).Get("/agents/{id}/usage", agentHandler.Usage)
 			r.With(RequireRole("admin")).Get("/agents/{id}/volumes", agentHandler.ListVolumes)
 
 			// Destinations

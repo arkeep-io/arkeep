@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -18,15 +19,19 @@ import (
 // AgentHandler groups all agent-related HTTP handlers.
 type AgentHandler struct {
 	repo      repositories.AgentRepository
+	policies  repositories.PolicyRepository
+	dests     repositories.DestinationRepository
 	manager   *agentmanager.Manager
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
 }
 
 // NewAgentHandler creates a new AgentHandler.
-func NewAgentHandler(repo repositories.AgentRepository, manager *agentmanager.Manager, auditRepo repositories.AuditRepository, logger *zap.Logger) *AgentHandler {
+func NewAgentHandler(repo repositories.AgentRepository, policies repositories.PolicyRepository, dests repositories.DestinationRepository, manager *agentmanager.Manager, auditRepo repositories.AuditRepository, logger *zap.Logger) *AgentHandler {
 	return &AgentHandler{
 		repo:      repo,
+		policies:  policies,
+		dests:     dests,
 		manager:   manager,
 		auditRepo: auditRepo,
 		logger:    logger.Named("agent_handler"),
@@ -177,11 +182,87 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 	Ok(w, agentToResponse(agent))
 }
 
+// agentUsageRef names an object that depends on an agent.
+type agentUsageRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// agentUsageResponse lists what depends on an agent: the policies that back
+// up on it and the destinations whose retention and checks run on it.
+type agentUsageResponse struct {
+	Policies     []agentUsageRef `json:"policies"`
+	Destinations []agentUsageRef `json:"destinations"`
+}
+
+func (u agentUsageResponse) inUse() bool {
+	return len(u.Policies) > 0 || len(u.Destinations) > 0
+}
+
+// usage loads what depends on agent id.
+func (h *AgentHandler) usage(ctx context.Context, id uuid.UUID) (agentUsageResponse, error) {
+	out := agentUsageResponse{Policies: []agentUsageRef{}, Destinations: []agentUsageRef{}}
+	policies, err := h.policies.ListByAgent(ctx, id)
+	if err != nil {
+		return out, err
+	}
+	for _, p := range policies {
+		out.Policies = append(out.Policies, agentUsageRef{ID: p.ID.String(), Name: p.Name})
+	}
+	dests, err := h.dests.ListByMaintenanceAgent(ctx, id)
+	if err != nil {
+		return out, err
+	}
+	for _, d := range dests {
+		out.Destinations = append(out.Destinations, agentUsageRef{ID: d.ID.String(), Name: d.Name})
+	}
+	return out, nil
+}
+
+// Usage handles GET /api/v1/agents/{id}/usage (admin only). The delete
+// dialog shows it: an agent in use cannot be deleted.
+func (h *AgentHandler) Usage(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if _, err := h.repo.GetByID(r.Context(), id); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to get agent for usage", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	usage, err := h.usage(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to load agent usage", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	Ok(w, usage)
+}
+
 // Delete handles DELETE /api/v1/agents/{id}.
-// Soft-deletes the agent — the record is retained in the database.
+// Soft-deletes the agent — the record is retained in the database. Refused
+// with 409 while policies back up on the agent or destinations use it as
+// their maintenance agent: they would stop running, with no error to show for
+// it, since nothing reports on a deleted agent.
 func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
+		return
+	}
+
+	usage, err := h.usage(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to load agent usage", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	if usage.inUse() {
+		ErrConflict(w, "the agent is still in use: reassign or delete its policies and choose another maintenance agent for its destinations first")
 		return
 	}
 

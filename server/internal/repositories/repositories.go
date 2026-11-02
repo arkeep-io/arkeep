@@ -221,6 +221,10 @@ type DestinationRepository interface {
 	// one-time migration backfill.
 	ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error)
 
+	// ListByMaintenanceAgent returns every live destination whose retention
+	// sweeps and integrity checks run on the given agent.
+	ListByMaintenanceAgent(ctx context.Context, agentID uuid.UUID) ([]db.Destination, error)
+
 	// PolicyCountsByDestination returns, for every destination with at least
 	// one live policy attached, how many such policies there are. Used to
 	// surface "shared by N policies" in the GUI.
