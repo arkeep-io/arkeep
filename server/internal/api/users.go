@@ -228,6 +228,8 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wasActiveAdmin := user.Role == "admin" && user.IsActive
+
 	if req.DisplayName != nil {
 		if *req.DisplayName == "" {
 			ErrBadRequest(w, "display_name cannot be empty")
@@ -244,6 +246,22 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IsActive != nil {
 		user.IsActive = *req.IsActive
+	}
+
+	// The last active admin can be neither demoted nor deactivated: nobody
+	// could administer Arkeep afterwards. An OIDC login refuses the same
+	// (OIDCAuthProvider.canChangeRole).
+	if wasActiveAdmin && (user.Role != "admin" || !user.IsActive) {
+		n, err := h.repo.CountActiveAdmins(r.Context())
+		if err != nil {
+			h.logger.Error("failed to count active admins", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		if n <= 1 {
+			ErrConflict(w, "the last active admin cannot be demoted or deactivated")
+			return
+		}
 	}
 
 	if err := h.repo.Update(r.Context(), user); err != nil {
