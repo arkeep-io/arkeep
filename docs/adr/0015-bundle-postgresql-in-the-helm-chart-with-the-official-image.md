@@ -81,3 +81,12 @@ other features of the Bitnami chart.
 - `deploy/docker/docker-compose.postgres.yml` (same image).
 - ADR 0005 (database), ADR 0013 (dependency pinning), ADR 0014 (chart publishing).
 - [Bitnami: changes to the container catalog](https://github.com/bitnami/containers/issues/83267).
+
+## Amendments
+
+- 2026-11-03: the image is not updated by Dependabot's `helm` ecosystem, as the
+  Decision says: its updater skips `image:` strings pinned by digest.
+  Dependabot updates the image in `docker-compose.postgres.yml`, and the
+  `deps-pins` workflow copies it to `postgresql.image` (and to the commented
+  example in `docker-compose.yml`), so the compose files and the chart still
+  move together.

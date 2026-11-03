@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -358,7 +359,13 @@ func run(ctx context.Context, cfg *config) error {
 	// The hub must start before the HTTP server so clients can connect
 	// immediately after the server is ready.
 	wsHub := websocket.NewHub()
-	go wsHub.Run(ctx)
+
+	// background tracks the long-running services started below. They all
+	// return once ctx is cancelled, and shutdown waits for them before the
+	// deferred calls stop the schedulers and close the database, so none of
+	// them is left querying a closed database.
+	var background sync.WaitGroup
+	background.Go(func() { wsHub.Run(ctx) })
 
 	// --- Notification Service ---
 	// Must be created after the hub so it can publish real-time in-app
@@ -375,7 +382,7 @@ func run(ctx context.Context, cfg *config) error {
 	// Start the background delivery retrier. It polls every 30 s for pending
 	// email/webhook deliveries and retries them with exponential backoff
 	// (max 3 attempts: +5 min → +30 min → exhausted).
-	go notifService.Start(ctx)
+	background.Go(func() { notifService.Start(ctx) })
 
 	// The scheduler is built before the hub, so it gets the notification service
 	// here. It uses it only to report that automatic resume of a repeatedly
@@ -392,14 +399,14 @@ func run(ctx context.Context, cfg *config) error {
 	destQueue.SetNotificationService(notifService)
 	destQueue.SetPinger(hcPinger)
 	destQueue.SetHub(wsHub)
-	go destQueue.Run(ctx)
+	background.Go(func() { destQueue.Run(ctx) })
 
 	// --- Log retention ---
 	// Periodically prunes old job_logs rows so the database does not grow
 	// without bound. Disabled by default (see Settings → Log Retention); it only
 	// deletes rows once an administrator configures a retention window.
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
-	go logRetentionSvc.Start(ctx)
+	background.Go(func() { logRetentionSvc.Start(ctx) })
 
 	// --- Snapshot sync ---
 	// Lists each destination's repository through a connected agent and makes
@@ -408,7 +415,7 @@ func run(ctx context.Context, cfg *config) error {
 	// periodically once an administrator sets an interval (Settings →
 	// Snapshot Sync).
 	snapshotSyncSvc := snapshotsync.NewService(destinationRepo, snapshotRepo, settingsRepo, agentMgr, logger)
-	go snapshotSyncSvc.Start(ctx)
+	background.Go(func() { snapshotSyncSvc.Start(ctx) })
 
 	// --- Agent watchdog ---
 	// Detects agents that stopped sending heartbeats (network partition, crash,
@@ -417,7 +424,7 @@ func run(ctx context.Context, cfg *config) error {
 	// forever, since the only other trigger for "offline" is the StreamJobs
 	// stream actually closing.
 	agentWatchdogSvc := agentwatchdog.NewService(agentRepo, jobRepo, agentMgr, notifService, wsHub, logger)
-	go agentWatchdogSvc.Start(ctx)
+	background.Go(func() { agentWatchdogSvc.Start(ctx) })
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
@@ -530,7 +537,7 @@ func run(ctx context.Context, cfg *config) error {
 					"To opt out: set ARKEEP_TELEMETRY=false or --telemetry=false\n" +
 					"Public stats: https://telemetry.arkeep.io")
 			}
-			go reporter.Start(ctx)
+			background.Go(func() { reporter.Start(ctx) })
 		}
 	}
 
@@ -543,6 +550,17 @@ func run(ctx context.Context, cfg *config) error {
 
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http server graceful shutdown error", zap.Error(err))
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		background.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-shutdownCtx.Done():
+		logger.Warn("background services did not stop in time, closing the database anyway")
 	}
 
 	logger.Info("arkeep server stopped")
