@@ -9,10 +9,10 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/metadata"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -58,15 +58,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
-	gormDB, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("db.New: %v", err)
-	}
+	gormDB := dbtest.New(t)
 	e := &testEnv{
 		dests:    repositories.NewDestinationRepository(gormDB),
 		policies: repositories.NewPolicyRepository(gormDB),

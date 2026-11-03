@@ -19,11 +19,10 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/api"
-	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -84,15 +83,7 @@ func TestEnrollment(t *testing.T) {
 
 	// ── Step 2: Start mTLS gRPC server ────────────────────────────────────────
 
-	gdb, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	gdb := dbtest.New(t)
 
 	agentRepo := repositories.NewAgentRepository(gdb)
 	agentMgr := agentmanager.New(zap.NewNop())
@@ -266,10 +257,7 @@ func TestEnrollmentWithCSR(t *testing.T) {
 		t.Fatalf("the issued certificate does not match the agent's key: %v", err)
 	}
 
-	gdb, err := db.New(db.Config{Driver: "sqlite", DSN: ":memory:", Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	gdb := dbtest.New(t)
 	srv := grpcserver.New(
 		grpcserver.Config{AutoCerts: autoCerts},
 		agentmanager.New(zap.NewNop()),

@@ -14,12 +14,12 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	gormlogger "gorm.io/gorm/logger"
 	"gorm.io/gorm"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -30,12 +30,14 @@ import (
 
 // TestMain initialises the AES encryption key required by EncryptedString
 // fields (passwords, credentials, repo passwords) before any test runs.
-// The key is fixed and arbitrary — security is irrelevant in an in-memory
-// test database.
+// The key is fixed and arbitrary — security is irrelevant in a throwaway
+// test database. Password hashing uses the minimum Argon2id cost: this
+// package logs in and sets passwords in many tests.
 func TestMain(m *testing.M) {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		panic("db.InitEncryption: " + err.Error())
 	}
+	auth.UseCheapPasswordHashing()
 	os.Exit(m.Run())
 }
 
@@ -43,15 +45,7 @@ func TestMain(m *testing.M) {
 
 func newTestGormDB(t *testing.T) (*gorm.DB, *sql.DB) {
 	t.Helper()
-	gdb, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("newTestGormDB: %v", err)
-	}
+	gdb := dbtest.New(t)
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		t.Fatalf("newTestGormDB: sql.DB: %v", err)

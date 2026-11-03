@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
@@ -20,10 +20,7 @@ func TestRunOnce(t *testing.T) {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("InitEncryption: %v", err)
 	}
-	gdb, err := db.New(db.Config{Driver: "sqlite", DSN: ":memory:", Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
-	if err != nil {
-		t.Fatalf("db.New: %v", err)
-	}
+	gdb := dbtest.New(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
 

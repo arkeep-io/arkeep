@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -29,10 +29,7 @@ import (
 func TestDestinationQueue_BackupWaitsForSweepThenRunsBesideAnother(t *testing.T) {
 	ctx := context.Background()
 
-	gdb, err := db.New(db.Config{Driver: "sqlite", DSN: ":memory:", Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	gdb := dbtest.New(t)
 	agentRepo := repositories.NewAgentRepository(gdb)
 	jobRepo := repositories.NewJobRepository(gdb)
 	policyRepo := repositories.NewPolicyRepository(gdb)
