@@ -81,5 +81,5 @@ func buildTemplate() {
 		templateErr = err
 		return
 	}
-	template, templateErr = os.ReadFile(path)
+	template, templateErr = os.ReadFile(filepath.Clean(path))
 }
