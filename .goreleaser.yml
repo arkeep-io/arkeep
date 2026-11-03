@@ -84,6 +84,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - deploy/systemd/arkeep-server.service
 
   - id: agent
     ids: [agent, agent-embedded]
