@@ -119,13 +119,15 @@ case "$ARKEEP_DEPLOY_MODE" in
       sqlite3 "$SQLITE_PATH" ".backup '$CONTAINER_TMP'" \
       || die "docker exec sqlite3 backup failed"
 
+    # Checked inside the container, so the host needs no sqlite3.
+    log "Verifying integrity..."
+    result=$(docker exec "$DOCKER_CONTAINER" sqlite3 "$CONTAINER_TMP" "PRAGMA integrity_check;") || true
+
     docker cp "$DOCKER_CONTAINER:$CONTAINER_TMP" "$DB_BACKUP" \
       || die "docker cp failed"
 
     docker exec "$DOCKER_CONTAINER" rm -f "$CONTAINER_TMP"
 
-    log "Verifying integrity..."
-    result=$(sqlite3 "$DB_BACKUP" "PRAGMA integrity_check;")
     [[ "$result" == "ok" ]] || die "Integrity check failed: $result"
 
     safe_chmod 600 "$DB_BACKUP"
