@@ -144,26 +144,38 @@ func TestValidateHookCommand(t *testing.T) {
 	})
 }
 
-func TestValidateHookTimeout(t *testing.T) {
+// TestValidateHook covers hook definitions as the agent decodes and runs them.
+// The checks apply to the decoded command and arguments: a JSON escape such as
+// \u0024( must not hide a $( (SEC-32), whatever the case of the JSON key.
+func TestValidateHook(t *testing.T) {
 	tests := []struct {
 		name    string
 		hook    string
 		wantErr bool
 	}{
 		{"no hook", "", false},
-		{"plain command", "pg_dump mydb", false},
-		{"no timeout", `{"command":"echo"}`, false},
-		{"agent default", `{"command":"echo","timeout_secs":0}`, false},
-		{"upper bound", `{"command":"echo","timeout_secs":86400}`, false},
-		{"above the bound", `{"command":"echo","timeout_secs":86401}`, true},
-		{"negative", `{"command":"echo","timeout_secs":-1}`, true},
-		{"not a whole number", `{"command":"echo","timeout_secs":1.5}`, true},
-		{"not a number", `{"command":"echo","timeout_secs":"30"}`, true},
+		{"plain command, not the JSON the agent runs", "pg_dump mydb", true},
+		{"command only", `{"command":"pg_dump mydb"}`, false},
+		{"command with arguments", `{"name":"dump","command":"pg_dump","args":["mydb","-f","/backup/db.sql"],"timeout_secs":30}`, false},
+		{"command substitution", `{"command":"echo $(id)"}`, true},
+		{"command substitution behind a JSON escape", `{"command":"echo \u0024(id)"}`, true},
+		{"backtick behind a JSON escape", `{"command":"echo \u0060id\u0060"}`, true},
+		{"internal variable behind a JSON escape", `{"command":"echo \u0024RESTIC_PASSWORD"}`, true},
+		{"path traversal behind a JSON escape", `{"command":"cat \u002e\u002e/etc/passwd"}`, true},
+		{"upper-case key decoded like the agent does", `{"COMMAND":"echo \u0024(id)"}`, true},
+		{"command substitution in an argument", `{"command":"echo","args":["$(id)"]}`, true},
+		{"escaped substitution in an argument", `{"command":"echo","args":["\u0024(id)"]}`, true},
+		{"agent default timeout", `{"command":"echo","timeout_secs":0}`, false},
+		{"timeout upper bound", `{"command":"echo","timeout_secs":86400}`, false},
+		{"timeout above the bound", `{"command":"echo","timeout_secs":86401}`, true},
+		{"negative timeout", `{"command":"echo","timeout_secs":-1}`, true},
+		{"timeout not a whole number", `{"command":"echo","timeout_secs":1.5}`, true},
+		{"timeout not a number", `{"command":"echo","timeout_secs":"30"}`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := validateHookTimeout(tt.hook); (err != nil) != tt.wantErr {
-				t.Errorf("validateHookTimeout(%q) error = %v, wantErr %v", tt.hook, err, tt.wantErr)
+			if err := validateHook(tt.hook); (err != nil) != tt.wantErr {
+				t.Errorf("validateHook(%q) error = %v, wantErr %v", tt.hook, err, tt.wantErr)
 			}
 		})
 	}

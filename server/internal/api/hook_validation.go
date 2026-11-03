@@ -61,21 +61,45 @@ func validateHookCommand(cmd string) error {
 	return nil
 }
 
-// validateHookTimeout checks the timeout_secs of a hook definition, which the
-// GUI stores as a JSON object. A hook that is not a JSON object, or has no
-// timeout_secs, is left alone.
-func validateHookTimeout(hook string) error {
-	var def map[string]json.RawMessage
-	if json.Unmarshal([]byte(hook), &def) != nil {
+// hookDefinition is a hook as the GUI saves it and the agent runs it
+// (hookPayload in agent/internal/executor). Decoding into the same fields with
+// encoding/json, as the agent does, makes the server check exactly the
+// command and arguments the agent will execute.
+type hookDefinition struct {
+	Command     string   `json:"command"`
+	Args        []string `json:"args"`
+	TimeoutSecs int      `json:"timeout_secs"`
+}
+
+// validateHook validates a hook definition before it is persisted. An empty
+// hook is valid (hooks are optional); anything else must be the JSON object
+// the agent expects, or every backup of the policy would fail. The command
+// and each argument go through validateHookCommand after decoding: checked on
+// the raw JSON text, an escape such as $( would hide a $( from it.
+func validateHook(hook string) error {
+	if hook == "" {
 		return nil
 	}
-	raw, ok := def["timeout_secs"]
-	if !ok {
-		return nil
+	var def hookDefinition
+	if err := json.Unmarshal([]byte(hook), &def); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field == "timeout_secs" {
+			return fmt.Errorf("timeout_secs must be a whole number between 0 and %d", maxHookTimeoutSecs)
+		}
+		return errors.New(`hook must be a JSON object such as {"command": "…", "args": [], "timeout_secs": 30}`)
 	}
-	var secs int
-	if err := json.Unmarshal(raw, &secs); err != nil || secs < 0 || secs > maxHookTimeoutSecs {
+	if def.TimeoutSecs < 0 || def.TimeoutSecs > maxHookTimeoutSecs {
 		return fmt.Errorf("timeout_secs must be a whole number between 0 and %d", maxHookTimeoutSecs)
+	}
+	if err := validateHookCommand(def.Command); err != nil {
+		return err
+	}
+	// Arguments reach the shell too: cmd /C on Windows joins them into the
+	// command line.
+	for _, arg := range def.Args {
+		if err := validateHookCommand(arg); err != nil {
+			return fmt.Errorf("hook argument: %w", err)
+		}
 	}
 	return nil
 }
