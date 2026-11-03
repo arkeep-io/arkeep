@@ -46,7 +46,7 @@ func newBackfillTestDB(t *testing.T) *gorm.DB {
 func seedSinglePolicyDestination(t *testing.T, gormDB *gorm.DB) *db.Destination {
 	t.Helper()
 	ctx := context.Background()
-	agent := &db.Agent{Name: "agent", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "agent", Status: "offline"}
 	if err := repositories.NewAgentRepository(gormDB).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}

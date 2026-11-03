@@ -6,6 +6,8 @@
 //   2. OIDC:  full-page redirect to /api/v1/auth/oidc/login?provider_id={id}
 //             One button per enabled provider. Buttons hidden when none configured.
 //             A two-factor account comes back to /login?challenge=… for the code.
+//   An account whose password an admin set with "require a new password"
+//   stops at a last step that sets it (after the code, on a two-factor account).
 
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -27,6 +29,7 @@ import { Input } from '@/components/ui/input'
 import { AlertCircle, Eye, EyeOff, Loader2, Moon, Sun } from '@lucide/vue'
 import { useTheme } from '@/composables/useTheme'
 import TwoFactorCodeForm from '@/components/users/TwoFactorCodeForm.vue'
+import PasswordChangeForm from '@/components/users/PasswordChangeForm.vue'
 import type { OIDCProviderSummary } from '@/types'
 
 // Respect the user's OS "reduce motion" preference for the decorative login video.
@@ -60,9 +63,9 @@ const serverError = ref<string | null>(null)
 const showPassword = ref(false)
 const oidcLoadingId = ref<string | null>(null)
 
-// ─── Two-factor step ──────────────────────────────────────────────────────────
+// ─── Two-factor and password change steps ─────────────────────────────────────
 
-const step = ref<'credentials' | 'code'>('credentials')
+const step = ref<'credentials' | 'code' | 'password'>('credentials')
 const challengeToken = ref('')
 
 // Enabled OIDC providers fetched on mount — one button rendered per entry.
@@ -83,11 +86,20 @@ const onSubmit = handleSubmit(async (values) => {
             step.value = 'code'
             return
         }
+        if (outcome.passwordChangeRequired) {
+            toPasswordChange(outcome.challengeToken)
+            return
+        }
         router.push(redirectTo.value)
     } catch {
         serverError.value = 'Invalid email or password'
     }
 })
+
+function toPasswordChange(token: string): void {
+    challengeToken.value = token
+    step.value = 'password'
+}
 
 function backToCredentials(): void {
     step.value = 'credentials'
@@ -238,7 +250,12 @@ onMounted(() => {
                         </form>
 
                         <!-- Two-factor code form -->
-                        <TwoFactorCodeForm v-else :challenge-token="challengeToken"
+                        <TwoFactorCodeForm v-else-if="step === 'code'" :challenge-token="challengeToken"
+                            @verified="router.push(redirectTo)" @password-change="toPasswordChange"
+                            @back="backToCredentials" />
+
+                        <!-- New password, when an admin required one -->
+                        <PasswordChangeForm v-else :challenge-token="challengeToken"
                             @verified="router.push(redirectTo)" @back="backToCredentials" />
 
                         <!-- Decorative panel -->

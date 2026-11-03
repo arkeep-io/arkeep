@@ -32,10 +32,19 @@ func TestListWithCheckSchedule(t *testing.T) {
 		Name: "no-schedule", Type: "local", Config: "{}", Enabled: true,
 		CheckEnabled: true, CheckSchedule: "",
 	}
-	for _, d := range []*db.Destination{eligible, appendOnly, disabled, noSchedule} {
+	paused := &db.Destination{
+		Name: "paused", Type: "local", Config: "{}", Enabled: true,
+		CheckEnabled: true, CheckSchedule: "0 3 * * 0",
+	}
+	for _, d := range []*db.Destination{eligible, appendOnly, disabled, noSchedule, paused} {
 		if err := destRepo.Create(ctx, d); err != nil {
 			t.Fatalf("create destination %q: %v", d.Name, err)
 		}
+	}
+	// A disabled destination is paused: no scheduled check. Enabled carries
+	// default:true, so it is turned off after Create.
+	if err := gdb.Model(paused).UpdateColumn("enabled", false).Error; err != nil {
+		t.Fatalf("disable destination: %v", err)
 	}
 
 	got, err := destRepo.ListWithCheckSchedule(ctx)

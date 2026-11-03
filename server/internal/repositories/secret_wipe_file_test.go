@@ -45,7 +45,7 @@ func TestDelete_LeavesNoSecretInDatabaseFile(t *testing.T) {
 			t.Fatalf("create destination: %v", err)
 		}
 	}
-	agent := &db.Agent{Name: "agent", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "agent", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}

@@ -157,9 +157,11 @@ func (s *CheckScheduler) IsRunning() bool {
 	return s.running.Load()
 }
 
-// eligible reports whether a destination should have a gocron entry at all.
+// eligible reports whether a destination should have a gocron entry at all. A
+// disabled destination is paused: no scheduled check, though Run Check Now
+// (TriggerNow) still works.
 func eligible(dest *db.Destination) bool {
-	return dest.CheckEnabled && dest.CheckSchedule != ""
+	return dest.Enabled && dest.CheckEnabled && dest.CheckSchedule != ""
 }
 
 func (s *CheckScheduler) addJob(dest *db.Destination) error {

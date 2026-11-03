@@ -3,8 +3,9 @@
 //
 // Takes the challenge token issued by the first step (password, or an OIDC
 // sign-in that came back with ?challenge=…) and completes the login with a
-// TOTP code or a recovery code. Emits `verified` once the tokens are issued
-// and `back` when the user returns to the credentials step.
+// TOTP code or a recovery code. Emits `verified` once the tokens are issued,
+// `password-change` with a new challenge when the account must first set a
+// new password, and `back` when the user returns to the credentials step.
 import { computed, nextTick, ref, useTemplateRef } from 'vue'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
@@ -28,6 +29,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
     verified: []
+    'password-change': [challengeToken: string]
     back: []
 }>()
 
@@ -90,7 +92,11 @@ const onSubmit = handleSubmit(async (values) => {
     verifying.value = true
     const code = values.useRecoveryCode ? values.recoveryCode.trim() : values.pin.join('')
     try {
-        await auth.completeTwoFactor(props.challengeToken, code)
+        const next = await auth.completeTwoFactor(props.challengeToken, code)
+        if (next) {
+            emit('password-change', next.challengeToken)
+            return
+        }
         emit('verified')
     } catch {
         verifying.value = false

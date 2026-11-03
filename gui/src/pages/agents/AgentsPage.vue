@@ -17,16 +17,6 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogDescription,
-    AlertDialogFooter,
-    AlertDialogHeader,
-    AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -43,6 +33,7 @@ import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
+import AgentDeleteDialog from '@/components/agents/AgentDeleteDialog.vue'
 import UpgradeIndicator from '@/components/shared/UpgradeIndicator.vue'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
@@ -82,7 +73,6 @@ const liveStatus = ref<Record<string, AgentStatus>>({})
 // Delete confirmation dialog
 const deleteDialogOpen = ref(false)
 const agentToDelete = ref<Agent | null>(null)
-const deleteLoading = ref(false)
 
 // Edit sheet
 const editSheetOpen = ref(false)
@@ -180,23 +170,13 @@ function openDeleteDialog(agent: Agent) {
     deleteDialogOpen.value = true
 }
 
-async function confirmDelete() {
-    if (!agentToDelete.value) return
-    deleteLoading.value = true
-    try {
-        await api(`/api/v1/agents/${agentToDelete.value.id}`, { method: 'DELETE' })
-        deleteDialogOpen.value = false
-        agentToDelete.value = null
-        // If we deleted the last item on a page, go back one page.
-        if (agents.value.length === 1 && page.value > 1) {
-            page.value--
-        }
-        await fetchAgents()
-    } catch (e: any) {
-        error.value = apiErrorMessage(e, 'Failed to delete agent')
-    } finally {
-        deleteLoading.value = false
+async function onDeleted() {
+    agentToDelete.value = null
+    // If we deleted the last item on a page, go back one page.
+    if (agents.value.length === 1 && page.value > 1) {
+        page.value--
     }
+    await fetchAgents()
 }
 
 // ---------------------------------------------------------------------------
@@ -457,24 +437,6 @@ onUnmounted(teardownSubscriptions)
         @saved="fetchAgents" />
 
     <!-- Delete confirmation dialog -->
-    <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">
-        <AlertDialogContent>
-            <AlertDialogHeader>
-                <AlertDialogTitle>Delete agent?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    <span v-if="agentToDelete">
-                        <strong>{{ agentToDelete.name }}</strong> will be soft-deleted. Existing jobs and
-                        snapshots associated with this agent will be retained.
-                    </span>
-                </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-                <AlertDialogCancel :disabled="deleteLoading">Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive"
-                    :disabled="deleteLoading" @click="confirmDelete">
-                    {{ deleteLoading ? 'Deleting…' : 'Delete' }}
-                </AlertDialogAction>
-            </AlertDialogFooter>
-        </AlertDialogContent>
-    </AlertDialog>
+    <AgentDeleteDialog :open="deleteDialogOpen" :agent="agentToDelete" @update:open="deleteDialogOpen = $event"
+        @deleted="onDeleted" />
 </template>

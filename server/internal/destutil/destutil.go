@@ -25,6 +25,9 @@ type sftpConfig struct {
 	User string `json:"user"`
 	Path string `json:"path"`
 	Port string `json:"port"`
+	// HostKey is the server's public host key (ssh-keyscan output). When set,
+	// the agent refuses a server presenting another key. Optional.
+	HostKey string `json:"host_key"`
 }
 
 // BuildRepoURL constructs the restic repository URL from a destination record.
@@ -228,6 +231,13 @@ func buildSFTPEnv(dest *db.Destination, env map[string]string) {
 	}
 	if cfg.Port != "" && cfg.Port != "22" {
 		env[prefix+"PORT"] = cfg.Port
+	}
+	if cfg.HostKey != "" {
+		// ValidateConfig refused an unparsable key; one stored before that
+		// check is skipped rather than sent half-read.
+		if keys, err := ParseHostKeys(cfg.HostKey); err == nil {
+			env[SFTPKnownHostsEnv] = knownHostsContent(cfg.Host, cfg.Port, keys)
+		}
 	}
 
 	if dest.Credentials == "" {

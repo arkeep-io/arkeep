@@ -28,7 +28,8 @@ type ListOptions struct {
 // all queries that return this type.
 type PolicyDestinationWithName struct {
 	db.PolicyDestination
-	DestinationName string
+	DestinationName    string
+	DestinationEnabled bool
 }
 
 // -----------------------------------------------------------------------------
@@ -45,6 +46,8 @@ type UserRepository interface {
 	List(ctx context.Context, opts ListOptions) ([]db.User, int64, error)
 	// CountActiveAdmins returns how many active users hold the admin role.
 	CountActiveAdmins(ctx context.Context) (int64, error)
+	// ListActiveAdmins returns every active user holding the admin role.
+	ListActiveAdmins(ctx context.Context) ([]db.User, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -95,6 +98,24 @@ type TwoFactorChallengeRepository interface {
 	MarkUsed(ctx context.Context, id uuid.UUID) error
 	// DeleteByUserID removes all outstanding challenges for a user, so a new
 	// login attempt invalidates any previous one.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// PasswordChangeChallengeRepository
+// -----------------------------------------------------------------------------
+
+// PasswordChangeChallengeRepository stores the interim step of a login that
+// must set a new password before a session is issued.
+type PasswordChangeChallengeRepository interface {
+	Create(ctx context.Context, challenge *db.PasswordChangeChallenge) error
+	// GetUnusedByHash returns an unconsumed challenge matching the hash.
+	// Expiry is checked by the caller. Returns ErrNotFound if none matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.PasswordChangeChallenge, error)
+	// Consume marks the challenge used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all outstanding challenges for a user.
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -199,6 +220,10 @@ type DestinationRepository interface {
 	// retention scheduler to know which restic tags to sweep, and by the
 	// one-time migration backfill.
 	ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error)
+
+	// ListByMaintenanceAgent returns every live destination whose retention
+	// sweeps and integrity checks run on the given agent.
+	ListByMaintenanceAgent(ctx context.Context, agentID uuid.UUID) ([]db.Destination, error)
 
 	// PolicyCountsByDestination returns, for every destination with at least
 	// one live policy attached, how many such policies there are. Used to

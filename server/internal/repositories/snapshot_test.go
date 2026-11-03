@@ -29,7 +29,7 @@ func newSnapshotFixture(t *testing.T, destCount int) (*snapshotFixture, []uuid.U
 	gormDB := newTestDB(t)
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Hostname: "host", Status: "offline"}
 	if err := NewAgentRepository(gormDB).Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}

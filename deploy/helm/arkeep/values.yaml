@@ -1,6 +1,6 @@
 # values.yaml — default configuration for the Arkeep Helm chart.
 # Override any value with --set or a custom values file:
-#   helm install arkeep arkeep/arkeep -f my-values.yaml
+#   helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version X.Y.Z -f my-values.yaml
 
 # ─── Image ────────────────────────────────────────────────────────────────────
 

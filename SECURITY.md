@@ -152,6 +152,17 @@ revokes every other active session for the account except the one used to enroll
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.
 
+### Passwords set by an administrator
+
+An administrator can set another local user's password (`POST /api/v1/users/{id}/password`),
+never their own and never an OIDC account's. It revokes every session of the user and
+is recorded in the audit log. With "require a new password", the login stops after the
+password and the second factor and issues no session: it returns a single-use challenge,
+valid for 10 minutes and stored as a SHA-256 hash, which only
+`POST /api/v1/auth/login/password` accepts, together with a new password different from
+the one the administrator set. The challenge is consumed atomically before the password
+is written, so it cannot be used twice.
+
 ### Health endpoints
 
 `GET /health/live` and `GET /health/ready` are unauthenticated and accessible on the HTTP port (default `:8080`). They do not expose credentials or user data.
@@ -160,11 +171,13 @@ is not the account owner.
 
 ### Metrics endpoint
 
-The `/metrics` endpoint (Prometheus text format) is **unauthenticated** and accessible on the same port as the HTTP API (default `:8080`). It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
+The `/metrics` endpoint (Prometheus text format) is served on the same port as the HTTP API (default `:8080`). By default it is **unauthenticated**. It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
 
 However, the endpoint can reveal information about your deployment (number of agents, job frequency, error rates) that you may not want public.
 
-**Recommendation:** restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
+**Recommendation:** set `ARKEEP_METRICS_TOKEN` (or `--metrics-token`). `/metrics` then answers `401` unless the request carries `Authorization: Bearer <token>`; the token is compared in constant time. Configure the same token in your Prometheus scrape job (`authorization.credentials`).
+
+You can also, or instead, restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
 
 ```nginx
 location /metrics {

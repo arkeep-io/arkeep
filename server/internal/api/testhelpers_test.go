@@ -79,6 +79,7 @@ type testDeps struct {
 	resets        repositories.PasswordResetTokenRepository
 	challenges    repositories.TwoFactorChallengeRepository
 	recoveryCodes repositories.RecoveryCodeRepository
+	passwordChanges repositories.PasswordChangeChallengeRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -102,6 +103,7 @@ func newTestDeps(t *testing.T) *testDeps {
 		resets:        repositories.NewPasswordResetTokenRepository(gdb),
 		challenges:    repositories.NewTwoFactorChallengeRepository(gdb),
 		recoveryCodes: repositories.NewRecoveryCodeRepository(gdb),
+		passwordChanges: repositories.NewPasswordChangeChallengeRepository(gdb),
 	}
 }
 
@@ -212,6 +214,7 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		ResetTokens:   deps.resets,
 		RefreshTokens: deps.tokens,
 		Challenges:    deps.challenges,
+		PasswordChanges: deps.passwordChanges,
 		RecoveryCodes: deps.recoveryCodes,
 		Mailer:        mailer,
 		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),
@@ -404,7 +407,7 @@ func createDBUser(t *testing.T, deps *testDeps, email, role string) uuid.UUID {
 // createDBAgent inserts an agent record and returns it.
 func createDBAgent(t *testing.T, deps *testDeps, name string) *db.Agent {
 	t.Helper()
-	a := &db.Agent{Name: name, Status: "offline", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "offline"}
 	if err := deps.agents.Create(context.Background(), a); err != nil {
 		t.Fatalf("createDBAgent: %v", err)
 	}

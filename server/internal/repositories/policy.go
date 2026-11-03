@@ -270,7 +270,7 @@ func (r *gormPolicyRepository) GetDestinations(ctx context.Context, policyID uui
 	var dests []PolicyDestinationWithName
 	err := r.db.WithContext(ctx).
 		Table("policy_destinations pd").
-		Select("pd.*, d.name AS destination_name").
+		Select("pd.*, d.name AS destination_name, d.enabled AS destination_enabled").
 		Joins("INNER JOIN destinations d ON d.id = pd.destination_id").
 		Where("pd.policy_id = ?", policyID).
 		Order("pd.priority ASC").

@@ -17,6 +17,8 @@ package restic
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,8 +26,10 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -208,6 +212,12 @@ type Wrapper struct {
 	resticBin string // absolute path to the extracted restic binary
 	rcloneBin string // absolute path to the extracted rclone binary
 	logger    *zap.Logger
+
+	// knownHostsDir is a private (0700) directory, created on first use, that
+	// holds the known_hosts files of SFTP destinations with a pinned host key.
+	knownHostsOnce sync.Once
+	knownHostsDir  string
+	knownHostsErr  error
 }
 
 // NewWrapper extracts the embedded binaries (if needed) and returns a ready
@@ -1071,9 +1081,43 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 			zap.Strings("keys", rejected))
 	}
 	for k, v := range allowed {
+		if strings.EqualFold(k, sftpKnownHostsEnv) {
+			env = append(env, sftpRcloneEnvPrefix+"KNOWN_HOSTS_FILE="+w.knownHostsFile(v))
+			continue
+		}
 		env = append(env, k+"="+v)
 	}
 
 	cmd.Env = env
 	return cmd
+}
+
+// knownHostsFile writes content to a file named after its hash in the
+// wrapper's private directory and returns its path. The directory is created
+// with a random name and mode 0700, so no other local user can plant a file
+// there. On failure it returns a path that cannot be opened: rclone then fails
+// instead of connecting without checking the host key.
+func (w *Wrapper) knownHostsFile(content string) string {
+	w.knownHostsOnce.Do(func() {
+		w.knownHostsDir, w.knownHostsErr = os.MkdirTemp("", "arkeep-known-hosts-")
+	})
+	unavailable := filepath.Join(os.DevNull, "known_hosts")
+	if w.knownHostsErr != nil {
+		w.logError("cannot create the known_hosts directory: the SFTP host key cannot be checked", w.knownHostsErr)
+		return unavailable
+	}
+	sum := sha256.Sum256([]byte(content))
+	path := filepath.Join(w.knownHostsDir, hex.EncodeToString(sum[:]))
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		w.logError("cannot write the known_hosts file: the SFTP host key cannot be checked", err)
+		return unavailable
+	}
+	return path
+}
+
+// logError logs through the wrapper's logger, which tests may leave unset.
+func (w *Wrapper) logError(msg string, err error) {
+	if w.logger != nil {
+		w.logger.Error(msg, zap.Error(err))
+	}
 }

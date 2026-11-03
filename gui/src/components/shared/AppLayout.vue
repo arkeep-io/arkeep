@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/sidebar"
 import { computed } from "vue"
 import { useRoute } from "vue-router"
+import { useAuthStore } from "@/stores/auth"
 
 type Crumb = {
     label: string
@@ -24,6 +25,9 @@ type Crumb = {
 }
 
 const route = useRoute()
+// In-app notifications are created for administrators only: the read-only
+// user role would only ever see an empty bell.
+const auth = useAuthStore()
 
 
 const breadcrumbs = computed<Crumb[]>(() => {
@@ -75,7 +79,7 @@ const breadcrumbs = computed<Crumb[]>(() => {
                         </template>
                     </BreadcrumbList>
                 </Breadcrumb>
-                <div class="ml-auto">
+                <div v-if="auth.isAdmin" class="ml-auto">
                     <NotificationBell />
                 </div>
             </header>

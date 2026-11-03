@@ -16,9 +16,11 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { MoreHorizontal, PencilLine, Plus, RefreshCw, ShieldOff, Trash2, Users } from '@lucide/vue'
+import { KeyRound, MoreHorizontal, PencilLine, Plus, RefreshCw, ShieldOff, Trash2, Users } from '@lucide/vue'
 import UserSheet from '@/components/users/UserSheet.vue'
+import SetPasswordDialog from '@/components/users/SetPasswordDialog.vue'
 import { api, apiErrorMessage } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 import type { ApiResponse, User } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,25 @@ const deleteLoading = ref(false)
 const resetDialogOpen = ref(false)
 const userToReset = ref<User | null>(null)
 const resetLoading = ref(false)
+
+// ---------------------------------------------------------------------------
+// State — set password
+// ---------------------------------------------------------------------------
+
+const auth = useAuthStore()
+const setPasswordOpen = ref(false)
+const userToSetPassword = ref<User | null>(null)
+
+// The identity provider owns an OIDC user's password, and your own password is
+// changed from Profile, where the current one is asked for.
+function canSetPassword(u: User): boolean {
+    return !u.is_oidc && u.id !== auth.user?.id
+}
+
+function openSetPassword(u: User) {
+    userToSetPassword.value = u
+    setPasswordOpen.value = true
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -265,6 +286,7 @@ async function confirmReset() {
                                 <div class="flex items-center gap-1.5">
                                     <Badge :variant="roleVariant(u.role)">{{ u.role }}</Badge>
                                     <Badge v-if="u.two_factor_enabled" variant="outline">2FA</Badge>
+                                    <Badge v-if="u.must_change_password" variant="outline">Password change pending</Badge>
                                 </div>
                             </TableCell>
                             <TableCell>
@@ -287,6 +309,10 @@ async function confirmReset() {
                                         <DropdownMenuItem @click="openEdit(u)">
                                             <PencilLine class="w-4 h-4 mr-2" />
                                             Edit
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem v-if="canSetPassword(u)" @click="openSetPassword(u)">
+                                            <KeyRound class="w-4 h-4 mr-2" />
+                                            Set password
                                         </DropdownMenuItem>
                                         <DropdownMenuItem v-if="u.two_factor_enabled" @click="openResetDialog(u)">
                                             <ShieldOff class="w-4 h-4 mr-2" />
@@ -328,6 +354,10 @@ async function confirmReset() {
 
     <!-- User sheet -->
     <UserSheet ref="sheetRef" :open="sheetOpen" :user="sheetUser" @update:open="sheetOpen = $event"
+        @saved="fetchUsers" />
+
+    <!-- Set password dialog -->
+    <SetPasswordDialog :open="setPasswordOpen" :user="userToSetPassword" @update:open="setPasswordOpen = $event"
         @saved="fetchUsers" />
 
     <!-- Delete dialog -->

@@ -95,6 +95,11 @@ func (p *LocalAuthProvider) Login(ctx context.Context, req LoginRequest) (*Token
 	if user.TwoFactorEnabled {
 		return nil, &TwoFactorRequiredError{UserID: user.ID}
 	}
+	// Same for an account that must set a new password; after the second
+	// factor, AuthHandler.LoginTwoFactor applies the same check.
+	if user.MustChangePassword {
+		return nil, &PasswordChangeRequiredError{UserID: user.ID}
+	}
 
 	return p.IssueTokenPair(ctx, user, nil)
 }
