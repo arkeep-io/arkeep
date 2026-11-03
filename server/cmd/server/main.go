@@ -552,8 +552,11 @@ func (s *telemetryStats) ActivePoliciesCount() int {
 	return s.policyRepo.ActivePoliciesCount(context.Background())
 }
 
-// buildJWTManager loads RSA keys from the data directory if available,
-// or generates ephemeral in-memory keys for development.
+// buildJWTManager loads RSA keys from the data directory if an operator placed
+// them there, and otherwise generates keys in memory, the default. In-memory
+// keys are intended: a restart invalidates every access token, including those
+// on the in-memory denylist, and the GUI renews them from its refresh cookie,
+// which is stored in the database and survives the restart.
 func buildJWTManager(dataDir string, logger *zap.Logger) (*auth.JWTManager, error) {
 	privPath := filepath.Join(dataDir, "jwt_private.pem")
 	pubPath := filepath.Join(dataDir, "jwt_public.pem")
@@ -570,8 +573,8 @@ func buildJWTManager(dataDir string, logger *zap.Logger) (*auth.JWTManager, erro
 		return nil, fmt.Errorf("JWT key file inaccessible (%s): %w", privPath, err)
 	}
 
-	logger.Warn("JWT key files not found — using ephemeral in-memory keys (tokens will be invalidated on restart)",
-		zap.String("expected_private", privPath),
+	logger.Info("signing access tokens with in-memory keys: a restart ends them, sessions renew from their refresh token",
+		zap.String("optional_key_file", privPath),
 	)
 	return auth.NewJWTManagerGenerated("arkeep-server")
 }

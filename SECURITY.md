@@ -133,10 +133,13 @@ If this window is unacceptable for your threat model, mitigations include:
 - Running the server behind a reverse proxy that can enforce an emergency block at the
   network layer.
 
-**Denylist persistence:** the access token denylist is in-memory and is cleared on
-server restart. Tokens revoked shortly before a restart may be accepted for up to
-their remaining TTL after the restart. Refresh token revocation is unaffected — it is
-persisted in the database.
+**Server restart:** access tokens are signed with keys the server generates in memory
+at every start, so a restart invalidates every access token issued before it. The
+in-memory denylist is lost on restart, but the tokens it held are invalid anyway. The
+GUI renews its access token from the refresh cookie, which is persisted in the database,
+so users stay signed in. If `jwt_private.pem` and `jwt_public.pem` are placed in the
+data directory, the server uses them instead: access tokens then survive a restart, and
+a token revoked shortly before one may be accepted for the rest of its 15 minutes.
 
 ### Two-factor authentication
 
