@@ -434,6 +434,22 @@ func TestPersistImported(t *testing.T) {
 		}
 	})
 
+	t.Run("records that the repository exists, even when it holds no snapshot", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := e.createDestination(t, "imported")
+		res := listing()
+
+		e.svc.PersistImported(context.Background(), dest, &res)
+
+		got, err := e.dests.GetByID(context.Background(), dest.ID)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		if got.RepoInitializedAt == nil {
+			t.Error("RepoInitializedAt is nil after a successful listing, want set")
+		}
+	})
+
 	t.Run("reports already known snapshots as skipped, not imported", func(t *testing.T) {
 		e := newTestEnv(t)
 		dest := e.createDestination(t, "imported")

@@ -309,7 +309,10 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
                             class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
                         <FolderOpen v-else class="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
                         <div class="min-w-0">
-                            <p class="text-sm font-mono truncate">{{ src.path }}</p>
+                            <!-- The server sends a command source's command to admins only. -->
+                            <p v-if="src.type === 'command' && !src.path" class="text-sm italic text-muted-foreground"
+                                data-testid="command-hidden">Command visible to administrators only</p>
+                            <p v-else class="text-sm font-mono truncate">{{ src.path }}</p>
                             <p v-if="src.label" class="text-xs text-muted-foreground">{{ src.label }}</p>
                             <p v-else class="text-xs text-muted-foreground">{{ src.type }}</p>
                         </div>

@@ -3,6 +3,10 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +16,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/agent/internal/docker"
+	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -41,6 +47,7 @@ type retentionTagResult struct {
 
 type fakeReporter struct {
 	statuses         []string
+	lastMsg          string
 	destResults      map[string]destResult
 	commandResults   []commandResult
 	retentionResults []retentionTagResult
@@ -48,6 +55,7 @@ type fakeReporter struct {
 
 func (r *fakeReporter) ReportStatus(jobID, status, message string) {
 	r.statuses = append(r.statuses, status)
+	r.lastMsg = message
 }
 
 func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string) {
@@ -178,7 +186,7 @@ func TestResolveSources_RejectsFlagLikeEntries(t *testing.T) {
 	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	noopLog := func(level, msg string) {}
 
-	_, err := e.resolveSources(context.Background(), `["--password-command=touch /tmp/pwned"]`, noopLog)
+	_, _, err := e.resolveSources(context.Background(), `["--password-command=touch /tmp/pwned"]`, noopLog)
 	if err == nil {
 		t.Fatal("expected an error rejecting a flag-like source, got nil")
 	}
@@ -190,7 +198,7 @@ func TestResolveSources_AcceptsNormalPaths(t *testing.T) {
 	e := New(nil, nil, nil, zap.NewNop(), "", "")
 	noopLog := func(level, msg string) {}
 
-	got, err := e.resolveSources(context.Background(), `["/data", "C:\\Users"]`, noopLog)
+	got, _, err := e.resolveSources(context.Background(), `["/data", "C:\\Users"]`, noopLog)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -549,5 +557,256 @@ func TestReconcileRestoreFilters(t *testing.T) {
 				t.Errorf("skipped = %v, want %v", skipped, tt.wantSkipped)
 			}
 		})
+	}
+}
+
+// TestExecuteBackup_MissingLocalRepositoryIsNotRecreated covers a local
+// destination on a disk that is no longer mounted at its path: once the
+// repository is known to exist, its missing directory fails the backup instead
+// of being created again, and restic is never run against it.
+func TestExecuteBackup_MissingLocalRepositoryIsNotRecreated(t *testing.T) {
+	dir := t.TempDir()
+	callLog := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "fake-restic.sh")
+	body := "#!/bin/sh\necho \"$1\" >> '" + callLog + "'\nexit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(dir, "mnt", "usb")
+
+	payload := backupPayload{
+		Sources:      `["/tmp"]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{{DestinationID: "dest-1", Type: "local", RepoURL: repo, RepoMustExist: true}},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop())
+	e := New(w, nil, nil, zap.NewNop(), "", "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+	e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+	got := reporter.destResults["dest-1"]
+	if got.status != "failed" || !strings.Contains(got.errMsg, "repository not found") {
+		t.Errorf("destination result = %+v, want failed with a repository-not-found error", got)
+	}
+	if _, err := os.Stat(repo); !os.IsNotExist(err) {
+		t.Errorf("repository directory was created (stat err = %v), want it left missing", err)
+	}
+	if data, _ := os.ReadFile(callLog); len(data) > 0 {
+		t.Errorf("restic ran %q against a missing repository", data)
+	}
+}
+
+// TestExecuteBackup_PostHookRunsOnEveryWayOut covers the post-backup hook as
+// the counterpart of the pre-backup one (it starts again what that stopped):
+// once the job reaches its hooks it runs exactly once, also after a failing
+// pre-backup hook and after a cancel, and the job keeps its own outcome.
+func TestExecuteBackup_PostHookRunsOnEveryWayOut(t *testing.T) {
+	tests := []struct {
+		name       string
+		preHook    string
+		cancelled  bool
+		wantStatus string
+	}{
+		{name: "backup succeeds", wantStatus: "succeeded"},
+		{name: "pre-backup hook fails", preHook: `{"command":"exit 1","timeout_secs":10}`, wantStatus: "failed"},
+		{name: "job cancelled", cancelled: true, wantStatus: "cancelled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "fake-restic.sh")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(dir, "post-hook-ran")
+			payload := backupPayload{
+				Sources:        `["/tmp"]`,
+				RepoPassword:   "pw",
+				Destinations:   []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+				HookPreBackup:  tt.preHook,
+				HookPostBackup: `{"command":"echo ran >> '` + marker + `'","timeout_secs":10}`,
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelled {
+				cancel()
+			}
+
+			e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, hooks.NewRunner(10*time.Second), zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			e.executeBackup(ctx, JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}, fakeSink{}, reporter)
+
+			data, _ := os.ReadFile(marker)
+			if runs := strings.Count(string(data), "ran"); runs != 1 {
+				t.Errorf("post-backup hook ran %d times, want once", runs)
+			}
+			if final := reporter.statuses[len(reporter.statuses)-1]; final != tt.wantStatus {
+				t.Errorf("final job status = %q, want %q (all: %v)", final, tt.wantStatus, reporter.statuses)
+			}
+		})
+	}
+}
+
+// recordingSink keeps every job log line.
+type recordingSink struct{ lines []string }
+
+func (s *recordingSink) SendLog(jobID, level, message string) { s.lines = append(s.lines, message) }
+
+// TestExecuteBackup_HookCommandStaysOutOfTheJobLog pins that the job log,
+// readable by every user, names a hook without its command line, which often
+// carries credentials.
+func TestExecuteBackup_HookCommandStaysOutOfTheJobLog(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "hunter2"
+	payload := backupPayload{
+		Sources:        `["/tmp"]`,
+		RepoPassword:   "pw",
+		Destinations:   []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+		HookPreBackup:  `{"name":"dump","command":"PGPASSWORD=` + secret + ` true","timeout_secs":10}`,
+		HookPostBackup: `{"command":"PGPASSWORD=` + secret + ` true","timeout_secs":10}`,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, hooks.NewRunner(10*time.Second), zap.NewNop(), "", "")
+	sink := &recordingSink{}
+	e.executeBackup(context.Background(), JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}, sink, &fakeReporter{})
+
+	all := strings.Join(sink.lines, "\n")
+	if strings.Contains(all, secret) {
+		t.Errorf("job log contains the hook command:\n%s", all)
+	}
+	for _, want := range []string{`running pre-backup hook "dump"`, "running post-backup hook"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("job log lacks %q:\n%s", want, all)
+		}
+	}
+}
+
+// fakeDockerDaemon serves the Docker API on a unix socket and reports every
+// volume at mountpoint. Returns a client connected to it.
+func fakeDockerDaemon(t *testing.T, mountpoint string) *docker.Client {
+	t.Helper()
+	// Unix socket paths are limited to about 100 bytes: keep it short.
+	dir, err := os.MkdirTemp("", "dk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "d.sock")
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Api-Version", "1.47")
+		if i := strings.Index(r.URL.Path, "/volumes/"); i >= 0 {
+			name := r.URL.Path[i+len("/volumes/"):]
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"Name":%q,"Mountpoint":%q,"Driver":"local"}`, name, mountpoint)
+			return
+		}
+		_, _ = w.Write([]byte("OK"))
+	})}
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	c, err := docker.NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// TestExecuteBackup_UnreachableVolumeFailsTheJob covers a Docker volume whose
+// mountpoint is not reachable from the agent (not bind-mounted into its
+// container): the other sources are still backed up, but the job fails and
+// names the volume, so the failure notification goes out.
+func TestExecuteBackup_UnreachableVolumeFailsTheJob(t *testing.T) {
+	dir := t.TempDir()
+	callLog := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" >> '"+callLog+"'\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := backupPayload{
+		Sources:      `["/tmp","docker-volume://db"]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dockerClient := fakeDockerDaemon(t, filepath.Join(dir, "not-mounted", "_data"))
+	e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), dockerClient, nil, zap.NewNop(), "", "")
+	reporter := &fakeReporter{}
+	e.executeBackup(context.Background(), JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}, fakeSink{}, reporter)
+
+	if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
+		t.Errorf("final job status = %q, want failed (all: %v)", final, reporter.statuses)
+	}
+	if got := reporter.lastMsg; !strings.Contains(got, "docker-volume://db") {
+		t.Errorf("final message = %q, want it to name the skipped volume", got)
+	}
+	if data, _ := os.ReadFile(callLog); !strings.Contains(string(data), "backup") || !strings.Contains(string(data), "/tmp") {
+		t.Errorf("restic calls = %q, want the reachable source backed up", data)
+	}
+}
+
+// TestEnqueue_IgnoresAJobAlreadyQueued covers the server sending its pending
+// jobs again after the stream reconnects: a job already queued is not queued
+// twice, and once it has been handled it can be queued again.
+func TestEnqueue_IgnoresAJobAlreadyQueued(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP}
+
+	for range 2 {
+		if err := e.Enqueue(job); err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+	}
+	if n := len(e.queue); n != 1 {
+		t.Fatalf("queue holds %d jobs, want the duplicate ignored", n)
+	}
+
+	// Handle it: cancelled while queued, so run reports it without executing.
+	e.Cancel(job.JobID)
+	reporter := &fakeReporter{}
+	e.run(context.Background(), <-e.queue, fakeSink{}, reporter)
+	if err := e.Enqueue(job); err != nil || len(e.queue) != 1 {
+		t.Errorf("Enqueue after the job was handled: err = %v, queue = %d, want it queued again", err, len(e.queue))
+	}
+}
+
+// TestEnqueue_FullQueue covers a job that does not fit in the queue: Enqueue
+// says so with ErrQueueFull, which the connection manager reports to the
+// server as a failed job.
+func TestEnqueue_FullQueue(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
+	for i := range queueSize {
+		if err := e.Enqueue(JobAssignment{JobID: fmt.Sprintf("job-%d", i)}); err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+	if err := e.Enqueue(JobAssignment{JobID: "one-too-many"}); !errors.Is(err, ErrQueueFull) {
+		t.Errorf("Enqueue on a full queue = %v, want ErrQueueFull", err)
 	}
 }

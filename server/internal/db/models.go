@@ -212,6 +212,15 @@ type Destination struct {
 	// each backup. Zero until the first backup or import completes.
 	RepoSizeBytes     int64      `gorm:"not null;default:0"`
 	RepoSizeUpdatedAt *time.Time `gorm:""`
+	// RepoInitializedAt is when the restic repository was first known to
+	// exist (the first job or snapshot sync that succeeded against it); nil
+	// until then. Once set, a backup never runs `restic init` again, so a
+	// repository that has gone missing — an unmounted disk, an emptied bucket —
+	// fails the backup instead of being replaced by an empty one. Read-only
+	// for GORM so that Save on a stale copy can never set or clear it: it is
+	// written only by DestinationRepository.MarkRepoInitialized and
+	// ResetRepoInitialized.
+	RepoInitializedAt *time.Time `gorm:"->"`
 	// RepoPassword is the Restic repository password. Originally populated
 	// only for destinations whose snapshots were imported from a pre-existing
 	// repository (browse/restore of those has no policy to take the password
