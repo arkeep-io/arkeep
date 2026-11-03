@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, RefreshCw, X } from '@lucide/vue'
+import { AlertCircle, Loader2, RefreshCw, Send, X } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, SMTPSettings } from '@/types'
 
@@ -148,23 +148,31 @@ onMounted(fetchSMTP)
 // Submit
 // ---------------------------------------------------------------------------
 
+type FormValues = ReturnType<typeof defaultValues>
+
+// requestBody is what both Save and Send test email send: the form values.
+function requestBody(values: FormValues) {
+    return {
+        host: values.host,
+        port: values.port,
+        tls: values.tls,
+        username: values.auth_enabled ? values.username : '',
+        password: values.auth_enabled ? values.password : '',
+        from: values.from,
+        from_name: values.from_name,
+        recipients: values.recipients,
+    }
+}
+
 const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
+    testResult.value = null
 
     try {
         await api('/api/v1/settings/smtp', {
             method: 'PUT',
-            body: {
-                host: values.host,
-                port: values.port,
-                tls: values.tls,
-                username: values.auth_enabled ? values.username : '',
-                password: values.auth_enabled ? values.password : '',
-                from: values.from,
-                from_name: values.from_name,
-                recipients: values.recipients,
-            },
+            body: requestBody(values),
         })
         smtpExists.value = true
         smtpPassword.value = ''
@@ -172,6 +180,33 @@ const submit = handleSubmit(async (values) => {
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save SMTP settings')
+    }
+})
+
+// ---------------------------------------------------------------------------
+// Test email
+// ---------------------------------------------------------------------------
+
+// The server sends the test to the signed-in admin, with the values in the
+// form, saved or not. A blank password means the saved one, for the saved host.
+const testing = ref(false)
+const testResult = ref<{ ok: boolean; message: string } | null>(null)
+
+const sendTest = handleSubmit(async (values) => {
+    submitError.value = null
+    success.value = false
+    testResult.value = null
+    testing.value = true
+    try {
+        const res = await api<ApiResponse<{ sent_to: string }>>('/api/v1/settings/smtp/test', {
+            method: 'POST',
+            body: requestBody(values),
+        })
+        testResult.value = { ok: true, message: `Test email sent to ${res.data.sent_to}.` }
+    } catch (e: any) {
+        testResult.value = { ok: false, message: apiErrorMessage(e, 'Failed to send the test email') }
+    } finally {
+        testing.value = false
     }
 })
 </script>
@@ -223,6 +258,11 @@ const submit = handleSubmit(async (values) => {
                     <AlertDescription>SMTP settings saved successfully.</AlertDescription>
                 </Alert>
             </Transition>
+
+            <Alert v-if="testResult" :variant="testResult.ok ? 'default' : 'destructive'" data-testid="smtp-test-result"
+                :class="testResult.ok ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' : ''">
+                <AlertDescription>{{ testResult.message }}</AlertDescription>
+            </Alert>
 
             <!-- ── Connection ──────────────────────────────────────────────── -->
             <div class="flex flex-col gap-4">
@@ -347,7 +387,12 @@ const submit = handleSubmit(async (values) => {
             </div>
 
             <!-- ── Submit ──────────────────────────────────────────────────── -->
-            <div class="flex justify-end pt-2">
+            <div class="flex justify-end gap-2 pt-2">
+                <Button type="button" variant="outline" :disabled="isSubmitting || testing" @click="sendTest">
+                    <Loader2 v-if="testing" class="size-4 animate-spin" />
+                    <Send v-else class="size-4" />
+                    {{ testing ? 'Sending…' : 'Send test email' }}
+                </Button>
                 <Button type="submit" :disabled="isSubmitting">
                     <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
                     {{ isSubmitting ? 'Saving…' : 'Save Settings' }}

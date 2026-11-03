@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mountPage, submitForm } from '@/test/mount'
+import { mountPage, settle, submitForm } from '@/test/mount'
 import { api } from '@/services/api'
 import NotificationsPage from './NotificationsPage.vue'
 
@@ -66,6 +66,46 @@ describe('NotificationsPage', () => {
 
     expect(putBody('/api/v1/settings/webhook')).toEqual({
       url: 'https://hooks.example.com/arkeep', secret: 's3cret', enabled: true,
+    })
+  })
+
+  describe('send test webhook', () => {
+    async function clickTest(wrapper: Awaited<ReturnType<typeof openPage>>, answer: unknown) {
+      const base = vi.mocked(api).getMockImplementation()!
+      vi.mocked(api).mockImplementation((url: string, opts?: { method?: string }) => {
+        if (url === '/api/v1/settings/webhook/test') return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer)
+        return base(url, opts)
+      })
+      await wrapper.findAll('button').find((b) => b.text() === 'Send test webhook')!.trigger('click')
+      await settle()
+    }
+    const testBody = () => vi.mocked(api).mock.calls.find(([u]) => u === '/api/v1/settings/webhook/test')?.[1]?.body
+
+    it('posts the URL and secret of the form', async () => {
+      const wrapper = await openPage({ url: 'https://hooks.example.com/saved', enabled: true })
+      await wrapper.find('#webhook-url').setValue(' https://hooks.example.com/new ')
+      await clickTest(wrapper, { data: { ok: true } })
+
+      expect(testBody()).toEqual({ url: 'https://hooks.example.com/new', secret: '' })
+      expect(wrapper.find('[data-testid="webhook-test-result"]').text()).toBe('Test webhook delivered.')
+    })
+
+    it('shows why the test failed', async () => {
+      const wrapper = await openPage({ url: 'https://hooks.example.com/saved', enabled: true })
+      const refusal = Object.assign(new Error('422'), { data: { error: { message: 'webhook returned non-2xx status 500' } } })
+      await clickTest(wrapper, refusal)
+
+      expect(wrapper.find('[data-testid="webhook-test-result"]').text()).toBe('webhook returned non-2xx status 500')
+    })
+
+    it('does not test an invalid URL', async () => {
+      const wrapper = await openPage(null)
+      await enableWebhook(wrapper)
+      await wrapper.find('#webhook-url').setValue('ftp://hooks.example.com')
+      await clickTest(wrapper, { data: { ok: true } })
+
+      expect(wrapper.text()).toContain('Must be an http(s) URL')
+      expect(testBody()).toBeUndefined()
     })
   })
 })
