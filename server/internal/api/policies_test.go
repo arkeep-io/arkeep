@@ -295,7 +295,7 @@ func TestPolicyHandler_Create(t *testing.T) {
 	t.Run("returns 403 when non-admin sets hook_pre_backup", func(t *testing.T) {
 		e := newTestEnv(t)
 		body := validPolicy(uuid.New().String())
-		body["hook_pre_backup"] = "/usr/local/bin/pre-backup.sh"
+		body["hook_pre_backup"] = `{"command":"/usr/local/bin/pre-backup.sh"}`
 		resp := e.post(t, "/api/v1/policies", e.userToken(t), body)
 		assertStatus(t, resp, http.StatusForbidden)
 	})
@@ -328,7 +328,24 @@ func TestPolicyHandler_Create(t *testing.T) {
 	t.Run("returns 400 when hook_pre_backup contains shell injection", func(t *testing.T) {
 		e := newTestEnv(t)
 		body := validPolicy(uuid.New().String())
-		body["hook_pre_backup"] = "echo $(cat /etc/passwd)"
+		body["hook_pre_backup"] = `{"command":"echo $(cat /etc/passwd)"}`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 when hook_pre_backup hides shell injection behind a JSON escape", func(t *testing.T) {
+		// Regression test for SEC-32: the agent decodes \u0024( into $( and runs it.
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["hook_pre_backup"] = `{"command":"echo \u0024(cat /etc/passwd)"}`
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("returns 400 when hook_pre_backup is not the JSON the agent runs", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := validPolicy(uuid.New().String())
+		body["hook_pre_backup"] = "pg_dump mydb"
 		resp := e.post(t, "/api/v1/policies", e.adminToken(t), body)
 		assertStatus(t, resp, http.StatusBadRequest)
 	})
@@ -557,7 +574,7 @@ func TestPolicyHandler_Update(t *testing.T) {
 		agentID := createDBAgent(t, e.deps, "test-agent").ID
 		policy := createDBPolicy(t, e.deps, "policy", agentID)
 
-		hook := "cat ../../etc/passwd"
+		hook := `{"command":"cat ../../etc/passwd"}`
 		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
 			"hook_pre_backup": &hook,
 		})

@@ -32,6 +32,35 @@ type rawSource struct {
 	Label string `json:"label"`
 }
 
+// WithoutCommands returns sourcesJSON with the command of every command-type
+// source removed, for readers who may see what a policy backs up but not the
+// command lines, which often carry database passwords. Entries are decoded
+// like CommandSources decodes them, so whatever it treats as a command source
+// is redacted; other entries are kept as they are. Input that is not a JSON
+// array yields "[]".
+func WithoutCommands(sourcesJSON string) string {
+	var entries []json.RawMessage
+	if err := json.Unmarshal([]byte(sourcesJSON), &entries); err != nil {
+		return "[]"
+	}
+	for i, raw := range entries {
+		var s rawSource
+		if json.Unmarshal(raw, &s) != nil || s.Type != SourceTypeCommand {
+			continue
+		}
+		redacted, err := json.Marshal(rawSource{Type: SourceTypeCommand, Label: s.Label})
+		if err != nil {
+			return "[]"
+		}
+		entries[i] = redacted
+	}
+	out, err := json.Marshal(entries)
+	if err != nil {
+		return "[]"
+	}
+	return string(out)
+}
+
 func parseSources(sourcesJSON string) ([]rawSource, error) {
 	var sources []rawSource
 	if err := json.Unmarshal([]byte(sourcesJSON), &sources); err != nil {

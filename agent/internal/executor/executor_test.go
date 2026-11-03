@@ -650,3 +650,45 @@ func TestExecuteBackup_PostHookRunsOnEveryWayOut(t *testing.T) {
 		})
 	}
 }
+
+// recordingSink keeps every job log line.
+type recordingSink struct{ lines []string }
+
+func (s *recordingSink) SendLog(jobID, level, message string) { s.lines = append(s.lines, message) }
+
+// TestExecuteBackup_HookCommandStaysOutOfTheJobLog pins that the job log,
+// readable by every user, names a hook without its command line, which often
+// carries credentials.
+func TestExecuteBackup_HookCommandStaysOutOfTheJobLog(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "hunter2"
+	payload := backupPayload{
+		Sources:        `["/tmp"]`,
+		RepoPassword:   "pw",
+		Destinations:   []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+		HookPreBackup:  `{"name":"dump","command":"PGPASSWORD=` + secret + ` true","timeout_secs":10}`,
+		HookPostBackup: `{"command":"PGPASSWORD=` + secret + ` true","timeout_secs":10}`,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, hooks.NewRunner(10*time.Second), zap.NewNop(), "", "")
+	sink := &recordingSink{}
+	e.executeBackup(context.Background(), JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}, sink, &fakeReporter{})
+
+	all := strings.Join(sink.lines, "\n")
+	if strings.Contains(all, secret) {
+		t.Errorf("job log contains the hook command:\n%s", all)
+	}
+	for _, want := range []string{`running pre-backup hook "dump"`, "running post-backup hook"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("job log lacks %q:\n%s", want, all)
+		}
+	}
+}

@@ -170,6 +170,16 @@ type hookPayload struct {
 	TimeoutSecs int      `json:"timeout_secs"`
 }
 
+// logLabel names the hook for the job log by its name only: job logs are
+// readable by every user, and a hook's command line often carries
+// credentials (a database password, for instance).
+func (h *hookPayload) logLabel(kind string) string {
+	if h.Name == "" {
+		return kind + " hook"
+	}
+	return fmt.Sprintf("%s hook %q", kind, h.Name)
+}
+
 // queueSize is the maximum number of jobs that can be buffered in the channel
 // while waiting to be executed. Jobs beyond this limit are rejected — the
 // server will retry them on the next reconnect via DispatchPending.
@@ -470,13 +480,12 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		if payload.HookPostBackup == "" {
 			return
 		}
-		log("info", fmt.Sprintf("running post-backup hook: %s", payload.HookPostBackup))
-
 		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
 		if err != nil {
 			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
 			return
 		}
+		log("info", "running "+hook.logLabel("post-backup"))
 		result, err := e.hooks.Run(context.WithoutCancel(ctx), hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
 		if result.Output != "" {
 			log("info", "post-backup hook output: "+result.Output)
@@ -488,14 +497,13 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 
 	// --- 4. Pre-backup hook ---
 	if payload.HookPreBackup != "" {
-		log("info", fmt.Sprintf("running pre-backup hook: %s", payload.HookPreBackup))
-
 		hook, err := e.resolveHook(ctx, payload.HookPreBackup)
 		if err != nil {
 			runPostHook()
 			fail(fmt.Sprintf("failed to resolve pre-backup hook: %v", err))
 			return
 		}
+		log("info", "running "+hook.logLabel("pre-backup"))
 
 		result, err := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
 

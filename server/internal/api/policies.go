@@ -15,6 +15,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
+	"github.com/arkeep-io/arkeep/server/internal/policyutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
 )
@@ -127,6 +128,22 @@ func policyToResponse(p *db.Policy, destinations []repositories.PolicyDestinatio
 	return resp
 }
 
+// forReader removes from a policy response what only admins may read: the
+// hook commands, the commands of command sources and the healthcheck URL.
+// Hooks and command sources often carry database passwords inline, and the
+// Healthchecks.io ping URL is itself the credential that reports a backup's
+// outcome. The read-only user role still sees which sources a policy has.
+func (resp policyResponse) forReader(r *http.Request) policyResponse {
+	if isAdmin(r) {
+		return resp
+	}
+	resp.HookPreBackup = ""
+	resp.HookPostBackup = ""
+	resp.HealthcheckURL = ""
+	resp.Sources = policyutil.WithoutCommands(resp.Sources)
+	return resp
+}
+
 // listPoliciesResponse wraps a paginated list of policies.
 type listPoliciesResponse struct {
 	Items []policyResponse `json:"items"`
@@ -169,7 +186,7 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]policyResponse, len(policies))
 	for i := range policies {
-		items[i] = policyToResponse(&policies[i], nil, agentNameByID[policies[i].AgentID.String()])
+		items[i] = policyToResponse(&policies[i], nil, agentNameByID[policies[i].AgentID.String()]).forReader(r)
 	}
 
 	Ok(w, listPoliciesResponse{Items: items, Total: total})
@@ -396,7 +413,7 @@ func (h *PolicyHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		agentName = agent.Name
 	}
 
-	Ok(w, policyToResponse(policy, destinations, agentName))
+	Ok(w, policyToResponse(policy, destinations, agentName).forReader(r))
 }
 
 // updatePolicyRequest is the JSON body for PATCH /api/v1/policies/{id}.
@@ -507,11 +524,7 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.HookPreBackup != nil {
-		if err := validateHookCommand(*req.HookPreBackup); err != nil {
-			ErrBadRequest(w, "hook_pre_backup: "+err.Error())
-			return
-		}
-		if err := validateHookTimeout(*req.HookPreBackup); err != nil {
+		if err := validateHook(*req.HookPreBackup); err != nil {
 			ErrBadRequest(w, "hook_pre_backup: "+err.Error())
 			return
 		}
@@ -523,11 +536,7 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		policy.HookPreBackup = *req.HookPreBackup
 	}
 	if req.HookPostBackup != nil {
-		if err := validateHookCommand(*req.HookPostBackup); err != nil {
-			ErrBadRequest(w, "hook_post_backup: "+err.Error())
-			return
-		}
-		if err := validateHookTimeout(*req.HookPostBackup); err != nil {
+		if err := validateHook(*req.HookPostBackup); err != nil {
 			ErrBadRequest(w, "hook_post_backup: "+err.Error())
 			return
 		}
@@ -766,16 +775,10 @@ func validateCreatePolicy(req *createPolicyRequest) error {
 	if err := validateSchedule(req.Schedule); err != nil {
 		return err
 	}
-	if err := validateHookCommand(req.HookPreBackup); err != nil {
+	if err := validateHook(req.HookPreBackup); err != nil {
 		return errors.New("hook_pre_backup: " + err.Error())
 	}
-	if err := validateHookTimeout(req.HookPreBackup); err != nil {
-		return errors.New("hook_pre_backup: " + err.Error())
-	}
-	if err := validateHookCommand(req.HookPostBackup); err != nil {
-		return errors.New("hook_post_backup: " + err.Error())
-	}
-	if err := validateHookTimeout(req.HookPostBackup); err != nil {
+	if err := validateHook(req.HookPostBackup); err != nil {
 		return errors.New("hook_post_backup: " + err.Error())
 	}
 	req.NotifyOnSuccess = cmp.Or(req.NotifyOnSuccess, db.NotifyInherit)
