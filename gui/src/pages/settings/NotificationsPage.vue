@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, RefreshCw } from '@lucide/vue'
+import { AlertCircle, Loader2, RefreshCw, Send } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, NotificationSettings, WebhookSettings } from '@/types'
 
@@ -146,6 +146,31 @@ const submit = handleSubmit(async (values) => {
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save notification settings')
+    }
+})
+
+// ---------------------------------------------------------------------------
+// Test webhook
+// ---------------------------------------------------------------------------
+
+// The server posts a "test" event to the URL in the form, saved or not, signed
+// with the secret in the form or, when it is blank, with the saved one.
+const testingWebhook = ref(false)
+const webhookTestResult = ref<{ ok: boolean; message: string } | null>(null)
+
+const sendTestWebhook = handleSubmit(async (values) => {
+    webhookTestResult.value = null
+    testingWebhook.value = true
+    try {
+        await api('/api/v1/settings/webhook/test', {
+            method: 'POST',
+            body: { url: values.webhook_url.trim(), secret: values.webhook_secret },
+        })
+        webhookTestResult.value = { ok: true, message: 'Test webhook delivered.' }
+    } catch (e: any) {
+        webhookTestResult.value = { ok: false, message: apiErrorMessage(e, 'Failed to send the test webhook') }
+    } finally {
+        testingWebhook.value = false
     }
 })
 </script>
@@ -288,6 +313,18 @@ const submit = handleSubmit(async (values) => {
                                 (HMAC-SHA256) so the receiving endpoint can verify it came from Arkeep.
                             </p>
                         </Field>
+                        <div class="flex flex-col items-start gap-2">
+                            <Button type="button" variant="outline" size="sm" :disabled="testingWebhook"
+                                @click="sendTestWebhook">
+                                <Loader2 v-if="testingWebhook" class="size-4 animate-spin" />
+                                <Send v-else class="size-4" />
+                                {{ testingWebhook ? 'Sending…' : 'Send test webhook' }}
+                            </Button>
+                            <p v-if="webhookTestResult" data-testid="webhook-test-result" class="text-xs"
+                                :class="webhookTestResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'">
+                                {{ webhookTestResult.message }}
+                            </p>
+                        </div>
                     </div>
                 </Transition>
             </div>

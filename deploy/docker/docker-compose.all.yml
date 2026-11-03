@@ -28,10 +28,19 @@ services:
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       # External base URL for links in outbound email (e.g. password reset).
-      # Set in production behind a reverse proxy; empty = derive from request host.
+      # Links are never built from request headers: empty = reset emails disabled.
       ARKEEP_BASE_URL: "${ARKEEP_BASE_URL:-}"
       # Check GitHub for new Arkeep releases; "false" never contacts api.github.com.
       ARKEEP_UPDATE_CHECK: "${ARKEEP_UPDATE_CHECK:-true}"
+      # "true" when the interface is served over HTTPS (behind a reverse proxy).
+      ARKEEP_SECURE_COOKIES: "${ARKEEP_SECURE_COOKIES:-false}"
+      # Reverse proxies whose X-Forwarded-For is trusted; empty = loopback and
+      # private networks, "none" = no proxy.
+      ARKEEP_TRUSTED_PROXIES: "${ARKEEP_TRUSTED_PROXIES:-}"
+      # Bearer token required on /metrics; empty = /metrics is public.
+      ARKEEP_METRICS_TOKEN: "${ARKEEP_METRICS_TOKEN:-}"
+      # Anonymous daily usage statistics; "false" turns them off.
+      ARKEEP_TELEMETRY: "${ARKEEP_TELEMETRY:-true}"
       TZ: "${TZ:-UTC}"
     volumes:
       - arkeep-data:/var/lib/arkeep
@@ -81,10 +90,11 @@ services:
       # Windows (Docker Desktop) — one entry per drive (replace the line above):
       #   - C:/:/hostfs/c:ro
       #   - D:/:/hostfs/d:ro
-      # Docker socket — :ro is enough for automatic container/volume discovery.
-      # If you use pre/post-backup hooks that run `docker stop`/`docker start`/
-      # `docker compose ...` to control other containers, change this to :rw —
-      # those commands make write Docker API calls that :ro will block.
+      # Docker socket — required for Docker volume discovery and for pre/post-backup
+      # hooks that run `docker stop`/`docker start`/`docker compose ...`. Whatever the
+      # mount mode, the socket gives full control of Docker: :ro only makes the socket
+      # file read-only, not the API calls made through it. Remove this line if the agent
+      # needs neither, or put a Docker socket proxy in front of it to restrict the API.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Docker volumes root — required to back up Docker named volumes.
       # The agent resolves volume paths via the Docker API (host paths), so the
@@ -106,7 +116,7 @@ services:
 
   # ── Optional: PostgreSQL ────────────────────────────────────────────────────
   # postgres:
-  #   image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+  #   image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
   #   container_name: arkeep-postgres
   #   restart: unless-stopped
   #   environment:

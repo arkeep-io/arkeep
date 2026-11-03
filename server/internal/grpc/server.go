@@ -465,7 +465,7 @@ func (s *Server) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (*p
 
 	// has_pending_jobs is always false for now — the scheduler (step 5) will
 	// populate this once it is implemented.
-	return &proto.HeartbeatResponse{HasPendingJobs: false}, nil
+	return &proto.HeartbeatResponse{}, nil
 }
 
 // StreamJobs opens the persistent job delivery stream for an agent.

@@ -7,6 +7,11 @@ metadata:
     {{- include "arkeep.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # One server at a time, upgrades included: a rolling update would start the
+  # new pod next to the old one, two schedulers on one database, or hang on the
+  # ReadWriteOnce volume when the new pod lands on another node.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "arkeep.selectorLabels" . | nindent 6 }}
@@ -60,6 +65,12 @@ spec:
               value: {{ .Values.config.secureCookies | quote }}
             - name: ARKEEP_UPDATE_CHECK
               value: {{ .Values.config.updateCheck | quote }}
+            - name: ARKEEP_TELEMETRY
+              value: {{ .Values.config.telemetry | quote }}
+            {{- if .Values.config.trustedProxies }}
+            - name: ARKEEP_TRUSTED_PROXIES
+              value: {{ .Values.config.trustedProxies | quote }}
+            {{- end }}
             - name: ARKEEP_DATA_DIR
               value: {{ printf "%s/data" .Values.persistence.mountPath | quote }}
 
@@ -91,6 +102,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "arkeep.secretName" . }}
                   key: ARKEEP_AGENT_SECRET
+            - name: ARKEEP_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "arkeep.secretName" . }}
+                  key: ARKEEP_METRICS_TOKEN
+                  optional: true
 
             {{- if .Values.grpc.tls.existingSecret }}
             # gRPC TLS — paths inside the container where the secret is mounted

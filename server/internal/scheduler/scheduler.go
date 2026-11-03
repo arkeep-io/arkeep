@@ -33,7 +33,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -98,6 +97,10 @@ var ErrPolicyDisabled = errors.New("policy is disabled")
 // for a busy destination. That backup will run; a second one would only
 // repeat it.
 var ErrJobAlreadyQueued = errors.New("a backup for this policy is already queued")
+
+// errAllDestinationsDisabled is the error of a backup whose destinations are
+// all disabled: it fails rather than running hooks and backing up to nothing.
+const errAllDestinationsDisabled = "all destinations disabled: backup not run"
 
 // Scheduler wraps gocron and coordinates job creation and dispatch.
 // The zero value is not usable — create instances with New.
@@ -583,7 +586,12 @@ func (s *Scheduler) createAndDispatch(policy *db.Policy, destinations []reposito
 	s.logger.Info("job created", fields...)
 
 	// --- Create JobDestination records ---
+	// A disabled destination takes no part in the run, so it gets no record;
+	// startBackup skips it again when it loads the destinations.
 	for _, pd := range destinations {
+		if !pd.DestinationEnabled {
+			continue
+		}
 		jd := &db.JobDestination{
 			JobID:         job.ID,
 			DestinationID: pd.DestinationID,
@@ -730,6 +738,7 @@ func (s *Scheduler) StartQueued(ctx context.Context, job *db.Job, admit destqueu
 func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Policy, policyDests []repositories.PolicyDestinationWithName, admit destqueue.AdmitFunc) error {
 	destPayloads := make([]destinationPayload, 0, len(policyDests))
 	destIDs := make([]uuid.UUID, 0, len(policyDests))
+	disabled := 0
 	for _, pd := range policyDests {
 		dest, err := s.dests.GetByID(ctx, pd.DestinationID)
 		if err != nil {
@@ -737,6 +746,21 @@ func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Pol
 				zap.String("destination_id", pd.DestinationID.String()),
 				zap.Error(err),
 			)
+			continue
+		}
+		// A disabled destination is skipped. A job created while it was
+		// enabled has a record for it (it was disabled while the job waited):
+		// close that record; a fresh run has none.
+		if !dest.Enabled {
+			disabled++
+			now := time.Now().UTC()
+			if err := s.jobs.UpdateDestinationStatus(ctx, job.ID, dest.ID, "skipped", nil, &now, "", 0,
+				"destination disabled"); err != nil && !errors.Is(err, repositories.ErrNotFound) {
+				s.logger.Error("failed to mark disabled destination skipped",
+					zap.String("destination_id", dest.ID.String()),
+					zap.Error(err),
+				)
+			}
 			continue
 		}
 
@@ -756,7 +780,10 @@ func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Pol
 	// up to nothing and report success (issue #283). Close it as failed instead
 	// so the user learns the backup did not happen.
 	if len(destPayloads) == 0 {
-		const errMsg = "all destinations unavailable: backup not run"
+		errMsg := "all destinations unavailable: backup not run"
+		if disabled > 0 && disabled == len(policyDests) {
+			errMsg = errAllDestinationsDisabled
+		}
 		now := time.Now().UTC()
 		if err := s.jobs.UpdateStatus(ctx, job.ID, "failed", nil, &now, errMsg); err != nil {
 			return fmt.Errorf("failed to mark job without destinations as failed: %w", err)
@@ -836,11 +863,10 @@ func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Pol
 	}
 
 	assignment := &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		PolicyId:    policy.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_BACKUP,
-		Payload:     payloadBytes,
-		ScheduledAt: timestamppb.Now(),
+		JobId:    job.ID.String(),
+		PolicyId: policy.ID.String(),
+		Type:     proto.JobType_JOB_TYPE_BACKUP,
+		Payload:  payloadBytes,
 	}
 
 	if err := s.agentMgr.Dispatch(job.AgentID.String(), assignment); err != nil {

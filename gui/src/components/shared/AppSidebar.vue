@@ -108,7 +108,7 @@ const userInitials = computed(() =>
                 <SidebarMenuItem>
                     <SidebarMenuButton size="lg" as-child>
                         <RouterLink to="/dashboard">
-                            <img src="/arkeep-icon.png" class="size-8 rounded-lg shrink-0" alt="Arkeep" />
+                            <img src="/icons/pwa-192x192.png" class="size-8 rounded-lg shrink-0" alt="Arkeep" />
                             <div class="grid flex-1 text-sm leading-tight text-left">
                                 <span class="font-medium truncate">Arkeep</span>
                             </div>

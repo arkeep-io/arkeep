@@ -36,7 +36,6 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -157,9 +156,11 @@ func (s *CheckScheduler) IsRunning() bool {
 	return s.running.Load()
 }
 
-// eligible reports whether a destination should have a gocron entry at all.
+// eligible reports whether a destination should have a gocron entry at all. A
+// disabled destination is paused: no scheduled check, though Run Check Now
+// (TriggerNow) still works.
 func eligible(dest *db.Destination) bool {
-	return dest.CheckEnabled && dest.CheckSchedule != ""
+	return dest.Enabled && dest.CheckEnabled && dest.CheckSchedule != ""
 }
 
 func (s *CheckScheduler) addJob(dest *db.Destination) error {
@@ -401,10 +402,9 @@ func (s *CheckScheduler) dispatch(job *db.Job, dest *db.Destination, password st
 	}
 
 	assignment := &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_VERIFY,
-		Payload:     payloadBytes,
-		ScheduledAt: timestamppb.Now(),
+		JobId:   job.ID.String(),
+		Type:    proto.JobType_JOB_TYPE_VERIFY,
+		Payload: payloadBytes,
 	}
 
 	if err := s.agentMgr.Dispatch(job.AgentID.String(), assignment); err != nil {

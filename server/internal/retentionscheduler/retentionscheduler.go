@@ -31,7 +31,6 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -164,9 +163,10 @@ func (s *RetentionScheduler) IsRunning() bool {
 
 // eligible reports whether a destination should have a gocron entry at all —
 // append-only repositories can never support forget --prune, so the agent is
-// never even asked to try (issue #130).
+// never even asked to try (issue #130). A disabled destination is paused: no
+// scheduled sweep, though Run Retention Now (TriggerNow) still works.
 func eligible(dest *db.Destination) bool {
-	return dest.RetentionEnabled && !dest.AppendOnly && dest.RetentionSchedule != ""
+	return dest.Enabled && dest.RetentionEnabled && !dest.AppendOnly && dest.RetentionSchedule != ""
 }
 
 func (s *RetentionScheduler) addJob(dest *db.Destination) error {
@@ -481,10 +481,9 @@ func (s *RetentionScheduler) dispatch(job *db.Job, dest *db.Destination, agentID
 	}
 
 	assignment := &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_FORGET,
-		Payload:     payloadBytes,
-		ScheduledAt: timestamppb.Now(),
+		JobId:   job.ID.String(),
+		Type:    proto.JobType_JOB_TYPE_FORGET,
+		Payload: payloadBytes,
 	}
 
 	if err := s.agentMgr.Dispatch(agentID.String(), assignment); err != nil {

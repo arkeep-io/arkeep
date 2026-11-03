@@ -98,53 +98,12 @@ func TestAgentHandler_List(t *testing.T) {
 	})
 }
 
-func TestAgentHandler_Create(t *testing.T) {
-	t.Run("returns 201 with valid name", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{
-			"name": "my-backup-agent",
-		})
-		assertStatus(t, resp, http.StatusCreated)
-
-		var data struct {
-			ID     string `json:"id"`
-			Name   string `json:"name"`
-			Status string `json:"status"`
-		}
-		decodeData(t, resp, &data)
-		if data.Name != "my-backup-agent" {
-			t.Errorf("name = %q, want %q", data.Name, "my-backup-agent")
-		}
-		if data.Status != "offline" {
-			t.Errorf("status = %q, want offline", data.Status)
-		}
-		if data.ID == "" {
-			t.Error("id is empty")
-		}
-	})
-
-	t.Run("returns 400 when name is empty", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{
-			"name": "",
-		})
-		assertStatus(t, resp, http.StatusBadRequest)
-	})
-
-	t.Run("returns 400 on unknown fields", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{
-			"name":    "agent",
-			"unknown": "field",
-		})
-		assertStatus(t, resp, http.StatusBadRequest)
-	})
-
-	t.Run("returns 401 without token", func(t *testing.T) {
-		e := newTestEnv(t)
-		resp := e.post(t, "/api/v1/agents", "", map[string]string{"name": "agent"})
-		assertStatus(t, resp, http.StatusUnauthorized)
-	})
+// TestAgentHandler_NoPlaceholderCreate: agents register themselves over gRPC.
+// The old POST /agents created a placeholder no agent could ever claim.
+func TestAgentHandler_NoPlaceholderCreate(t *testing.T) {
+	e := newTestEnv(t)
+	resp := e.post(t, "/api/v1/agents", e.adminToken(t), map[string]string{"name": "placeholder"})
+	assertStatus(t, resp, http.StatusMethodNotAllowed)
 }
 
 func TestAgentHandler_GetByID(t *testing.T) {
@@ -233,6 +192,53 @@ func TestAgentHandler_Delete(t *testing.T) {
 
 		resp := e.del(t, "/api/v1/agents/"+agent.ID.String(), e.adminToken(t))
 		assertStatus(t, resp, http.StatusNoContent)
+	})
+
+	t.Run("refused while policies or destinations depend on the agent", func(t *testing.T) {
+		e := newTestEnv(t)
+		ctx := context.Background()
+		admin := e.adminToken(t)
+		agent := createDBAgent(t, e.deps, "in-use")
+		policy := createDBPolicy(t, e.deps, "laptop", agent.ID)
+		dest := createDBDestination(t, e.deps, "offsite", "s3")
+		dest.RetentionAgentID = &agent.ID
+		if err := e.deps.dests.Update(ctx, dest); err != nil {
+			t.Fatalf("set maintenance agent: %v", err)
+		}
+		// A deleted policy does not keep the agent in use.
+		gone := createDBPolicy(t, e.deps, "gone", agent.ID)
+		if err := e.deps.policies.Delete(ctx, gone.ID); err != nil {
+			t.Fatalf("delete policy: %v", err)
+		}
+
+		resp := e.get(t, "/api/v1/agents/"+agent.ID.String()+"/usage", admin)
+		assertStatus(t, resp, http.StatusOK)
+		var usage struct {
+			Policies     []struct{ ID, Name string } `json:"policies"`
+			Destinations []struct{ ID, Name string } `json:"destinations"`
+		}
+		decodeData(t, resp, &usage)
+		if len(usage.Policies) != 1 || usage.Policies[0].ID != policy.ID.String() || usage.Policies[0].Name != "laptop" {
+			t.Errorf("usage policies = %+v, want only laptop", usage.Policies)
+		}
+		if len(usage.Destinations) != 1 || usage.Destinations[0].ID != dest.ID.String() {
+			t.Errorf("usage destinations = %+v, want only offsite", usage.Destinations)
+		}
+
+		assertStatus(t, e.del(t, "/api/v1/agents/"+agent.ID.String(), admin), http.StatusConflict)
+		if _, err := e.deps.agents.GetByID(ctx, agent.ID); err != nil {
+			t.Fatalf("the agent was deleted: %v", err)
+		}
+
+		// Once nothing depends on it, it can go.
+		if err := e.deps.policies.Delete(ctx, policy.ID); err != nil {
+			t.Fatalf("delete policy: %v", err)
+		}
+		dest.RetentionAgentID = nil
+		if err := e.deps.dests.Update(ctx, dest); err != nil {
+			t.Fatalf("clear maintenance agent: %v", err)
+		}
+		assertStatus(t, e.del(t, "/api/v1/agents/"+agent.ID.String(), admin), http.StatusNoContent)
 	})
 
 	t.Run("returns 403 for non-admin user", func(t *testing.T) {

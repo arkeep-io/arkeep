@@ -15,7 +15,29 @@ minimumReleaseAgeExclude:
   - vue@3.5.38
   - zod@4.6.6
   - '@tanstack/virtual-core@3.19.0'
-  - '@lucide/vue@1.63.0'
+  - '@lucide/vue@1.63.0 || 1.67.0'
+  - '@tailwindcss/node@4.3.4'
+  - '@tailwindcss/oxide-android-arm64@4.3.4'
+  - '@tailwindcss/oxide-darwin-arm64@4.3.4'
+  - '@tailwindcss/oxide-darwin-x64@4.3.4'
+  - '@tailwindcss/oxide-freebsd-x64@4.3.4'
+  - '@tailwindcss/oxide-linux-arm-gnueabihf@4.3.4'
+  - '@tailwindcss/oxide-linux-arm64-gnu@4.3.4'
+  - '@tailwindcss/oxide-linux-arm64-musl@4.3.4'
+  - '@tailwindcss/oxide-linux-x64-gnu@4.3.4'
+  - '@tailwindcss/oxide-linux-x64-musl@4.3.4'
+  - '@tailwindcss/oxide-wasm32-wasi@4.3.4'
+  - '@tailwindcss/oxide-win32-arm64-msvc@4.3.4'
+  - '@tailwindcss/oxide-win32-x64-msvc@4.3.4'
+  - '@tailwindcss/oxide@4.3.4'
+  - '@tailwindcss/vite@4.3.4'
+  - '@vitest/mocker@5.1.0'
+  - '@vitest/spy@5.1.0'
+  - tailwindcss@4.3.4
+  - vitest@5.1.0
 
 # ADR 0013: dependencies are added with their exact version (no ^ or ~ range).
+permissions:
+  '@tanstack/vue-table':
+    skills: false
 savePrefix: ''

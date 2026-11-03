@@ -1,6 +1,6 @@
 # values.yaml — default configuration for the Arkeep Helm chart.
 # Override any value with --set or a custom values file:
-#   helm install arkeep arkeep/arkeep -f my-values.yaml
+#   helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version X.Y.Z -f my-values.yaml
 
 # ─── Image ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,16 @@ config:
   # egress-restricted clusters).
   updateCheck: true
 
+  # Anonymous daily usage statistics (instance ID, version, OS, agent and policy
+  # counts). Set to false to turn them off.
+  telemetry: true
+
+  # Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For header is
+  # trusted for the client address (login rate limits, audit log). Empty trusts
+  # loopback and private networks, which covers most ingress controllers inside
+  # the cluster; "none" trusts no proxy.
+  trustedProxies: ""
+
   # HTTP and gRPC listen addresses inside the container.
   # Change only if you have a specific reason — the Service ports below must match.
   httpAddr: ":8080"
@@ -92,12 +102,16 @@ grpc:
 secret:
   # Reference an existing Secret instead of creating one.
   # The Secret must contain the keys: ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET
-  # and ARKEEP_DB_DSN (when config.dbDriver=postgres).
+  # and ARKEEP_DB_DSN (when config.dbDriver=postgres), and may contain
+  # ARKEEP_METRICS_TOKEN.
   existingSecret: ""
 
   # Used only when existingSecret is empty.
   secretKey: ""
   agentSecret: ""
+  # Bearer token required to read /metrics (Prometheus: bearer_token in the
+  # scrape job). Empty leaves /metrics public.
+  metricsToken: ""
 
 # ─── Persistence ──────────────────────────────────────────────────────────────
 
@@ -137,21 +151,28 @@ ingress:
   #    hosts:
   #      - arkeep.example.com
 
-# ─── PostgreSQL (subchart) ────────────────────────────────────────────────────
-# Deploys a PostgreSQL instance alongside Arkeep.
-# Set config.dbDriver=postgres to use it.
+# ─── PostgreSQL (bundled) ─────────────────────────────────────────────────────
+# Deploys a single PostgreSQL instance alongside Arkeep, from the official
+# image (see docs/adr/0015). Set config.dbDriver=postgres to use it.
 
 postgresql:
   enabled: false
+  # Same image as the compose examples, pinned by digest (ADR 0013). Dependabot
+  # updates docker-compose.postgres.yml and the deps-pins workflow copies its
+  # image here. A new major version needs a dump and restore: do not change it
+  # on an existing install without one.
+  image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+  imagePullPolicy: IfNotPresent
   auth:
     username: arkeep
     # Required when postgresql.enabled=true — generate with: openssl rand -hex 16
     password: ""
     database: arkeep
-  primary:
-    persistence:
-      enabled: true
-      size: 8Gi
+  persistence:
+    # Storage class — leave empty to use the cluster default.
+    storageClass: ""
+    size: 8Gi
+  resources: {}
 
 # ─── External PostgreSQL ──────────────────────────────────────────────────────
 # Used when postgresql.enabled=false and config.dbDriver=postgres.

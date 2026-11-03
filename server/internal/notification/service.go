@@ -293,9 +293,10 @@ type event struct {
 //     On failure the row stays pending and will be retried by the background
 //     retrier (Start).
 func (s *NotificationService) notify(ctx context.Context, ev event) error {
-	admins, _, err := s.userRepo.List(ctx, repositories.ListOptions{Limit: 100, Offset: 0})
+	// Every active admin, however many users there are.
+	admins, err := s.userRepo.ListActiveAdmins(ctx)
 	if err != nil {
-		return fmt.Errorf("notification: failed to list users: %w", err)
+		return fmt.Errorf("notification: failed to list admins: %w", err)
 	}
 
 	payloadJSON, err := json.Marshal(ev.payload)
@@ -311,9 +312,6 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 
 	for i := range admins {
 		u := &admins[i]
-		if u.Role != "admin" || !u.IsActive {
-			continue
-		}
 
 		n := &db.Notification{
 			UserID:  u.ID,
@@ -438,14 +436,15 @@ func (s *NotificationService) enqueueAndSend(ctx context.Context, n *db.Notifica
 
 const maxRetryAttempts = 3
 
-// retryBackoff returns the next_retry_at time for a given attempt count.
-// attempt is the number of retries already performed (post-initial-send).
+// retryBackoff returns the next_retry_at time after a failed retry. retries is
+// the number of retries performed so far, the failed one included (the initial
+// optimistic send is not counted, and is retried on the next tick):
 //
-//	attempt=0 (first retry after initial failure) → +5 min
-//	attempt=1 (second retry)                      → +30 min
-func retryBackoff(attempt int) time.Time {
-	switch attempt {
-	case 0:
+//	retries=1 (first retry failed)  → +5 min
+//	retries=2 (second retry failed) → +30 min
+func retryBackoff(retries int) time.Time {
+	switch retries {
+	case 1:
 		return time.Now().Add(5 * time.Minute)
 	default:
 		return time.Now().Add(30 * time.Minute)
@@ -484,8 +483,11 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 	var sendErr error
 	switch d.Type {
 	case "email":
-		to := s.configuredRecipients(ctx)
-		sendErr = s.email.Send(ctx, to, n.Title, n.Body)
+		var to []string
+		to, sendErr = s.emailRecipients(ctx)
+		if sendErr == nil {
+			sendErr = s.email.Send(ctx, to, n.Title, n.Body)
+		}
 	case "webhook":
 		var payload map[string]any
 		if jsonErr := json.Unmarshal([]byte(n.Payload), &payload); jsonErr != nil {
@@ -537,6 +539,23 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+// emailRecipients returns who a retried email goes to: the configured list or,
+// when none is set, every active admin, as on the first send (see notify).
+func (s *NotificationService) emailRecipients(ctx context.Context) ([]string, error) {
+	if to := s.configuredRecipients(ctx); len(to) > 0 {
+		return to, nil
+	}
+	admins, err := s.userRepo.ListActiveAdmins(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list admins: %w", err)
+	}
+	to := make([]string, 0, len(admins))
+	for _, u := range admins {
+		to = append(to, u.Email)
+	}
+	return to, nil
+}
 
 // configuredRecipients loads the explicit email recipient list from settings.
 // Returns nil (not an empty slice) when not configured so the caller can

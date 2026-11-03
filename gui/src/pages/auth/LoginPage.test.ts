@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountPage, submitForm } from '@/test/mount'
 import { useAuthStore } from '@/stores/auth'
 import TwoFactorCodeForm from '@/components/users/TwoFactorCodeForm.vue'
+import PasswordChangeForm from '@/components/users/PasswordChangeForm.vue'
 import LoginPage from './LoginPage.vue'
 
 describe('LoginPage', () => {
@@ -44,5 +45,32 @@ describe('LoginPage', () => {
 
     codeForm.vm.$emit('verified')
     expect(router.push).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('asks for a new password when an admin required one', async () => {
+    const { wrapper, router } = await mountPage(LoginPage)
+    vi.spyOn(useAuthStore(), 'login').mockResolvedValue({ twoFactorRequired: false, passwordChangeRequired: true, challengeToken: 'p' })
+    await wrapper.find('#email').setValue('jane@example.com')
+    await wrapper.find('#password').setValue('temporary')
+    await submitForm(wrapper)
+
+    const form = wrapper.findComponent(PasswordChangeForm)
+    expect(form.props('challengeToken')).toBe('p')
+    expect(router.push).not.toHaveBeenCalled()
+
+    form.vm.$emit('verified')
+    expect(router.push).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('goes from the code to the new password on a two-factor account', async () => {
+    const { wrapper } = await mountPage(LoginPage)
+    vi.spyOn(useAuthStore(), 'login').mockResolvedValue({ twoFactorRequired: true, challengeToken: 'c' })
+    await wrapper.find('#email').setValue('jane@example.com')
+    await wrapper.find('#password').setValue('temporary')
+    await submitForm(wrapper)
+
+    wrapper.findComponent(TwoFactorCodeForm).vm.$emit('password-change', 'p')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(PasswordChangeForm).props('challengeToken')).toBe('p')
   })
 })

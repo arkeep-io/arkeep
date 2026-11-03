@@ -92,3 +92,25 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The Helm chart is published as an OCI artifact on GHCR and Docker Hub,
+      # versioned like the release (ADR 0014). It runs after GoReleaser so the
+      # images it points to already exist. helm is a Go tool: go install pins
+      # it and checks it against the Go checksum database (ADR 0013).
+      - name: Install Helm
+        run: GOWORK=off go install helm.sh/helm/v4/cmd/helm@v4.3.1
+
+      - name: Publish the Helm chart
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          chart_dir="${RUNNER_TEMP}/chart"
+          helm package deploy/helm/arkeep --version "$version" --app-version "$GITHUB_REF_NAME" --destination "$chart_dir"
+          echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin
+          echo "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          helm push "${chart_dir}/arkeep-${version}.tgz" oci://ghcr.io/arkeep-io/charts
+          helm push "${chart_dir}/arkeep-${version}.tgz" oci://registry-1.docker.io/arkeepio

@@ -12,7 +12,7 @@ import (
 // newTestAgent creates a minimal agent for tests in this file.
 func newTestAgentForRetention(t *testing.T, agentRepo AgentRepository, name string) *db.Agent {
 	t.Helper()
-	a := &db.Agent{Name: name, Status: "offline", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "offline"}
 	if err := agentRepo.Create(context.Background(), a); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -150,10 +150,19 @@ func TestListWithRetentionSchedule(t *testing.T) {
 		Name: "no-schedule", Type: "local", Config: "{}", Enabled: true,
 		RetentionEnabled: true, RetentionSchedule: "",
 	}
-	for _, d := range []*db.Destination{eligible, disabled, appendOnly, noSchedule} {
+	paused := &db.Destination{
+		Name: "paused", Type: "local", Config: "{}", Enabled: true,
+		RetentionEnabled: true, RetentionSchedule: "0 3 * * *",
+	}
+	for _, d := range []*db.Destination{eligible, disabled, appendOnly, noSchedule, paused} {
 		if err := destRepo.Create(ctx, d); err != nil {
 			t.Fatalf("create destination %q: %v", d.Name, err)
 		}
+	}
+	// A disabled destination is paused: no scheduled sweep. Enabled carries
+	// default:true, so it is turned off after Create.
+	if err := gdb.Model(paused).UpdateColumn("enabled", false).Error; err != nil {
+		t.Fatalf("disable destination: %v", err)
 	}
 
 	got, err := destRepo.ListWithRetentionSchedule(ctx)

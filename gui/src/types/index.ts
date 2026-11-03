@@ -58,27 +58,6 @@ export const DestinationType = {
 } as const
 export type DestinationType = (typeof DestinationType)[keyof typeof DestinationType]
 
-export const SourceType = {
-  Path: 'path',
-  DockerVolume: 'docker-volume',
-} as const
-export type SourceType = (typeof SourceType)[keyof typeof SourceType]
-
-export const NotificationChannel = {
-  InApp: 'in_app',
-  Email: 'email',
-  Webhook: 'webhook',
-} as const
-export type NotificationChannel = (typeof NotificationChannel)[keyof typeof NotificationChannel]
-
-export const NotificationEventType = {
-  JobSucceeded: 'job.succeeded',
-  JobFailed: 'job.failed',
-  AgentOffline: 'agent.offline',
-} as const
-export type NotificationEventType =
-  (typeof NotificationEventType)[keyof typeof NotificationEventType]
-
 // ─── Core models ──────────────────────────────────────────────────────────────
 
 export interface User {
@@ -91,6 +70,7 @@ export interface User {
   two_factor_enabled: boolean
   last_login_at: string | null
   created_at: string
+  must_change_password: boolean // set by an admin's Set password
 }
 
 // ─── Two-factor authentication ────────────────────────────────────────────────
@@ -126,16 +106,6 @@ export interface Agent {
   created_at: string
   updated_at: string
   // deleted_at is omitted — soft-deleted agents are not returned by the API
-}
-
-// AgentMetrics are sent by the agent on each heartbeat and stored in memory
-// by the server (not persisted to the database).
-export interface AgentMetrics {
-  cpu_percent: number
-  ram_used_bytes: number
-  ram_total_bytes: number
-  disk_used_bytes: number
-  disk_total_bytes: number
 }
 
 // VolumeInfo is returned by GET /api/v1/agents/{id}/volumes.
@@ -222,18 +192,7 @@ export type CheckMode = 'structure' | 'subset' | 'full'
 
 // ─── Policy ───────────────────────────────────────────────────────────────────
 
-export interface PolicySource {
-  type: SourceType
-  path: string // filesystem path or docker volume name
-}
-
-export interface HookConfig {
-  pre_backup: string[] // shell commands to run before backup
-  post_backup: string[] // shell commands to run after backup (regardless of outcome)
-  timeout_seconds: number
-}
-
-export interface PolicyDestination {
+interface PolicyDestination {
   destination_id: string
   destination_name: string // denormalized for display; populated by server join
   priority: number // lower = higher priority; used for 3-2-1 ordering
@@ -268,13 +227,9 @@ export interface Policy {
   updated_at: string
 }
 
-// PolicyListItem is the leaner shape returned by the list endpoint.
-// Destinations are NOT included (too costly — N extra queries per policy).
-export type PolicyListItem = Omit<Policy, 'destinations'>
-
 // ─── Job ──────────────────────────────────────────────────────────────────────
 
-export interface JobDestination {
+interface JobDestination {
   id: string
   destination_id: string
   destination_name: string  // denormalized via JOIN in the API layer
@@ -290,7 +245,7 @@ export interface JobDestination {
 // restic invocation (backup --stdin-from-command) to one destination. A job
 // can have several of these per destination — one per command source of the
 // policy — distinct from the single regular backup result in JobDestination.
-export interface JobDestinationCommand {
+interface JobDestinationCommand {
   id: string
   destination_id: string
   destination_name: string  // denormalized via JOIN in the API layer
@@ -307,7 +262,7 @@ export interface JobDestinationCommand {
 // within a standalone retention job (type "retention"). A job can have
 // several of these — one per policy attached to the destination, plus one
 // per that policy's command sources.
-export interface JobRetentionTag {
+interface JobRetentionTag {
   id: string
   tag: string
   status: JobStatus
@@ -340,9 +295,6 @@ export interface Job {
   command_sources?: JobDestinationCommand[]
   retention_tags?: JobRetentionTag[]
 }
-
-// JobListItem is the leaner shape returned by the list endpoint.
-export type JobListItem = Omit<Job, 'destinations' | 'command_sources' | 'retention_tags'>
 
 // ─── Snapshot Browse ──────────────────────────────────────────────────────────
 
@@ -507,22 +459,10 @@ export interface CreateDestinationResponse extends Destination {
 
 // ─── API request / response shapes ───────────────────────────────────────────
 
-// Pagination params accepted by list endpoints
-export interface PaginationParams {
-  page?: number
-  per_page?: number
-}
-
 // Standard paginated list envelope
 export interface PaginatedResponse<T> {
   items: T[]
   total: number
-}
-
-// Auth — login returns only the access token; user profile is a separate call
-export interface LoginRequest {
-  email: string
-  password: string
 }
 
 export interface TokenResponse {
@@ -531,83 +471,10 @@ export interface TokenResponse {
   access_token?: string
   expires_in?: number
   two_factor_required?: boolean
+  // The account must set a new password before a session is issued; the
+  // challenge_token goes to /auth/login/password with it.
+  password_change_required?: boolean
   challenge_token?: string
-}
-
-// Agents
-export interface CreateAgentRequest {
-  name: string
-}
-
-export interface UpdateAgentRequest {
-  name: string
-}
-
-export interface AgentRegistrationToken {
-  token: string
-  expires_at: string
-}
-
-// Destinations
-export interface CreateDestinationRequest {
-  name: string
-  type: DestinationType
-  config: string
-  repository_password: string
-  append_only?: boolean
-  retention_enabled?: boolean
-  retention_agent_id?: string
-  retention_schedule?: string
-  retention_last?: number
-  retention_hourly?: number
-  retention_daily?: number
-  retention_weekly?: number
-  retention_monthly?: number
-  retention_yearly?: number
-}
-
-export type UpdateDestinationRequest = Partial<CreateDestinationRequest>
-
-// Policies
-export interface CreatePolicyRequest {
-  name: string
-  agent_id: string
-  sources: PolicySource[]
-  schedule: string
-  hooks?: HookConfig
-  enabled: boolean
-  destination_ids: { destination_id: string; priority: number }[]
-}
-
-export type UpdatePolicyRequest = Partial<CreatePolicyRequest>
-
-// Users
-export interface CreateUserRequest {
-  email: string
-  password: string
-  display_name: string
-  role: UserRole
-}
-
-export interface UpdateUserRequest {
-  display_name?: string
-  role?: UserRole
-  is_active?: boolean
-  password?: string
-}
-
-// Self-update — users can only change their own display_name and password.
-// OIDC users cannot change password (managed by the IdP).
-export interface UpdateMeRequest {
-  display_name?: string
-  password?: string
-}
-
-// Snapshots
-export interface RestoreRequest {
-  agent_id: string
-  target_path: string
-  include_paths?: string[]
 }
 
 export interface RestoreResponse {
@@ -658,13 +525,6 @@ export interface JobLogPayload {
   timestamp: string
 }
 
-export interface AgentStatusPayload {
-  agent_id: string
-  status: AgentStatus
-  metrics?: AgentMetrics
-  last_seen_at: string
-}
-
 // WSNotificationPayload is the shape of msg.payload when msg.type === 'notification'.
 // The server sends the notification fields directly (not wrapped in a 'notification' key).
 // The payload field here is an object (not a JSON string like in the REST response).
@@ -678,7 +538,7 @@ export interface WSNotificationPayload {
 }
 
 // AuditLog represents a single admin-action audit record returned by
-// GET /api/v1/admin/audit. The details field is a JSON object whose
+// GET /api/v1/audit. The details field is a JSON object whose
 // shape varies by action type (e.g. policy events include "name",
 // auth events include "email").
 export interface AuditLog {

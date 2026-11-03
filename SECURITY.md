@@ -133,10 +133,13 @@ If this window is unacceptable for your threat model, mitigations include:
 - Running the server behind a reverse proxy that can enforce an emergency block at the
   network layer.
 
-**Denylist persistence:** the access token denylist is in-memory and is cleared on
-server restart. Tokens revoked shortly before a restart may be accepted for up to
-their remaining TTL after the restart. Refresh token revocation is unaffected — it is
-persisted in the database.
+**Server restart:** access tokens are signed with keys the server generates in memory
+at every start, so a restart invalidates every access token issued before it. The
+in-memory denylist is lost on restart, but the tokens it held are invalid anyway. The
+GUI renews its access token from the refresh cookie, which is persisted in the database,
+so users stay signed in. If `jwt_private.pem` and `jwt_public.pem` are placed in the
+data directory, the server uses them instead: access tokens then survive a restart, and
+a token revoked shortly before one may be accepted for the rest of its 15 minutes.
 
 ### Two-factor authentication
 
@@ -152,6 +155,17 @@ revokes every other active session for the account except the one used to enroll
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.
 
+### Passwords set by an administrator
+
+An administrator can set another local user's password (`POST /api/v1/users/{id}/password`),
+never their own and never an OIDC account's. It revokes every session of the user and
+is recorded in the audit log. With "require a new password", the login stops after the
+password and the second factor and issues no session: it returns a single-use challenge,
+valid for 10 minutes and stored as a SHA-256 hash, which only
+`POST /api/v1/auth/login/password` accepts, together with a new password different from
+the one the administrator set. The challenge is consumed atomically before the password
+is written, so it cannot be used twice.
+
 ### Health endpoints
 
 `GET /health/live` and `GET /health/ready` are unauthenticated and accessible on the HTTP port (default `:8080`). They do not expose credentials or user data.
@@ -160,11 +174,13 @@ is not the account owner.
 
 ### Metrics endpoint
 
-The `/metrics` endpoint (Prometheus text format) is **unauthenticated** and accessible on the same port as the HTTP API (default `:8080`). It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
+The `/metrics` endpoint (Prometheus text format) is served on the same port as the HTTP API (default `:8080`). By default it is **unauthenticated**. It does not expose credentials, backup contents, or user data — only operational counters and gauges (job counts, agent connections, HTTP request rates).
 
 However, the endpoint can reveal information about your deployment (number of agents, job frequency, error rates) that you may not want public.
 
-**Recommendation:** restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
+**Recommendation:** set `ARKEEP_METRICS_TOKEN` (or `--metrics-token`). `/metrics` then answers `401` unless the request carries `Authorization: Bearer <token>`; the token is compared in constant time. Configure the same token in your Prometheus scrape job (`authorization.credentials`).
+
+You can also, or instead, restrict access at the reverse-proxy or firewall level so only your Prometheus scraper can reach it:
 
 ```nginx
 location /metrics {

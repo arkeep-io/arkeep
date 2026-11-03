@@ -173,3 +173,65 @@ func TestIsPlainHTTPRemote(t *testing.T) {
 		}
 	}
 }
+
+// TestEnsureEnrolled_RetriesUntilEnrolled: an enrollment that fails because the
+// server is not answering yet is tried again on the next connection attempt.
+func TestEnsureEnrolled_RetriesUntilEnrolled(t *testing.T) {
+	ca := newTestCA(t)
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+			return
+		}
+		var body struct {
+			CSR string `json:"csr"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		block, _ := pem.Decode([]byte(body.CSR))
+		csr, _ := x509.ParseCertificateRequest(block.Bytes)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"ca_cert":     string(ca.pem),
+			"client_cert": string(ca.sign(t, csr.PublicKey)),
+		})
+	}))
+	t.Cleanup(srv.Close)
+	m := &Manager{
+		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: "secret", StateDir: t.TempDir()},
+		logger: zap.NewNop(),
+	}
+
+	m.ensureEnrolled(context.Background())
+	if m.cfg.ClientCertFile != "" {
+		t.Fatal("enrolled although the server refused the first request")
+	}
+	m.ensureEnrolled(context.Background())
+	if m.cfg.ClientCertFile == "" {
+		t.Fatal("the second attempt did not enroll")
+	}
+	m.ensureEnrolled(context.Background())
+	if calls != 2 {
+		t.Errorf("enrollment requests = %d, want 2: an enrolled agent must not enroll again", calls)
+	}
+}
+
+// TestEnsureEnrolled_StopsWhenUnsupported: a server without auto-PKI answers
+// 405, and the agent stops asking.
+func TestEnsureEnrolled_StopsWhenUnsupported(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	t.Cleanup(srv.Close)
+	m := &Manager{
+		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: "secret", StateDir: t.TempDir()},
+		logger: zap.NewNop(),
+	}
+	m.ensureEnrolled(context.Background())
+	m.ensureEnrolled(context.Background())
+	if calls != 1 {
+		t.Errorf("enrollment requests = %d, want 1", calls)
+	}
+}

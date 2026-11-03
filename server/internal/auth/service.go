@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,7 +65,7 @@ func (s *AuthService) IssueTokenPairForUser(ctx context.Context, user *db.User, 
 }
 
 // AuthorizationURL generates the OIDC authorization URL for the given provider.
-// callbackURL is the server-computed redirect URI (base_url + /api/v1/auth/oidc/callback).
+// callbackURL is the server-computed redirect URI (base_url + /auth/oidc/callback).
 // Returns the URL to redirect the user to, plus state and codeVerifier that the
 // caller must store in short-lived session cookies before redirecting.
 func (s *AuthService) AuthorizationURL(ctx context.Context, providerID uuid.UUID, callbackURL string) (url, state, codeVerifier string, err error) {
@@ -93,14 +92,6 @@ func (s *AuthService) RefreshToken(ctx context.Context, rawToken string) (*Token
 // Logout invalidates the given refresh token.
 func (s *AuthService) Logout(ctx context.Context, rawToken string) error {
 	return s.local.Logout(ctx, rawToken)
-}
-
-// LogoutAllSessions revokes all active refresh tokens for a user.
-func (s *AuthService) LogoutAllSessions(ctx context.Context, userID uuid.UUID) error {
-	if err := s.tokenRepo.RevokeAllForUser(ctx, userID); err != nil {
-		return fmt.Errorf("auth: revoking all sessions for user %s: %w", userID, err)
-	}
-	return nil
 }
 
 // ValidateAccessToken parses and verifies a JWT access token, then checks the

@@ -98,6 +98,8 @@ const configSchemas: Record<DestType, z.ZodObject<any>> = {
             .optional(),
         user: z.string().min(1, 'Username is required'),
         path: z.string().min(1, 'Path is required'),
+        // Checked by the server (ssh-keyscan lines or bare public keys).
+        host_key: z.string().optional(),
     }),
     rest: z.object({
         url: z.string().url('Must be a valid URL')
@@ -116,9 +118,13 @@ const credSchemas: Record<DestType, z.ZodObject<any>> = {
         access_key: z.string().min(1, 'Access key is required'),
         secret_key: z.string().min(1, 'Secret key is required'),
     }),
+    // rclone needs one of the two: the agent has no ssh-agent to fall back on.
     sftp: z.object({
         password: z.string().optional(),
         private_key: z.string().optional(),
+    }).refine((c) => !!c.password?.trim() || !!c.private_key?.trim(), {
+        path: ['password'],
+        message: 'Enter a password or a private key',
     }),
     rest: z.object({
         user: z.string().optional(),
@@ -177,6 +183,7 @@ function defaultValues() {
         local_path: '',
         s3_bucket: '', s3_endpoint: '', s3_region: '', s3_prefix: '', s3_access_key: '', s3_secret_key: '',
         sftp_host: '', sftp_port: '', sftp_user: '', sftp_path: '', sftp_password: '', sftp_private_key: '',
+        sftp_host_key: '',
         rest_url: '', rest_user: '', rest_password: '',
         rclone_remote: '', rclone_path: '',
         import_enabled: false,
@@ -227,7 +234,7 @@ function configAndCreds(v: FormValues): { config: Record<string, string>; creds:
             }
         case 'sftp':
             return {
-                config: { host: v.sftp_host, port: v.sftp_port, user: v.sftp_user, path: v.sftp_path },
+                config: { host: v.sftp_host, port: v.sftp_port, user: v.sftp_user, path: v.sftp_path, host_key: v.sftp_host_key.trim() },
                 creds: { password: v.sftp_password, private_key: v.sftp_private_key },
             }
         case 'rest':
@@ -259,7 +266,7 @@ const schema = toTypedSchema(
         s3_bucket: z.string(), s3_endpoint: z.string(), s3_region: z.string(), s3_prefix: z.string(),
         s3_access_key: z.string(), s3_secret_key: z.string(),
         sftp_host: z.string(), sftp_port: z.string(), sftp_user: z.string(), sftp_path: z.string(),
-        sftp_password: z.string(), sftp_private_key: z.string(),
+        sftp_password: z.string(), sftp_private_key: z.string(), sftp_host_key: z.string(),
         rest_url: z.string(), rest_user: z.string(), rest_password: z.string(),
         rclone_remote: z.string(), rclone_path: z.string(),
         import_enabled: z.boolean(),
@@ -353,8 +360,9 @@ const { value: sftpHost, errorMessage: sftpHostError } = useField<string>('sftp_
 const { value: sftpPort, errorMessage: sftpPortError } = useField<string>('sftp_port')
 const { value: sftpUser, errorMessage: sftpUserError } = useField<string>('sftp_user')
 const { value: sftpPath, errorMessage: sftpPathError } = useField<string>('sftp_path')
-const { value: sftpPassword } = useField<string>('sftp_password')
+const { value: sftpPassword, errorMessage: sftpPasswordError } = useField<string>('sftp_password')
 const { value: sftpPrivateKey } = useField<string>('sftp_private_key')
+const { value: sftpHostKey, errorMessage: sftpHostKeyError } = useField<string>('sftp_host_key')
 const { value: restUrl, errorMessage: restUrlError } = useField<string>('rest_url')
 const { value: restUser } = useField<string>('rest_user')
 const { value: restPassword } = useField<string>('rest_password')
@@ -460,6 +468,7 @@ function valuesFromDestination(dest: Destination, asClone: boolean): FormValues 
             values.sftp_port = config.port ?? ''
             values.sftp_user = config.user ?? ''
             values.sftp_path = config.path ?? ''
+            values.sftp_host_key = config.host_key ?? ''
             break
         case 'rest':
             values.rest_url = config.url ?? ''
@@ -785,7 +794,9 @@ function onOpenChange(value: boolean) {
                             <FieldLabel for="sftp-password">
                                 Password <span class="text-muted-foreground font-normal">(optional)</span>
                             </FieldLabel>
-                            <Input id="sftp-password" v-model="sftpPassword" type="password" autocomplete="off" />
+                            <Input id="sftp-password" v-model="sftpPassword" type="password" autocomplete="off"
+                                :class="sftpPasswordError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="sftpPasswordError">{{ sftpPasswordError }}</FieldError>
                         </Field>
                         <Field>
                             <FieldLabel for="sftp-key">
@@ -794,6 +805,27 @@ function onOpenChange(value: boolean) {
                             <textarea id="sftp-key" v-model="sftpPrivateKey" rows="4"
                                 placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                                 class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] focus-visible:ring-[3px] resize-none font-mono" />
+                        </Field>
+
+                        <Separator />
+                        <Field>
+                            <FieldLabel for="sftp-host-key">
+                                Host Key <span class="text-muted-foreground font-normal">(recommended)</span>
+                            </FieldLabel>
+                            <textarea id="sftp-host-key" v-model="sftpHostKey" rows="3"
+                                placeholder="backup.example.com ssh-ed25519 AAAA…"
+                                class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] focus-visible:ring-[3px] resize-none font-mono"
+                                :class="sftpHostKeyError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                            <FieldError v-if="sftpHostKeyError">{{ sftpHostKeyError }}</FieldError>
+                            <p class="text-muted-foreground text-xs">
+                                Paste the output of <code>ssh-keyscan -p {{ sftpPort || '22' }} {{ sftpHost || '<host>' }}</code>,
+                                run from a network you trust. Agents then refuse a server presenting another key.
+                            </p>
+                            <p v-if="!sftpHostKey.trim()" data-testid="sftp-host-key-warning"
+                                class="text-amber-600 dark:text-amber-400 text-xs">
+                                Without a host key the server's identity is not verified: whoever sits on the network
+                                path could receive the credentials and the backups.
+                            </p>
                         </Field>
                     </template>
 
@@ -1093,7 +1125,7 @@ function onOpenChange(value: boolean) {
                             <div>
                                 <p class="text-sm font-medium">Enabled</p>
                                 <p class="text-muted-foreground text-xs">
-                                    Disabled destinations are skipped during backup jobs.
+                                    Disabled destinations are skipped by backups, snapshot sync and scheduled retention and checks.
                                 </p>
                             </div>
                             <Switch :model-value="enabled" @update:model-value="enabled = $event" />

@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -30,15 +30,7 @@ func newTestScheduler(t *testing.T) (*Scheduler, *gorm.DB, repositories.PolicyRe
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
-	gdb, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("db.New: %v", err)
-	}
+	gdb := dbtest.New(t)
 
 	policies := repositories.NewPolicyRepository(gdb)
 	jobs := repositories.NewJobRepository(gdb)
@@ -66,7 +58,7 @@ func newResumeFixture(t *testing.T, gdb *gorm.DB, policies repositories.PolicyRe
 	t.Helper()
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Status: "online"}
 	if err := repositories.NewAgentRepository(gdb).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -474,7 +466,7 @@ func (q *queueFixture) dispatchAs(agentID uuid.UUID, dests ...*db.Destination) *
 // agent creates a second agent with a live stream.
 func (q *queueFixture) agent(name string) uuid.UUID {
 	q.t.Helper()
-	a := &db.Agent{Name: name, Status: "online", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "online"}
 	if err := repositories.NewAgentRepository(q.gdb).Create(context.Background(), a); err != nil {
 		q.t.Fatalf("create agent: %v", err)
 	}
@@ -719,7 +711,7 @@ func TestScheduledRunAdvancesNextRunAt(t *testing.T) {
 	s, gdb, policies, _ := newTestScheduler(t)
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Status: "online"}
 	if err := repositories.NewAgentRepository(gdb).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -803,7 +795,7 @@ func TestNextScheduledRunAt_UsesSchedulerLocation(t *testing.T) {
 func newSchedulePolicy(t *testing.T, gdb *gorm.DB, policies repositories.PolicyRepository, schedule string) *db.Policy {
 	t.Helper()
 	ctx := context.Background()
-	agent := &db.Agent{Name: "agent-" + uuid.Must(uuid.NewV7()).String(), Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: "agent-" + uuid.Must(uuid.NewV7()).String(), Status: "online"}
 	if err := repositories.NewAgentRepository(gdb).Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -939,5 +931,125 @@ func TestRunJob_AfterPendingTimeout(t *testing.T) {
 	job, err := q.s.runJob(q.f.policy, nil)
 	if err != nil || job == nil {
 		t.Fatalf("runJob after the timeout = %v, %v; want a new job", job, err)
+	}
+}
+
+// pause disables d. Destination.Enabled carries default:true, so a destination
+// created with Enabled false would be stored enabled: flip it with an update.
+func (q *queueFixture) pause(d *db.Destination) {
+	q.t.Helper()
+	if err := q.gdb.Model(d).UpdateColumn("enabled", false).Error; err != nil {
+		q.t.Fatalf("disable destination: %v", err)
+	}
+}
+
+// jobDestinations returns the destination ID and status of every
+// JobDestination of job.
+func (q *queueFixture) jobDestinations(job *db.Job) map[uuid.UUID]repositories.JobDestinationWithName {
+	q.t.Helper()
+	rows, err := q.jobs.ListDestinationsByJob(context.Background(), job.ID)
+	if err != nil {
+		q.t.Fatalf("ListDestinationsByJob: %v", err)
+	}
+	out := make(map[uuid.UUID]repositories.JobDestinationWithName, len(rows))
+	for _, r := range rows {
+		out[r.DestinationID] = r
+	}
+	return out
+}
+
+// TestTriggerNow_SkipsDisabledDestination: a disabled destination of the policy
+// takes no part in the backup and does not appear in the job.
+func TestTriggerNow_SkipsDisabledDestination(t *testing.T) {
+	q := newQueueFixture(t)
+	ctx := context.Background()
+	active := q.dest("active")
+	paused := q.dest("paused")
+	q.pause(paused)
+	for _, d := range []*db.Destination{active, paused} {
+		if err := q.s.policies.AddDestination(ctx, &db.PolicyDestination{PolicyID: q.f.policy.ID, DestinationID: d.ID}); err != nil {
+			t.Fatalf("attach destination: %v", err)
+		}
+	}
+
+	job, err := q.s.TriggerNow(ctx, q.f.policy.ID)
+	if err != nil {
+		t.Fatalf("TriggerNow: %v", err)
+	}
+
+	if got := q.status(job); got != "pending" {
+		t.Fatalf("job status = %q, want \"pending\" (sent to the agent)", got)
+	}
+	jds := q.jobDestinations(job)
+	if _, ok := jds[active.ID]; len(jds) != 1 || !ok {
+		t.Errorf("job destinations = %v, want only the enabled one", jds)
+	}
+	if h := q.holders(paused); len(h) != 0 {
+		t.Errorf("disabled destination holders = %v, want none", h)
+	}
+}
+
+// TestTriggerNow_AllDestinationsDisabled: a policy whose destinations are all
+// disabled does not back up to nothing; the job fails and is reported.
+func TestTriggerNow_AllDestinationsDisabled(t *testing.T) {
+	q := newQueueFixture(t)
+	notif := &countingNotifier{}
+	q.s.SetNotificationService(notif)
+	ctx := context.Background()
+	paused := q.dest("paused")
+	q.pause(paused)
+	if err := q.s.policies.AddDestination(ctx, &db.PolicyDestination{PolicyID: q.f.policy.ID, DestinationID: paused.ID}); err != nil {
+		t.Fatalf("attach destination: %v", err)
+	}
+
+	job, err := q.s.TriggerNow(ctx, q.f.policy.ID)
+	if err != nil {
+		t.Fatalf("TriggerNow: %v", err)
+	}
+
+	stored, err := q.jobs.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Status != "failed" || stored.Error != errAllDestinationsDisabled {
+		t.Errorf("job = %q %q, want \"failed\" %q", stored.Status, stored.Error, errAllDestinationsDisabled)
+	}
+	if len(q.stream.sent()) != 0 {
+		t.Errorf("agent was sent %v, want nothing", q.stream.sent())
+	}
+	if notif.jobFailed != 1 {
+		t.Errorf("NotifyJobFailed called %d times, want 1", notif.jobFailed)
+	}
+}
+
+// TestDispatch_DestinationDisabledWhileWaiting: a destination disabled while
+// its backup waits in the queue is skipped when the backup starts.
+func TestDispatch_DestinationDisabledWhileWaiting(t *testing.T) {
+	q := newQueueFixture(t)
+	busy := q.dest("busy")
+	other := q.dest("other")
+	holder := q.holder(busy)
+
+	job := q.dispatch(busy, other)
+	if got := q.status(job); got != "waiting" {
+		t.Fatalf("job status = %q, want \"waiting\"", got)
+	}
+
+	q.pause(other)
+	q.finish(holder)
+	q.s.queue.Drain(context.Background())
+
+	if got := q.status(job); got != "pending" {
+		t.Fatalf("job status after drain = %q, want \"pending\" (sent to the agent)", got)
+	}
+	jds := q.jobDestinations(job)
+	if got := jds[other.ID]; got.Status != "skipped" || got.Error != "destination disabled" {
+		t.Errorf("disabled destination = %q %q, want \"skipped\" \"destination disabled\"", got.Status, got.Error)
+	}
+	if got := jds[busy.ID]; got.Status != "pending" {
+		t.Errorf("enabled destination status = %q, want \"pending\"", got.Status)
+	}
+	if h := q.holders(other); len(h) != 0 {
+		t.Errorf("disabled destination holders = %v, want none", h)
 	}
 }

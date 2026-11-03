@@ -20,13 +20,6 @@ const (
 	// refreshTokenDuration defines how long a refresh token remains valid.
 	refreshTokenDuration = 7 * 24 * time.Hour
 
-	// argon2Time is the number of iterations (time cost) for Argon2id.
-	// OWASP minimum recommendation is 1; 2 provides a better security margin.
-	argon2Time = 2
-
-	// argon2Memory is the memory cost in KiB for Argon2id (64 MiB).
-	argon2Memory = 64 * 1024
-
 	// argon2Threads is the parallelism factor for Argon2id.
 	argon2Threads = 2
 
@@ -38,6 +31,17 @@ const (
 
 	// refreshTokenBytes is the length of the random refresh token before encoding.
 	refreshTokenBytes = 32
+)
+
+// The Argon2id cost parameters are variables only so that test binaries can
+// lower them with UseCheapPasswordHashing.
+var (
+	// argon2Time is the number of iterations (time cost) for Argon2id.
+	// OWASP minimum recommendation is 1; 2 provides a better security margin.
+	argon2Time uint32 = 2
+
+	// argon2Memory is the memory cost in KiB for Argon2id (64 MiB).
+	argon2Memory uint32 = 64 * 1024
 )
 
 // LocalAuthProvider authenticates users via email/password stored in the
@@ -60,11 +64,6 @@ func NewLocalAuthProvider(
 		tokenIssuer: tokenIssuer{userRepo: userRepo, tokenRepo: tokenRepo, jwtManager: jwtManager},
 		logger:      logger.Named("local_auth"),
 	}
-}
-
-// ProviderType implements AuthProvider.
-func (p *LocalAuthProvider) ProviderType() string {
-	return "local"
 }
 
 // Login validates email/password and returns a token pair on success.
@@ -94,6 +93,11 @@ func (p *LocalAuthProvider) Login(ctx context.Context, req LoginRequest) (*Token
 	// successful login. AuthHandler.Login turns this into a challenge.
 	if user.TwoFactorEnabled {
 		return nil, &TwoFactorRequiredError{UserID: user.ID}
+	}
+	// Same for an account that must set a new password; after the second
+	// factor, AuthHandler.LoginTwoFactor applies the same check.
+	if user.MustChangePassword {
+		return nil, &PasswordChangeRequiredError{UserID: user.ID}
 	}
 
 	return p.IssueTokenPair(ctx, user, nil)

@@ -37,6 +37,11 @@ func ValidateConfig(destType, config string) error {
 				return errors.New("config.port must be a number between 1 and 65535")
 			}
 		}
+		if hostKey := strings.TrimSpace(cfg["host_key"]); hostKey != "" {
+			if _, err := ParseHostKeys(hostKey); err != nil {
+				return fmt.Errorf("config.host_key: %w", err)
+			}
+		}
 	case "rest":
 		if err := requireFields(cfg, "config", "url"); err != nil {
 			return err
@@ -70,6 +75,10 @@ func ValidateCredentials(destType, creds string) error {
 	switch destType {
 	case "s3":
 		return requireFields(c, "credentials", "access_key", "secret_key")
+	case "sftp":
+		if strings.TrimSpace(c["password"]) == "" && strings.TrimSpace(c["private_key"]) == "" {
+			return errors.New("credentials: a password or a private key is required")
+		}
 	case "rclone":
 		for _, v := range c {
 			if strings.TrimSpace(v) != "" {

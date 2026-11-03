@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -75,15 +75,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
-	gdb, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("db.New: %v", err)
-	}
+	gdb := dbtest.New(t)
 
 	e := &testEnv{
 		gdb:      gdb,
@@ -100,7 +92,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 func (e *testEnv) createAgent(t *testing.T, name string) *db.Agent {
 	t.Helper()
-	agent := &db.Agent{Name: name, Hostname: name, Status: "online", Labels: "{}"}
+	agent := &db.Agent{Name: name, Hostname: name, Status: "online"}
 	if err := repositories.NewAgentRepository(e.gdb).Create(context.Background(), agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}

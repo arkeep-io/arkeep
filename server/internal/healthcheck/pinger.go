@@ -95,7 +95,7 @@ func pingURL(base, event, rid string) (string, error) {
 		return "", fmt.Errorf("invalid ping url: %w", err)
 	}
 	if event != EventSuccess {
-		u = u.JoinPath(event)
+		u = u.JoinPath(url.PathEscape(event))
 	}
 	if rid != "" {
 		q := u.Query()

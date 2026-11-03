@@ -1,0 +1,58 @@
+[Unit]
+Description=Arkeep Backup Server
+Documentation=https://arkeep.io/docs
+After=network-online.target
+Wants=network-online.target
+# With a local PostgreSQL, start after it (no effect when it is not installed);
+# the server also waits up to 60 s for the database to accept connections.
+After=postgresql.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/arkeep-server
+
+# The server runs as an unprivileged user that systemd allocates on start
+# (DynamicUser), so there is no account to create. It can write only to its
+# state directory, /var/lib/arkeep, which systemd creates and keeps across
+# restarts (stored in /var/lib/private/arkeep, /var/lib/arkeep links to it).
+DynamicUser=yes
+StateDirectory=arkeep
+StateDirectoryMode=0700
+
+# Defaults for the database and data directory, inside the state directory.
+# The environment file below overrides them, e.g. with a PostgreSQL DSN.
+Environment=ARKEEP_DB_DSN=/var/lib/arkeep/arkeep.db
+Environment=ARKEEP_DATA_DIR=/var/lib/arkeep/data
+
+# Environment file — copy to /etc/arkeep/server.env (chmod 600) and fill in
+# the values. Minimum required:
+#   ARKEEP_SECRET_KEY=<openssl rand -hex 32 — never change it afterwards>
+#   ARKEEP_AGENT_SECRET=<openssl rand -hex 24 — the same on every agent>
+# Any other ARKEEP_* setting can go here too (ARKEEP_BASE_URL,
+# ARKEEP_SECURE_COOKIES, ARKEEP_DB_DRIVER and ARKEEP_DB_DSN for PostgreSQL…).
+#
+# gRPC with your own certificate: the service cannot read files owned by root,
+# so hand them over with LoadCredential in a drop-in
+# (systemctl edit arkeep-server):
+#   [Service]
+#   LoadCredential=grpc.crt:/etc/arkeep/tls.crt
+#   LoadCredential=grpc.key:/etc/arkeep/tls.key
+#   Environment=ARKEEP_GRPC_TLS_CERT=%d/grpc.crt
+#   Environment=ARKEEP_GRPC_TLS_KEY=%d/grpc.key
+EnvironmentFile=/etc/arkeep/server.env
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+
+# Security hardening (DynamicUser already implies ProtectSystem=strict,
+# ProtectHome=read-only, PrivateTmp and NoNewPrivileges).
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

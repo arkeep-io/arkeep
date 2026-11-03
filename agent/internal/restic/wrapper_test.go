@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -314,6 +315,8 @@ func TestBuildCmd_DropsEnvOutsideAllowlist(t *testing.T) {
 			"RESTIC_REPOSITORY":              "/tmp/elsewhere",
 			"RCLONE_CONFIG_ARKEEPSFTP_SSH":   "id",
 			"RCLONE_CONFIG_OTHERREMOTE_TYPE": "local",
+			// The server never picks a file on the agent: only the content.
+			"RCLONE_CONFIG_ARKEEPSFTP_KNOWN_HOSTS_FILE": "/etc/shadow",
 		},
 	}
 
@@ -325,7 +328,7 @@ func TestBuildCmd_DropsEnvOutsideAllowlist(t *testing.T) {
 	if got := envVar(cmd.Env, "aws_secret_access_key"); got != "secret" {
 		t.Errorf("allowlist must match case-insensitively, got %q", got)
 	}
-	for _, k := range []string{"RESTIC_PASSWORD_COMMAND", "LD_PRELOAD", "RCLONE_CONFIG_ARKEEPSFTP_SSH", "RCLONE_CONFIG_OTHERREMOTE_TYPE"} {
+	for _, k := range []string{"RESTIC_PASSWORD_COMMAND", "LD_PRELOAD", "RCLONE_CONFIG_ARKEEPSFTP_SSH", "RCLONE_CONFIG_ARKEEPSFTP_KNOWN_HOSTS_FILE", "RCLONE_CONFIG_OTHERREMOTE_TYPE"} {
 		for _, kv := range cmd.Env {
 			if strings.HasPrefix(kv, k+"=") && os.Getenv(k) == "" {
 				t.Errorf("%s reached the restic environment", k)
@@ -334,6 +337,48 @@ func TestBuildCmd_DropsEnvOutsideAllowlist(t *testing.T) {
 	}
 	if got := envVar(cmd.Env, "RESTIC_REPOSITORY"); got != "s3:s3.example.com/bucket" {
 		t.Errorf("RESTIC_REPOSITORY = %q, must not be overridden by destination env", got)
+	}
+}
+
+// TestBuildCmd_SFTPKnownHosts: the known_hosts content the server sends is
+// written to a private file and only its path reaches rclone, so a pinned SFTP
+// host key is checked (SEC-31).
+func TestBuildCmd_SFTPKnownHosts(t *testing.T) {
+	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	const content = "[h.example.com]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
+	dest := Destination{
+		Type:    DestSFTP,
+		RepoURL: "rclone:arkeepsftp:/srv/restic",
+		Env: map[string]string{
+			"RCLONE_CONFIG_ARKEEPSFTP_TYPE": "sftp",
+			"ARKEEP_SFTP_KNOWN_HOSTS":       content,
+		},
+	}
+
+	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+
+	path := envVar(cmd.Env, "RCLONE_CONFIG_ARKEEPSFTP_KNOWN_HOSTS_FILE")
+	if path == "" {
+		t.Fatal("KNOWN_HOSTS_FILE not set")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != content {
+		t.Errorf("known_hosts file = %q (%v), want the content sent by the server", got, err)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Dir(path))
+		if err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("known_hosts directory mode = %v (%v), want private 0700", info.Mode().Perm(), err)
+		}
+	}
+	if v := envVar(cmd.Env, "ARKEEP_SFTP_KNOWN_HOSTS"); v != "" {
+		t.Errorf("ARKEEP_SFTP_KNOWN_HOSTS reached the restic environment")
+	}
+
+	// The same content maps to the same file.
+	again := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+	if p := envVar(again.Env, "RCLONE_CONFIG_ARKEEPSFTP_KNOWN_HOSTS_FILE"); p != path {
+		t.Errorf("second command uses %q, want %q", p, path)
 	}
 }
 
@@ -744,5 +789,30 @@ func TestParseCheckOutput(t *testing.T) {
 	plain := parseCheckOutput("", "Fatal: wrong password or no key found\n")
 	if !slices.Equal(plain.Messages, []string{"Fatal: wrong password or no key found"}) {
 		t.Errorf("non-JSON stderr Messages = %q, want the raw line", plain.Messages)
+	}
+}
+
+// TestEmptyRestoreSummary uses lines printed by restic 0.19.1: a selection
+// that matches nothing ends with a summary without total_files.
+func TestEmptyRestoreSummary(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		wantEmpty bool
+		wantOK    bool
+	}{
+		{"nothing matched", `{"message_type":"summary"}`, true, true},
+		{"one file", `{"message_type":"summary","total_files":1,"files_restored":9,"total_bytes":3,"bytes_restored":3}`, false, true},
+		{"empty directory", `{"message_type":"summary","total_files":7,"files_restored":7}`, false, true},
+		{"progress line", `{"message_type":"status","percent_done":0.5,"total_files":4}`, false, false},
+		{"not json", `restoring <Snapshot 1a2b3c4d>`, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			empty, ok := emptyRestoreSummary([]byte(tt.line))
+			if empty != tt.wantEmpty || ok != tt.wantOK {
+				t.Errorf("emptyRestoreSummary(%s) = (%v, %v), want (%v, %v)", tt.line, empty, ok, tt.wantEmpty, tt.wantOK)
+			}
+		})
 	}
 }

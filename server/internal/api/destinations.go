@@ -315,9 +315,10 @@ type createDestinationRequest struct {
 	RetentionAgentID  string `json:"retention_agent_id"`
 	AppendOnly        bool   `json:"append_only"`
 
-	// Integrity check — issue #307, all optional at creation (defaults:
-	// disabled, mode "subset", 5%).
-	CheckEnabled       bool   `json:"check_enabled"`
+	// Integrity check — issue #307, all optional at creation. Omitting
+	// check_enabled turns the check on with defaultCheckSchedule, as the GUI
+	// form does; mode defaults to "subset" and the share to 5%.
+	CheckEnabled       *bool  `json:"check_enabled"`
 	CheckSchedule      string `json:"check_schedule"`
 	CheckMode          string `json:"check_mode"`
 	CheckSubsetPercent int    `json:"check_subset_percent"`
@@ -369,6 +370,12 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	checkEnabled := true
+	if req.CheckEnabled != nil {
+		checkEnabled = *req.CheckEnabled
+	} else if req.CheckSchedule == "" {
+		req.CheckSchedule = defaultCheckSchedule
+	}
 	if req.CheckMode == "" {
 		req.CheckMode = checkscheduler.ModeSubset
 	}
@@ -414,7 +421,7 @@ func (h *DestinationHandler) Create(w http.ResponseWriter, r *http.Request) {
 		RetentionEnabled:   req.RetentionEnabled,
 		RetentionAgentID:   retentionAgentID,
 		AppendOnly:         req.AppendOnly,
-		CheckEnabled:       req.CheckEnabled,
+		CheckEnabled:       checkEnabled,
 		CheckSchedule:      req.CheckSchedule,
 		CheckMode:          req.CheckMode,
 		CheckSubsetPercent: req.CheckSubsetPercent,
@@ -755,6 +762,11 @@ func validateRetentionKeep(enabled bool, keep ...int) error {
 // defaultCheckSubsetPercent is the share of pack data a "subset" integrity
 // check reads when the request does not say.
 const defaultCheckSubsetPercent = 5
+
+// defaultCheckSchedule runs the integrity check of a new destination weekly,
+// Sunday at 03:00, when the create request leaves check_enabled out. Matches
+// the GUI form's default.
+const defaultCheckSchedule = "0 3 * * 0"
 
 // validateCheckSettings validates a destination's integrity check settings.
 // An empty schedule is allowed: the check is then never run on its own.

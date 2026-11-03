@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +11,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 )
 
 // TestDelete_LeavesNoSecretInDatabaseFile is the regression test for the
@@ -23,7 +23,7 @@ func TestDelete_LeavesNoSecretInDatabaseFile(t *testing.T) {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "arkeep.db")
+	path := dbtest.Path(t)
 	gdb, err := db.New(db.Config{Driver: "sqlite", DSN: path, Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
 	if err != nil {
 		t.Fatalf("db.New: %v", err)
@@ -45,7 +45,7 @@ func TestDelete_LeavesNoSecretInDatabaseFile(t *testing.T) {
 			t.Fatalf("create destination: %v", err)
 		}
 	}
-	agent := &db.Agent{Name: "agent", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "agent", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}

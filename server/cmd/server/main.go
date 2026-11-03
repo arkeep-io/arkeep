@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -27,6 +29,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
+	"github.com/arkeep-io/arkeep/server/internal/housekeeping"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -177,12 +180,14 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	// --- Database ---
-	gormDB, err := db.New(db.Config{
-		Driver:   cfg.dbDriver,
-		DSN:      cfg.dbDSN,
-		Logger:   logger,
-		LogLevel: gormLogLevel(cfg.logLevel),
-	})
+	gormDB, err := connectDB(ctx, cfg.dbDriver, func() (*gorm.DB, error) {
+		return db.New(db.Config{
+			Driver:   cfg.dbDriver,
+			DSN:      cfg.dbDSN,
+			Logger:   logger,
+			LogLevel: gormLogLevel(cfg.logLevel),
+		})
+	}, logger, dbWaitTimeout, dbRetryInterval)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -211,6 +216,7 @@ func run(ctx context.Context, cfg *config) error {
 	auditRepo := repositories.NewAuditRepository(gormDB)
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
+	passwordChangeRepo := repositories.NewPasswordChangeChallengeRepository(gormDB)
 	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
 
 	// The initial admin can only be created within api.SetupWindow of this
@@ -354,7 +360,13 @@ func run(ctx context.Context, cfg *config) error {
 	// The hub must start before the HTTP server so clients can connect
 	// immediately after the server is ready.
 	wsHub := websocket.NewHub()
-	go wsHub.Run(ctx)
+
+	// background tracks the long-running services started below. They all
+	// return once ctx is cancelled, and shutdown waits for them before the
+	// deferred calls stop the schedulers and close the database, so none of
+	// them is left querying a closed database.
+	var background sync.WaitGroup
+	background.Go(func() { wsHub.Run(ctx) })
 
 	// --- Notification Service ---
 	// Must be created after the hub so it can publish real-time in-app
@@ -371,7 +383,7 @@ func run(ctx context.Context, cfg *config) error {
 	// Start the background delivery retrier. It polls every 30 s for pending
 	// email/webhook deliveries and retries them with exponential backoff
 	// (max 3 attempts: +5 min → +30 min → exhausted).
-	go notifService.Start(ctx)
+	background.Go(func() { notifService.Start(ctx) })
 
 	// The scheduler is built before the hub, so it gets the notification service
 	// here. It uses it only to report that automatic resume of a repeatedly
@@ -388,14 +400,20 @@ func run(ctx context.Context, cfg *config) error {
 	destQueue.SetNotificationService(notifService)
 	destQueue.SetPinger(hcPinger)
 	destQueue.SetHub(wsHub)
-	go destQueue.Run(ctx)
+	background.Go(func() { destQueue.Run(ctx) })
 
 	// --- Log retention ---
 	// Periodically prunes old job_logs rows so the database does not grow
 	// without bound. Disabled by default (see Settings → Log Retention); it only
 	// deletes rows once an administrator configures a retention window.
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
-	go logRetentionSvc.Start(ctx)
+	background.Go(func() { logRetentionSvc.Start(ctx) })
+
+	// --- Housekeeping ---
+	// Deletes expired refresh tokens and notifications read more than 30 days
+	// ago, once a day.
+	housekeepingSvc := housekeeping.NewService(refreshTokenRepo, notificationRepo, logger)
+	background.Go(func() { housekeepingSvc.Start(ctx) })
 
 	// --- Snapshot sync ---
 	// Lists each destination's repository through a connected agent and makes
@@ -404,7 +422,7 @@ func run(ctx context.Context, cfg *config) error {
 	// periodically once an administrator sets an interval (Settings →
 	// Snapshot Sync).
 	snapshotSyncSvc := snapshotsync.NewService(destinationRepo, snapshotRepo, settingsRepo, agentMgr, logger)
-	go snapshotSyncSvc.Start(ctx)
+	background.Go(func() { snapshotSyncSvc.Start(ctx) })
 
 	// --- Agent watchdog ---
 	// Detects agents that stopped sending heartbeats (network partition, crash,
@@ -413,7 +431,7 @@ func run(ctx context.Context, cfg *config) error {
 	// forever, since the only other trigger for "offline" is the StreamJobs
 	// stream actually closing.
 	agentWatchdogSvc := agentwatchdog.NewService(agentRepo, jobRepo, agentMgr, notifService, wsHub, logger)
-	go agentWatchdogSvc.Start(ctx)
+	background.Go(func() { agentWatchdogSvc.Start(ctx) })
 
 	// --- gRPC server ---
 	grpcSrv := grpcserver.New(
@@ -438,9 +456,16 @@ func run(ctx context.Context, cfg *config) error {
 		logger,
 	)
 
+	// A listener that fails (port taken, unreadable certificate) shuts the
+	// server down and makes run return its error, so the process exits
+	// non-zero and a supervisor (systemd Restart=on-failure, Kubernetes) sees a
+	// failure rather than a clean stop. Buffered: each listener sends at most once.
+	listenErr := make(chan error, 2)
+
 	go func() {
 		if err := grpcSrv.ListenAndServe(ctx, cfg.grpcAddr); err != nil {
 			logger.Error("gRPC server error", zap.Error(err))
+			listenErr <- err
 			cancel()
 		}
 	}()
@@ -473,6 +498,7 @@ func run(ctx context.Context, cfg *config) error {
 		ResetTokens:        resetTokenRepo,
 		RefreshTokens:      refreshTokenRepo,
 		Challenges:         challengeRepo,
+		PasswordChanges:    passwordChangeRepo,
 		RecoveryCodes:      recoveryCodeRepo,
 		Mailer:             notifService,
 		Pinger:             hcPinger,
@@ -500,6 +526,7 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Info("http server listening", zap.String("addr", cfg.httpAddr))
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server error", zap.Error(err))
+			listenErr <- fmt.Errorf("http server: %w", err)
 			cancel()
 		}
 	}()
@@ -517,7 +544,7 @@ func run(ctx context.Context, cfg *config) error {
 					"To opt out: set ARKEEP_TELEMETRY=false or --telemetry=false\n" +
 					"Public stats: https://telemetry.arkeep.io")
 			}
-			go reporter.Start(ctx)
+			background.Go(func() { reporter.Start(ctx) })
 		}
 	}
 
@@ -532,8 +559,24 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Warn("http server graceful shutdown error", zap.Error(err))
 	}
 
+	stopped := make(chan struct{})
+	go func() {
+		background.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-shutdownCtx.Done():
+		logger.Warn("background services did not stop in time, closing the database anyway")
+	}
+
 	logger.Info("arkeep server stopped")
-	return nil
+	select {
+	case err := <-listenErr:
+		return err
+	default:
+		return nil
+	}
 }
 
 // telemetryStats adapts repositories to the telemetry.StatsProvider interface
@@ -550,8 +593,11 @@ func (s *telemetryStats) ActivePoliciesCount() int {
 	return s.policyRepo.ActivePoliciesCount(context.Background())
 }
 
-// buildJWTManager loads RSA keys from the data directory if available,
-// or generates ephemeral in-memory keys for development.
+// buildJWTManager loads RSA keys from the data directory if an operator placed
+// them there, and otherwise generates keys in memory, the default. In-memory
+// keys are intended: a restart invalidates every access token, including those
+// on the in-memory denylist, and the GUI renews them from its refresh cookie,
+// which is stored in the database and survives the restart.
 func buildJWTManager(dataDir string, logger *zap.Logger) (*auth.JWTManager, error) {
 	privPath := filepath.Join(dataDir, "jwt_private.pem")
 	pubPath := filepath.Join(dataDir, "jwt_public.pem")
@@ -568,10 +614,42 @@ func buildJWTManager(dataDir string, logger *zap.Logger) (*auth.JWTManager, erro
 		return nil, fmt.Errorf("JWT key file inaccessible (%s): %w", privPath, err)
 	}
 
-	logger.Warn("JWT key files not found — using ephemeral in-memory keys (tokens will be invalidated on restart)",
-		zap.String("expected_private", privPath),
+	logger.Info("signing access tokens with in-memory keys: a restart ends them, sessions renew from their refresh token",
+		zap.String("optional_key_file", privPath),
 	)
 	return auth.NewJWTManagerGenerated("arkeep-server")
+}
+
+// dbWaitTimeout bounds how long the server waits for PostgreSQL at startup. It
+// stays below the Helm chart's liveness window (about 70 s), so Kubernetes
+// does not kill the pod while it waits.
+const (
+	dbWaitTimeout   = 60 * time.Second
+	dbRetryInterval = 2 * time.Second
+)
+
+// connectDB opens the database with open. PostgreSQL often starts alongside
+// the server (the chart's bundled database, a machine booting), so a failure
+// is retried every interval until timeout. SQLite is a local file: its errors
+// do not go away by waiting, and it fails at once.
+func connectDB(ctx context.Context, driver string, open func() (*gorm.DB, error), logger *zap.Logger, timeout, interval time.Duration) (*gorm.DB, error) {
+	gdb, err := open()
+	if err == nil || driver != "postgres" {
+		return gdb, err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		logger.Warn("waiting for the database", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(interval):
+		}
+		if gdb, err = open(); err == nil {
+			return gdb, nil
+		}
+	}
+	return nil, fmt.Errorf("database still unreachable after %s: %w", timeout, err)
 }
 
 // gormLogLevel maps the application log level string to a GORM logger level.

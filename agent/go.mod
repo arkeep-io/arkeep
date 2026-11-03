@@ -9,7 +9,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
-	github.com/shirou/gopsutil/v4 v4.26.9
+	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.85.0
@@ -29,7 +29,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/lufia/plan9stats v0.0.0-20260802145828-341c2f0c90b5 // indirect
+	github.com/lufia/plan9stats v0.0.0-20261101121723-be84dd9509a0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect

@@ -142,8 +142,8 @@ func TestRefreshTokenRevocationIsEnforced(t *testing.T) {
 	}
 
 	t.Run("revoked token is not redeemable", func(t *testing.T) {
-		if err := repo.Revoke(ctx, drop.ID); err != nil {
-			t.Fatalf("Revoke: %v", err)
+		if err := gdb.Model(&db.RefreshToken{}).Where("id = ?", drop.ID).Update("revoked_at", time.Now()).Error; err != nil {
+			t.Fatalf("revoke: %v", err)
 		}
 		if _, err := repo.GetByHash(ctx, "drop"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("GetByHash(revoked) err = %v, want ErrNotFound", err)

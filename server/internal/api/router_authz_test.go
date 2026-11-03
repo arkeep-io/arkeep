@@ -15,10 +15,10 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 	routes := []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/v1/agents"},
 		{http.MethodPatch, "/api/v1/agents/" + id},
 		{http.MethodGet, "/api/v1/agents/" + id + "/volumes"},
 		{http.MethodPost, "/api/v1/agents/" + id + "/reset-identity"},
+		{http.MethodGet, "/api/v1/agents/" + id + "/usage"},
 		{http.MethodPost, "/api/v1/destinations"},
 		{http.MethodPatch, "/api/v1/destinations/" + id},
 		{http.MethodPost, "/api/v1/destinations/" + id + "/import"},
@@ -29,6 +29,9 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodPatch, "/api/v1/policies/" + id},
 		{http.MethodPost, "/api/v1/jobs/" + id + "/cancel"},
 		{http.MethodGet, "/api/v1/snapshots/" + id + "/browse"},
+		{http.MethodPost, "/api/v1/settings/smtp/test"},
+		{http.MethodPost, "/api/v1/settings/webhook/test"},
+		{http.MethodPost, "/api/v1/users/" + id + "/password"},
 	}
 
 	e := newTestEnv(t)

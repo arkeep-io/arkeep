@@ -1,0 +1,1 @@
+ALTER TABLE agents ADD COLUMN labels TEXT NOT NULL DEFAULT '{}';

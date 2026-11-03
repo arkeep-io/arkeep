@@ -5,11 +5,10 @@ import (
 	"context"
 	"testing"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 )
 
 // newTestDB opens a fresh in-memory SQLite database with all migrations
@@ -21,15 +20,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
-	gormDB, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("db.New: %v", err)
-	}
+	gormDB := dbtest.New(t)
 	return gormDB
 }
 
@@ -39,7 +30,7 @@ func TestActivePoliciesCount(t *testing.T) {
 	agentRepo := NewAgentRepository(gdb)
 	ctx := context.Background()
 
-	agent := &db.Agent{Name: "test-agent", Status: "offline", Labels: "{}"}
+	agent := &db.Agent{Name: "test-agent", Status: "offline"}
 	if err := agentRepo.Create(ctx, agent); err != nil {
 		t.Fatalf("Create agent: %v", err)
 	}

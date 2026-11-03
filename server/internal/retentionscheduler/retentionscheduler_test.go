@@ -9,10 +9,10 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/metadata"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -58,15 +58,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
-	gormDB, err := db.New(db.Config{
-		Driver:   "sqlite",
-		DSN:      ":memory:",
-		Logger:   zap.NewNop(),
-		LogLevel: gormlogger.Silent,
-	})
-	if err != nil {
-		t.Fatalf("db.New: %v", err)
-	}
+	gormDB := dbtest.New(t)
 	e := &testEnv{
 		dests:    repositories.NewDestinationRepository(gormDB),
 		policies: repositories.NewPolicyRepository(gormDB),
@@ -93,7 +85,7 @@ func (e *testEnv) newScheduler(t *testing.T) *RetentionScheduler {
 
 func (e *testEnv) createAgent(t *testing.T, name string) *db.Agent {
 	t.Helper()
-	a := &db.Agent{Name: name, Status: "offline", Labels: "{}"}
+	a := &db.Agent{Name: name, Status: "offline"}
 	if err := e.agents.Create(context.Background(), a); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -359,5 +351,31 @@ func TestTriggerNow_DestinationBusy_Queues(t *testing.T) {
 	}
 	if locks, err := e.dests.ListLocks(ctx, []uuid.UUID{dest.ID}); err != nil || len(locks) != 1 || locks[0].JobID != job.ID {
 		t.Errorf("destination locks = %+v, %v; want only %s (held by the started sweep)", locks, err, job.ID)
+	}
+}
+
+// TestEligible: a disabled destination is paused, so it gets no scheduled
+// sweep; Run Retention Now (TriggerNow) does not go through eligible.
+func TestEligible(t *testing.T) {
+	base := db.Destination{Enabled: true, RetentionEnabled: true, RetentionSchedule: "0 3 * * *"}
+	tests := []struct {
+		name   string
+		modify func(d *db.Destination)
+		want   bool
+	}{
+		{"scheduled", func(d *db.Destination) {}, true},
+		{"destination disabled", func(d *db.Destination) { d.Enabled = false }, false},
+		{"retention off", func(d *db.Destination) { d.RetentionEnabled = false }, false},
+		{"append-only", func(d *db.Destination) { d.AppendOnly = true }, false},
+		{"no schedule", func(d *db.Destination) { d.RetentionSchedule = "" }, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := base
+			tt.modify(&d)
+			if got := eligible(&d); got != tt.want {
+				t.Errorf("eligible = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

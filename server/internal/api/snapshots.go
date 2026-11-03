@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -516,11 +515,10 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	assignment := &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		PolicyId:    uuidString(job.PolicyID),
-		Type:        proto.JobType_JOB_TYPE_RESTORE,
-		Payload:     payloadBytes,
-		ScheduledAt: timestamppb.Now(),
+		JobId:    job.ID.String(),
+		PolicyId: uuidString(job.PolicyID),
+		Type:     proto.JobType_JOB_TYPE_RESTORE,
+		Payload:  payloadBytes,
 	}
 
 	if err := h.agentMgr.Dispatch(agentID.String(), assignment); err != nil {

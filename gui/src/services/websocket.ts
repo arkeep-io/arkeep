@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type MessageType =
+type MessageType =
   | 'job.status'
   | 'job.log'
   | 'agent.status'
@@ -16,7 +16,7 @@ export type MessageType =
   | 'notification'
   | 'ping'
 
-export interface WSMessage<T = unknown> {
+interface WSMessage<T = unknown> {
   type: MessageType
   topic: string
   payload: T

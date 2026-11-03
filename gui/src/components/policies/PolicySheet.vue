@@ -191,8 +191,7 @@ async function fetchVolumes() {
 // Zod schema
 // ---------------------------------------------------------------------------
 
-// SourceType uses "docker-volume" (hyphen) to match the frontend SourceType enum.
-// "command" backs up the stdout of a shell command via restic's
+// The source types the server accepts (server/internal/policyutil). "command" backs up the stdout of a shell command via restic's
 // --stdin-from-command (e.g. a pg_dump), instead of a filesystem path.
 const SOURCE_TYPES = ['directory', 'docker-volume', 'command'] as const
 type SourceTypeValue = typeof SOURCE_TYPES[number]
@@ -294,21 +293,6 @@ const schema = z.object({
     if (data.use_destination_password) {
       // Password resolved server-side from the selected destination(s).
     } else if (!data.repo_password || data.repo_password.length < MIN_REPO_PASSWORD_LENGTH) {
-      ctx.addIssue({
-        code: "custom",
-        path: ['repo_password'],
-        message: `Repository password must be at least ${MIN_REPO_PASSWORD_LENGTH} characters`,
-      })
-    }
-    if (data.repo_password !== data.repo_password_confirm) {
-      ctx.addIssue({
-        code: "custom",
-        path: ['repo_password_confirm'],
-        message: 'Passwords do not match',
-      })
-    }
-  } else if (data.repo_password && data.repo_password.length > 0) {
-    if (data.repo_password.length < MIN_REPO_PASSWORD_LENGTH) {
       ctx.addIssue({
         code: "custom",
         path: ['repo_password'],
@@ -866,10 +850,10 @@ const onSubmit = handleSubmit(async (values) => {
     if (authStore.isAdmin) body.healthcheck_url = values.healthcheck_url
 
     if (isEdit.value) {
-      // PATCH: enabled, optional new password, destinations, and agent (to allow reassignment)
+      // PATCH: enabled, destinations, and agent (to allow reassignment). The
+      // repository password cannot be changed after creation.
       body.enabled = values.enabled
       body.agent_id = values.agent_id
-      if (values.repo_password) body.repo_password = values.repo_password
       body.destinations = destinationsPayload
     } else {
       // POST-only: agent, password (required unless resolved from the

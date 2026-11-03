@@ -5,11 +5,12 @@ import { PinInput } from '@/components/ui/pin-input'
 import TwoFactorCodeForm from './TwoFactorCodeForm.vue'
 
 // mountForm mounts the form for challenge "c" with completeTwoFactor stubbed.
-async function mountForm(outcome: 'ok' | 'rejected' = 'ok') {
+async function mountForm(outcome: 'ok' | 'rejected' | 'password-change' = 'ok') {
   // Attached to the document so focus can be asserted.
   const { wrapper } = await mountPage(TwoFactorCodeForm, { props: { challengeToken: 'c' }, attachTo: document.body })
   const complete = vi.spyOn(useAuthStore(), 'completeTwoFactor')
-  if (outcome === 'ok') complete.mockResolvedValue()
+  if (outcome === 'ok') complete.mockResolvedValue(undefined)
+  else if (outcome === 'password-change') complete.mockResolvedValue({ passwordChangeRequired: true, challengeToken: 'p' })
   else complete.mockRejectedValue(new Error('400'))
   return { wrapper, complete }
 }
@@ -51,6 +52,15 @@ describe('TwoFactorCodeForm', () => {
     const submit = wrapper.find('button[type=submit]')
     expect(submit.attributes('disabled')).toBeDefined()
     expect(submit.text()).toBe('Verifying…')
+  })
+
+  it('hands over to the password change step when the account needs one', async () => {
+    const { wrapper } = await mountForm('password-change')
+    await typePin(wrapper, '123456')
+    await settle()
+
+    expect(wrapper.emitted('password-change')).toEqual([['p']])
+    expect(wrapper.emitted('verified')).toBeUndefined()
   })
 
   it('asks for the recovery code when empty', async () => {

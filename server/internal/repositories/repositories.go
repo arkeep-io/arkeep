@@ -28,7 +28,8 @@ type ListOptions struct {
 // all queries that return this type.
 type PolicyDestinationWithName struct {
 	db.PolicyDestination
-	DestinationName string
+	DestinationName    string
+	DestinationEnabled bool
 }
 
 // -----------------------------------------------------------------------------
@@ -45,6 +46,8 @@ type UserRepository interface {
 	List(ctx context.Context, opts ListOptions) ([]db.User, int64, error)
 	// CountActiveAdmins returns how many active users hold the admin role.
 	CountActiveAdmins(ctx context.Context) (int64, error)
+	// ListActiveAdmins returns every active user holding the admin role.
+	ListActiveAdmins(ctx context.Context) ([]db.User, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -55,12 +58,11 @@ type RefreshTokenRepository interface {
 	Create(ctx context.Context, token *db.RefreshToken) error
 	GetByHash(ctx context.Context, hash string) (*db.RefreshToken, error)
 	DeleteByHash(ctx context.Context, hash string) error
-	Revoke(ctx context.Context, id uuid.UUID) error
 	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
 	// RevokeAllForUserExcept revokes every active token except keepHash.
 	// Pass an empty keepHash to revoke all.
 	RevokeAllForUserExcept(ctx context.Context, userID uuid.UUID, keepHash string) error
-	DeleteExpired(ctx context.Context) error
+	DeleteExpired(ctx context.Context, before time.Time) error
 }
 
 // -----------------------------------------------------------------------------
@@ -95,6 +97,24 @@ type TwoFactorChallengeRepository interface {
 	MarkUsed(ctx context.Context, id uuid.UUID) error
 	// DeleteByUserID removes all outstanding challenges for a user, so a new
 	// login attempt invalidates any previous one.
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
+// PasswordChangeChallengeRepository
+// -----------------------------------------------------------------------------
+
+// PasswordChangeChallengeRepository stores the interim step of a login that
+// must set a new password before a session is issued.
+type PasswordChangeChallengeRepository interface {
+	Create(ctx context.Context, challenge *db.PasswordChangeChallenge) error
+	// GetUnusedByHash returns an unconsumed challenge matching the hash.
+	// Expiry is checked by the caller. Returns ErrNotFound if none matches.
+	GetUnusedByHash(ctx context.Context, hash string) (*db.PasswordChangeChallenge, error)
+	// Consume marks the challenge used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
+	// DeleteByUserID removes all outstanding challenges for a user.
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
 }
 
@@ -145,7 +165,6 @@ type AgentFilter struct {
 type AgentRepository interface {
 	Create(ctx context.Context, agent *db.Agent) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Agent, error)
-	GetByHostname(ctx context.Context, hostname string) (*db.Agent, error)
 	Update(ctx context.Context, agent *db.Agent) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, lastSeenAt time.Time) error
 	ListStale(ctx context.Context, cutoff time.Time) ([]db.Agent, error)
@@ -199,6 +218,10 @@ type DestinationRepository interface {
 	// retention scheduler to know which restic tags to sweep, and by the
 	// one-time migration backfill.
 	ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error)
+
+	// ListByMaintenanceAgent returns every live destination whose retention
+	// sweeps and integrity checks run on the given agent.
+	ListByMaintenanceAgent(ctx context.Context, agentID uuid.UUID) ([]db.Destination, error)
 
 	// PolicyCountsByDestination returns, for every destination with at least
 	// one live policy attached, how many such policies there are. Used to
@@ -275,11 +298,11 @@ type PolicyRepository interface {
 	// PolicyDestination
 	AddDestination(ctx context.Context, pd *db.PolicyDestination) error
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error
-	UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error
 	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
 	DeleteDestinationAssociations(ctx context.Context, destinationID uuid.UUID) error
-	// GetDestinations returns active (non-deleted) destination associations for a
-	// policy ordered by priority. Deleted destinations are excluded automatically.
+	// GetDestinations returns the destination associations of a policy ordered by
+	// priority. It does not filter soft-deleted destinations: deleting one removes
+	// its associations (DeleteDestinationAssociations).
 	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]PolicyDestinationWithName, error)
 }
 
@@ -308,7 +331,6 @@ type JobRepository interface {
 	MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error
 	List(ctx context.Context, opts ListOptions) ([]JobWithNames, int64, error)
 	ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error)
-	ListByType(ctx context.Context, jobType string, opts ListOptions) ([]JobWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
 	ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
 	HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)

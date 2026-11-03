@@ -88,8 +88,8 @@ func (r *gormPolicyRepository) Update(ctx context.Context, policy *db.Policy) er
 
 // Delete soft-deletes a policy by setting deleted_at and wipes its stored
 // repository password in the same transaction, so no secret outlives the
-// deletion. Associated policy_destinations are cascade-deleted automatically
-// by the database.
+// deletion. Its policy_destinations rows are kept: the ON DELETE CASCADE only
+// fires on a hard delete, and nothing reads the rows of a deleted policy.
 // Returns ErrNotFound if no live record exists.
 func (r *gormPolicyRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -264,32 +264,17 @@ func (r *gormPolicyRepository) DeleteAllDestinations(ctx context.Context, policy
 		Delete(&db.PolicyDestination{}).Error
 }
 
-// GetDestinations returns active destination associations for a policy ordered
-// by priority. Destinations that have been deleted are excluded via INNER JOIN.
+// GetDestinations returns the destination associations of a policy ordered by
+// priority. The INNER JOIN does not filter soft-deleted destinations: deleting
+// one removes its associations (DeleteDestinationAssociations).
 func (r *gormPolicyRepository) GetDestinations(ctx context.Context, policyID uuid.UUID) ([]PolicyDestinationWithName, error) {
 	var dests []PolicyDestinationWithName
 	err := r.db.WithContext(ctx).
 		Table("policy_destinations pd").
-		Select("pd.*, d.name AS destination_name").
+		Select("pd.*, d.name AS destination_name, d.enabled AS destination_enabled").
 		Joins("INNER JOIN destinations d ON d.id = pd.destination_id").
 		Where("pd.policy_id = ?", policyID).
 		Order("pd.priority ASC").
 		Scan(&dests).Error
 	return dests, err
-}
-
-// UpdateDestinationPriority updates the priority of a destination within a policy.
-// Lower priority values are tried first during backup execution.
-func (r *gormPolicyRepository) UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error {
-	result := r.db.WithContext(ctx).
-		Model(&db.PolicyDestination{}).
-		Where("policy_id = ? AND destination_id = ?", policyID, destinationID).
-		Update("priority", priority)
-	if result.Error != nil {
-		return fmt.Errorf("policies: update destination priority: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
 }

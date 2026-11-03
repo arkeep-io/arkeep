@@ -11,7 +11,7 @@ vi.mock('@/services/api', async (importActual) => ({
 
 const provider = {
   id: 'p1', name: 'Keycloak', issuer: 'https://idp.example.com/realms/main', client_id: 'arkeep',
-  callback_url: 'http://localhost/api/v1/auth/oidc/callback', scopes: 'openid email profile', enabled: true,
+  callback_url: 'http://localhost/auth/oidc/callback', scopes: 'openid email profile', enabled: true,
   groups_claim: 'groups', allowed_groups: 'arkeep-users', admin_groups: '', session_max_hours: 8,
 } as OIDCProvider
 

@@ -372,15 +372,6 @@ func (m *Manager) IsConnected(agentID string) bool {
 	return exists
 }
 
-// DockerAvailable reports whether the connected agent advertised Docker support.
-// Returns false if the agent is not connected.
-func (m *Manager) DockerAvailable(agentID string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	a, exists := m.agents[agentID]
-	return exists && a.DockerAvailable
-}
-
 // ConnectedAgentsCount returns the number of currently connected agents.
 func (m *Manager) ConnectedAgentsCount() int {
 	m.mu.RLock()
@@ -400,21 +391,6 @@ func (m *Manager) ConnectedAgents() []*ConnectedAgent {
 		result = append(result, &cp)
 	}
 	return result
-}
-
-// WaitForAgent blocks until the agent with the given ID connects or the
-// context is cancelled.
-func (m *Manager) WaitForAgent(ctx context.Context, agentID string) error {
-	for {
-		if m.IsConnected(agentID) {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for agent %s to connect: %w", agentID, ctx.Err())
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
 }
 
 // RequestVolumeList sends a JOB_TYPE_LIST_VOLUMES assignment to the agent and
