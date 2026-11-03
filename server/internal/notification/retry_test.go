@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -97,5 +98,51 @@ func TestRetryDelivery_Schedule(t *testing.T) {
 	svc.retryDelivery(ctx, d)
 	if d.Status != "exhausted" || d.Attempts != maxRetryAttempts {
 		t.Errorf("after the last retry: status %q, attempts %d; want exhausted after %d", d.Status, d.Attempts, maxRetryAttempts)
+	}
+}
+
+// TestEmailRecipients checks that a retried email reaches the same people as
+// the first send: the configured list, or every active admin without one.
+func TestEmailRecipients(t *testing.T) {
+	ctx := context.Background()
+	svc, users, settings, _ := newRetryTestService(t)
+
+	for _, u := range []*db.User{
+		{Email: "a1@test.local", DisplayName: "A1", Role: "admin", IsActive: true},
+		{Email: "a2@test.local", DisplayName: "A2", Role: "admin", IsActive: true},
+		{Email: "off@test.local", DisplayName: "Off", Role: "admin", IsActive: false},
+		{Email: "user@test.local", DisplayName: "User", Role: "user", IsActive: true},
+	} {
+		active := u.IsActive
+		if err := users.Create(ctx, u); err != nil {
+			t.Fatalf("create %s: %v", u.Email, err)
+		}
+		// is_active has a database default, so false is only stored by Update.
+		if !active {
+			u.IsActive = false
+			if err := users.Update(ctx, u); err != nil {
+				t.Fatalf("deactivate %s: %v", u.Email, err)
+			}
+		}
+	}
+
+	got, err := svc.emailRecipients(ctx)
+	if err != nil {
+		t.Fatalf("emailRecipients: %v", err)
+	}
+	slices.Sort(got)
+	if want := []string{"a1@test.local", "a2@test.local"}; !slices.Equal(got, want) {
+		t.Errorf("without a recipient list = %v, want the active admins %v", got, want)
+	}
+
+	if err := settings.Set(ctx, KeyNotificationRecipients, db.EncryptedString("ops@test.local, oncall@test.local")); err != nil {
+		t.Fatalf("set recipients: %v", err)
+	}
+	got, err = svc.emailRecipients(ctx)
+	if err != nil {
+		t.Fatalf("emailRecipients: %v", err)
+	}
+	if want := []string{"ops@test.local", "oncall@test.local"}; !slices.Equal(got, want) {
+		t.Errorf("with a recipient list = %v, want %v", got, want)
 	}
 }
