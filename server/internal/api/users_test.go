@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"testing"
 )
@@ -257,6 +258,47 @@ func TestUserHandler_Update(t *testing.T) {
 			"display_name": &name,
 		})
 		assertStatus(t, resp, http.StatusForbidden)
+	})
+}
+
+// TestUserHandler_Update_LastAdmin: the last active admin can be neither
+// demoted nor deactivated, so Arkeep always keeps an administrator.
+func TestUserHandler_Update_LastAdmin(t *testing.T) {
+	demote := map[string]any{"role": "user"}
+	deactivate := map[string]any{"is_active": false}
+
+	for name, body := range map[string]map[string]any{"demote": demote, "deactivate": deactivate} {
+		t.Run(name+" the last admin is refused", func(t *testing.T) {
+			e := newTestEnv(t)
+			adminID := createDBUser(t, e.deps, "only-admin@example.com", "admin")
+
+			resp := e.patch(t, "/api/v1/users/"+adminID.String(), e.tokenForUser(t, adminID, "admin"), body)
+			assertStatus(t, resp, http.StatusConflict)
+
+			u, err := e.deps.users.GetByID(context.Background(), adminID)
+			if err != nil || u.Role != "admin" || !u.IsActive {
+				t.Errorf("admin after refused update = %+v, %v; want unchanged", u, err)
+			}
+		})
+
+		t.Run(name+" an admin when another remains", func(t *testing.T) {
+			e := newTestEnv(t)
+			adminID := createDBUser(t, e.deps, "admin-a@example.com", "admin")
+			createDBUser(t, e.deps, "admin-b@example.com", "admin")
+
+			resp := e.patch(t, "/api/v1/users/"+adminID.String(), e.adminToken(t), body)
+			assertStatus(t, resp, http.StatusOK)
+		})
+	}
+
+	t.Run("other changes to the last admin are allowed", func(t *testing.T) {
+		e := newTestEnv(t)
+		adminID := createDBUser(t, e.deps, "only-admin@example.com", "admin")
+		name := "Renamed"
+		resp := e.patch(t, "/api/v1/users/"+adminID.String(), e.adminToken(t), map[string]any{
+			"display_name": &name, "role": "admin", "is_active": true,
+		})
+		assertStatus(t, resp, http.StatusOK)
 	})
 }
 
