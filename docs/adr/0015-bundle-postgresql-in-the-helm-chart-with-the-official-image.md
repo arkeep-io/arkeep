@@ -1,6 +1,6 @@
 # 0015. Bundle PostgreSQL in the Helm chart with the official image
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-03
 - **Deciders:** Arkeep maintainers
 
