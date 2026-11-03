@@ -17,7 +17,7 @@ defineProps<{
         <HoverCardContent :side="tooltipSide ?? 'top'" class="w-72 animate-none">
             <div class="flex flex-col space-y-3">
                 <div class="flex items-center space-x-3">
-                    <img src="/arkeep-icon.png" class="size-8 rounded-lg shrink-0" alt="Arkeep" />
+                    <img src="/icons/pwa-192x192.png" class="size-8 rounded-lg shrink-0" alt="Arkeep" />
                     <div>
                         <p class="text-sm font-semibold leading-none">Update available</p>
                         <p class="text-xs text-primary mt-1">v{{ version }}</p>

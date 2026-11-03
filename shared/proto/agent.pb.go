@@ -339,13 +339,7 @@ type AgentCapabilities struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// docker is true when the agent can reach the Docker socket and discover volumes.
 	// Requires the Docker socket to be mounted (read-only) into the agent container.
-	Docker bool `protobuf:"varint,1,opt,name=docker,proto3" json:"docker,omitempty"`
-	// restic is true when the restic binary is found in PATH.
-	// Required for all backup, verify, restore, and forget jobs.
-	Restic bool `protobuf:"varint,2,opt,name=restic,proto3" json:"restic,omitempty"`
-	// rclone is true when the rclone binary is found in PATH.
-	// Required for destinations not natively supported by restic.
-	Rclone        bool `protobuf:"varint,3,opt,name=rclone,proto3" json:"rclone,omitempty"`
+	Docker        bool `protobuf:"varint,1,opt,name=docker,proto3" json:"docker,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -383,20 +377,6 @@ func (*AgentCapabilities) Descriptor() ([]byte, []int) {
 func (x *AgentCapabilities) GetDocker() bool {
 	if x != nil {
 		return x.Docker
-	}
-	return false
-}
-
-func (x *AgentCapabilities) GetRestic() bool {
-	if x != nil {
-		return x.Restic
-	}
-	return false
-}
-
-func (x *AgentCapabilities) GetRclone() bool {
-	if x != nil {
-		return x.Rclone
 	}
 	return false
 }
@@ -583,16 +563,11 @@ func (x *SystemMetrics) GetDiskPercent() float32 {
 	return 0
 }
 
-// HeartbeatResponse acknowledges the heartbeat and carries control signals
-// from the server back to the agent.
+// HeartbeatResponse acknowledges the heartbeat.
 type HeartbeatResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// has_pending_jobs is a hint that the server has jobs queued for this agent.
-	// The jobs will be delivered on the open StreamJobs stream. This field exists
-	// as a fallback signal in case the stream was reconnected and missed a push.
-	HasPendingJobs bool `protobuf:"varint,1,opt,name=has_pending_jobs,json=hasPendingJobs,proto3" json:"has_pending_jobs,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
@@ -623,13 +598,6 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
 	return file_agent_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *HeartbeatResponse) GetHasPendingJobs() bool {
-	if x != nil {
-		return x.HasPendingJobs
-	}
-	return false
 }
 
 // StreamJobsRequest opens the job delivery stream for a specific agent.
@@ -693,10 +661,7 @@ type JobAssignment struct {
 	// payload is a JSON-encoded struct whose shape depends on job type.
 	// See agent/internal/executor/ for the payload structs per job type.
 	// Using bytes (not string) to avoid UTF-8 validation overhead on large payloads.
-	Payload []byte `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
-	// scheduled_at is when the server originally scheduled this job.
-	// Used for latency tracking and audit purposes.
-	ScheduledAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=scheduled_at,json=scheduledAt,proto3" json:"scheduled_at,omitempty"`
+	Payload       []byte `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -755,13 +720,6 @@ func (x *JobAssignment) GetType() JobType {
 func (x *JobAssignment) GetPayload() []byte {
 	if x != nil {
 		return x.Payload
-	}
-	return nil
-}
-
-func (x *JobAssignment) GetScheduledAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.ScheduledAt
 	}
 	return nil
 }
@@ -2122,11 +2080,9 @@ const file_agent_proto_rawDesc = "" +
 	"\x02os\x18\x03 \x01(\tR\x02os\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12<\n" +
 	"\fcapabilities\x18\x05 \x01(\v2\x18.agent.AgentCapabilitiesR\fcapabilities\x12\x19\n" +
-	"\bagent_id\x18\x06 \x01(\tR\aagentId\"[\n" +
+	"\bagent_id\x18\x06 \x01(\tR\aagentId\"G\n" +
 	"\x11AgentCapabilities\x12\x16\n" +
-	"\x06docker\x18\x01 \x01(\bR\x06docker\x12\x16\n" +
-	"\x06restic\x18\x02 \x01(\bR\x06restic\x12\x16\n" +
-	"\x06rclone\x18\x03 \x01(\bR\x06rclone\"L\n" +
+	"\x06docker\x18\x01 \x01(\bR\x06dockerJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06resticR\x06rclone\"L\n" +
 	"\x10RegisterResponse\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
 	"\n" +
@@ -2139,17 +2095,15 @@ const file_agent_proto_rawDesc = "" +
 	"cpuPercent\x12\x1f\n" +
 	"\vmem_percent\x18\x02 \x01(\x02R\n" +
 	"memPercent\x12!\n" +
-	"\fdisk_percent\x18\x03 \x01(\x02R\vdiskPercent\"=\n" +
-	"\x11HeartbeatResponse\x12(\n" +
-	"\x10has_pending_jobs\x18\x01 \x01(\bR\x0ehasPendingJobs\".\n" +
+	"\fdisk_percent\x18\x03 \x01(\x02R\vdiskPercent\"+\n" +
+	"\x11HeartbeatResponseJ\x04\b\x01\x10\x02R\x10has_pending_jobs\".\n" +
 	"\x11StreamJobsRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xc0\x01\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x95\x01\n" +
 	"\rJobAssignment\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1b\n" +
 	"\tpolicy_id\x18\x02 \x01(\tR\bpolicyId\x12\"\n" +
 	"\x04type\x18\x03 \x01(\x0e2\x0e.agent.JobTypeR\x04type\x12\x18\n" +
-	"\apayload\x18\x04 \x01(\fR\apayload\x12=\n" +
-	"\fscheduled_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vscheduledAt\"\xc1\x01\n" +
+	"\apayload\x18\x04 \x01(\fR\apayloadJ\x04\b\x05\x10\x06R\fscheduled_at\"\xc1\x01\n" +
 	"\x0fJobStatusReport\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12(\n" +
@@ -2332,43 +2286,42 @@ var file_agent_proto_depIdxs = []int32{
 	4,  // 0: agent.RegisterRequest.capabilities:type_name -> agent.AgentCapabilities
 	7,  // 1: agent.HeartbeatRequest.metrics:type_name -> agent.SystemMetrics
 	0,  // 2: agent.JobAssignment.type:type_name -> agent.JobType
-	30, // 3: agent.JobAssignment.scheduled_at:type_name -> google.protobuf.Timestamp
-	1,  // 4: agent.JobStatusReport.status:type_name -> agent.JobStatus
-	30, // 5: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
-	30, // 6: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
-	2,  // 7: agent.LogEntry.level:type_name -> agent.LogLevel
-	30, // 8: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	17, // 9: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
-	20, // 10: agent.SnapshotBrowseReport.entries:type_name -> agent.SnapshotFileEntry
-	25, // 11: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
-	30, // 12: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
-	3,  // 13: agent.AgentService.Register:input_type -> agent.RegisterRequest
-	6,  // 14: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
-	9,  // 15: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
-	11, // 16: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
-	13, // 17: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
-	15, // 18: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
-	18, // 19: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
-	21, // 20: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
-	26, // 21: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
-	23, // 22: agent.AgentService.UploadSnapshotDownload:input_type -> agent.SnapshotDownloadChunk
-	28, // 23: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
-	5,  // 24: agent.AgentService.Register:output_type -> agent.RegisterResponse
-	8,  // 25: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // 26: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
-	12, // 27: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
-	14, // 28: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
-	16, // 29: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
-	19, // 30: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
-	22, // 31: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
-	27, // 32: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
-	24, // 33: agent.AgentService.UploadSnapshotDownload:output_type -> agent.SnapshotDownloadAck
-	29, // 34: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
-	24, // [24:35] is the sub-list for method output_type
-	13, // [13:24] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	1,  // 3: agent.JobStatusReport.status:type_name -> agent.JobStatus
+	30, // 4: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
+	30, // 5: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
+	2,  // 6: agent.LogEntry.level:type_name -> agent.LogLevel
+	30, // 7: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	17, // 8: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
+	20, // 9: agent.SnapshotBrowseReport.entries:type_name -> agent.SnapshotFileEntry
+	25, // 10: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
+	30, // 11: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
+	3,  // 12: agent.AgentService.Register:input_type -> agent.RegisterRequest
+	6,  // 13: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
+	9,  // 14: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
+	11, // 15: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
+	13, // 16: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
+	15, // 17: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
+	18, // 18: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
+	21, // 19: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
+	26, // 20: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
+	23, // 21: agent.AgentService.UploadSnapshotDownload:input_type -> agent.SnapshotDownloadChunk
+	28, // 22: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
+	5,  // 23: agent.AgentService.Register:output_type -> agent.RegisterResponse
+	8,  // 24: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
+	10, // 25: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
+	12, // 26: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
+	14, // 27: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
+	16, // 28: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
+	19, // 29: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
+	22, // 30: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
+	27, // 31: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
+	24, // 32: agent.AgentService.UploadSnapshotDownload:output_type -> agent.SnapshotDownloadAck
+	29, // 33: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
+	23, // [23:34] is the sub-list for method output_type
+	12, // [12:23] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }

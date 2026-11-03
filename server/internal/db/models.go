@@ -335,11 +335,6 @@ type Policy struct {
 	HealthcheckURL string `gorm:"type:text;not null;default:''"`
 	LastRunAt      *time.Time
 	NextRunAt      *time.Time
-
-	// Destinations is populated by GetByIDWithDestinations via a manual query.
-	// The gorm:"-" tag prevents GORM from attempting foreign key resolution
-	// on this field, which would fail with uuid.UUID primary keys.
-	Destinations []PolicyDestination `gorm:"-"`
 }
 
 // Values of Policy.NotifyOnSuccess / Policy.NotifyOnFailure.
@@ -371,10 +366,6 @@ type PolicyDestination struct {
 // down, sleep, network loss), as opposed to "failed", which is a real error
 // reported by the agent. Only interrupted jobs are eligible for automatic
 // resume.
-//
-// Destinations and Logs are populated by GetByIDWithDetails via manual queries.
-// The gorm:"-" tag prevents GORM from attempting foreign key resolution on
-// these fields, which would fail with uuid.UUID primary keys.
 type Job struct {
 	Base
 	// PolicyID is nil for a restore job started from an imported snapshot:
@@ -393,10 +384,6 @@ type Job struct {
 	// ResumeAttempt counts consecutive resumes, so a host that dies at the same
 	// point every time stops being retried. Zero for a normal run.
 	ResumeAttempt int `gorm:"not null;default:0"`
-
-	// Populated manually by GetByIDWithDetails — not managed by GORM.
-	Destinations []JobDestination `gorm:"-"`
-	Logs         []JobLog         `gorm:"-"`
 }
 
 // JobDestination tracks the result of a backup job for each individual

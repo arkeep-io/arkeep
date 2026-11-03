@@ -31,7 +31,6 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -482,10 +481,9 @@ func (s *RetentionScheduler) dispatch(job *db.Job, dest *db.Destination, agentID
 	}
 
 	assignment := &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_FORGET,
-		Payload:     payloadBytes,
-		ScheduledAt: timestamppb.Now(),
+		JobId:   job.ID.String(),
+		Type:    proto.JobType_JOB_TYPE_FORGET,
+		Payload: payloadBytes,
 	}
 
 	if err := s.agentMgr.Dispatch(agentID.String(), assignment); err != nil {

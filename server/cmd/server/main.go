@@ -28,6 +28,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
+	"github.com/arkeep-io/arkeep/server/internal/housekeeping"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -404,6 +405,12 @@ func run(ctx context.Context, cfg *config) error {
 	// deletes rows once an administrator configures a retention window.
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	background.Go(func() { logRetentionSvc.Start(ctx) })
+
+	// --- Housekeeping ---
+	// Deletes expired refresh tokens and notifications read more than 30 days
+	// ago, once a day.
+	housekeepingSvc := housekeeping.NewService(refreshTokenRepo, notificationRepo, logger)
+	background.Go(func() { housekeepingSvc.Start(ctx) })
 
 	// --- Snapshot sync ---
 	// Lists each destination's repository through a connected agent and makes

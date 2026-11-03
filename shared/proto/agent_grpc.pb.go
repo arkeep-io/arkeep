@@ -60,8 +60,7 @@ type AgentServiceClient interface {
 	// to signal liveness and report lightweight system metrics.
 	//
 	// The server updates the agent's last_seen_at timestamp on every heartbeat.
-	// If the server has pending jobs for this agent, it sets has_pending_jobs=true
-	// in the response as a nudge — the job will arrive on the open StreamJobs stream.
+	// Jobs arrive on the open StreamJobs stream.
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	// StreamJobs opens a persistent server-streaming RPC that stays alive for the
 	// entire duration of the agent's session. The server pushes JobAssignment
@@ -280,8 +279,7 @@ type AgentServiceServer interface {
 	// to signal liveness and report lightweight system metrics.
 	//
 	// The server updates the agent's last_seen_at timestamp on every heartbeat.
-	// If the server has pending jobs for this agent, it sets has_pending_jobs=true
-	// in the response as a nudge — the job will arrive on the open StreamJobs stream.
+	// Jobs arrive on the open StreamJobs stream.
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	// StreamJobs opens a persistent server-streaming RPC that stays alive for the
 	// entire duration of the agent's session. The server pushes JobAssignment

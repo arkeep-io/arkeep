@@ -2,7 +2,7 @@ import type { DestinationLock } from '@/types'
 
 // A destination is held exclusively by a retention sweep or integrity check,
 // or shared by any number of backups (issue #319).
-export function isExclusive(locks: DestinationLock[]): boolean {
+function isExclusive(locks: DestinationLock[]): boolean {
   return locks.some((l) => l.mode === 'exclusive')
 }
 

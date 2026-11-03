@@ -171,11 +171,3 @@ func (h *Hub) Subscribe(client *Client) {
 func (h *Hub) Unsubscribe(client *Client) {
 	h.unregister <- client
 }
-
-// ConnectedCount returns the current number of connected WebSocket clients.
-// Intended for metrics and health endpoints.
-func (h *Hub) ConnectedCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.clients)
-}

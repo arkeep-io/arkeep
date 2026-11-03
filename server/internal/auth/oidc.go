@@ -52,18 +52,6 @@ func NewOIDCAuthProvider(
 	}
 }
 
-// ProviderType implements AuthProvider.
-func (p *OIDCAuthProvider) ProviderType() string {
-	return "oidc"
-}
-
-// Login is not used for OIDC — the flow goes through AuthorizationURL and
-// ExchangeCode. This satisfies the AuthProvider interface but always returns
-// an error to prevent accidental misuse.
-func (p *OIDCAuthProvider) Login(_ context.Context, _ LoginRequest) (*TokenPair, error) {
-	return nil, fmt.Errorf("auth: Login is not supported for OIDC provider, use AuthorizationURL and ExchangeCode")
-}
-
 // AuthorizationURL generates the OIDC authorization URL for the given provider.
 // callbackURL is the redirect URI registered with the identity provider
 // (computed server-side as {base_url}/auth/oidc/callback).

@@ -7,7 +7,7 @@
 import { useColorMode, usePreferredColorScheme } from '@vueuse/core'
 import { computed, watch } from 'vue'
 
-export type ColorModeValue = 'dark' | 'light'
+type ColorModeValue = 'dark' | 'light'
 
 export function useTheme() {
   const mode = useColorMode({

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -72,9 +71,8 @@ func TestOrphanRecovery(t *testing.T) {
 	addJobDestination(t, ts, job, "pending")
 
 	if err := ts.agentMgr.Dispatch(agentID, &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_BACKUP,
-		ScheduledAt: timestamppb.Now(),
+		JobId: job.ID.String(),
+		Type:  proto.JobType_JOB_TYPE_BACKUP,
 	}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}

@@ -191,8 +191,7 @@ async function fetchVolumes() {
 // Zod schema
 // ---------------------------------------------------------------------------
 
-// SourceType uses "docker-volume" (hyphen) to match the frontend SourceType enum.
-// "command" backs up the stdout of a shell command via restic's
+// The source types the server accepts (server/internal/policyutil). "command" backs up the stdout of a shell command via restic's
 // --stdin-from-command (e.g. a pg_dump), instead of a filesystem path.
 const SOURCE_TYPES = ['directory', 'docker-volume', 'command'] as const
 type SourceTypeValue = typeof SOURCE_TYPES[number]

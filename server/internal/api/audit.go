@@ -147,7 +147,7 @@ func auditLogToResponse(e *db.AuditLog) auditLogResponse {
 	}
 }
 
-// List handles GET /api/v1/admin/audit.
+// List handles GET /api/v1/audit.
 // Supported query parameters:
 //
 //	limit, offset      — pagination (default limit 50, max 200)

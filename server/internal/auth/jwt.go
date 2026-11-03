@@ -205,17 +205,3 @@ func (m *JWTManager) ValidateAccessToken(tokenString string) (*Claims, error) {
 
 	return claims, nil
 }
-
-// PublicKeyPEM returns the public key in PEM-encoded PKIX format.
-// Useful for exposing a JWKS endpoint or sharing the key with other services.
-func (m *JWTManager) PublicKeyPEM() ([]byte, error) {
-	pubBytes, err := x509.MarshalPKIXPublicKey(m.publicKey)
-	if err != nil {
-		return nil, fmt.Errorf("auth: marshaling public key: %w", err)
-	}
-
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: pubBytes,
-	}), nil
-}

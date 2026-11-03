@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/google/uuid"
@@ -181,22 +182,6 @@ func (r *gormRefreshTokenRepository) GetByHash(ctx context.Context, hash string)
 	return &token, nil
 }
 
-// Revoke sets the RevokedAt timestamp on a refresh token, invalidating it.
-// Returns ErrNotFound if no record exists.
-func (r *gormRefreshTokenRepository) Revoke(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).
-		Model(&db.RefreshToken{}).
-		Where("id = ?", id).
-		Update("revoked_at", gorm.Expr("CURRENT_TIMESTAMP"))
-	if result.Error != nil {
-		return fmt.Errorf("refresh_tokens: revoke: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // RevokeAllForUser revokes all active refresh tokens for a given user.
 // Used on logout, password change, or security events.
 func (r *gormRefreshTokenRepository) RevokeAllForUser(ctx context.Context, userID uuid.UUID) error {
@@ -225,11 +210,11 @@ func (r *gormRefreshTokenRepository) RevokeAllForUserExcept(ctx context.Context,
 	return nil
 }
 
-// DeleteExpired permanently removes all expired refresh tokens from the database.
-// Intended to be called periodically by a background cleanup job.
-func (r *gormRefreshTokenRepository) DeleteExpired(ctx context.Context) error {
+// DeleteExpired permanently removes the refresh tokens that expired before
+// the given time, revoked or not. Called daily by the housekeeping service.
+func (r *gormRefreshTokenRepository) DeleteExpired(ctx context.Context, before time.Time) error {
 	err := r.db.WithContext(ctx).
-		Where("expires_at < CURRENT_TIMESTAMP").
+		Where("expires_at < ?", before).
 		Delete(&db.RefreshToken{}).Error
 	if err != nil {
 		return fmt.Errorf("refresh_tokens: delete expired: %w", err)
