@@ -1,56 +1,6 @@
 package auth
 
-import (
-	"context"
-	"time"
-
-	"github.com/google/uuid"
-)
-
-// AuthProvider is the interface that every authentication backend must implement.
-// Currently two implementations exist: LocalAuthProvider (email/password) and
-// OIDCAuthProvider (external identity provider via OpenID Connect).
-//
-// New providers (SAML, LDAP, etc.) can be added by implementing this interface
-// without changes to the auth service or API layer.
-type AuthProvider interface {
-	// Login authenticates a user and returns a token pair on success.
-	// The access token is a signed JWT; the refresh token is an opaque string
-	// that must be stored in an httpOnly cookie by the caller.
-	Login(ctx context.Context, req LoginRequest) (*TokenPair, error)
-
-	// RefreshToken validates a refresh token, rotates it, and returns a new
-	// token pair. The old refresh token is invalidated after this call.
-	RefreshToken(ctx context.Context, refreshToken string) (*TokenPair, error)
-
-	// Logout invalidates the given refresh token so it cannot be used again.
-	// Access tokens remain valid until expiry — their short TTL (15 min) is
-	// the revocation mechanism for those.
-	Logout(ctx context.Context, refreshToken string) error
-
-	// ProviderType returns a string identifier for this provider.
-	// Used for logging and to route OIDC callbacks to the correct provider.
-	ProviderType() string
-}
-
-// OIDCFlowProvider extends AuthProvider with the two-step OAuth2 flow.
-// Only OIDCAuthProvider implements this interface.
-//
-// The split from AuthProvider is intentional: the REST API layer can type-assert
-// to OIDCFlowProvider when handling /auth/oidc/* routes, keeping the base
-// AuthProvider interface clean and implementable by non-OIDC providers.
-type OIDCFlowProvider interface {
-	AuthProvider
-
-	// AuthorizationURL generates the OIDC authorization URL for the given provider
-	// and returns the state and code verifier (PKCE) that must be stored server-side
-	// in short-lived session cookies before redirecting the user.
-	AuthorizationURL(ctx context.Context, providerID uuid.UUID, callbackURL string) (url, state, codeVerifier string, err error)
-
-	// ExchangeCode completes the OIDC flow by exchanging the authorization code
-	// for tokens. state and codeVerifier must match the values from AuthorizationURL.
-	ExchangeCode(ctx context.Context, req OIDCCallbackRequest) (*TokenPair, error)
-}
+import "time"
 
 // LoginRequest carries credentials for a local email/password login attempt.
 // OIDC logins use OIDCCallbackRequest instead and bypass Login entirely.

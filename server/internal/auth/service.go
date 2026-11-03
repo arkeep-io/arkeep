@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -93,14 +92,6 @@ func (s *AuthService) RefreshToken(ctx context.Context, rawToken string) (*Token
 // Logout invalidates the given refresh token.
 func (s *AuthService) Logout(ctx context.Context, rawToken string) error {
 	return s.local.Logout(ctx, rawToken)
-}
-
-// LogoutAllSessions revokes all active refresh tokens for a user.
-func (s *AuthService) LogoutAllSessions(ctx context.Context, userID uuid.UUID) error {
-	if err := s.tokenRepo.RevokeAllForUser(ctx, userID); err != nil {
-		return fmt.Errorf("auth: revoking all sessions for user %s: %w", userID, err)
-	}
-	return nil
 }
 
 // ValidateAccessToken parses and verifies a JWT access token, then checks the

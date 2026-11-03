@@ -1,6 +1,6 @@
 import type { ImportDestinationResponse } from '@/types'
 
-export interface ImportSummary {
+interface ImportSummary {
   // tone drives the icon: an error for snapshots that could not be recorded,
   // neutral for an empty repository, success otherwise.
   tone: 'success' | 'neutral' | 'error'

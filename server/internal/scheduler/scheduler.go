@@ -33,7 +33,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
@@ -864,11 +863,10 @@ func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Pol
 	}
 
 	assignment := &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		PolicyId:    policy.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_BACKUP,
-		Payload:     payloadBytes,
-		ScheduledAt: timestamppb.Now(),
+		JobId:    job.ID.String(),
+		PolicyId: policy.ID.String(),
+		Type:     proto.JobType_JOB_TYPE_BACKUP,
+		Payload:  payloadBytes,
 	}
 
 	if err := s.agentMgr.Dispatch(job.AgentID.String(), assignment); err != nil {

@@ -14,7 +14,7 @@
 //
 // OIDC flow:
 //   1. window.location.href = /api/v1/auth/oidc/login  (server-side redirect)
-//   2. Server completes OAuth exchange, redirects to /?token=<access_token>
+//   2. Server completes OAuth exchange, redirects to /auth/callback?token=<access_token>&expires_in=<seconds>
 //   3. OIDCCallbackPage reads token from URL, calls setTokenAndFetchUser()
 
 import { defineStore } from 'pinia'
@@ -25,11 +25,11 @@ import { router } from '@/router'
 
 // PasswordChangeStep is returned instead of a session when the account must
 // set a new password (an admin's Set password): call completePasswordChange().
-export type PasswordChangeStep = { passwordChangeRequired: true; challengeToken: string }
+type PasswordChangeStep = { passwordChangeRequired: true; challengeToken: string }
 
 // LoginOutcome is what login() resolves to instead of throwing: a two-factor
 // account needs a second call to completeTwoFactor() before a session exists.
-export type LoginOutcome =
+type LoginOutcome =
   | { twoFactorRequired: false; passwordChangeRequired?: false }
   | { twoFactorRequired: true; challengeToken: string }
   | ({ twoFactorRequired: false } & PasswordChangeStep)

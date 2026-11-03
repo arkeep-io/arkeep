@@ -14,7 +14,6 @@
     "@fontsource/be-vietnam-pro": "5.3.0",
     "@lucide/vue": "1.67.0",
     "@tailwindcss/vite": "4.3.4",
-    "@tanstack/vue-table": "9.3.1",
     "@unovis/ts": "1.7.1",
     "@unovis/vue": "1.7.1",
     "@vee-validate/zod": "4.15.1",

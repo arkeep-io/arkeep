@@ -62,11 +62,6 @@ func NewLocalAuthProvider(
 	}
 }
 
-// ProviderType implements AuthProvider.
-func (p *LocalAuthProvider) ProviderType() string {
-	return "local"
-}
-
 // Login validates email/password and returns a token pair on success.
 // The password is verified against the Argon2id hash stored in the database
 // and encrypted at rest via EncryptedString.

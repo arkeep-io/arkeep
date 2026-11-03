@@ -519,13 +519,9 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 		}
 	}
 
-	// AgentCapabilities reflect what is available on this host.
-	// The restic and rclone binaries are always present (embedded in the binary),
-	// so those are always true. Docker availability is not checked here — the
-	// executor handles graceful degradation when Docker is unavailable.
+	// AgentCapabilities reflect what is available on this host. restic and
+	// rclone are embedded in the agent, so only Docker varies.
 	caps := &proto.AgentCapabilities{
-		Restic: true,
-		Rclone: true,
 		Docker: m.cfg.DockerAvailable,
 	}
 

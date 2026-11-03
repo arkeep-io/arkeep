@@ -113,13 +113,9 @@ func (r *gormNotificationRepository) ListByUser(ctx context.Context, userID uuid
 	return notifications, total, nil
 }
 
-// DeleteReadOlderThan permanently removes read notifications older than the
-// given time. Intended to be called periodically by a background cleanup job
-// to prevent unbounded growth of the notifications table.
-//
-// Example — purge notifications read more than 30 days ago:
-//
-//	repo.DeleteReadOlderThan(ctx, time.Now().AddDate(0, 0, -30))
+// DeleteReadOlderThan permanently removes notifications read before the given
+// time; unread ones are kept whatever their age. Called daily by the
+// housekeeping service, so the notifications table does not grow without bound.
 func (r *gormNotificationRepository) DeleteReadOlderThan(ctx context.Context, t time.Time) error {
 	if err := r.db.WithContext(ctx).
 		Where("read_at IS NOT NULL AND read_at < ?", t).

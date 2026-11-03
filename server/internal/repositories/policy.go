@@ -278,19 +278,3 @@ func (r *gormPolicyRepository) GetDestinations(ctx context.Context, policyID uui
 		Scan(&dests).Error
 	return dests, err
 }
-
-// UpdateDestinationPriority updates the priority of a destination within a policy.
-// Lower priority values are tried first during backup execution.
-func (r *gormPolicyRepository) UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error {
-	result := r.db.WithContext(ctx).
-		Model(&db.PolicyDestination{}).
-		Where("policy_id = ? AND destination_id = ?", policyID, destinationID).
-		Update("priority", priority)
-	if result.Error != nil {
-		return fmt.Errorf("policies: update destination priority: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
-}

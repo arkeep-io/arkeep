@@ -241,19 +241,3 @@ func (r *gormAgentRepository) ResetCertFingerprint(ctx context.Context, id uuid.
 	}
 	return nil
 }
-
-// GetByHostname retrieves a non-deleted agent by its hostname.
-// Used during agent registration to detect reconnections and avoid creating
-// duplicate records when an agent reconnects without its stored ID.
-// Returns ErrNotFound if no matching agent exists.
-func (r *gormAgentRepository) GetByHostname(ctx context.Context, hostname string) (*db.Agent, error) {
-	var agent db.Agent
-	err := r.db.WithContext(ctx).First(&agent, "hostname = ?", hostname).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("agents: get by hostname: %w", err)
-	}
-	return &agent, nil
-}

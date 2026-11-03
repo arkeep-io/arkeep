@@ -33,8 +33,7 @@ service AgentService {
   // to signal liveness and report lightweight system metrics.
   //
   // The server updates the agent's last_seen_at timestamp on every heartbeat.
-  // If the server has pending jobs for this agent, it sets has_pending_jobs=true
-  // in the response as a nudge — the job will arrive on the open StreamJobs stream.
+  // Jobs arrive on the open StreamJobs stream.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
 
   // StreamJobs opens a persistent server-streaming RPC that stays alive for the
@@ -131,12 +130,9 @@ message AgentCapabilities {
   // docker is true when the agent can reach the Docker socket and discover volumes.
   // Requires the Docker socket to be mounted (read-only) into the agent container.
   bool docker = 1;
-  // restic is true when the restic binary is found in PATH.
-  // Required for all backup, verify, restore, and forget jobs.
-  bool restic = 2;
-  // rclone is true when the rclone binary is found in PATH.
-  // Required for destinations not natively supported by restic.
-  bool rclone = 3;
+  // restic and rclone were always true: both binaries are embedded in the agent.
+  reserved 2, 3;
+  reserved "restic", "rclone";
 }
 
 // RegisterResponse contains the identity the server assigns to this agent.
@@ -175,13 +171,11 @@ message SystemMetrics {
   float disk_percent = 3;
 }
 
-// HeartbeatResponse acknowledges the heartbeat and carries control signals
-// from the server back to the agent.
+// HeartbeatResponse acknowledges the heartbeat.
 message HeartbeatResponse {
-  // has_pending_jobs is a hint that the server has jobs queued for this agent.
-  // The jobs will be delivered on the open StreamJobs stream. This field exists
-  // as a fallback signal in case the stream was reconnected and missed a push.
-  bool has_pending_jobs = 1;
+  // has_pending_jobs was never set by the server.
+  reserved 1;
+  reserved "has_pending_jobs";
 }
 
 // ─── StreamJobs ──────────────────────────────────────────────────────────────
@@ -207,9 +201,9 @@ message JobAssignment {
   // See agent/internal/executor/ for the payload structs per job type.
   // Using bytes (not string) to avoid UTF-8 validation overhead on large payloads.
   bytes payload = 4;
-  // scheduled_at is when the server originally scheduled this job.
-  // Used for latency tracking and audit purposes.
-  google.protobuf.Timestamp scheduled_at = 5;
+  // scheduled_at was never read by the agent.
+  reserved 5;
+  reserved "scheduled_at";
 }
 
 // JobType identifies the kind of operation the agent must perform.

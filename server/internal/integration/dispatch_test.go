@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -34,11 +33,10 @@ func TestJobDispatch(t *testing.T) {
 
 	// Dispatch the job via agentManager (same path the scheduler uses).
 	assignment := &proto.JobAssignment{
-		JobId:       jobID,
-		PolicyId:    job.PolicyID.String(),
-		Type:        proto.JobType_JOB_TYPE_BACKUP,
-		Payload:     []byte(`{}`),
-		ScheduledAt: timestamppb.Now(),
+		JobId:    jobID,
+		PolicyId: job.PolicyID.String(),
+		Type:     proto.JobType_JOB_TYPE_BACKUP,
+		Payload:  []byte(`{}`),
 	}
 	if err := ts.agentMgr.Dispatch(agentID, assignment); err != nil {
 		t.Fatalf("Dispatch: %v", err)
@@ -98,9 +96,8 @@ func TestJobDispatchFailed(t *testing.T) {
 	job := createIntegrationJob(t, ts, agentUUID)
 
 	if err := ts.agentMgr.Dispatch(agentID, &proto.JobAssignment{
-		JobId:       job.ID.String(),
-		Type:        proto.JobType_JOB_TYPE_BACKUP,
-		ScheduledAt: timestamppb.Now(),
+		JobId: job.ID.String(),
+		Type:  proto.JobType_JOB_TYPE_BACKUP,
 	}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
