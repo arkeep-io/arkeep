@@ -1,6 +1,6 @@
 # 0012. Restrict OIDC sign-in by group and cap OIDC session lifetime
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-28 (retro-documented; implemented for issue #277)
 - **Deciders:** Arkeep maintainers
 
