@@ -439,9 +439,16 @@ func run(ctx context.Context, cfg *config) error {
 		logger,
 	)
 
+	// A listener that fails (port taken, unreadable certificate) shuts the
+	// server down and makes run return its error, so the process exits
+	// non-zero and a supervisor (systemd Restart=on-failure, Kubernetes) sees a
+	// failure rather than a clean stop. Buffered: each listener sends at most once.
+	listenErr := make(chan error, 2)
+
 	go func() {
 		if err := grpcSrv.ListenAndServe(ctx, cfg.grpcAddr); err != nil {
 			logger.Error("gRPC server error", zap.Error(err))
+			listenErr <- err
 			cancel()
 		}
 	}()
@@ -502,6 +509,7 @@ func run(ctx context.Context, cfg *config) error {
 		logger.Info("http server listening", zap.String("addr", cfg.httpAddr))
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("http server error", zap.Error(err))
+			listenErr <- fmt.Errorf("http server: %w", err)
 			cancel()
 		}
 	}()
@@ -535,7 +543,12 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	logger.Info("arkeep server stopped")
-	return nil
+	select {
+	case err := <-listenErr:
+		return err
+	default:
+		return nil
+	}
 }
 
 // telemetryStats adapts repositories to the telemetry.StatsProvider interface
