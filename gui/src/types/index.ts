@@ -132,6 +132,10 @@ export interface Destination {
   // restic repository, refreshed after each backup/import. 0 until first measured.
   repo_size_bytes: number
   repo_size_updated_at: string // RFC3339, empty until first measured
+  // repo_initialized_at: when the repository was first known to exist (RFC3339),
+  // empty until then. Once set, backups no longer create the repository: a
+  // missing one fails them until an admin resets it.
+  repo_initialized_at: string
   // has_repo_password: true when this destination has a repository password
   // on file, captured when it was imported from a pre-existing repository.
   // Never the password itself — credentials are write-only.

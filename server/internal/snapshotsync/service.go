@@ -72,6 +72,7 @@ type destinationStore interface {
 	List(ctx context.Context, opts repositories.ListOptions) ([]db.Destination, int64, error)
 	ListPoliciesByDestination(ctx context.Context, destinationID uuid.UUID) ([]db.Policy, error)
 	UpdateRepoSize(ctx context.Context, id uuid.UUID, sizeBytes int64, at time.Time) error
+	MarkRepoInitialized(ctx context.Context, id uuid.UUID, at time.Time) error
 	ListLocks(ctx context.Context, destinationIDs []uuid.UUID) ([]db.DestinationLock, error)
 }
 
@@ -258,12 +259,16 @@ func (s *Service) pickAgent(dest *db.Destination, policies []db.Policy) string {
 }
 
 // PersistImported records the listed snapshots that are not yet known for this
-// destination and caches the repository size the agent reported.
+// destination and caches the repository size the agent reported. The listing
+// succeeded, so it also records that the repository exists.
 //
 // Imported snapshots carry no policy and no job: they were not produced by a
 // backup run, so PolicyID and JobID stay nil.
 func (s *Service) PersistImported(ctx context.Context, dest *db.Destination, result *agentmanager.SnapshotImportResult) ImportOutcome {
 	var out ImportOutcome
+	if err := s.dests.MarkRepoInitialized(ctx, dest.ID, time.Now().UTC()); err != nil {
+		s.logger.Warn("failed to mark destination repository initialized", zap.Error(err))
+	}
 	for _, info := range result.Snapshots {
 		exists, err := s.snapshots.ExistsBySnapshotIDAndDestination(ctx, info.ResticSnapshotId, dest.ID)
 		if err != nil {

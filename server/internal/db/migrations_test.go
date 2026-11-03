@@ -630,7 +630,7 @@ func TestSQLiteMigration_DropAgentLabels(t *testing.T) {
 		t.Fatalf("sql.DB: %v", err)
 	}
 	m := newSQLiteMigrator(t, sqlDB)
-	if err := m.Steps(-1); err != nil {
+	if err := m.Migrate(39); err != nil {
 		t.Fatalf("down 000040: %v", err)
 	}
 	if !hasLabels() {
@@ -645,5 +645,89 @@ func TestSQLiteMigration_DropAgentLabels(t *testing.T) {
 	var n int64
 	if err := gdb.Model(&Agent{}).Count(&n).Error; err != nil || n != 1 {
 		t.Errorf("agents = %d (%v), want the row kept", n, err)
+	}
+}
+
+// TestSQLiteMigration_DestinationRepoInitialized checks that 000041 marks the
+// repository of an existing destination as initialized when something has
+// already succeeded against it (a backup, a command source, a measured size or
+// a snapshot record), and leaves untouched destinations and those that only
+// ever failed unmarked.
+func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/repoinit.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(40); err != nil {
+		t.Fatalf("Migrate(40): %v", err)
+	}
+
+	agent := &Agent{Name: "agent", Status: "online"}
+	if err := gdb.Create(agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	job := &Job{AgentID: agent.ID, Type: "backup", Status: "succeeded"}
+	if err := gdb.Create(job).Error; err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	dests := map[string]*Destination{}
+	for _, name := range []string{"backed-up", "command", "sized", "snapshot", "failed", "new"} {
+		d := &Destination{Name: name, Type: "local", Config: `{"path":"/r"}`, Enabled: true}
+		if err := gdb.Create(d).Error; err != nil {
+			t.Fatalf("create destination: %v", err)
+		}
+		dests[name] = d
+	}
+	now := time.Now().UTC()
+	rows := []any{
+		&JobDestination{JobID: job.ID, DestinationID: dests["backed-up"].ID, Status: "succeeded"},
+		&JobDestinationCommand{JobID: job.ID, DestinationID: dests["command"].ID, SourceName: "db", Status: "succeeded"},
+		&Snapshot{DestinationID: dests["snapshot"].ID, SnapshotID: "abc", SnapshotAt: now},
+		&JobDestination{JobID: job.ID, DestinationID: dests["failed"].ID, Status: "failed"},
+	}
+	for _, row := range rows {
+		if err := gdb.Create(row).Error; err != nil {
+			t.Fatalf("create %T: %v", row, err)
+		}
+	}
+	if err := gdb.Model(dests["sized"]).Update("repo_size_updated_at", now).Error; err != nil {
+		t.Fatalf("set repo size: %v", err)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("Up: %v", err)
+	}
+	for name, d := range dests {
+		var got Destination
+		if err := gdb.First(&got, "id = ?", d.ID).Error; err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+		want := name != "failed" && name != "new"
+		if (got.RepoInitializedAt != nil) != want {
+			t.Errorf("%s: repo_initialized_at = %v, want set = %v", name, got.RepoInitializedAt, want)
+		}
+	}
+
+	if err := m.Migrate(40); err != nil {
+		t.Fatalf("down 000041: %v", err)
+	}
+	if gdb.Migrator().HasColumn(&Destination{}, "repo_initialized_at") {
+		t.Error("down migration kept destinations.repo_initialized_at")
+	}
+	if err := m.Up(); err != nil {
+		t.Fatalf("Up again: %v", err)
 	}
 }

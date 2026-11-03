@@ -551,3 +551,46 @@ func TestReconcileRestoreFilters(t *testing.T) {
 		})
 	}
 }
+
+// TestExecuteBackup_MissingLocalRepositoryIsNotRecreated covers a local
+// destination on a disk that is no longer mounted at its path: once the
+// repository is known to exist, its missing directory fails the backup instead
+// of being created again, and restic is never run against it.
+func TestExecuteBackup_MissingLocalRepositoryIsNotRecreated(t *testing.T) {
+	dir := t.TempDir()
+	callLog := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "fake-restic.sh")
+	body := "#!/bin/sh\necho \"$1\" >> '" + callLog + "'\nexit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(dir, "mnt", "usb")
+
+	payload := backupPayload{
+		Sources:      `["/tmp"]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{{DestinationID: "dest-1", Type: "local", RepoURL: repo, RepoMustExist: true}},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop())
+	e := New(w, nil, nil, zap.NewNop(), "", "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+	e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+	got := reporter.destResults["dest-1"]
+	if got.status != "failed" || !strings.Contains(got.errMsg, "repository not found") {
+		t.Errorf("destination result = %+v, want failed with a repository-not-found error", got)
+	}
+	if _, err := os.Stat(repo); !os.IsNotExist(err) {
+		t.Errorf("repository directory was created (stat err = %v), want it left missing", err)
+	}
+	if data, _ := os.ReadFile(callLog); len(data) > 0 {
+		t.Errorf("restic ran %q against a missing repository", data)
+	}
+}

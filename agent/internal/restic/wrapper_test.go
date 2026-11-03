@@ -816,3 +816,67 @@ func TestEmptyRestoreSummary(t *testing.T) {
 		})
 	}
 }
+
+// writeMissingRepoScript creates a fake restic that records each subcommand
+// it is run with in a log file, succeeds for "init" and exits with restic's
+// "repository does not exist" status (10) for anything else.
+func writeMissingRepoScript(t *testing.T, dir string) (script, calls string) {
+	t.Helper()
+	script = filepath.Join(dir, "fake-restic.sh")
+	calls = filepath.Join(dir, "calls")
+	body := fmt.Sprintf(`#!/bin/sh
+for a in "$@"; do
+  case "$a" in -*) ;; *) echo "$a" >> %q; break ;; esac
+done
+[ "$1" = "init" ] && exit 0
+echo "Fatal: repository does not exist: unable to open config file" >&2
+exit 10
+`, calls)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, calls
+}
+
+// TestBackup_RepositoryThatMustExist covers a repository that has gone missing
+// (an unmounted disk): when it is known to exist the backup must neither run
+// `restic init` nor report a plain restic failure, but ErrRepositoryNotFound.
+// A repository not yet known to exist is still created first.
+func TestBackup_RepositoryThatMustExist(t *testing.T) {
+	backups := map[string]func(w *Wrapper, dest Destination) error{
+		"Backup": func(w *Wrapper, dest Destination) error {
+			_, err := w.Backup(context.Background(), dest, BackupOptions{Sources: []string{"/data"}}, nil)
+			return err
+		},
+		"BackupFromCommand": func(w *Wrapper, dest Destination) error {
+			_, err := w.BackupFromCommand(context.Background(), dest, StdinBackupOptions{Command: "true", Filename: "db"}, nil)
+			return err
+		},
+	}
+	for name, backup := range backups {
+		t.Run(name, func(t *testing.T) {
+			for _, mustExist := range []bool{true, false} {
+				dir := t.TempDir()
+				script, calls := writeMissingRepoScript(t, dir)
+				w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+				dest := Destination{Type: DestLocal, RepoURL: filepath.Join(dir, "repo"), Password: "pw", MustExist: mustExist}
+
+				err := backup(w, dest)
+				if err == nil {
+					t.Fatalf("MustExist=%v: backup succeeded, want an error", mustExist)
+				}
+				data, _ := os.ReadFile(calls)
+				ranInit := strings.HasPrefix(string(data), "init\n")
+				if ranInit == mustExist {
+					t.Errorf("MustExist=%v: restic ran %q, want init only when the repository is not known to exist", mustExist, data)
+				}
+				if got := errors.Is(err, ErrRepositoryNotFound); got != mustExist {
+					t.Errorf("MustExist=%v: errors.Is(err, ErrRepositoryNotFound) = %v; err = %v", mustExist, got, err)
+				}
+				if mustExist && !strings.Contains(err.Error(), dest.RepoURL) {
+					t.Errorf("error %q does not name the repository location", err)
+				}
+			}
+		})
+	}
+}

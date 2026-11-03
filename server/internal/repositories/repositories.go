@@ -209,6 +209,12 @@ type DestinationRepository interface {
 	// UpdateRepoSize refreshes only the cached restic repository size and its
 	// timestamp, leaving all other destination fields untouched.
 	UpdateRepoSize(ctx context.Context, id uuid.UUID, sizeBytes int64, at time.Time) error
+	// MarkRepoInitialized records that the destination's repository exists,
+	// unless that is already recorded.
+	MarkRepoInitialized(ctx context.Context, id uuid.UUID, at time.Time) error
+	// ResetRepoInitialized forgets that the destination's repository exists,
+	// so the next backup creates one.
+	ResetRepoInitialized(ctx context.Context, id uuid.UUID) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, opts ListOptions) ([]db.Destination, int64, error)
 	ListFiltered(ctx context.Context, filter DestinationFilter, opts ListOptions) ([]db.Destination, int64, error)
