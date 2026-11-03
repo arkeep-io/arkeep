@@ -3,6 +3,9 @@ Description=Arkeep Backup Server
 Documentation=https://arkeep.io/docs
 After=network-online.target
 Wants=network-online.target
+# With a local PostgreSQL, start after it (no effect when it is not installed);
+# the server also waits up to 60 s for the database to accept connections.
+After=postgresql.service
 
 [Service]
 Type=simple

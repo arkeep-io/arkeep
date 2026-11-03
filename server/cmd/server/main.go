@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -177,12 +178,14 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	// --- Database ---
-	gormDB, err := db.New(db.Config{
-		Driver:   cfg.dbDriver,
-		DSN:      cfg.dbDSN,
-		Logger:   logger,
-		LogLevel: gormLogLevel(cfg.logLevel),
-	})
+	gormDB, err := connectDB(ctx, cfg.dbDriver, func() (*gorm.DB, error) {
+		return db.New(db.Config{
+			Driver:   cfg.dbDriver,
+			DSN:      cfg.dbDSN,
+			Logger:   logger,
+			LogLevel: gormLogLevel(cfg.logLevel),
+		})
+	}, logger, dbWaitTimeout, dbRetryInterval)
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -590,6 +593,38 @@ func buildJWTManager(dataDir string, logger *zap.Logger) (*auth.JWTManager, erro
 		zap.String("optional_key_file", privPath),
 	)
 	return auth.NewJWTManagerGenerated("arkeep-server")
+}
+
+// dbWaitTimeout bounds how long the server waits for PostgreSQL at startup. It
+// stays below the Helm chart's liveness window (about 70 s), so Kubernetes
+// does not kill the pod while it waits.
+const (
+	dbWaitTimeout   = 60 * time.Second
+	dbRetryInterval = 2 * time.Second
+)
+
+// connectDB opens the database with open. PostgreSQL often starts alongside
+// the server (the chart's bundled database, a machine booting), so a failure
+// is retried every interval until timeout. SQLite is a local file: its errors
+// do not go away by waiting, and it fails at once.
+func connectDB(ctx context.Context, driver string, open func() (*gorm.DB, error), logger *zap.Logger, timeout, interval time.Duration) (*gorm.DB, error) {
+	gdb, err := open()
+	if err == nil || driver != "postgres" {
+		return gdb, err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		logger.Warn("waiting for the database", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(interval):
+		}
+		if gdb, err = open(); err == nil {
+			return gdb, nil
+		}
+	}
+	return nil, fmt.Errorf("database still unreachable after %s: %w", timeout, err)
 }
 
 // gormLogLevel maps the application log level string to a GORM logger level.

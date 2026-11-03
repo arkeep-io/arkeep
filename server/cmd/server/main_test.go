@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // TestRun_ListenerFailureIsAnError: when a listener cannot start, run must
@@ -40,4 +44,55 @@ func TestRun_ListenerFailureIsAnError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "grpc") {
 		t.Errorf("run() = %v, want the gRPC listener error", err)
 	}
+}
+
+func TestConnectDB(t *testing.T) {
+	errDown := errors.New("connection refused")
+	// opener fails n times, then succeeds; calls counts the attempts.
+	opener := func(n int, calls *int) func() (*gorm.DB, error) {
+		return func() (*gorm.DB, error) {
+			*calls++
+			if *calls <= n {
+				return nil, errDown
+			}
+			return &gorm.DB{}, nil
+		}
+	}
+	log := zap.NewNop()
+	ctx := context.Background()
+
+	t.Run("postgres that comes up is waited for", func(t *testing.T) {
+		calls := 0
+		gdb, err := connectDB(ctx, "postgres", opener(3, &calls), log, time.Second, time.Millisecond)
+		if err != nil || gdb == nil || calls != 4 {
+			t.Errorf("connectDB = %v, %v after %d attempts; want a database after 4", gdb, err, calls)
+		}
+	})
+
+	t.Run("postgres that stays down fails after the timeout", func(t *testing.T) {
+		calls := 0
+		_, err := connectDB(ctx, "postgres", opener(1000, &calls), log, 50*time.Millisecond, 10*time.Millisecond)
+		if !errors.Is(err, errDown) || calls < 2 {
+			t.Errorf("connectDB = %v after %d attempts; want the last error after retrying", err, calls)
+		}
+	})
+
+	t.Run("sqlite fails at once", func(t *testing.T) {
+		calls := 0
+		_, err := connectDB(ctx, "sqlite", opener(1, &calls), log, time.Second, time.Millisecond)
+		if !errors.Is(err, errDown) || calls != 1 {
+			t.Errorf("connectDB = %v after %d attempts; want the error at once", err, calls)
+		}
+	})
+
+	t.Run("a stop signal ends the wait", func(t *testing.T) {
+		stopped, cancel := context.WithCancel(ctx)
+		cancel()
+		calls := 0
+		start := time.Now()
+		_, err := connectDB(stopped, "postgres", opener(1000, &calls), log, time.Minute, time.Second)
+		if err == nil || time.Since(start) > 500*time.Millisecond {
+			t.Errorf("connectDB = %v after %s; want it to give up at once", err, time.Since(start))
+		}
+	})
 }
