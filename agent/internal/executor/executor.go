@@ -140,6 +140,9 @@ type destinationPayload struct {
 	Config        string            `json:"config"`
 	Env           map[string]string `json:"env"`
 	Priority      int               `json:"priority"`
+	// RepoMustExist is set once the server knows the repository exists: the
+	// backup must not create it again (restic.Destination.MustExist).
+	RepoMustExist bool `json:"repo_must_exist"`
 }
 
 type retentionPayload struct {
@@ -511,6 +514,15 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if dest.RepoURL != originalURL {
 				log("debug", fmt.Sprintf("translated local path %q → %q (ARKEEP_DOCKER_HOST_ROOT=%q)", originalURL, dest.RepoURL, e.dockerHostRoot))
 			}
+			// A repository that must exist is never recreated, so neither is
+			// its directory: ensureWritableDir would create a missing one.
+			if _, statErr := os.Stat(dest.RepoURL); dest.RepoMustExist && os.IsNotExist(statErr) {
+				errMsg := restic.RepositoryNotFoundError(dest.RepoURL).Error()
+				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, errMsg)
+				backupFailed = true
+				continue
+			}
 			if err := ensureWritableDir(dest.RepoURL); err != nil {
 				var errMsg string
 				if e.dockerHostRoot == "" {
@@ -538,10 +550,11 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		d := restic.Destination{
-			Type:     restic.DestinationType(dest.Type),
-			RepoURL:  dest.RepoURL,
-			Password: payload.RepoPassword,
-			Env:      dest.Env,
+			Type:      restic.DestinationType(dest.Type),
+			RepoURL:   dest.RepoURL,
+			Password:  payload.RepoPassword,
+			Env:       dest.Env,
+			MustExist: dest.RepoMustExist,
 		}
 
 		onProgress := func(ev restic.ProgressEvent) error {

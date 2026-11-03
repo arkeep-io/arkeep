@@ -68,6 +68,50 @@ type Destination struct {
 	// (e.g. AWS_ACCESS_KEY_ID, RCLONE_CONFIG_*). These are added to the
 	// subprocess environment alongside the standard restic variables.
 	Env map[string]string
+	// MustExist reports that the repository is known to exist (the server
+	// recorded an earlier success against it). Backups then skip `restic
+	// init`: a repository that has gone missing — an unmounted disk, an
+	// emptied bucket — fails with ErrRepositoryNotFound instead of being
+	// replaced by an empty one.
+	MustExist bool
+}
+
+// ErrRepositoryNotFound is returned when a repository that must exist is
+// missing.
+var ErrRepositoryNotFound = errors.New("restic: repository not found")
+
+// repositoryNotFoundExitCode is restic's dedicated exit status for "repository
+// does not exist" (restic 0.17+).
+const repositoryNotFoundExitCode = 10
+
+// RepositoryNotFoundError explains a repository that must exist but is missing
+// at repoURL. It wraps ErrRepositoryNotFound.
+func RepositoryNotFoundError(repoURL string) error {
+	return fmt.Errorf("%w at %s: backups were written there before, so it is not created again. "+
+		"Check that the storage is mounted and reachable. If it was replaced on purpose, "+
+		"use New Repository on the destination page to start a new one", ErrRepositoryNotFound, repoURL)
+}
+
+// prepareRepository creates dest's repository unless it must already exist.
+func (w *Wrapper) prepareRepository(ctx context.Context, dest Destination) error {
+	if dest.MustExist {
+		return nil
+	}
+	if err := w.Init(ctx, dest); err != nil {
+		return fmt.Errorf("restic: failed to init repository: %w", err)
+	}
+	return nil
+}
+
+// backupError turns restic's "repository does not exist" exit status into a
+// RepositoryNotFoundError when the repository must exist; other errors are
+// returned unchanged.
+func backupError(dest Destination, err error) error {
+	var exitErr *exec.ExitError
+	if dest.MustExist && errors.As(err, &exitErr) && exitErr.ExitCode() == repositoryNotFoundExitCode {
+		return RepositoryNotFoundError(dest.RepoURL)
+	}
+	return err
 }
 
 // BackupOptions carries the parameters for a backup run.
@@ -299,15 +343,15 @@ func buildBackupArgs(opts BackupOptions, goos string) []string {
 // summary event, and an error if the backup fails. A non-zero restic exit
 // code is always wrapped in the returned error with stderr included.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
-	if err := w.Init(ctx, dest); err != nil {
-		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
+	if err := w.prepareRepository(ctx, dest); err != nil {
+		return nil, err
 	}
 
 	args := buildBackupArgs(opts, runtime.GOOS)
 
 	var result BackupResult
 	if err := w.runWithProgress(ctx, dest, args, summaryInterceptor(&result, onProgress)); err != nil {
-		return nil, err
+		return nil, backupError(dest, err)
 	}
 	return &result, nil
 }
@@ -373,15 +417,15 @@ func shellArgv(command, goos string) []string {
 // temporary file on the agent. Progress events are forwarded to onProgress
 // exactly like Backup. A non-zero exit from the command cancels the backup.
 func (w *Wrapper) BackupFromCommand(ctx context.Context, dest Destination, opts StdinBackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
-	if err := w.Init(ctx, dest); err != nil {
-		return nil, fmt.Errorf("restic: failed to init repository: %w", err)
+	if err := w.prepareRepository(ctx, dest); err != nil {
+		return nil, err
 	}
 
 	args := buildStdinBackupArgs(opts, runtime.GOOS)
 
 	var result BackupResult
 	if err := w.runWithProgress(ctx, dest, args, summaryInterceptor(&result, onProgress)); err != nil {
-		return nil, err
+		return nil, backupError(dest, err)
 	}
 	return &result, nil
 }
