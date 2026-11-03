@@ -186,6 +186,10 @@ type Manager struct {
 	// Stored here so SendLog and ReportStatus can include it in RPCs.
 	agentID    string
 	sessionCtx context.Context // authenticated context for out-of-band RPCs
+
+	// enrollUnsupported is set once the server answers enrollment with 405
+	// (no auto-PKI): retrying could never succeed. Only the Run goroutine uses it.
+	enrollUnsupported bool
 }
 
 // New creates a Manager. Call Run to start the connection loop.
@@ -210,7 +214,7 @@ func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapp
 // On success it updates m.cfg so subsequent calls to buildTransportCredentials
 // use the new mTLS credentials.
 //
-// Enroll is called automatically by Run when ClientCertFile does not exist yet.
+// Run calls Enroll (through ensureEnrolled) while ClientCertFile does not exist yet.
 func (m *Manager) Enroll(ctx context.Context) error {
 	if m.cfg.ServerHTTPAddr == "" {
 		return fmt.Errorf("enrollment required but --server-http-addr is not set")
@@ -300,34 +304,6 @@ func (m *Manager) Enroll(ctx context.Context) error {
 // begins the heartbeat and job stream loops. On any error it reconnects with
 // exponential backoff. Blocks until ctx is cancelled.
 func (m *Manager) Run(ctx context.Context) {
-	// Auto-enroll if client certs are not yet present and the agent is not
-	// running in insecure mode. The enrollment request goes over HTTP and
-	// therefore does not require a pre-existing TLS certificate.
-	if !m.cfg.Insecure && m.cfg.ClientCertFile == "" {
-		m.logger.Info("no client certificate found — attempting enrollment",
-			zap.String("http_addr", m.cfg.ServerHTTPAddr),
-		)
-		if err := m.Enroll(ctx); err != nil {
-			if errors.Is(err, ErrEnrollmentNotSupported) {
-				// 405 means the server runs without auto-PKI (issue #344): it
-				// has its own certificate or TLS disabled. Not a configuration
-				// error, and the agent cannot tell the two apart, so the hint
-				// must not push it to insecure, which would drop TLS against a
-				// server that serves it.
-				m.logger.Info("server does not use auto-PKI — connecting without client certificate",
-					zap.String("hint", "expected when the server uses its own TLS certificate or has TLS disabled; the agent authenticates with --agent-secret. Set ARKEEP_GRPC_INSECURE=true only if the server runs with --grpc-insecure"),
-				)
-			} else {
-				m.logger.Error("enrollment failed — check --server-http-addr and --agent-secret",
-					zap.Error(err),
-				)
-			}
-			// Continue without mTLS; the server may still accept the connection
-			// in dev mode (agentSecret == ""). If mTLS is enforced the gRPC
-			// handshake will fail and the retry loop will handle it.
-		}
-	}
-
 	backoff := backoffInitial
 
 	for {
@@ -335,6 +311,8 @@ func (m *Manager) Run(ctx context.Context) {
 			m.logger.Info("connection manager stopped")
 			return
 		}
+
+		m.ensureEnrolled(ctx)
 
 		m.logger.Info("connecting to server", zap.String("addr", m.cfg.ServerAddr))
 
@@ -354,6 +332,41 @@ func (m *Manager) Run(ctx context.Context) {
 
 		// Successful session — reset backoff for the next reconnect.
 		backoff = backoffInitial
+	}
+}
+
+// ensureEnrolled enrolls the agent when it has no client certificate yet and
+// does not run in insecure mode. Run calls it before every connection attempt,
+// so an enrollment that failed because the server was not reachable yet is
+// retried with the reconnect backoff instead of leaving the agent without a
+// certificate until it restarts. The enrollment request goes over HTTP and
+// therefore does not require a pre-existing TLS certificate.
+func (m *Manager) ensureEnrolled(ctx context.Context) {
+	if m.cfg.Insecure || m.cfg.ClientCertFile != "" || m.enrollUnsupported {
+		return
+	}
+	m.logger.Info("no client certificate found — attempting enrollment",
+		zap.String("http_addr", m.cfg.ServerHTTPAddr),
+	)
+	err := m.Enroll(ctx)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrEnrollmentNotSupported):
+		// 405 means the server runs without auto-PKI (issue #344): it has its
+		// own certificate or TLS disabled. Not a configuration error, and the
+		// agent cannot tell the two apart, so the hint must not push it to
+		// insecure, which would drop TLS against a server that serves it.
+		m.enrollUnsupported = true
+		m.logger.Info("server does not use auto-PKI — connecting without client certificate",
+			zap.String("hint", "expected when the server uses its own TLS certificate or has TLS disabled; the agent authenticates with --agent-secret. Set ARKEEP_GRPC_INSECURE=true only if the server runs with --grpc-insecure"),
+		)
+	default:
+		// Connect without mTLS anyway: the server may still accept the
+		// connection in dev mode (agentSecret == ""). If mTLS is enforced the
+		// handshake fails and the next attempt enrolls again.
+		m.logger.Error("enrollment failed — check --server-http-addr and --agent-secret; retrying",
+			zap.Error(err),
+		)
 	}
 }
 
