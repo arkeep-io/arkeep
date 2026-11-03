@@ -106,7 +106,7 @@ services:
 
   # ── Optional: PostgreSQL ────────────────────────────────────────────────────
   # postgres:
-  #   image: postgres:16.15-alpine3.24@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+  #   image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
   #   container_name: arkeep-postgres
   #   restart: unless-stopped
   #   environment:

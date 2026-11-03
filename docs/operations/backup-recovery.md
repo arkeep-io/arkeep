@@ -270,12 +270,13 @@ spec:
 
 ### PostgreSQL (bundled chart)
 
-When `postgresql.enabled=true` the chart deploys Bitnami PostgreSQL. Back it up with
-`pg_dump` from a temporary pod:
+When `postgresql.enabled=true` the chart deploys PostgreSQL 17 from the official
+image (StatefulSet `arkeep-postgresql`). Back it up with `pg_dump` from a
+temporary pod of the same major version:
 
 ```bash
 kubectl run pg-backup --rm -it --restart=Never \
-  --image=postgres:16 \
+  --image=postgres:17 \
   --env="PGPASSWORD=<your-postgres-password>" \
   -- pg_dump -h arkeep-postgresql -U arkeep -Fc arkeep \
      -f /tmp/arkeep-$(date +%Y%m%d).dump
@@ -284,9 +285,9 @@ kubectl run pg-backup --rm -it --restart=Never \
 kubectl cp pg-backup:/tmp/arkeep-YYYYMMDD.dump ./arkeep-YYYYMMDD.dump
 ```
 
-For production use, enable Bitnami PostgreSQL's built-in backup via
-`postgresql.primary.persistence` and a `VolumeSnapshot`, or use a managed
-PostgreSQL service and let the provider handle PITR.
+For production use, take a `VolumeSnapshot` of the `pgdata-arkeep-postgresql-0`
+claim on a schedule, or use a managed PostgreSQL service (`externalPostgresql`)
+and let the provider handle PITR.
 
 ### Data directory (PVC)
 
