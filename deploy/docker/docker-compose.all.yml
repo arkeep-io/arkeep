@@ -32,6 +32,15 @@ services:
       ARKEEP_BASE_URL: "${ARKEEP_BASE_URL:-}"
       # Check GitHub for new Arkeep releases; "false" never contacts api.github.com.
       ARKEEP_UPDATE_CHECK: "${ARKEEP_UPDATE_CHECK:-true}"
+      # "true" when the interface is served over HTTPS (behind a reverse proxy).
+      ARKEEP_SECURE_COOKIES: "${ARKEEP_SECURE_COOKIES:-false}"
+      # Reverse proxies whose X-Forwarded-For is trusted; empty = loopback and
+      # private networks, "none" = no proxy.
+      ARKEEP_TRUSTED_PROXIES: "${ARKEEP_TRUSTED_PROXIES:-}"
+      # Bearer token required on /metrics; empty = /metrics is public.
+      ARKEEP_METRICS_TOKEN: "${ARKEEP_METRICS_TOKEN:-}"
+      # Anonymous daily usage statistics; "false" turns them off.
+      ARKEEP_TELEMETRY: "${ARKEEP_TELEMETRY:-true}"
       TZ: "${TZ:-UTC}"
     volumes:
       - arkeep-data:/var/lib/arkeep

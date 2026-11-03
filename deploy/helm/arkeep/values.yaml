@@ -47,6 +47,16 @@ config:
   # egress-restricted clusters).
   updateCheck: true
 
+  # Anonymous daily usage statistics (instance ID, version, OS, agent and policy
+  # counts). Set to false to turn them off.
+  telemetry: true
+
+  # Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For header is
+  # trusted for the client address (login rate limits, audit log). Empty trusts
+  # loopback and private networks, which covers most ingress controllers inside
+  # the cluster; "none" trusts no proxy.
+  trustedProxies: ""
+
   # HTTP and gRPC listen addresses inside the container.
   # Change only if you have a specific reason — the Service ports below must match.
   httpAddr: ":8080"
@@ -92,12 +102,16 @@ grpc:
 secret:
   # Reference an existing Secret instead of creating one.
   # The Secret must contain the keys: ARKEEP_SECRET_KEY, ARKEEP_AGENT_SECRET
-  # and ARKEEP_DB_DSN (when config.dbDriver=postgres).
+  # and ARKEEP_DB_DSN (when config.dbDriver=postgres), and may contain
+  # ARKEEP_METRICS_TOKEN.
   existingSecret: ""
 
   # Used only when existingSecret is empty.
   secretKey: ""
   agentSecret: ""
+  # Bearer token required to read /metrics (Prometheus: bearer_token in the
+  # scrape job). Empty leaves /metrics public.
+  metricsToken: ""
 
 # ─── Persistence ──────────────────────────────────────────────────────────────
 
