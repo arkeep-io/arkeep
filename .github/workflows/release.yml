@@ -109,7 +109,6 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           chart_dir="${RUNNER_TEMP}/chart"
-          helm repo add bitnami https://charts.bitnami.com/bitnami
           helm dependency build deploy/helm/arkeep
           helm package deploy/helm/arkeep --version "$version" --app-version "$GITHUB_REF_NAME" --destination "$chart_dir"
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin

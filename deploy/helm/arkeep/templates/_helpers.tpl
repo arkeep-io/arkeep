@@ -80,7 +80,33 @@ Secret name — either the existing secret or the chart-managed one.
 {{- end }}
 
 {{/*
-PostgreSQL DSN — built from subchart or external config.
+Bundled PostgreSQL — name of its StatefulSet, Service and Secret.
+*/}}
+{{- define "arkeep.postgresql.fullname" -}}
+{{- printf "%s-postgresql" (include "arkeep.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Bundled PostgreSQL selector labels. The name differs from the server's so the
+server Service never selects the database pod.
+*/}}
+{{- define "arkeep.postgresql.selectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-postgresql" (include "arkeep.name" .) | trunc 63 | trimSuffix "-" }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Bundled PostgreSQL labels.
+*/}}
+{{- define "arkeep.postgresql.labels" -}}
+helm.sh/chart: {{ include "arkeep.chart" . }}
+{{ include "arkeep.postgresql.selectorLabels" . }}
+app.kubernetes.io/component: database
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+PostgreSQL DSN — built from the bundled database or external config.
 The password is required in all cases to prevent a silent misconfiguration
 where an empty password produces an invalid DSN.
 */}}
@@ -88,7 +114,7 @@ where an empty password produces an invalid DSN.
 {{- if .Values.externalPostgresql.url }}
 {{- .Values.externalPostgresql.url }}
 {{- else if .Values.postgresql.enabled }}
-{{- $host := printf "%s-postgresql" .Release.Name }}
+{{- $host := include "arkeep.postgresql.fullname" . }}
 {{- $pass := required "postgresql.auth.password is required when postgresql.enabled=true" .Values.postgresql.auth.password }}
 {{- printf "postgres://%s:%s@%s:5432/%s?sslmode=disable"
     .Values.postgresql.auth.username
