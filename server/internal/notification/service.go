@@ -436,14 +436,15 @@ func (s *NotificationService) enqueueAndSend(ctx context.Context, n *db.Notifica
 
 const maxRetryAttempts = 3
 
-// retryBackoff returns the next_retry_at time for a given attempt count.
-// attempt is the number of retries already performed (post-initial-send).
+// retryBackoff returns the next_retry_at time after a failed retry. retries is
+// the number of retries performed so far, the failed one included (the initial
+// optimistic send is not counted, and is retried on the next tick):
 //
-//	attempt=0 (first retry after initial failure) → +5 min
-//	attempt=1 (second retry)                      → +30 min
-func retryBackoff(attempt int) time.Time {
-	switch attempt {
-	case 0:
+//	retries=1 (first retry failed)  → +5 min
+//	retries=2 (second retry failed) → +30 min
+func retryBackoff(retries int) time.Time {
+	switch retries {
+	case 1:
 		return time.Now().Add(5 * time.Minute)
 	default:
 		return time.Now().Add(30 * time.Minute)
