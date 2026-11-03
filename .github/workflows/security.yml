@@ -36,12 +36,6 @@ jobs:
       # Installed from tools/go.mod instead of the securego/gosec Docker action:
       # the action's image bundles its own Go (with GOTOOLCHAIN=local) and
       # cannot load packages when go.work requires a newer Go version.
-      #
-      # tools/go.mod pins gosec to a master commit until a tagged release ships
-      # it: v2.29.0 bundles golang.org/x/tools v0.49.0, which cannot read the
-      # export data (version 5) written by Go 1.27 ("export data version 5
-      # is greater than maximum supported version 4"). Switch back to a release
-      # tag once one is available.
       - name: Install gosec
         working-directory: tools
         run: GOWORK=off go install github.com/securego/gosec/v2/cmd/gosec

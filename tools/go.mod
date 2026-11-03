@@ -4,11 +4,6 @@
 //
 // Install them all into $GOBIN:   cd tools && GOWORK=off go install tool
 // Or run one without installing:  cd tools && GOWORK=off go tool <name>
-//
-// gosec is pinned to a pseudo-version (ADR 0013 exception): v2.29.0 bundles
-// golang.org/x/tools v0.49.0, which cannot read the export data written by
-// Go 1.27. Move back to a release tag (v2.30.0 or later, which bundles
-// x/tools v0.52.0) once it is past the 7-day cooldown.
 module github.com/arkeep-io/arkeep/tools
 
 go 1.27.0
