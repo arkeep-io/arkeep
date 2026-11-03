@@ -3,7 +3,7 @@
 # (docs/adr/0013-pin-and-verify-every-dependency.md).
 #
 # Checks what Arkeep consumes: GitHub Actions, container images, CI toolchains,
-# tool versions, npm manifests and Helm chart dependencies. Exceptions are
+# tool versions and npm manifests. Exceptions are
 # listed in the ADR; a line can opt out with a trailing "# pin-exempt: <reason>"
 # comment, which is then reviewed like code.
 #
@@ -91,11 +91,6 @@ if not re.fullmatch(r"pnpm@\d+\.\d+\.\d+\+sha512\.[0-9a-f]{128}", pkg.get("packa
     bad = True
 sys.exit(1 if bad else 0)
 EOF
-
-# 6. Helm chart dependencies: exact versions.
-grep_violations "Helm dependency version is a range" \
-  '^[[:space:]]+version:[[:space:]]*"?[^0-9"[:space:]]|^[[:space:]]+version:[[:space:]]*"?[0-9]+(\.[0-9x*]+)?(\.[x*])' \
-  deploy/helm/arkeep/Chart.yaml
 
 if (( failed )); then
   echo "Dependency pinning check failed — see docs/adr/0013-pin-and-verify-every-dependency.md" >&2

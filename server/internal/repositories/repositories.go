@@ -303,8 +303,9 @@ type PolicyRepository interface {
 	UpdateDestinationPriority(ctx context.Context, policyID, destinationID uuid.UUID, priority int) error
 	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
 	DeleteDestinationAssociations(ctx context.Context, destinationID uuid.UUID) error
-	// GetDestinations returns active (non-deleted) destination associations for a
-	// policy ordered by priority. Deleted destinations are excluded automatically.
+	// GetDestinations returns the destination associations of a policy ordered by
+	// priority. It does not filter soft-deleted destinations: deleting one removes
+	// its associations (DeleteDestinationAssociations).
 	GetDestinations(ctx context.Context, policyID uuid.UUID) ([]PolicyDestinationWithName, error)
 }
 

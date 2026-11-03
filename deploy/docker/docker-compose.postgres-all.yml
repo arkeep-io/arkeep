@@ -34,7 +34,7 @@ services:
       ARKEEP_GRPC_ADDR: ":9090"
       ARKEEP_LOG_LEVEL: "${ARKEEP_LOG_LEVEL:-info}"
       # External base URL for links in outbound email (e.g. password reset).
-      # Set in production behind a reverse proxy; empty = derive from request host.
+      # Links are never built from request headers: empty = reset emails disabled.
       ARKEEP_BASE_URL: "${ARKEEP_BASE_URL:-}"
       # Check GitHub for new Arkeep releases; "false" never contacts api.github.com.
       ARKEEP_UPDATE_CHECK: "${ARKEEP_UPDATE_CHECK:-true}"
@@ -82,10 +82,11 @@ services:
       # Windows (Docker Desktop) — one entry per drive (replace the line above):
       #   - C:/:/hostfs/c:ro
       #   - D:/:/hostfs/d:ro
-      # Docker socket — :ro is enough for automatic container/volume discovery.
-      # If you use pre/post-backup hooks that run `docker stop`/`docker start`/
-      # `docker compose ...` to control other containers, change this to :rw —
-      # those commands make write Docker API calls that :ro will block.
+      # Docker socket — required for Docker volume discovery and for pre/post-backup
+      # hooks that run `docker stop`/`docker start`/`docker compose ...`. Whatever the
+      # mount mode, the socket gives full control of Docker: :ro only makes the socket
+      # file read-only, not the API calls made through it. Remove this line if the agent
+      # needs neither, or put a Docker socket proxy in front of it to restrict the API.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Docker volumes root — required to back up Docker named volumes.
       # :ro (default) — safe for backup; prevents accidental writes.
