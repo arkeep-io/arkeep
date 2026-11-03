@@ -12,6 +12,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -592,5 +593,60 @@ func TestExecuteBackup_MissingLocalRepositoryIsNotRecreated(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(callLog); len(data) > 0 {
 		t.Errorf("restic ran %q against a missing repository", data)
+	}
+}
+
+// TestExecuteBackup_PostHookRunsOnEveryWayOut covers the post-backup hook as
+// the counterpart of the pre-backup one (it starts again what that stopped):
+// once the job reaches its hooks it runs exactly once, also after a failing
+// pre-backup hook and after a cancel, and the job keeps its own outcome.
+func TestExecuteBackup_PostHookRunsOnEveryWayOut(t *testing.T) {
+	tests := []struct {
+		name       string
+		preHook    string
+		cancelled  bool
+		wantStatus string
+	}{
+		{name: "backup succeeds", wantStatus: "succeeded"},
+		{name: "pre-backup hook fails", preHook: `{"command":"exit 1","timeout_secs":10}`, wantStatus: "failed"},
+		{name: "job cancelled", cancelled: true, wantStatus: "cancelled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "fake-restic.sh")
+			if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(dir, "post-hook-ran")
+			payload := backupPayload{
+				Sources:        `["/tmp"]`,
+				RepoPassword:   "pw",
+				Destinations:   []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+				HookPreBackup:  tt.preHook,
+				HookPostBackup: `{"command":"echo ran >> '` + marker + `'","timeout_secs":10}`,
+			}
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.cancelled {
+				cancel()
+			}
+
+			e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, hooks.NewRunner(10*time.Second), zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			e.executeBackup(ctx, JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}, fakeSink{}, reporter)
+
+			data, _ := os.ReadFile(marker)
+			if runs := strings.Count(string(data), "ran"); runs != 1 {
+				t.Errorf("post-backup hook ran %d times, want once", runs)
+			}
+			if final := reporter.statuses[len(reporter.statuses)-1]; final != tt.wantStatus {
+				t.Errorf("final job status = %q, want %q (all: %v)", final, tt.wantStatus, reporter.statuses)
+			}
+		})
 	}
 }

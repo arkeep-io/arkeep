@@ -460,12 +460,39 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	}
 	log("info", fmt.Sprintf("resolved %d source(s), %d command source(s)", len(sources), len(payload.CommandSources)))
 
+	// runPostHook runs the post-backup hook. Once the job reaches its hooks it
+	// runs on every way out — a failing pre-backup hook, a failed backup, a
+	// cancel, the agent shutting down — because a pre-backup hook that stops
+	// a service (docker stop db) relies on it to start the service again. It
+	// runs on a context detached from the job's, which is already cancelled
+	// in the last two cases; the hook's own timeout still bounds it.
+	runPostHook := func() {
+		if payload.HookPostBackup == "" {
+			return
+		}
+		log("info", fmt.Sprintf("running post-backup hook: %s", payload.HookPostBackup))
+
+		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
+		if err != nil {
+			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
+			return
+		}
+		result, err := e.hooks.Run(context.WithoutCancel(ctx), hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
+		if result.Output != "" {
+			log("info", "post-backup hook output: "+result.Output)
+		}
+		if err != nil {
+			log("warn", fmt.Sprintf("post-backup hook failed (exit %d): %v", result.ExitCode, err))
+		}
+	}
+
 	// --- 4. Pre-backup hook ---
 	if payload.HookPreBackup != "" {
 		log("info", fmt.Sprintf("running pre-backup hook: %s", payload.HookPreBackup))
 
 		hook, err := e.resolveHook(ctx, payload.HookPreBackup)
 		if err != nil {
+			runPostHook()
 			fail(fmt.Sprintf("failed to resolve pre-backup hook: %v", err))
 			return
 		}
@@ -476,6 +503,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			log("info", "pre-backup hook output: "+result.Output)
 		}
 		if err != nil {
+			runPostHook()
 			fail(fmt.Sprintf("pre-backup hook failed (exit %d): %v", result.ExitCode, err))
 			return
 		}
@@ -713,24 +741,13 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// server (e.g. connection already closed).
 	if ctx.Err() != nil {
 		log("warn", "backup cancelled: agent shutting down")
+		runPostHook()
 		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
 		return
 	}
 
-	// --- 6. Post-backup hook (always runs) ---
-	if payload.HookPostBackup != "" {
-		log("info", fmt.Sprintf("running post-backup hook: %s", payload.HookPostBackup))
-
-		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
-		if err != nil {
-			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
-		} else {
-			result, _ := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
-			if result.Output != "" {
-				log("info", "post-backup hook output: "+result.Output)
-			}
-		}
-	}
+	// --- 6. Post-backup hook ---
+	runPostHook()
 
 	// --- 7. Final status ---
 	if backupFailed {
