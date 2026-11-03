@@ -61,16 +61,19 @@ for file in "${dockerfiles[@]}"; do
   done < <(grep -nE '^FROM[[:space:]]' "$file")
 done
 
-# 4. Compose images: third-party images by digest, Arkeep images by release tag.
+# 4. Compose and Helm images: third-party images by digest, Arkeep images by
+# release tag. An "image:" key with no value opens a map (the chart's own
+# repository/tag, which defaults to appVersion) and is skipped.
 while IFS= read -r hit; do
   file=${hit%%:*}; rest=${hit#*:}; line=${rest%%:*}; text=${rest#*:}
   ref=$(sed -E 's/^[[:space:]#]*image:[[:space:]]*//; s/[[:space:]]+#.*$//; s/"//g' <<<"$text")
+  [[ -z "$ref" ]] && continue
   if [[ "$ref" == ghcr.io/arkeep-io/* ]]; then
     [[ "$ref" =~ :v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$file,line=$line" "Arkeep image must use a release tag (:vX.Y.Z): $ref"
   else
     [[ "$ref" == *"@sha256:"* ]] || fail "$file,line=$line" "image without @sha256 digest: $ref"
   fi
-done < <(grep -nHE '^[[:space:]#]*image:' "${composes[@]}")
+done < <(grep -nHE '^[[:space:]#]*image:' "${composes[@]}" deploy/helm/arkeep/values.yaml)
 
 # 5. npm manifests: exact versions only.
 python3 - gui/package.json <<'EOF' || failed=1

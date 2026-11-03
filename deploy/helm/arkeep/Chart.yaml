@@ -23,11 +23,3 @@ sources:
 maintainers:
   - name: arkeep-io
     url: https://github.com/arkeep-io
-
-dependencies:
-  # PostgreSQL subchart — enabled only when postgresql.enabled is true.
-  # When disabled, configure an external database via externalPostgresql.
-  - name: postgresql
-    version: "16.7.27"
-    repository: https://charts.bitnami.com/bitnami
-    condition: postgresql.enabled
