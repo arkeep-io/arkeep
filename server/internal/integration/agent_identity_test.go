@@ -13,10 +13,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
-	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/arkeep-io/arkeep/server/internal/agentmanager"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
@@ -39,10 +39,7 @@ func newMTLSServer(t *testing.T) *mtlsServer {
 	if err != nil {
 		t.Fatalf("EnsureCerts: %v", err)
 	}
-	gdb, err := db.New(db.Config{Driver: "sqlite", DSN: ":memory:", Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
+	gdb := dbtest.New(t)
 	ms := &mtlsServer{
 		autoCerts: autoCerts,
 		agents:    repositories.NewAgentRepository(gdb),

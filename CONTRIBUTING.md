@@ -201,7 +201,11 @@ task test:gui      # run GUI tests only
 ```
 
 - **Go:** table-driven tests with the standard `testing` package. Place test files next to the
-  code they test (`foo_test.go` alongside `foo.go`).
+  code they test (`foo_test.go` alongside `foo.go`). Server tests get their database from
+  `dbtest.New(t)` (`server/internal/db/dbtest`), a copy of a database migrated once per test
+  binary: running the migrations for every test made the suite several times slower under the
+  race detector. A package that hashes many passwords calls `auth.UseCheapPasswordHashing()`
+  from its `TestMain`.
 - **GUI:** Vitest with Vue Test Utils and jsdom. Place test files next to the code they test
   (`Foo.test.ts` alongside `Foo.vue`). Mount pages and components with `mountPage` from
   `src/test/mount.ts`, submit with `submitForm`, and replace the HTTP client with

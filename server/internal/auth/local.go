@@ -20,13 +20,6 @@ const (
 	// refreshTokenDuration defines how long a refresh token remains valid.
 	refreshTokenDuration = 7 * 24 * time.Hour
 
-	// argon2Time is the number of iterations (time cost) for Argon2id.
-	// OWASP minimum recommendation is 1; 2 provides a better security margin.
-	argon2Time = 2
-
-	// argon2Memory is the memory cost in KiB for Argon2id (64 MiB).
-	argon2Memory = 64 * 1024
-
 	// argon2Threads is the parallelism factor for Argon2id.
 	argon2Threads = 2
 
@@ -38,6 +31,17 @@ const (
 
 	// refreshTokenBytes is the length of the random refresh token before encoding.
 	refreshTokenBytes = 32
+)
+
+// The Argon2id cost parameters are variables only so that test binaries can
+// lower them with UseCheapPasswordHashing.
+var (
+	// argon2Time is the number of iterations (time cost) for Argon2id.
+	// OWASP minimum recommendation is 1; 2 provides a better security margin.
+	argon2Time uint32 = 2
+
+	// argon2Memory is the memory cost in KiB for Argon2id (64 MiB).
+	argon2Memory uint32 = 64 * 1024
 )
 
 // LocalAuthProvider authenticates users via email/password stored in the
