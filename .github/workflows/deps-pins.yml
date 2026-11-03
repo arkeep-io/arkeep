@@ -5,7 +5,9 @@ name: Dependency pins
 #   - restic and rclone versions and SHA-256 digests (agent/scripts/deps.json),
 #     from GPG-verified upstream SHA256SUMS, with a 7-day release cooldown;
 #   - the Arkeep release used by the Helm chart (appVersion) and the compose
-#     examples (image tags), set to the latest Arkeep release.
+#     examples (image tags), set to the latest Arkeep release;
+#   - the PostgreSQL image of the Helm chart and of the commented example in
+#     docker-compose.yml, aligned with docker-compose.postgres.yml.
 on:
   workflow_dispatch:
   schedule:
@@ -53,6 +55,20 @@ jobs:
           sed -i -E "s#(ghcr\.io/arkeep-io/arkeep-(server|agent)):v[0-9]+\.[0-9]+\.[0-9]+#\1:${tag}#" \
             deploy/docker/docker-compose*.yml
 
+      # Dependabot updates the digest-pinned postgres image of the compose files,
+      # but its helm updater skips image strings pinned by digest, and it does
+      # not read comments. The chart and the commented example follow
+      # docker-compose.postgres.yml (ADR 0015: they move together).
+      - name: Align the PostgreSQL image with the compose files
+        run: |
+          image=$(grep -m1 -oE 'postgres:[^[:space:]"]+@sha256:[0-9a-f]{64}' deploy/docker/docker-compose.postgres.yml)
+          if [ -z "$image" ]; then
+            echo "no digest-pinned postgres image in docker-compose.postgres.yml" >&2
+            exit 1
+          fi
+          sed -i -E "s#^(  image: )postgres:[^[:space:]]+@sha256:[0-9a-f]{64}#\1${image}#" deploy/helm/arkeep/values.yaml
+          sed -i -E "s#^(  \#   image: )postgres:[^[:space:]]+@sha256:[0-9a-f]{64}#\1${image}#" deploy/docker/docker-compose.yml
+
       - name: Check pins
         run: scripts/check-pins.sh
 
@@ -66,6 +82,7 @@ jobs:
           add-paths: |
             agent/scripts/deps.json
             deploy/helm/arkeep/Chart.yaml
+            deploy/helm/arkeep/values.yaml
             deploy/docker/docker-compose*.yml
           commit-message: "chore(deps): update restic, rclone and Arkeep release pins"
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
@@ -82,6 +99,10 @@ jobs:
             - `deploy/helm/arkeep/Chart.yaml` (`appVersion`) and the Arkeep
               image tags in `deploy/docker/docker-compose*.yml`: set to the
               latest Arkeep release.
+            - `deploy/helm/arkeep/values.yaml` (`postgresql.image`) and the
+              commented example in `deploy/docker/docker-compose.yml`: the
+              PostgreSQL image of `docker-compose.postgres.yml`, which Dependabot
+              updates.
 
             Review the upstream release notes before merging:
             [restic](https://github.com/restic/restic/releases) ·

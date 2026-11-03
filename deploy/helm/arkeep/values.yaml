@@ -157,9 +157,10 @@ ingress:
 
 postgresql:
   enabled: false
-  # Same image as the compose examples, pinned by digest (ADR 0013) and updated
-  # by Dependabot. A new major version needs a dump and restore: do not change
-  # it on an existing install without one.
+  # Same image as the compose examples, pinned by digest (ADR 0013). Dependabot
+  # updates docker-compose.postgres.yml and the deps-pins workflow copies its
+  # image here. A new major version needs a dump and restore: do not change it
+  # on an existing install without one.
   image: postgres:17.11-alpine3.24@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
   imagePullPolicy: IfNotPresent
   auth:
