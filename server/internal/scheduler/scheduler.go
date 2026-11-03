@@ -74,6 +74,10 @@ type destinationPayload struct {
 	Config        string            `json:"config"`
 	Env           map[string]string `json:"env"`
 	Priority      int               `json:"priority"`
+	// RepoMustExist tells the agent the repository already exists
+	// (db.Destination.RepoInitializedAt), so it must not run `restic init`:
+	// a missing repository fails the backup instead of being recreated empty.
+	RepoMustExist bool `json:"repo_must_exist,omitempty"`
 }
 
 // commandSourcePayload is one command-type source: the agent runs it as its
@@ -773,6 +777,7 @@ func (s *Scheduler) startBackup(ctx context.Context, job *db.Job, policy *db.Pol
 			Config:        dest.Config,
 			Env:           destutil.BuildEnv(dest),
 			Priority:      pd.Priority,
+			RepoMustExist: dest.RepoInitializedAt != nil,
 		})
 	}
 

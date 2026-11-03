@@ -270,6 +270,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-retention", destinationHandler.TriggerRetention)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-check", destinationHandler.TriggerCheck)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/sync", destinationHandler.Sync)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/reset-repository", destinationHandler.ResetRepository)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
