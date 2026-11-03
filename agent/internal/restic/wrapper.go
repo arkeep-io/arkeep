@@ -797,11 +797,14 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 		}
 
 		// Drain stdout to prevent the subprocess from blocking when its pipe buffer
-		// fills up. We ignore the JSON content for now — restore progress is not
-		// currently streamed to the UI.
+		// fills up. Restore progress is not streamed to the UI; only the final
+		// summary is kept, to tell whether anything matched.
+		var empty bool
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
-			// discard
+			if e, ok := emptyRestoreSummary(scanner.Bytes()); ok {
+				empty = e
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			return fmt.Errorf("restic: failed to read stdout: %w", err)
@@ -814,8 +817,33 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 			}
 			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
 		}
+		if empty {
+			return ErrNothingRestored
+		}
 		return nil
 	})
+}
+
+// ErrNothingRestored is returned when restic restore succeeded but matched
+// nothing in the snapshot, for example files to restore that the snapshot
+// does not contain. restic exits 0 in that case, so without this check the
+// job would succeed without writing a single file.
+var ErrNothingRestored = errors.New("restic: nothing in the snapshot matched the files to restore")
+
+// emptyRestoreSummary reports, for one line of `restic restore --json` output,
+// whether it is the summary (ok) and whether that summary counts no entries
+// (empty). total_files counts every restored entry, directories included, so
+// it is zero only when the selection matched nothing; restic leaves it out of
+// the JSON then.
+func emptyRestoreSummary(line []byte) (empty, ok bool) {
+	var ev struct {
+		MessageType string `json:"message_type"`
+		TotalFiles  uint64 `json:"total_files"`
+	}
+	if json.Unmarshal(line, &ev) != nil || ev.MessageType != "summary" {
+		return false, false
+	}
+	return ev.TotalFiles == 0, true
 }
 
 // isOnlyHostRootLchownErrors returns true when every error restic encountered

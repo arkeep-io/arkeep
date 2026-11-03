@@ -791,3 +791,28 @@ func TestParseCheckOutput(t *testing.T) {
 		t.Errorf("non-JSON stderr Messages = %q, want the raw line", plain.Messages)
 	}
 }
+
+// TestEmptyRestoreSummary uses lines printed by restic 0.19.1: a selection
+// that matches nothing ends with a summary without total_files.
+func TestEmptyRestoreSummary(t *testing.T) {
+	tests := []struct {
+		name      string
+		line      string
+		wantEmpty bool
+		wantOK    bool
+	}{
+		{"nothing matched", `{"message_type":"summary"}`, true, true},
+		{"one file", `{"message_type":"summary","total_files":1,"files_restored":9,"total_bytes":3,"bytes_restored":3}`, false, true},
+		{"empty directory", `{"message_type":"summary","total_files":7,"files_restored":7}`, false, true},
+		{"progress line", `{"message_type":"status","percent_done":0.5,"total_files":4}`, false, false},
+		{"not json", `restoring <Snapshot 1a2b3c4d>`, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			empty, ok := emptyRestoreSummary([]byte(tt.line))
+			if empty != tt.wantEmpty || ok != tt.wantOK {
+				t.Errorf("emptyRestoreSummary(%s) = (%v, %v), want (%v, %v)", tt.line, empty, ok, tt.wantEmpty, tt.wantOK)
+			}
+		})
+	}
+}
