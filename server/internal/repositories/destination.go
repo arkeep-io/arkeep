@@ -96,6 +96,33 @@ func (r *gormDestinationRepository) UpdateRepoSize(ctx context.Context, id uuid.
 	return nil
 }
 
+// MarkRepoInitialized sets repo_initialized_at only if it is not set yet, so
+// it keeps the first time the repository was known to exist.
+func (r *gormDestinationRepository) MarkRepoInitialized(ctx context.Context, id uuid.UUID, at time.Time) error {
+	result := r.db.WithContext(ctx).Exec(
+		`UPDATE destinations SET repo_initialized_at = ? WHERE id = ? AND repo_initialized_at IS NULL`, at, id,
+	)
+	if result.Error != nil {
+		return fmt.Errorf("destinations: mark repo initialized: %w", result.Error)
+	}
+	return nil
+}
+
+// ResetRepoInitialized clears repo_initialized_at. Returns ErrNotFound if the
+// destination does not exist.
+func (r *gormDestinationRepository) ResetRepoInitialized(ctx context.Context, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).Exec(
+		`UPDATE destinations SET repo_initialized_at = NULL WHERE id = ? AND deleted_at IS NULL`, id,
+	)
+	if result.Error != nil {
+		return fmt.Errorf("destinations: reset repo initialized: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete soft-deletes a destination by ID and wipes its stored secrets
 // (credentials and repository password) in the same transaction. The row
 // itself is kept so snapshots and job history keep resolving the destination's

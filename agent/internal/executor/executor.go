@@ -140,6 +140,9 @@ type destinationPayload struct {
 	Config        string            `json:"config"`
 	Env           map[string]string `json:"env"`
 	Priority      int               `json:"priority"`
+	// RepoMustExist is set once the server knows the repository exists: the
+	// backup must not create it again (restic.Destination.MustExist).
+	RepoMustExist bool `json:"repo_must_exist"`
 }
 
 type retentionPayload struct {
@@ -467,10 +470,36 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	}
 	log("info", fmt.Sprintf("resolved %d source(s), %d command source(s)", len(sources), len(payload.CommandSources)))
 
+	// runPostHook runs the post-backup hook. Once the job reaches its hooks it
+	// runs on every way out — a failing pre-backup hook, a failed backup, a
+	// cancel, the agent shutting down — because a pre-backup hook that stops
+	// a service (docker stop db) relies on it to start the service again. It
+	// runs on a context detached from the job's, which is already cancelled
+	// in the last two cases; the hook's own timeout still bounds it.
+	runPostHook := func() {
+		if payload.HookPostBackup == "" {
+			return
+		}
+		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
+		if err != nil {
+			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
+			return
+		}
+		log("info", "running "+hook.logLabel("post-backup"))
+		result, err := e.hooks.Run(context.WithoutCancel(ctx), hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
+		if result.Output != "" {
+			log("info", "post-backup hook output: "+result.Output)
+		}
+		if err != nil {
+			log("warn", fmt.Sprintf("post-backup hook failed (exit %d): %v", result.ExitCode, err))
+		}
+	}
+
 	// --- 4. Pre-backup hook ---
 	if payload.HookPreBackup != "" {
 		hook, err := e.resolveHook(ctx, payload.HookPreBackup)
 		if err != nil {
+			runPostHook()
 			fail(fmt.Sprintf("failed to resolve pre-backup hook: %v", err))
 			return
 		}
@@ -482,6 +511,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			log("info", "pre-backup hook output: "+result.Output)
 		}
 		if err != nil {
+			runPostHook()
 			fail(fmt.Sprintf("pre-backup hook failed (exit %d): %v", result.ExitCode, err))
 			return
 		}
@@ -520,6 +550,15 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if dest.RepoURL != originalURL {
 				log("debug", fmt.Sprintf("translated local path %q → %q (ARKEEP_DOCKER_HOST_ROOT=%q)", originalURL, dest.RepoURL, e.dockerHostRoot))
 			}
+			// A repository that must exist is never recreated, so neither is
+			// its directory: ensureWritableDir would create a missing one.
+			if _, statErr := os.Stat(dest.RepoURL); dest.RepoMustExist && os.IsNotExist(statErr) {
+				errMsg := restic.RepositoryNotFoundError(dest.RepoURL).Error()
+				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, errMsg)
+				backupFailed = true
+				continue
+			}
 			if err := ensureWritableDir(dest.RepoURL); err != nil {
 				var errMsg string
 				if e.dockerHostRoot == "" {
@@ -547,10 +586,11 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 
 		d := restic.Destination{
-			Type:     restic.DestinationType(dest.Type),
-			RepoURL:  dest.RepoURL,
-			Password: payload.RepoPassword,
-			Env:      dest.Env,
+			Type:      restic.DestinationType(dest.Type),
+			RepoURL:   dest.RepoURL,
+			Password:  payload.RepoPassword,
+			Env:       dest.Env,
+			MustExist: dest.RepoMustExist,
 		}
 
 		onProgress := func(ev restic.ProgressEvent) error {
@@ -709,23 +749,13 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// server (e.g. connection already closed).
 	if ctx.Err() != nil {
 		log("warn", "backup cancelled: agent shutting down")
+		runPostHook()
 		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
 		return
 	}
 
-	// --- 6. Post-backup hook (always runs) ---
-	if payload.HookPostBackup != "" {
-		hook, err := e.resolveHook(ctx, payload.HookPostBackup)
-		if err != nil {
-			log("warn", fmt.Sprintf("failed to resolve post-backup hook: %v", err))
-		} else {
-			log("info", "running "+hook.logLabel("post-backup"))
-			result, _ := e.hooks.Run(ctx, hook.Command, hook.Args, time.Duration(hook.TimeoutSecs)*time.Second)
-			if result.Output != "" {
-				log("info", "post-backup hook output: "+result.Output)
-			}
-		}
-	}
+	// --- 6. Post-backup hook ---
+	runPostHook()
 
 	// --- 7. Final status ---
 	if backupFailed {

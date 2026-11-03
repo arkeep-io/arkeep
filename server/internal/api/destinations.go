@@ -77,6 +77,9 @@ type destinationResponse struct {
 	// is empty until the first measurement.
 	RepoSizeBytes     int64  `json:"repo_size_bytes"`
 	RepoSizeUpdatedAt string `json:"repo_size_updated_at"`
+	// RepoInitializedAt is when the repository was first known to exist, ""
+	// until then. Once set, backups no longer create the repository.
+	RepoInitializedAt string `json:"repo_initialized_at"`
 	// HasRepoPassword reports whether this destination has a stored password
 	// for a pre-existing repository (captured when it was imported). Never the
 	// password itself — credentials are write-only, like everywhere else in
@@ -168,6 +171,12 @@ func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentN
 				return ""
 			}
 			return d.RepoSizeUpdatedAt.UTC().Format(time.RFC3339)
+		}(),
+		RepoInitializedAt: func() string {
+			if d.RepoInitializedAt == nil {
+				return ""
+			}
+			return d.RepoInitializedAt.UTC().Format(time.RFC3339)
 		}(),
 		HasRepoPassword:      d.RepoPassword != "",
 		RetentionLast:        d.RetentionLast,
@@ -607,9 +616,12 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
 		dest.Credentials = db.EncryptedString(*req.Credentials)
 	}
+	oldRepoURL := destutil.BuildRepoURL(dest)
 	if req.Config != nil {
 		dest.Config = *req.Config
 	}
+	// A new location holds a new repository, which the next backup creates.
+	repoMoved := destutil.BuildRepoURL(dest) != oldRepoURL
 	if req.Enabled != nil {
 		dest.Enabled = *req.Enabled
 	}
@@ -721,6 +733,14 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		ErrInternal(w)
 		return
 	}
+	if repoMoved && dest.RepoInitializedAt != nil {
+		if err := h.repo.ResetRepoInitialized(r.Context(), id); err != nil {
+			h.logger.Error("failed to reset repository state after a location change", zap.String("id", id.String()), zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		dest.RepoInitializedAt = nil
+	}
 
 	if h.retentionSched != nil {
 		if err := h.retentionSched.UpdateDestination(dest); err != nil {
@@ -733,7 +753,37 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched})
+	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched, "location_changed": repoMoved})
+	Ok(w, h.singleDestinationResponse(r.Context(), dest))
+}
+
+// ResetRepository handles POST /api/v1/destinations/{id}/reset-repository
+// (admin only). Once a destination's repository is known to exist, backups
+// no longer create it, so a missing repository fails them. This forgets that
+// it existed: for storage replaced on purpose, where the next backup should
+// start a new repository at the same location.
+func (h *DestinationHandler) ResetRepository(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if err := h.repo.ResetRepoInitialized(r.Context(), id); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrNotFound(w)
+			return
+		}
+		h.logger.Error("failed to reset destination repository", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	dest, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		h.logger.Error("failed to reload destination after repository reset", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "destination.reset_repository", "destination", id.String(), map[string]any{"name": dest.Name})
 	Ok(w, h.singleDestinationResponse(r.Context(), dest))
 }
 

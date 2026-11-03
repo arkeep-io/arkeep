@@ -35,6 +35,7 @@ import {
     AlertTriangle,
     RefreshCcw,
     ShieldCheck,
+    DatabaseBackup,
 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
@@ -82,6 +83,8 @@ const triggerLoading = ref(false)
 const checkLoading = ref(false)
 const syncLoading = ref(false)
 const syncMessage = ref<string | null>(null)
+const resetRepoDialogOpen = ref(false)
+const resetRepoLoading = ref(false)
 
 // ---------------------------------------------------------------------------
 // Data fetching
@@ -162,6 +165,24 @@ async function syncSnapshots() {
         error.value = apiErrorMessage(e, 'Failed to sync snapshots')
     } finally {
         syncLoading.value = false
+    }
+}
+
+// confirmResetRepository forgets that the repository existed, so the next
+// backup creates a new one: for storage replaced on purpose. Until then a
+// missing repository fails backups instead of being recreated empty.
+async function confirmResetRepository() {
+    resetRepoLoading.value = true
+    error.value = null
+    try {
+        const res = await api<ApiResponse<Destination>>(
+            `/api/v1/destinations/${destinationId}/reset-repository`, { method: 'POST' })
+        destination.value = res.data
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to reset the repository')
+    } finally {
+        resetRepoLoading.value = false
+        resetRepoDialogOpen.value = false
     }
 }
 
@@ -286,6 +307,11 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                     <Loader2 v-if="syncLoading" class="w-4 h-4 mr-1.5 animate-spin" />
                     <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
                     Sync Snapshots
+                </Button>
+                <Button v-if="authStore.isAdmin && destination.repo_initialized_at" variant="outline" size="sm"
+                    data-testid="reset-repository" @click="resetRepoDialogOpen = true">
+                    <DatabaseBackup class="w-4 h-4 mr-1.5" />
+                    New Repository
                 </Button>
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
@@ -523,6 +549,32 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
     <!-- Edit sheet -->
     <DestinationSheet v-if="destination" :destination="destination" :open="editSheetOpen"
         @update:open="editSheetOpen = $event" @saved="onSaved" />
+
+    <!-- New repository dialog -->
+    <AlertDialog :open="resetRepoDialogOpen" @update:open="resetRepoDialogOpen = $event">
+        <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Start a new repository?</AlertDialogTitle>
+                <AlertDialogDescription>
+                    <span v-if="destination">
+                        Backups have already been written to <strong>{{ destination.name }}</strong>, so
+                        Arkeep does not create its repository again: if the storage is missing, for example
+                        a disk that is not mounted, backups fail instead of starting over in an empty folder.
+                        Continue only if you replaced the storage on purpose. The next backup will create a new,
+                        empty repository at the same location, and snapshots that are not in it will leave the
+                        snapshot list. Nothing on the storage is deleted.
+                    </span>
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel :disabled="resetRepoLoading">Cancel</AlertDialogCancel>
+                <AlertDialogAction data-testid="confirm-reset-repository" :disabled="resetRepoLoading"
+                    @click="confirmResetRepository">
+                    {{ resetRepoLoading ? 'Resetting…' : 'Start new repository' }}
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
 
     <!-- Delete dialog -->
     <AlertDialog :open="deleteDialogOpen" @update:open="deleteDialogOpen = $event">

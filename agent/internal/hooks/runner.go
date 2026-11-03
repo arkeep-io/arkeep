@@ -29,6 +29,12 @@ import (
 // while still preventing a stalled hook from blocking the job indefinitely.
 const DefaultTimeout = 5 * time.Minute
 
+// outputWaitDelay is how long Run keeps waiting for the hook's output once
+// the hook has exited or been killed: a process the hook left in the
+// background may still hold the output pipe open. A variable so tests can
+// shorten it.
+var outputWaitDelay = 5 * time.Second
+
 // ErrHookFailed is returned when the hook process exits with a non-zero code.
 // It wraps the exit error so callers can inspect it with errors.As if needed.
 var ErrHookFailed = errors.New("hook: command failed")
@@ -88,6 +94,13 @@ func (r *Runner) Run(ctx context.Context, command string, args []string, timeout
 	defer cancel()
 
 	cmd := buildShellCmd(ctx, command, args, timeout)
+	// On timeout or cancel, kill every process the hook started, not only the
+	// shell: its children would otherwise run on and keep the output pipe
+	// open, so Run would wait for them well past the timeout.
+	killProcessTree(cmd)
+	// A hook that exits leaving a child in the background (some-daemon &)
+	// also keeps the pipe open: stop waiting for it after outputWaitDelay.
+	cmd.WaitDelay = outputWaitDelay
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -96,6 +109,11 @@ func (r *Runner) Run(ctx context.Context, command string, args []string, timeout
 	start := time.Now()
 	err := cmd.Run()
 	duration := time.Since(start)
+	// The hook itself succeeded; only a background child it started still
+	// held the output pipe.
+	if errors.Is(err, exec.ErrWaitDelay) && ctx.Err() == nil {
+		err = nil
+	}
 
 	output := buf.String()
 

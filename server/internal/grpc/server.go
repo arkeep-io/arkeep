@@ -997,6 +997,19 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		startedAt = req.StartedAt.AsTime().UTC()
 	}
 
+	// Anything that succeeded against the destination — a backup, a command
+	// source, a retention sweep, a check — proves its repository exists, so
+	// later backups must not create it again (db.Destination.RepoInitializedAt).
+	// Non-fatal.
+	if req.Status == "succeeded" && s.destRepo != nil {
+		if err := s.destRepo.MarkRepoInitialized(ctx, destID, now); err != nil {
+			s.logger.Warn("ReportDestinationStatus: failed to mark destination repository initialized",
+				zap.String("destination_id", req.DestinationId),
+				zap.Error(err),
+			)
+		}
+	}
+
 	// A non-empty command_source_name means this report is for one command
 	// source's own restic invocation, not the destination's regular backup.
 	// Those results live in job_destination_commands: job_destinations holds
