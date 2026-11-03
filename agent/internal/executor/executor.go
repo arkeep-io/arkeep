@@ -18,6 +18,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -205,7 +206,16 @@ type Executor struct {
 	// being executed. Cancel() calls it directly when a job is in flight.
 	runningMu     sync.Mutex
 	runningCancel map[string]context.CancelFunc
+
+	// jobsMu protects jobs — the IDs of the jobs queued or running here. The
+	// server sends its pending jobs again when the stream reconnects, and
+	// those already queued here must not run twice.
+	jobsMu sync.Mutex
+	jobs   map[string]bool
 }
+
+// ErrQueueFull is returned by Enqueue when the job queue has no room left.
+var ErrQueueFull = errors.New("the agent's job queue is full")
 
 // New creates a new Executor. dockerClient may be nil — if it is, any job
 // that requires Docker volume discovery will fail gracefully.
@@ -233,6 +243,7 @@ func New(
 		hostname:       hostname,
 		cancelled:      make(map[string]bool),
 		runningCancel:  make(map[string]context.CancelFunc),
+		jobs:           make(map[string]bool),
 	}
 }
 
@@ -335,28 +346,48 @@ func (e *Executor) Run(ctx context.Context, sink LogSink, reporter StatusReporte
 			e.logger.Info("executor stopped")
 			return
 		case job := <-e.queue:
-			// If Cancel() was called while this job was still queued, skip execution
-			// and immediately report cancelled.
-			e.cancelledMu.Lock()
-			if e.cancelled[job.JobID] {
-				delete(e.cancelled, job.JobID)
-				e.cancelledMu.Unlock()
-				e.logger.Info("job cancelled before execution", zap.String("job_id", job.JobID))
-				reporter.ReportStatus(job.JobID, "cancelled", "job cancelled before execution started")
-				continue
-			}
-			e.cancelledMu.Unlock()
-			e.execute(ctx, job, sink, reporter)
+			e.run(ctx, job, sink, reporter)
 		}
 	}
+}
+
+// run handles one dequeued job, then forgets it, so the server can send it
+// again later (a resumed backup keeps its job ID).
+func (e *Executor) run(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	defer func() {
+		e.jobsMu.Lock()
+		delete(e.jobs, job.JobID)
+		e.jobsMu.Unlock()
+	}()
+	// If Cancel() was called while this job was still queued, skip execution
+	// and immediately report cancelled.
+	e.cancelledMu.Lock()
+	if e.cancelled[job.JobID] {
+		delete(e.cancelled, job.JobID)
+		e.cancelledMu.Unlock()
+		e.logger.Info("job cancelled before execution", zap.String("job_id", job.JobID))
+		reporter.ReportStatus(job.JobID, "cancelled", "job cancelled before execution started")
+		return
+	}
+	e.cancelledMu.Unlock()
+	e.execute(ctx, job, sink, reporter)
 }
 
 // Enqueue adds a job to the queue. Returns an error if the queue is full.
 // Non-blocking — the caller should log and discard rejected jobs; the server
 // will retry via DispatchPending on the next reconnect.
 func (e *Executor) Enqueue(job JobAssignment) error {
+	e.jobsMu.Lock()
+	defer e.jobsMu.Unlock()
+	// A job already queued or running here was sent again after the stream
+	// reconnected: running it twice would repeat its hooks and backups.
+	if e.jobs[job.JobID] {
+		e.logger.Info("job already queued or running, ignoring it", zap.String("job_id", job.JobID))
+		return nil
+	}
 	select {
 	case e.queue <- job:
+		e.jobs[job.JobID] = true
 		e.logger.Info("job enqueued",
 			zap.String("job_id", job.JobID),
 			zap.String("policy_id", job.PolicyID),
@@ -364,7 +395,7 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 		)
 		return nil
 	default:
-		return fmt.Errorf("executor: job queue full, rejecting job %s", job.JobID)
+		return fmt.Errorf("%w (%d jobs waiting): job not run", ErrQueueFull, queueSize)
 	}
 }
 
@@ -457,7 +488,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	log("info", "backup started")
 
 	// --- 3. Resolve sources ---
-	sources, err := e.resolveSources(ctx, payload.Sources, log)
+	sources, skipped, err := e.resolveSources(ctx, payload.Sources, log)
 	if err != nil {
 		fail(fmt.Sprintf("failed to resolve backup sources: %v", err))
 		return
@@ -760,6 +791,13 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// --- 7. Final status ---
 	if backupFailed {
 		fail("one or more destinations failed")
+		return
+	}
+	// The reachable sources were backed up, but the job did not do what the
+	// policy asks: report it, so the failure notification goes out.
+	if len(skipped) > 0 {
+		fail(fmt.Sprintf("%d source(s) could not be reached and were not backed up: %s; the other sources were backed up",
+			len(skipped), strings.Join(skipped, ", ")))
 		return
 	}
 
@@ -1223,14 +1261,15 @@ func (e *Executor) buildInPlaceExcludes(ctx context.Context, log func(level, msg
 
 // resolveSources parses the JSON sources array and resolves any
 // docker-volume:// entries to their host mountpoints.
-// Returns the final list of filesystem paths ready for restic.
-func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log func(level, msg string)) ([]string, error) {
+// Returns the final list of filesystem paths ready for restic, and the
+// sources it had to leave out because they are not reachable on this host.
+func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log func(level, msg string)) (resolved, skipped []string, err error) {
 	var raw []string
 	if err := json.Unmarshal([]byte(sourcesJSON), &raw); err != nil {
-		return nil, fmt.Errorf("invalid sources JSON: %w", err)
+		return nil, nil, fmt.Errorf("invalid sources JSON: %w", err)
 	}
 
-	resolved := make([]string, 0, len(raw))
+	resolved = make([]string, 0, len(raw))
 	for _, src := range raw {
 		if !strings.HasPrefix(src, "docker-volume://") {
 			// Translate host paths to container-accessible paths when
@@ -1246,12 +1285,12 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 		volumeName := strings.TrimPrefix(src, "docker-volume://")
 
 		if e.docker == nil {
-			return nil, fmt.Errorf("source %q requires Docker but Docker is unavailable on this host", src)
+			return nil, nil, fmt.Errorf("source %q requires Docker but Docker is unavailable on this host", src)
 		}
 
 		info, err := e.docker.InspectVolume(ctx, volumeName)
 		if err != nil {
-			return nil, fmt.Errorf("failed to inspect Docker volume %q: %w", volumeName, err)
+			return nil, nil, fmt.Errorf("failed to inspect Docker volume %q: %w", volumeName, err)
 		}
 
 		log("info", fmt.Sprintf("resolved docker-volume://%s → %s", volumeName, info.Mountpoint))
@@ -1269,6 +1308,7 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 					"- %s:%s:ro",
 				volumeName, info.Mountpoint, info.Mountpoint, info.Mountpoint,
 			))
+			skipped = append(skipped, src)
 			continue
 		}
 
@@ -1281,11 +1321,11 @@ func (e *Executor) resolveSources(ctx context.Context, sourcesJSON string, log f
 	// flag-like string (e.g. a maliciously named Docker volume mountpoint).
 	for _, path := range resolved {
 		if err := validation.ValidateSourceEntry(path); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	return resolved, nil
+	return resolved, skipped, nil
 }
 
 func (e *Executor) resolveHook(ctx context.Context, hookJSON string) (*hookPayload, error) {

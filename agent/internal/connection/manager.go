@@ -644,6 +644,9 @@ func (m *Manager) jobStreamLoop(ctx context.Context, client proto.AgentServiceCl
 				zap.String("job_id", assignment.JobId),
 				zap.Error(err),
 			)
+			// Close the job on the server: left pending, it would hold its
+			// destinations until the queue timeout and never run.
+			m.ReportStatus(assignment.JobId, "failed", err.Error())
 		}
 	}
 }
