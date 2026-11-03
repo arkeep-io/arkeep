@@ -1,6 +1,6 @@
 # 0014. Publish the Helm chart as an OCI artifact on GHCR and Docker Hub
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-02
 - **Deciders:** Arkeep maintainers
 

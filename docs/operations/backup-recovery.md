@@ -52,7 +52,7 @@ echo "0 3 * * * root /usr/local/bin/arkeep-backup" | sudo tee /etc/cron.d/arkeep
 ### Manual one-off backup
 
 ```bash
-# Safe to run while the server is running (SQLite WAL mode)
+# Safe to run while the server is running: .backup uses SQLite's online backup API
 sqlite3 /var/lib/arkeep/arkeep.db \
   ".backup '/var/backups/arkeep/arkeep-$(date +%Y%m%d-%H%M%S).db'"
 
@@ -249,6 +249,9 @@ spec:
     spec:
       template:
         spec:
+          securityContext:
+            runAsUser: 1000   # the chart's user, owner of the volume
+            runAsGroup: 1000
           containers:
             - name: backup
               image: keinos/sqlite3:latest
@@ -256,6 +259,8 @@ spec:
                 - sh
                 - -c
                 - |
+                  set -e
+                  mkdir -p /data/backups
                   sqlite3 /data/arkeep.db ".backup '/data/backups/arkeep-$(date +%Y%m%d-%H%M%S).db'"
                   find /data/backups -name "arkeep-*.db" -mtime +7 -delete
               volumeMounts:
@@ -265,7 +270,7 @@ spec:
           volumes:
             - name: data
               persistentVolumeClaim:
-                claimName: arkeep-data   # adjust to your release name
+                claimName: arkeep   # the release name; <release>-arkeep if it does not contain "arkeep"
 ```
 
 ### PostgreSQL (bundled chart)
@@ -390,12 +395,13 @@ issued their certificates no longer exists.
 2. Start the server **without** a data directory — it will generate a new CA on startup.
 3. Re-enroll each agent:
    ```bash
-   # On each agent machine: delete the old state and restart
-   rm -rf /var/lib/arkeep-agent/certs/
+   # On each agent machine: delete the certificates from the state directory and restart
+   rm -f /var/lib/arkeep-agent/grpc-ca.crt /var/lib/arkeep-agent/grpc-client.crt /var/lib/arkeep-agent/grpc-client.key
    systemctl restart arkeep-agent
    # The agent will re-enroll automatically on startup
    ```
-4. All policies, jobs, and configuration in the database are intact.
+4. Agents that were bound to their old certificate need **Reset identity** on the Agents page.
+5. All policies, jobs, and configuration in the database are intact.
 
 ### Scenario 4 — Full loss (database + data directory)
 
@@ -429,6 +435,6 @@ dropdb -U postgres arkeep_verify
 
 - [ ] Back up the database (`scripts/backup-arkeep-db.sh` or `pg_dump`)
 - [ ] Back up the data directory (`tar -czf ...`)
-- [ ] Note the current version (`GET /api/v1/version` or `arkeep-server --version`)
+- [ ] Note the current version (`GET /api/v1/version` or `arkeep-server version`)
 - [ ] Pull the new image / binary
 - [ ] Restart the server and verify `GET /health/ready` returns healthy
