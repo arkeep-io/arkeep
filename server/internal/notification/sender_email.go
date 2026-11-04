@@ -46,6 +46,12 @@ func (s *emailSender) Send(ctx context.Context, to []string, subject, body strin
 		return fmt.Errorf("%w: failed to load smtp config: %s", ErrSendFailed, err)
 	}
 
+	// Settings saved before From was validated could still hold a malformed
+	// address: refuse to send rather than put it in MAIL FROM and the headers.
+	if !IsBareAddress(cfg.From) {
+		return fmt.Errorf("%w: invalid from address", ErrSendFailed)
+	}
+
 	msg := buildEmail(cfg.From, cfg.FromName, to, subject, body)
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 
@@ -166,6 +172,17 @@ func (s *emailSender) sendTLS(addr string, cfg *SMTPConfig, to []string, msg []b
 	}
 
 	return client.Quit()
+}
+
+// IsBareAddress reports whether s is a single RFC 5322 address with no display
+// name, comments or surrounding text (e.g. "noreply@example.com"), so it is
+// safe to use verbatim in MAIL FROM and in the From header.
+func IsBareAddress(s string) bool {
+	if s == "" || strings.ContainsAny(s, "\r\n") {
+		return false
+	}
+	a, err := mail.ParseAddress(s)
+	return err == nil && a.Name == "" && a.Address == s
 }
 
 // sanitizeHeader removes CR and LF to prevent email header injection (CWE-93).

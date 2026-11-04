@@ -563,7 +563,24 @@ func validateUpsertSMTP(req *upsertSMTPRequest) error {
 	if req.From == "" {
 		return errors.New("from is required")
 	}
+	// These values end up in SMTP commands and email headers: reject control
+	// characters outright instead of relying on later sanitization (CWE-93).
+	if hasControlChars(req.Host) || strings.ContainsAny(req.Host, " /@") {
+		return errors.New("host is not a valid hostname")
+	}
+	if hasControlChars(req.FromName) {
+		return errors.New("from_name must not contain control characters")
+	}
+	if !notification.IsBareAddress(req.From) {
+		return errors.New("from must be a plain email address, e.g. noreply@example.com")
+	}
 	return nil
+}
+
+// hasControlChars reports whether s contains any ASCII control character
+// (including CR and LF) or DEL.
+func hasControlChars(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
 }
 
 // =============================================================================
