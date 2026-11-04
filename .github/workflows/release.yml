@@ -92,6 +92,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional: without it GoReleaser still renders the AUR PKGBUILD in
+          # dist/ but skips pushing it (see aurs in .goreleaser.yml).
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
       # The Helm chart is published as an OCI artifact on GHCR and Docker Hub,
       # versioned like the release (ADR 0014). It runs after GoReleaser so the
