@@ -39,6 +39,7 @@ const schema = toTypedSchema(
         job_failure: z.boolean(),
         agent_offline: z.boolean(),
         agent_online: z.boolean(),
+        email_enabled: z.boolean(),
         webhook_enabled: z.boolean(),
         webhook_url: z.string(),
         webhook_secret: z.string(),
@@ -56,6 +57,7 @@ const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
         job_failure: true,
         agent_offline: true,
         agent_online: false,
+        email_enabled: true,
         webhook_enabled: false,
         webhook_url: '',
         webhook_secret: '',
@@ -66,6 +68,7 @@ const { value: jobSuccess } = useField<boolean>('job_success')
 const { value: jobFailure } = useField<boolean>('job_failure')
 const { value: agentOffline } = useField<boolean>('agent_offline')
 const { value: agentOnline } = useField<boolean>('agent_online')
+const { value: emailEnabled } = useField<boolean>('email_enabled')
 const { value: webhookEnabled } = useField<boolean>('webhook_enabled')
 const { value: webhookUrl, errorMessage: webhookUrlError } = useField<string>('webhook_url')
 const { value: webhookSecret } = useField<string>('webhook_secret')
@@ -129,6 +132,7 @@ const submit = handleSubmit(async (values) => {
                     job_failure: values.job_failure,
                     agent_offline: values.agent_offline,
                     agent_online: values.agent_online,
+                    email_enabled: values.email_enabled,
                 },
             }),
             api('/api/v1/settings/webhook', {
@@ -277,6 +281,18 @@ const sendTestWebhook = handleSubmit(async (values) => {
             </div>
 
             <Separator />
+
+            <!-- ── Email ───────────────────────────────────────────────────── -->
+            <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+                <div>
+                    <p class="text-sm font-medium">Send email notifications</p>
+                    <p class="text-xs text-muted-foreground">
+                        Email every enabled event above to the notification recipients set in SMTP settings.
+                        Password reset emails are sent either way.
+                    </p>
+                </div>
+                <Switch :model-value="emailEnabled" @update:model-value="emailEnabled = $event" />
+            </div>
 
             <!-- ── Webhook ─────────────────────────────────────────────────── -->
             <div class="flex flex-col gap-4">

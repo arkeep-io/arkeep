@@ -7,6 +7,7 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -33,6 +34,11 @@ const (
 	// that receive email notifications. When empty the service falls back to
 	// all active admin users' email addresses.
 	KeyNotificationRecipients = "notification.recipients"
+
+	// KeyEmailEnabled turns event notifications by email on or off ("true" or
+	// "false"). Absent means on, so installs that predate it keep emailing.
+	// Password reset emails do not depend on it: they use SMTP directly.
+	KeyEmailEnabled = "notification.email_enabled"
 
 	// Per-event toggle keys — "true" or "false", default true except agent_online.
 	KeyEventJobSuccess   = "notification.events.job_success"
@@ -142,6 +148,32 @@ func loadWebhookConfig(ctx context.Context, repo repositories.SettingsRepository
 		Secret:  idx[KeyWebhookSecret],
 		Enabled: enabled,
 	}, nil
+}
+
+// channelEnabled reports whether the external channel deliveryType ("email" or
+// "webhook") is turned on. Email is on unless KeyEmailEnabled is "false"; the
+// webhook is on only when KeyWebhookEnabled is "true". When the setting cannot
+// be read the channel counts as on, so the delivery is attempted and its
+// failure reported rather than silently dropped.
+func channelEnabled(ctx context.Context, repo repositories.SettingsRepository, deliveryType string) bool {
+	var key string
+	var def bool
+	switch deliveryType {
+	case "email":
+		key, def = KeyEmailEnabled, true
+	case "webhook":
+		key, def = KeyWebhookEnabled, false
+	default:
+		return true
+	}
+	s, err := repo.Get(ctx, key)
+	if errors.Is(err, repositories.ErrNotFound) {
+		return def
+	}
+	if err != nil {
+		return true
+	}
+	return string(s.Value) == "true"
 }
 
 // NotificationEventsConfig holds the per-event enable/disable toggles for

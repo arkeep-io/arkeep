@@ -382,6 +382,8 @@ export interface NotificationSettings {
   job_failure: boolean
   agent_offline: boolean
   agent_online: boolean
+  // Event notifications by email; the webhook has its own switch.
+  email_enabled: boolean
 }
 
 // LogRetentionSettings controls automatic pruning of job_logs rows. Days are
