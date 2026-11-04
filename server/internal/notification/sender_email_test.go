@@ -113,3 +113,21 @@ func TestBuildEmail(t *testing.T) {
 		})
 	}
 }
+
+func TestIsBareAddress(t *testing.T) {
+	ok := []string{"noreply@arkeep.io", "a.b+c@example.com"}
+	bad := []string{
+		"", "not-an-address", "Arkeep <noreply@arkeep.io>", "noreply@arkeep.io (x)",
+		"noreply@arkeep.io\r\nBcc: attacker@evil.com", "a@b.com, c@d.com",
+	}
+	for _, s := range ok {
+		if !IsBareAddress(s) {
+			t.Errorf("IsBareAddress(%q) = false, want true", s)
+		}
+	}
+	for _, s := range bad {
+		if IsBareAddress(s) {
+			t.Errorf("IsBareAddress(%q) = true, want false", s)
+		}
+	}
+}
