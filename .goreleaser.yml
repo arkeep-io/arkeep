@@ -171,6 +171,10 @@ changelog:
   sort: asc
   abbrev: 7
   format: "{{ .Message }} ({{ .SHA }}){{ with .AuthorUsername }} by @{{ . }}{{ end }}"
+  # A commit lands in Breaking Changes only when its type carries a "!"
+  # (feat!:, fix(api)!:): mark every change that needs action on upgrade.
+  # docs and refactor commits are left out (see filters): they concern
+  # contributors, and the Full Changelog link still lists them.
   groups:
     - title: "⚠️ Breaking Changes"
       regexp: '^.*![:(]|^BREAKING CHANGE:'
@@ -188,23 +192,20 @@ changelog:
       regexp: '^(build|ci)(\(.+\))?:'
       order: 4
     - title: "🧹 Maintenance"
-      regexp: '^(refactor|chore)(\(.+\))?:'
+      regexp: '^chore(\(.+\))?:'
       order: 5
-    - title: "📚 Documentation"
-      regexp: '^docs(\(.+\))?:'
-      order: 6
     - title: "🔧 Other Changes"
       order: 999
   filters:
     exclude:
       - '^test(\(.+\))?:'
       - '^style(\(.+\))?:'
+      - '^docs(\(.+\))?:'
+      - '^refactor(\(.+\))?:'
       - '^Merge pull request'
       - '^Merge branch'
       - '^merge '
       - '^revert: merge '
-      - '^docs: update badge'
-      - '^docs\(readme\): update sponsors'
       - '^chore\(deps\):'
       - '^chore\(release\):'
 
@@ -222,7 +223,7 @@ release:
     > This is a pre-release. It may contain bugs or incomplete features — avoid running it in production.
     {{ end }}
     > [!IMPORTANT]
-    > Database migrations run automatically when the server starts. Back up your database (or the `data/` volume) before upgrading.
+    > Database migrations run automatically when the server starts. Back up your database (or the `data/` volume) before upgrading — see [Upgrading](https://arkeep.io/docs/installation/upgrading/).
 
     ## 📦 Install
 
@@ -234,8 +235,6 @@ release:
     Kubernetes: `helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version {{ .Version }}` (also `oci://registry-1.docker.io/arkeepio/arkeep`).
 
     Images are also published on Docker Hub (`arkeepio/arkeep-server`, `arkeepio/arkeep-agent`) for `linux/amd64` and `linux/arm64`. Standalone binaries — server for Linux and macOS, agent for Linux (amd64, arm64, armv7, mips, mipsle), macOS and Windows — are attached below. See the [installation docs](https://arkeep.io/docs/installation/docker-compose/) for Docker Compose, binary and Helm setups.
-
-    ## 📝 What's Changed
 
   footer: |
     {{- with envOrDefault "CONTRIBUTORS" "" }}
