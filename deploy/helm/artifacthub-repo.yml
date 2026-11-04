@@ -1,0 +1,6 @@
+# Artifact Hub repository metadata for oci://ghcr.io/arkeep-io/charts/arkeep.
+# Pushed to the chart's artifacthub.io tag by
+# .github/workflows/registry-metadata.yml. A matching repositoryID gives the
+# repository the verified publisher badge.
+# Schema: https://github.com/artifacthub/hub/blob/master/docs/metadata/artifacthub-repo.yml
+repositoryID: 90100684-6fb9-4bf5-9cea-29f5a20f70fa
