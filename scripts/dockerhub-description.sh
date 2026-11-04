@@ -3,8 +3,10 @@
 #
 # Usage: scripts/dockerhub-description.sh <namespace/repo> <short description> <markdown file>
 #
-# Requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a personal access token
-# with the Read, Write, Delete scope) in the environment, plus curl and jq.
+# Requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the environment: a
+# personal account with edit rights on the repository and one of its personal
+# access tokens with the Read, Write, Delete scope (an organization access
+# token is refused). Also needs curl and jq.
 # Used by .github/workflows/registry-metadata.yml. Calls the Docker Hub API directly
 # so that the token is never handed to third-party code.
 set -euo pipefail
@@ -29,20 +31,28 @@ if [ "$size" -gt 25000 ]; then
   exit 1
 fi
 
-token=$(jq -n --arg id "$DOCKERHUB_USERNAME" --arg secret "$DOCKERHUB_TOKEN" \
+login=$(jq -n --arg id "$DOCKERHUB_USERNAME" --arg secret "$DOCKERHUB_TOKEN" \
     '{identifier: $id, secret: $secret}' \
-  | curl -fsS -X POST https://hub.docker.com/v2/auth/token \
-      -H "Content-Type: application/json" --data @- \
-  | jq -r '.access_token // empty')
+  | curl -sS --fail-with-body -X POST https://hub.docker.com/v2/auth/token \
+      -H "Content-Type: application/json" --data @-) || {
+  echo "Docker Hub login failed: ${login}" >&2
+  exit 1
+}
+token=$(jq -r '.access_token // empty' <<<"$login")
 if [ -z "$token" ]; then
   echo "Docker Hub login returned no access token" >&2
   exit 1
 fi
 
-jq -n --arg short "$short" --rawfile full "$file" \
+# An organization access token can log in but is refused here (403): editing
+# a repository page needs a personal access token.
+resp=$(jq -n --arg short "$short" --rawfile full "$file" \
     '{description: $short, full_description: $full}' \
-  | curl -fsS -o /dev/null -X PATCH "https://hub.docker.com/v2/repositories/${repo}/" \
+  | curl -sS --fail-with-body -X PATCH "https://hub.docker.com/v2/repositories/${repo}/" \
       -H "Authorization: Bearer ${token}" \
-      -H "Content-Type: application/json" --data @-
+      -H "Content-Type: application/json" --data @-) || {
+  echo "Docker Hub refused to update ${repo}: ${resp}" >&2
+  exit 1
+}
 
 echo "updated ${repo} from ${file}"
