@@ -728,3 +728,24 @@ func TestSettingsHandler_OIDCAccessFields(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateUpsertSMTPRejectsInjection(t *testing.T) {
+	base := upsertSMTPRequest{Host: "smtp.example.com", Port: 587, From: "noreply@example.com", FromName: "Arkeep"}
+	if err := validateUpsertSMTP(&base); err != nil {
+		t.Fatalf("valid request rejected: %v", err)
+	}
+	cases := map[string]func(r *upsertSMTPRequest){
+		"CRLF in host":      func(r *upsertSMTPRequest) { r.Host = "smtp.example.com\r\nX: y" },
+		"space in host":     func(r *upsertSMTPRequest) { r.Host = "smtp example.com" },
+		"CRLF in from":      func(r *upsertSMTPRequest) { r.From = "a@example.com\r\nBcc: x@evil.com" },
+		"display in from":   func(r *upsertSMTPRequest) { r.From = "Evil <a@example.com>" },
+		"CRLF in from_name": func(r *upsertSMTPRequest) { r.FromName = "Evil\r\nBcc: x@evil.com" },
+	}
+	for name, mutate := range cases {
+		r := base
+		mutate(&r)
+		if err := validateUpsertSMTP(&r); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
