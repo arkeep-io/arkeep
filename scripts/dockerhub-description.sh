@@ -5,7 +5,7 @@
 #
 # Requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (a personal access token
 # with the Read, Write, Delete scope) in the environment, plus curl and jq.
-# Used by .github/workflows/dockerhub.yml. Calls the Docker Hub API directly
+# Used by .github/workflows/registry-metadata.yml. Calls the Docker Hub API directly
 # so that the token is never handed to third-party code.
 set -euo pipefail
 

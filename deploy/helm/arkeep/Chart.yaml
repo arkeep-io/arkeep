@@ -23,3 +23,13 @@ sources:
 maintainers:
   - name: arkeep-io
     url: https://github.com/arkeep-io
+
+# Read by Artifact Hub (https://artifacthub.io/docs/topics/annotations/helm/).
+annotations:
+  artifacthub.io/category: storage
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://arkeep.io/docs/installation/kubernetes/
+    - name: support
+      url: https://github.com/arkeep-io/arkeep/issues

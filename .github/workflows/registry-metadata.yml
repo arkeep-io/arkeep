@@ -1,0 +1,97 @@
+name: Registry metadata
+
+# Publishes what registries and catalogs show about Arkeep from the repository,
+# so it describes what is on main and never drifts from it.
+#
+# Docker Hub repository pages:
+#   arkeepio/arkeep-server  <- deploy/docker/hub/arkeep-server.md
+#   arkeepio/arkeep-agent   <- deploy/docker/hub/arkeep-agent.md
+#   arkeepio/arkeep (chart) <- deploy/helm/arkeep/README.md
+# Images and links in these files must use absolute URLs: Docker Hub does not
+# resolve relative ones.
+#
+# Artifact Hub repository metadata (verified publisher):
+#   ghcr.io/arkeep-io/charts/arkeep:artifacthub.io <- deploy/helm/artifacthub-repo.yml
+# Artifact Hub reads it the next time it processes the repository.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - deploy/docker/hub/**
+      - deploy/helm/arkeep/README.md
+      - deploy/helm/artifacthub-repo.yml
+      - scripts/dockerhub-description.sh
+      - .github/workflows/registry-metadata.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-metadata
+  cancel-in-progress: true
+
+jobs:
+  dockerhub:
+    name: Docker Hub descriptions
+    runs-on: ubuntu-26.04
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: arkeepio/arkeep-server
+        run: >-
+          scripts/dockerhub-description.sh arkeepio/arkeep-server
+          "Arkeep server: web UI, REST API and gRPC hub for self-hosted Restic and Rclone backups"
+          deploy/docker/hub/arkeep-server.md
+
+      - name: arkeepio/arkeep-agent
+        run: >-
+          scripts/dockerhub-description.sh arkeepio/arkeep-agent
+          "Arkeep agent: backs up a machine with embedded Restic and Rclone, driven by an Arkeep server"
+          deploy/docker/hub/arkeep-agent.md
+
+      - name: arkeepio/arkeep (Helm chart)
+        run: >-
+          scripts/dockerhub-description.sh arkeepio/arkeep
+          "Helm chart for Arkeep, self-hosted backup management for Restic and Rclone"
+          deploy/helm/arkeep/README.md
+
+  artifacthub:
+    name: Artifact Hub repository metadata
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache: false
+
+      # oras is a Go tool: go install pins it and checks it against the Go
+      # checksum database (ADR 0013).
+      - name: Install oras
+        run: GOWORK=off go install oras.land/oras/cmd/oras@v1.3.6
+
+      # The metadata goes under the special artifacthub.io tag of the chart
+      # repository, with the media types Artifact Hub looks for. oras stores the
+      # layer under its file name, so it is pushed from its own directory.
+      - name: Push artifacthub-repo.yml
+        working-directory: deploy/helm
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | oras login ghcr.io --username "$GHCR_USER" --password-stdin
+          oras push ghcr.io/arkeep-io/charts/arkeep:artifacthub.io \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
