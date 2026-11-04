@@ -120,11 +120,19 @@ dockers_v2:
       - linux/arm64
     labels:
       "org.opencontainers.image.title": "arkeep-server"
+      "org.opencontainers.image.description": "Arkeep server: web UI, REST API and gRPC hub for self-hosted Restic and Rclone backups"
       "org.opencontainers.image.version": "{{ .Version }}"
       "org.opencontainers.image.revision": "{{ .Commit }}"
       "org.opencontainers.image.created": "{{ .Date }}"
       "org.opencontainers.image.source": "https://github.com/arkeep-io/arkeep"
+      "org.opencontainers.image.url": "https://arkeep.io"
+      "org.opencontainers.image.documentation": "https://arkeep.io/docs/"
+      "org.opencontainers.image.vendor": "Arkeep"
       "org.opencontainers.image.licenses": "Apache-2.0"
+    # GHCR reads the description of a multi-platform image from the index
+    # annotation, not from the image labels.
+    annotations:
+      "index:org.opencontainers.image.description": "Arkeep server: web UI, REST API and gRPC hub for self-hosted Restic and Rclone backups"
 
   - id: agent
     ids: [agent]
@@ -142,11 +150,17 @@ dockers_v2:
       - linux/arm64
     labels:
       "org.opencontainers.image.title": "arkeep-agent"
+      "org.opencontainers.image.description": "Arkeep agent: backs up a machine with embedded Restic and Rclone, driven by an Arkeep server"
       "org.opencontainers.image.version": "{{ .Version }}"
       "org.opencontainers.image.revision": "{{ .Commit }}"
       "org.opencontainers.image.created": "{{ .Date }}"
       "org.opencontainers.image.source": "https://github.com/arkeep-io/arkeep"
+      "org.opencontainers.image.url": "https://arkeep.io"
+      "org.opencontainers.image.documentation": "https://arkeep.io/docs/"
+      "org.opencontainers.image.vendor": "Arkeep"
       "org.opencontainers.image.licenses": "Apache-2.0"
+    annotations:
+      "index:org.opencontainers.image.description": "Arkeep agent: backs up a machine with embedded Restic and Rclone, driven by an Arkeep server"
 
 # `use: github` resolves each commit's GitHub login, so every entry can credit
 # its author with an @mention (GitHub then renders the contributor avatars on

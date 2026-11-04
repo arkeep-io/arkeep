@@ -1,0 +1,55 @@
+name: Docker Hub descriptions
+
+# Publishes the Docker Hub repository pages from the repository, so they
+# describe what is on main and never drift from it:
+#   arkeepio/arkeep-server  <- deploy/docker/hub/arkeep-server.md
+#   arkeepio/arkeep-agent   <- deploy/docker/hub/arkeep-agent.md
+#   arkeepio/arkeep (chart) <- deploy/helm/arkeep/README.md
+# Images and links in these files must use absolute URLs: Docker Hub does not
+# resolve relative ones.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - deploy/docker/hub/**
+      - deploy/helm/arkeep/README.md
+      - scripts/dockerhub-description.sh
+      - .github/workflows/dockerhub.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-descriptions
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Update descriptions
+    runs-on: ubuntu-26.04
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: arkeepio/arkeep-server
+        run: >-
+          scripts/dockerhub-description.sh arkeepio/arkeep-server
+          "Arkeep server: web UI, REST API and gRPC hub for self-hosted Restic and Rclone backups"
+          deploy/docker/hub/arkeep-server.md
+
+      - name: arkeepio/arkeep-agent
+        run: >-
+          scripts/dockerhub-description.sh arkeepio/arkeep-agent
+          "Arkeep agent: backs up a machine with embedded Restic and Rclone, driven by an Arkeep server"
+          deploy/docker/hub/arkeep-agent.md
+
+      - name: arkeepio/arkeep (Helm chart)
+        run: >-
+          scripts/dockerhub-description.sh arkeepio/arkeep
+          "Helm chart for Arkeep, self-hosted backup management for Restic and Rclone"
+          deploy/helm/arkeep/README.md
