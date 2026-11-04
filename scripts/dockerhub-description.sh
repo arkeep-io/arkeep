@@ -44,8 +44,8 @@ if [ -z "$token" ]; then
   exit 1
 fi
 
-# An organization access token can log in but is refused here (403): editing
-# a repository page needs a personal access token.
+# A token that can log in but lacks the Read, Write, Delete scope (or an
+# organization access token) is refused here with 403.
 resp=$(jq -n --arg short "$short" --rawfile full "$file" \
     '{description: $short, full_description: $full}' \
   | curl -sS --fail-with-body -X PATCH "https://hub.docker.com/v2/repositories/${repo}/" \

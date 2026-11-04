@@ -35,12 +35,11 @@ jobs:
   dockerhub:
     name: Docker Hub descriptions
     runs-on: ubuntu-26.04
-    # Editing a repository page needs a personal access token: the
-    # organization access token used to push images (DOCKERHUB_TOKEN) is
-    # refused. Kept in separate secrets so the release keeps push-only rights.
+    # Editing a repository page needs a personal access token with the Read,
+    # Write, Delete scope (see scripts/dockerhub-description.sh).
     env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_DESCRIPTION_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
