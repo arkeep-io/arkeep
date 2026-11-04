@@ -35,6 +35,8 @@ jobs:
   dockerhub:
     name: Docker Hub descriptions
     runs-on: ubuntu-26.04
+    # Editing a repository page needs a personal access token with the Read,
+    # Write, Delete scope (see scripts/dockerhub-description.sh).
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
