@@ -8,7 +8,7 @@ vi.mock('@/services/api', async (importActual) => ({
   api: vi.fn(),
 }))
 
-const events = { job_success: false, job_failure: true, agent_offline: true, agent_online: false }
+const events = { job_success: false, job_failure: true, agent_offline: true, agent_online: false, email_enabled: true }
 
 // openPage mounts the page with the stored events and webhook (null = none).
 async function openPage(webhook: { url: string; enabled: boolean } | null) {
@@ -44,6 +44,20 @@ describe('NotificationsPage', () => {
 
     expect(putBody('/api/v1/settings/notifications')).toEqual(events)
     expect(putBody('/api/v1/settings/webhook')).toEqual({ url: '', secret: '', enabled: false })
+  })
+
+  it('turns email notifications off and keeps the webhook on', async () => {
+    const wrapper = await openPage({ url: 'https://hooks.example.com/arkeep', enabled: true })
+    // The email switch comes right before the webhook one, the last.
+    const toggle = wrapper.findAllComponents({ name: 'Switch' }).at(-2)!
+    toggle.vm.$emit('update:modelValue', false)
+    await wrapper.vm.$nextTick()
+    await submitForm(wrapper)
+
+    expect(putBody('/api/v1/settings/notifications')).toEqual({ ...events, email_enabled: false })
+    expect(putBody('/api/v1/settings/webhook')).toEqual({
+      url: 'https://hooks.example.com/arkeep', secret: '', enabled: true,
+    })
   })
 
   it.each([

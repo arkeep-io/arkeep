@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"testing"
 
@@ -464,6 +465,62 @@ func TestSettingsHandler_UpsertWebhook(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.doJSON(t, "PUT", "/api/v1/settings/webhook", "", validWebhook)
 		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+func TestSettingsHandler_NotificationEmailSwitch(t *testing.T) {
+	events := map[string]any{"job_success": true, "job_failure": true, "agent_offline": true, "agent_online": false}
+	type settingsData struct {
+		EmailEnabled bool `json:"email_enabled"`
+	}
+	getEmailEnabled := func(t *testing.T, e *testEnv) bool {
+		t.Helper()
+		resp := e.get(t, "/api/v1/settings/notifications", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data settingsData
+		decodeData(t, resp, &data)
+		return data.EmailEnabled
+	}
+
+	t.Run("email notifications are on by default", func(t *testing.T) {
+		e := newTestEnv(t)
+		if !getEmailEnabled(t, e) {
+			t.Error("email_enabled = false, want true")
+		}
+	})
+
+	t.Run("admin can turn email notifications off", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := map[string]any{"email_enabled": false}
+		maps.Copy(body, events)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusOK)
+		var data settingsData
+		decodeData(t, resp, &data)
+		if data.EmailEnabled {
+			t.Error("PUT answered email_enabled = true, want false")
+		}
+		if getEmailEnabled(t, e) {
+			t.Error("GET email_enabled = true after turning it off, want false")
+		}
+	})
+
+	t.Run("a request without email_enabled keeps the stored value", func(t *testing.T) {
+		e := newTestEnv(t)
+		off := map[string]any{"email_enabled": false}
+		maps.Copy(off, events)
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), off), http.StatusOK)
+
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), events)
+		assertStatus(t, resp, http.StatusOK)
+		var data settingsData
+		decodeData(t, resp, &data)
+		if data.EmailEnabled {
+			t.Error("PUT answered email_enabled = true, want the stored false")
+		}
+		if getEmailEnabled(t, e) {
+			t.Error("email_enabled = true, want it left off")
+		}
 	})
 }
 

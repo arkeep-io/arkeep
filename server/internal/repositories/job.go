@@ -477,6 +477,43 @@ func (r *gormJobRepository) HasJobForPolicyAfter(ctx context.Context, policyID u
 	return count > 0, nil
 }
 
+// ListRecentBackupsByPolicies returns up to perPolicy of each policy's most
+// recent backup jobs, newest first, keyed by policy ID. One window-function
+// query for the whole page of policies keeps the policies list free of N+1
+// lookups. Restores also carry the policy ID but say nothing about the
+// policy's health, so only backups count. Only the columns the run history
+// shows are read (idx_jobs_policy_id_created_at serves the ranking).
+func (r *gormJobRepository) ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error) {
+	result := make(map[uuid.UUID][]db.Job, len(policyIDs))
+	if len(policyIDs) == 0 || perPolicy <= 0 {
+		return result, nil
+	}
+
+	ranked := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select("jobs.id, jobs.policy_id, jobs.status, jobs.created_at, jobs.started_at, jobs.ended_at, " +
+			"ROW_NUMBER() OVER (PARTITION BY jobs.policy_id ORDER BY jobs.created_at DESC, jobs.id DESC) AS rn").
+		Where("jobs.policy_id IN ? AND jobs.type = ?", policyIDs, "backup")
+
+	var rows []db.Job
+	if err := r.db.WithContext(ctx).
+		Table("(?) AS ranked", ranked).
+		Select("ranked.*").
+		Where("ranked.rn <= ?", perPolicy).
+		Order("ranked.policy_id, ranked.rn").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list recent backups by policies: %w", err)
+	}
+
+	for _, j := range rows {
+		if j.PolicyID == nil {
+			continue
+		}
+		result[*j.PolicyID] = append(result[*j.PolicyID], j)
+	}
+	return result, nil
+}
+
 // ListFiltered returns a paginated list of jobs matching every non-zero field
 // of filter. A zero filter lists all jobs.
 func (r *gormJobRepository) ListFiltered(ctx context.Context, filter JobFilter, opts ListOptions) ([]JobWithNames, int64, error) {

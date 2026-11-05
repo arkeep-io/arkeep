@@ -57,3 +57,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0013](0013-pin-and-verify-every-dependency.md) | Pin and verify every dependency | Accepted |
 | [0014](0014-publish-the-helm-chart-as-an-oci-artifact.md) | Publish the Helm chart as an OCI artifact on GHCR and Docker Hub | Accepted |
 | [0015](0015-bundle-postgresql-in-the-helm-chart-with-the-official-image.md) | Bundle PostgreSQL in the Helm chart with the official image | Accepted |
+| [0016](0016-validate-release-tags-and-keep-latest-for-stable-releases.md) | Validate release tags and keep latest for stable releases | Accepted |

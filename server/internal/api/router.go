@@ -145,7 +145,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	}
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.Policies, cfg.Destinations, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.CheckScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
-	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
+	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Jobs, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
