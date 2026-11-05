@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import {
     Table,
@@ -43,7 +43,8 @@ import {
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, apiErrorMessage } from '@/services/api'
-import type { Policy, ApiResponse, TriggerResponse } from '@/types'
+import type { Policy, PolicyRecentJob, ApiResponse, TriggerResponse } from '@/types'
+import { formatDate, statusDotClass, statusLabel } from '@/lib/jobUtils'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
@@ -109,6 +110,29 @@ function scheduleLabel(cron: string): string {
         '@hourly': 'Hourly',
     }
     return presets[cron] ?? cron
+}
+
+/** Number of recent runs shown as dots; the server returns at most this many. */
+const RECENT_RUNS = 5
+
+/** Most recent run first, as the API returns them. */
+function recentJobs(policy: Policy): PolicyRecentJob[] {
+    return policy.recent_jobs ?? []
+}
+
+/**
+ * Recent runs oldest → newest, left to right, padded on the left with empty
+ * slots so the latest run always sits in the same column.
+ */
+function runHistory(policy: Policy): (PolicyRecentJob | null)[] {
+    const runs = recentJobs(policy).slice(0, RECENT_RUNS).reverse()
+    return [...Array<null>(RECENT_RUNS - runs.length).fill(null), ...runs]
+}
+
+/** When the latest run started, or was queued if it has not started yet. */
+function lastRunDate(policy: Policy): string | null {
+    const last = recentJobs(policy)[0]
+    return last ? (last.started_at ?? last.created_at) : null
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +278,8 @@ onMounted(fetchPolicies)
                         <SortableTableHead label="Agent" :active="sortKey === 'agent'" :order="sortOrder"
                             @toggle="toggleSort('agent')" />
                         <TableHead>Schedule</TableHead>
+                        <TableHead>Last Run</TableHead>
+                        <TableHead>Recent Runs</TableHead>
                         <SortableTableHead label="Status" :active="sortKey === 'status'" :order="sortOrder"
                             @toggle="toggleSort('status', 'desc')" />
                         <TableHead class="w-13" />
@@ -264,7 +290,7 @@ onMounted(fetchPolicies)
                     <!-- Loading skeletons -->
                     <template v-if="loading">
                         <TableRow v-for="n in 5" :key="n">
-                            <TableCell v-for="col in 5" :key="col">
+                            <TableCell v-for="col in 7" :key="col">
                                 <Skeleton class="w-full h-4" />
                             </TableCell>
                         </TableRow>
@@ -273,7 +299,7 @@ onMounted(fetchPolicies)
                     <!-- Empty state -->
                     <template v-else-if="policies.length === 0">
                         <TableRow>
-                            <TableCell colspan="5">
+                            <TableCell colspan="7">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                                     <div class="p-4 rounded-full bg-muted">
                                         <ShieldCheck class="w-10 h-10 text-muted-foreground" />
@@ -310,6 +336,32 @@ onMounted(fetchPolicies)
                                 <span class="font-mono text-xs text-muted-foreground">
                                     {{ scheduleLabel(policy.schedule) }}
                                 </span>
+                            </TableCell>
+                            <TableCell class="text-sm text-muted-foreground whitespace-nowrap" data-testid="last-run">
+                                {{ lastRunDate(policy) ? formatDate(lastRunDate(policy)) : 'Never' }}
+                            </TableCell>
+                            <!-- Oldest to newest; each dot opens its job -->
+                            <TableCell @click.stop>
+                                <div class="flex items-center gap-1.5" role="list" aria-label="Recent runs">
+                                    <template v-for="(run, i) in runHistory(policy)" :key="run?.id ?? `empty-${i}`">
+                                        <Tooltip v-if="run">
+                                            <TooltipTrigger as-child>
+                                                <RouterLink :to="{ name: 'job-detail', params: { id: run.id } }"
+                                                    role="listitem"
+                                                    data-testid="run-dot"
+                                                    :data-status="run.status"
+                                                    class="block size-2.5 rounded-full transition-transform hover:scale-125 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                                                    :class="[statusDotClass(run.status), { 'animate-pulse': run.status === 'running' }]"
+                                                    :aria-label="`${statusLabel(run.status)} — ${formatDate(run.started_at ?? run.created_at)}`" />
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                                {{ statusLabel(run.status) }} · {{ formatDate(run.started_at ?? run.created_at) }}
+                                            </TooltipContent>
+                                        </Tooltip>
+                                        <span v-else role="listitem" aria-label="No run" data-testid="run-dot-empty"
+                                            class="block size-2.5 rounded-full border border-dashed border-muted-foreground/40" />
+                                    </template>
+                                </div>
                             </TableCell>
                             <TableCell>
                                 <Badge :variant="policy.enabled ? 'default' : 'secondary'">
