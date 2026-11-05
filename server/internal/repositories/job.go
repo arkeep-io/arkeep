@@ -481,7 +481,8 @@ func (r *gormJobRepository) HasJobForPolicyAfter(ctx context.Context, policyID u
 // recent backup jobs, newest first, keyed by policy ID. One window-function
 // query for the whole page of policies keeps the policies list free of N+1
 // lookups. Restores also carry the policy ID but say nothing about the
-// policy's health, so only backups count.
+// policy's health, so only backups count. Only the columns the run history
+// shows are read (idx_jobs_policy_id_created_at serves the ranking).
 func (r *gormJobRepository) ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error) {
 	result := make(map[uuid.UUID][]db.Job, len(policyIDs))
 	if len(policyIDs) == 0 || perPolicy <= 0 {
@@ -490,7 +491,8 @@ func (r *gormJobRepository) ListRecentBackupsByPolicies(ctx context.Context, pol
 
 	ranked := r.db.WithContext(ctx).
 		Model(&db.Job{}).
-		Select("jobs.*, ROW_NUMBER() OVER (PARTITION BY jobs.policy_id ORDER BY jobs.created_at DESC, jobs.id DESC) AS rn").
+		Select("jobs.id, jobs.policy_id, jobs.status, jobs.created_at, jobs.started_at, jobs.ended_at, " +
+			"ROW_NUMBER() OVER (PARTITION BY jobs.policy_id ORDER BY jobs.created_at DESC, jobs.id DESC) AS rn").
 		Where("jobs.policy_id IN ? AND jobs.type = ?", policyIDs, "backup")
 
 	var rows []db.Job

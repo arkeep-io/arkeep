@@ -31,8 +31,7 @@ async function mountWith(policies: Policy[]) {
   const pinia = createPinia()
   setActivePinia(pinia)
   useAuthStore().user = { id: 'u1', email: 'jane@example.com', display_name: 'Jane', role: 'user' } as User
-  const { wrapper } = await mountPage(PoliciesPage, { pinia, stubs: { PolicySheet: true, RouterLink: true, Tooltip: true, TooltipTrigger: true, TooltipContent: true } })
-  return wrapper
+  return mountPage(PoliciesPage, { pinia, stubs: { PolicySheet: true, RouterLink: true, Tooltip: true, TooltipTrigger: true, TooltipContent: true } })
 }
 
 describe('PoliciesPage', () => {
@@ -41,7 +40,7 @@ describe('PoliciesPage', () => {
   afterAll(() => { config.global.renderStubDefaultSlot = false })
 
   it('shows the recent runs oldest to newest, padded to five', async () => {
-    const wrapper = await mountWith([policy('p1', 'home', [
+    const { wrapper } = await mountWith([policy('p1', 'home', [
       run('j3', 'pending', '2026-10-12T10:00:00Z'),
       run('j2', 'failed', '2026-10-11T10:00:00Z'),
       run('j1', 'succeeded', '2026-10-10T10:00:00Z'),
@@ -54,10 +53,22 @@ describe('PoliciesPage', () => {
   })
 
   it('says Never and shows five empty slots for a policy that has not run', async () => {
-    const wrapper = await mountWith([policy('p1', 'idle')])
+    const { wrapper } = await mountWith([policy('p1', 'idle')])
 
     expect(wrapper.find('[data-testid="last-run"]').text()).toBe('Never')
     expect(wrapper.findAll('[data-testid="run-dot"]')).toHaveLength(0)
     expect(wrapper.findAll('[data-testid="run-dot-empty"]')).toHaveLength(5)
+  })
+
+  it('opens the job from a run dot and the policy from the rest of the cell', async () => {
+    const { wrapper, router } = await mountWith([policy('p1', 'home', [run('j1', 'failed', '2026-10-10T10:00:00Z')])])
+    const dot = wrapper.get('[data-testid="run-dot"]')
+
+    await dot.trigger('click')
+    await dot.trigger('keyup', { key: 'Enter' })
+    expect(router.push).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="run-dot-empty"]').trigger('click')
+    expect(router.push).toHaveBeenCalledWith('/policies/p1')
   })
 })

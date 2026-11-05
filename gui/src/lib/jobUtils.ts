@@ -63,8 +63,7 @@ export function statusDotClass(status: string): string {
         case 'waiting': return 'bg-violet-500'
         case 'interrupted': return 'bg-amber-500'
         case 'failed': return 'bg-destructive'
-        case 'cancelled':
-        case 'skipped': return 'bg-slate-400 dark:bg-slate-500'
+        case 'cancelled': return 'bg-slate-400 dark:bg-slate-500'
         default: return 'bg-muted-foreground'
     }
 }

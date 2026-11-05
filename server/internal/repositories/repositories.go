@@ -342,7 +342,8 @@ type JobRepository interface {
 	HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
 	// ListRecentBackupsByPolicies returns up to perPolicy of each policy's
 	// most recent backup jobs, newest first, keyed by policy ID, in a single
-	// query. Policies without any backup job are absent from the map.
+	// query. Policies without any backup job are absent from the map. Only
+	// ID, PolicyID, Status, CreatedAt, StartedAt and EndedAt are filled.
 	ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
 

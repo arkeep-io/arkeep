@@ -340,8 +340,8 @@ onMounted(fetchPolicies)
                             <TableCell class="text-sm text-muted-foreground whitespace-nowrap" data-testid="last-run">
                                 {{ lastRunDate(policy) ? formatDate(lastRunDate(policy)) : 'Never' }}
                             </TableCell>
-                            <!-- Oldest to newest; each dot opens its job -->
-                            <TableCell @click.stop>
+                            <!-- Oldest to newest; each dot opens its job instead of the policy -->
+                            <TableCell>
                                 <div class="flex items-center gap-1.5" role="list" aria-label="Recent runs">
                                     <template v-for="(run, i) in runHistory(policy)" :key="run?.id ?? `empty-${i}`">
                                         <Tooltip v-if="run">
@@ -352,7 +352,9 @@ onMounted(fetchPolicies)
                                                     :data-status="run.status"
                                                     class="block size-2.5 rounded-full transition-transform hover:scale-125 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                                                     :class="[statusDotClass(run.status), { 'animate-pulse': run.status === 'running' }]"
-                                                    :aria-label="`${statusLabel(run.status)} — ${formatDate(run.started_at ?? run.created_at)}`" />
+                                                    :aria-label="`${statusLabel(run.status)} — ${formatDate(run.started_at ?? run.created_at)}`"
+                                                    @click.stop
+                                                    @keyup.enter.stop />
                                             </TooltipTrigger>
                                             <TooltipContent>
                                                 {{ statusLabel(run.status) }} · {{ formatDate(run.started_at ?? run.created_at) }}
