@@ -728,12 +728,15 @@ type notificationSettingsResponse struct {
 	JobFailure   bool `json:"job_failure"`
 	AgentOffline bool `json:"agent_offline"`
 	AgentOnline  bool `json:"agent_online"`
+	// EmailEnabled turns event notifications by email on or off. The webhook
+	// has its own switch in the webhook settings.
+	EmailEnabled bool `json:"email_enabled"`
 }
 
 // GetNotificationSettings handles GET /api/v1/settings/notifications (admin only).
 // Returns the current per-event toggle configuration with defaults applied.
 func (h *SettingsHandler) GetNotificationSettings(w http.ResponseWriter, r *http.Request) {
-	settings, err := h.settingsRepo.GetMany(r.Context(), "notification.events.")
+	settings, err := h.settingsRepo.GetMany(r.Context(), "notification.")
 	if err != nil {
 		h.logger.Error("failed to load notification event settings", zap.Error(err))
 		ErrInternal(w)
@@ -746,6 +749,7 @@ func (h *SettingsHandler) GetNotificationSettings(w http.ResponseWriter, r *http
 		JobFailure:   boolSetting(idx, notification.KeyEventJobFailure, true),
 		AgentOffline: boolSetting(idx, notification.KeyEventAgentOffline, true),
 		AgentOnline:  boolSetting(idx, notification.KeyEventAgentOnline, false),
+		EmailEnabled: boolSetting(idx, notification.KeyEmailEnabled, true),
 	}
 	Ok(w, resp)
 }
@@ -755,6 +759,9 @@ type upsertNotificationSettingsRequest struct {
 	JobFailure   bool `json:"job_failure"`
 	AgentOffline bool `json:"agent_offline"`
 	AgentOnline  bool `json:"agent_online"`
+	// EmailEnabled is optional: when omitted the stored value is kept, so
+	// clients that predate it do not turn email notifications off.
+	EmailEnabled *bool `json:"email_enabled"`
 }
 
 // UpsertNotificationSettings handles PUT /api/v1/settings/notifications (admin only).
@@ -774,6 +781,12 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 		{notification.KeyEventAgentOffline, strconv.FormatBool(req.AgentOffline)},
 		{notification.KeyEventAgentOnline, strconv.FormatBool(req.AgentOnline)},
 	}
+	if req.EmailEnabled != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{notification.KeyEmailEnabled, strconv.FormatBool(*req.EmailEnabled)})
+	}
 	for _, p := range pairs {
 		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
 			h.logger.Error("failed to save notification event setting",
@@ -785,8 +798,27 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 		}
 	}
 
-	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "", nil)
-	Ok(w, notificationSettingsResponse(req))
+	// Answer with the stored email switch, which the request may have left out.
+	emailEnabled := true
+	stored, err := h.settingsRepo.Get(ctx, notification.KeyEmailEnabled)
+	switch {
+	case err == nil:
+		emailEnabled = string(stored.Value) == "true"
+	case !errors.Is(err, repositories.ErrNotFound):
+		h.logger.Error("failed to load email notification setting", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
+	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "",
+		map[string]any{"email_enabled": emailEnabled})
+	Ok(w, notificationSettingsResponse{
+		JobSuccess:   req.JobSuccess,
+		JobFailure:   req.JobFailure,
+		AgentOffline: req.AgentOffline,
+		AgentOnline:  req.AgentOnline,
+		EmailEnabled: emailEnabled,
+	})
 }
 
 // =============================================================================

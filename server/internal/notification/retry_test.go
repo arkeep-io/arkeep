@@ -14,6 +14,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
 // newRetryTestService returns a service backed by an in-memory database.
@@ -31,6 +32,7 @@ func newRetryTestService(t *testing.T) (*NotificationService, repositories.UserR
 		UserRepo:     users,
 		SettingsRepo: settings,
 		PolicyRepo:   repositories.NewPolicyRepository(gdb),
+		Hub:          websocket.NewHub(),
 		Logger:       zap.NewNop(),
 	})
 	return svc, users, settings, notifs

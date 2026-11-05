@@ -364,20 +364,25 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 		return nil
 	}
 
-	// Email: resolve recipients (explicit config list, fall back to admin emails).
-	emailTo := s.configuredRecipients(ctx)
-	if len(emailTo) == 0 {
-		emailTo = emailRecipients
+	// A channel that is turned off gets no delivery row at all: nothing is
+	// attempted, retried or logged for it.
+	if channelEnabled(ctx, s.settingsRepo, "email") {
+		// Email: resolve recipients (explicit config list, fall back to admin emails).
+		emailTo := s.configuredRecipients(ctx)
+		if len(emailTo) == 0 {
+			emailTo = emailRecipients
+		}
+		s.enqueueAndSend(ctx, firstNotif, "email", func() error {
+			return s.email.Send(ctx, emailTo, ev.title, ev.body)
+		})
 	}
-	capturedEmailTo := emailTo // capture for closure
-	s.enqueueAndSend(ctx, firstNotif, "email", func() error {
-		return s.email.Send(ctx, capturedEmailTo, ev.title, ev.body)
-	})
 
 	// Webhook: one delivery per event.
-	s.enqueueAndSend(ctx, firstNotif, "webhook", func() error {
-		return s.webhook.Send(ctx, ev.notifType, ev.title, ev.body, ev.payload)
-	})
+	if channelEnabled(ctx, s.settingsRepo, "webhook") {
+		s.enqueueAndSend(ctx, firstNotif, "webhook", func() error {
+			return s.webhook.Send(ctx, ev.notifType, ev.title, ev.body, ev.payload)
+		})
+	}
 
 	return nil
 }
@@ -468,6 +473,20 @@ func (s *NotificationService) processDeliveries(ctx context.Context) {
 
 // retryDelivery attempts to resend a single delivery row.
 func (s *NotificationService) retryDelivery(ctx context.Context, d *db.NotificationDelivery) {
+	// The channel was turned off after the event: give the delivery up instead
+	// of sending a stale notification if the channel is turned back on later.
+	if !channelEnabled(ctx, s.settingsRepo, d.Type) {
+		d.Status = "exhausted"
+		d.LastError = d.Type + " notifications are turned off"
+		if err := s.notifRepo.UpdateDelivery(ctx, d); err != nil {
+			s.logger.Error("retrier: failed to update delivery row",
+				zap.String("delivery_id", d.ID.String()),
+				zap.Error(err),
+			)
+		}
+		return
+	}
+
 	// Load the parent notification to reconstruct content.
 	n, err := s.notifRepo.GetByID(ctx, d.NotificationID)
 	if err != nil {
