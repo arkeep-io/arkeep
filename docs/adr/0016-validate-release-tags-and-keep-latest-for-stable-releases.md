@@ -36,7 +36,7 @@ not check where a tag points.
 - A stable release requires the usual Gitflow path: `release/*` or `hotfix/*`
   merged into `main`, then tagged there.
 - Beta and rc builds can still be cut from `develop` for testing.
-- `latest` always points to the newest stable release.
+- The latest Docker image tag is updated only by stable releases.
 - Tags such as `v1.0.0-alpha.1` are no longer released. Adding a new
   pre-release kind requires a new ADR and a change to the workflow check.
 - The check is shell code in the workflow, reviewed like the rest of the
