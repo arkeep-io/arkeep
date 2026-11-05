@@ -18,6 +18,63 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # Refuses to release from a tag that is malformed or points to a commit
+      # outside the allowed branches, before anything is built or any
+      # registry credential is used. Stable tags (vX.Y.Z) must be in the
+      # history of main; beta and rc tags (vX.Y.Z-beta.N, vX.Y.Z-rc.N) in the
+      # history of main or develop. The tag is peeled to its commit, so
+      # lightweight and annotated tags are handled alike.
+      - name: Validate release tag and source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF_TYPE}" != "tag" ] || [ "${GITHUB_REF}" != "refs/tags/${GITHUB_REF_NAME}" ]; then
+            echo "::error::A release must be started by a tag push, got ref '${GITHUB_REF}'."
+            exit 1
+          fi
+
+          tag="${GITHUB_REF_NAME}"
+          num='(0|[1-9][0-9]*)'
+          stable_re="^v${num}\.${num}\.${num}$"
+          prerelease_re="^v${num}\.${num}\.${num}-(beta|rc)\.${num}$"
+          if [[ "$tag" =~ $stable_re ]]; then
+            allowed=(main)
+          elif [[ "$tag" =~ $prerelease_re ]]; then
+            allowed=(main develop)
+          else
+            echo "::error::Tag '${tag}' is not a release tag: use vX.Y.Z, vX.Y.Z-beta.N or vX.Y.Z-rc.N, with no leading zeros."
+            exit 1
+          fi
+
+          for branch in "${allowed[@]}"; do
+            if ! git fetch --no-tags origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"; then
+              echo "::error::Could not fetch origin/${branch} to validate tag '${tag}'."
+              exit 1
+            fi
+          done
+
+          if ! tag_commit=$(git rev-parse --verify --quiet "refs/tags/${tag}^{commit}"); then
+            echo "::error::Tag '${tag}' does not resolve to a commit in the checkout."
+            exit 1
+          fi
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$head_commit" ]; then
+            echo "::error::The checked-out commit ${head_commit} is not the commit of tag '${tag}' (${tag_commit})."
+            exit 1
+          fi
+
+          for branch in "${allowed[@]}"; do
+            if git merge-base --is-ancestor "$tag_commit" "refs/remotes/origin/${branch}"; then
+              echo "Tag ${tag} (${tag_commit}) is in the history of origin/${branch}."
+              exit 0
+            fi
+          done
+
+          printf -v branches 'origin/%s or ' "${allowed[@]}"
+          echo "::error::Tag '${tag}' points to ${tag_commit}, which is not in the history of ${branches% or }. Stable tags must be on main; beta and rc tags on main or develop."
+          exit 1
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.work
