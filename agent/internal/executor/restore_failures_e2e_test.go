@@ -30,8 +30,9 @@ func mustEndAs(t *testing.T, r *fakeReporter, sink *recordingSink, want string) 
 // the final message is the restic-run failure. The cause is pinned through
 // restic's exit code, its stable contract, when a specific one exists (12
 // wrong password, 10 repository missing); pass "" for the generic exit status
-// 1. restic's stderr text is also in the message but is not asserted, since
-// its wording can change between restic versions.
+// 1. The message also carries restic's own error text (the exit_error message
+// of its --json output, not the raw JSON), asserted only where a test needs
+// it, since its wording can change between restic versions.
 func mustFailInRestic(t *testing.T, r *fakeReporter, sink *recordingSink, exitStatus string) {
 	t.Helper()
 	mustEndAs(t, r, sink, "failed")
@@ -61,6 +62,10 @@ func TestRestoreE2E_WrongPassword(t *testing.T) {
 	sink := &recordingSink{}
 	r := env.restore(t, context.Background(), restorePayload{ResticSnapshotID: id, TargetPath: env.path("/home/u/restore"), RepoPassword: "wrong-password"}, sink)
 	mustFailInRestic(t, r, sink, "12")
+	// The user sees restic's message, not its raw JSON output.
+	if !strings.Contains(r.lastMsg, "wrong password") || strings.Contains(r.lastMsg, "message_type") {
+		t.Errorf("last message = %q, want restic's readable \"wrong password\" message without raw JSON", r.lastMsg)
+	}
 }
 
 func TestRestoreE2E_MissingRepository(t *testing.T) {

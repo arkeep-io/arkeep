@@ -53,6 +53,8 @@ func newE2EEnv(t *testing.T, hostRoot bool) *e2eEnv {
 	// that does not exist so the host's real /var/lib/docker/volumes never
 	// changes the outcome. Tests about it set their own.
 	env.e.dockerVolRoot = filepath.Join(t.TempDir(), "no-docker-volumes")
+	// Not the container the tests may themselves run in.
+	env.e.selfContainerID = ""
 	restictest.CopyInitializedRepo(t, env.repoPath())
 	return env
 }

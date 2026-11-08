@@ -4,7 +4,7 @@
 // host filesystem.
 //
 // The Docker socket is mounted read-only in the agent container — this package
-// never writes to the daemon, it only issues List and Inspect calls.
+// never writes to the daemon, it only issues List, Inspect and Info calls.
 //
 // If Docker is not available on the host (socket missing or daemon not running),
 // all methods return ErrDockerUnavailable so the executor can skip volume
@@ -15,6 +15,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -133,23 +136,33 @@ func (c *Client) InspectVolume(ctx context.Context, name string) (*VolumeInfo, e
 	}, nil
 }
 
-// RunningContainerVolumes holds the volume host-paths used by a single running container.
+// RunningContainerVolumes holds the host paths a single running container writes to.
 type RunningContainerVolumes struct {
+	// ContainerID is the full container ID.
+	ContainerID string
 	// ContainerName is the human-readable name of the container (without leading slash).
 	ContainerName string
 	// VolumePaths are the host-side mountpoints of the named volumes used by this
 	// container (e.g. /var/lib/docker/volumes/myapp_data/_data).
 	VolumePaths []string
+	// BindPaths are the host-side sources of the container's writable bind
+	// mounts (e.g. /srv/myapp/data). A bind source of "/" is left out: that
+	// is how the agent itself mounts the host (/:/hostfs), and it would cover
+	// every path.
+	BindPaths []string
+	// MountDestinations are the in-container paths of all its mounts, used
+	// to tell the agent's own container (which mounts the host root) apart.
+	MountDestinations []string
 }
 
-// ListRunningContainerVolumes returns the named-volume mountpoints used by
-// currently running containers. It is used by the executor to determine which
-// Docker volumes cannot be restored in-place without first stopping the
-// container.
+// ListRunningContainerVolumes returns the host paths currently running
+// containers write to: their named-volume mountpoints and writable bind-mount
+// sources. It is used by the executor to determine which paths cannot be
+// restored in-place without first stopping the container.
 //
-// Only named volumes (Type == volume) are included; bind-mounts are skipped.
-// If a volume's Source path is empty in the ContainerList response (the daemon
-// may omit it), the path is resolved via VolumeInspect.
+// Read-only bind mounts and other mount types are skipped. If a volume's
+// Source path is empty in the ContainerList response (the daemon may omit
+// it), the path is resolved via VolumeInspect.
 func (c *Client) ListRunningContainerVolumes(ctx context.Context) ([]RunningContainerVolumes, error) {
 	containers, err := c.docker.ContainerList(ctx, dockerclient.ContainerListOptions{All: false})
 	if err != nil {
@@ -163,8 +176,15 @@ func (c *Client) ListRunningContainerVolumes(ctx context.Context) ([]RunningCont
 			name = strings.TrimPrefix(ctr.Names[0], "/")
 		}
 
-		var paths []string
+		var paths, binds, dests []string
 		for _, m := range ctr.Mounts {
+			dests = append(dests, m.Destination)
+			if m.Type == mount.TypeBind {
+				if m.RW && m.Source != "" && m.Source != "/" {
+					binds = append(binds, m.Source)
+				}
+				continue
+			}
 			if m.Type != mount.TypeVolume {
 				continue
 			}
@@ -180,14 +200,74 @@ func (c *Client) ListRunningContainerVolumes(ctx context.Context) ([]RunningCont
 				paths = append(paths, src)
 			}
 		}
-		if len(paths) > 0 {
+		if len(paths) > 0 || len(binds) > 0 {
 			result = append(result, RunningContainerVolumes{
+				ContainerID:   ctr.ID,
 				ContainerName: name,
 				VolumePaths:   paths,
+				BindPaths:     binds,
+
+				MountDestinations: dests,
 			})
 		}
 	}
 	return result, nil
+}
+
+// VolumesRoot returns the directory where the daemon keeps named volumes:
+// its data root (DockerRootDir, /var/lib/docker unless configured otherwise)
+// followed by "/volumes".
+func (c *Client) VolumesRoot(ctx context.Context) (string, error) {
+	res, err := c.docker.Info(ctx, dockerclient.InfoOptions{})
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrDockerUnavailable, err)
+	}
+	if res.Info.DockerRootDir == "" {
+		return "", errors.New("docker: daemon did not report its data root")
+	}
+	return path.Join(res.Info.DockerRootDir, "volumes"), nil
+}
+
+// SelfContainerID returns the ID of the container the agent runs in, or ""
+// when it cannot tell (e.g. a native agent). It reads /proc/self/mountinfo,
+// falling back to the hostname, which Docker sets to the short container ID
+// unless configured otherwise. The result may be that short ID: compare it
+// as a prefix of full IDs.
+func SelfContainerID() string {
+	mountinfo, _ := os.ReadFile("/proc/self/mountinfo")
+	hostname, _ := os.Hostname()
+	return selfContainerID(string(mountinfo), hostname)
+}
+
+// containerIDRe matches a container's own directory in a mount source, as
+// used by Docker (…/docker/containers/<id>/) and Podman
+// (…/overlay-containers/<id>/userdata/).
+var containerIDRe = regexp.MustCompile(`containers/([0-9a-f]{64})/`)
+
+// shortIDRe matches a short container ID, Docker's default container hostname.
+var shortIDRe = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+// selfContainerID finds the agent's container ID in mountinfo: the runtime
+// bind-mounts the container's own /etc/hostname, /etc/hosts and
+// /etc/resolv.conf from its per-container directory.
+func selfContainerID(mountinfo, hostname string) string {
+	for _, line := range strings.Split(mountinfo, "\n") {
+		// Fields: id parent major:minor root mountpoint ...
+		f := strings.Fields(line)
+		if len(f) < 5 {
+			continue
+		}
+		switch f[4] {
+		case "/etc/hostname", "/etc/hosts", "/etc/resolv.conf":
+			if m := containerIDRe.FindStringSubmatch(f[3]); m != nil {
+				return m[1]
+			}
+		}
+	}
+	if shortIDRe.MatchString(hostname) {
+		return hostname
+	}
+	return ""
 }
 
 // Close releases the underlying Docker client resources.

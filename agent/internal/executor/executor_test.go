@@ -849,3 +849,31 @@ func TestNew_NilDockerClientLeavesInterfaceNil(t *testing.T) {
 		t.Errorf("dockerVolRoot = %q", e.dockerVolRoot)
 	}
 }
+
+func TestDesktopHostPath(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"/srv/app", "/srv/app"},
+		{"/run/desktop/mnt/host/c/Users/u/app", "c:/Users/u/app"},
+		{"/host_mnt/d/data", "d:/data"},
+		{"/run/desktop/mnt/host/c", "c:/"},
+		{"/host_mnt/c/", "c:/"},
+		{"/host_mnt", "/host_mnt"},
+		{"/host_mntx/c/data", "/host_mntx/c/data"},
+	}
+	for _, tt := range tests {
+		if got := desktopHostPath(tt.in); got != tt.want {
+			t.Errorf("desktopHostPath(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestIsFilesystemRoot(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/": true, `C:\`: true, "C:/": true, "c:": true, "c:/": true,
+		"/srv": false, "C:/Users": false, `C:\Users`: false,
+	} {
+		if got := isFilesystemRoot(p); got != want {
+			t.Errorf("isFilesystemRoot(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

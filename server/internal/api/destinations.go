@@ -1077,10 +1077,15 @@ func (h *DestinationHandler) CheckRepo(w http.ResponseWriter, r *http.Request) {
 	Ok(w, checkRepoResponse{Status: status, Message: msg})
 }
 
-// resticExitCodeRe extracts the numeric exit code from a wrapped error string
-// such as "restic: command failed: exit status 12\n{...}" when no JSON "code"
-// field is present.
-var resticExitCodeRe = regexp.MustCompile(`exit status (\d+)`)
+// resticExitCodeRe extracts the numeric exit code from the agent's error
+// string, "restic: <message> (exit status 12)", when no JSON "code" field is
+// present. The trailing form is tried first, since restic's message may
+// itself mention an exit status; resticAnyExitCodeRe covers the older
+// "restic: command failed: exit status 12\n…" format of earlier agents.
+var (
+	resticExitCodeRe    = regexp.MustCompile(`\(exit status (\d+)\)\s*$`)
+	resticAnyExitCodeRe = regexp.MustCompile(`exit status (\d+)`)
+)
 
 // classifyRepoCheckError turns a raw restic error string (from
 // SnapshotImportResult.Err) into a check-repo status and human message.
@@ -1100,7 +1105,11 @@ func classifyRepoCheckError(raw string) (status string, message string) {
 		}
 	}
 	if code == -1 {
-		if m := resticExitCodeRe.FindStringSubmatch(raw); m != nil {
+		m := resticExitCodeRe.FindStringSubmatch(raw)
+		if m == nil {
+			m = resticAnyExitCodeRe.FindStringSubmatch(raw)
+		}
+		if m != nil {
 			if n, err := strconv.Atoi(m[1]); err == nil {
 				code = n
 			}
@@ -1276,7 +1285,8 @@ func (h *DestinationHandler) Sync(w http.ResponseWriter, r *http.Request) {
 }
 
 // extractResticMessage parses a restic error string and returns only the
-// human-readable message. Restic errors often look like:
+// human-readable message. Current agents already send it readable
+// ("restic: <message> (exit status 12)"); earlier ones sent restic's JSON:
 //
 //	restic: command failed: exit status 12 {"message_type":"exit_error","code":12,"message":"Fatal: ..."}
 //
