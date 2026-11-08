@@ -377,8 +377,10 @@ func run(ctx context.Context, cfg *config) error {
 		UserRepo:     userRepo,
 		SettingsRepo: settingsRepo,
 		PolicyRepo:   policyRepo,
+		JobRepo:      jobRepo,
 		Hub:          wsHub,
 		Logger:       logger,
+		BaseURL:      cfg.baseURL,
 	})
 	// Start the background delivery retrier. It polls every 30 s for pending
 	// email/webhook deliveries and retries them with exponential backoff

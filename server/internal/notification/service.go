@@ -48,9 +48,11 @@ type NotificationService struct {
 	userRepo     repositories.UserRepository
 	settingsRepo repositories.SettingsRepository
 	policyRepo   repositories.PolicyRepository
+	jobRepo      repositories.JobRepository
 	hub          *websocket.Hub
 	email        *emailSender
 	webhook      *webhookSender
+	baseURL      string
 	logger       *zap.Logger
 }
 
@@ -60,8 +62,14 @@ type Config struct {
 	UserRepo     repositories.UserRepository
 	SettingsRepo repositories.SettingsRepository
 	PolicyRepo   repositories.PolicyRepository
-	Hub          *websocket.Hub
-	Logger       *zap.Logger
+	// JobRepo loads the job details shown in HTML job emails. Nil sends job
+	// emails as plain text only.
+	JobRepo repositories.JobRepository
+	Hub     *websocket.Hub
+	Logger  *zap.Logger
+	// BaseURL is the external URL of the server (ARKEEP_BASE_URL), used for
+	// the "View job" link in job emails. Empty leaves the link out.
+	BaseURL string
 }
 
 // NewService creates a new NotificationService. The email and webhook senders
@@ -75,7 +83,9 @@ func NewService(cfg Config) *NotificationService {
 		userRepo:     cfg.UserRepo,
 		settingsRepo: cfg.SettingsRepo,
 		policyRepo:   cfg.PolicyRepo,
+		jobRepo:      cfg.JobRepo,
 		hub:          cfg.Hub,
+		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
 		logger:       cfg.Logger.Named("notification"),
 	}
 
@@ -105,7 +115,7 @@ func (s *NotificationService) SMTPConfigured(ctx context.Context) bool {
 // as password reset. If SMTP is not configured the send is skipped silently
 // (see emailSender.Send) — callers should gate on SMTPConfigured first.
 func (s *NotificationService) SendEmail(ctx context.Context, to []string, subject, body string) error {
-	return s.email.Send(ctx, to, subject, body)
+	return s.email.Send(ctx, to, subject, body, "")
 }
 
 // Start launches the background delivery retrier. It runs until ctx is
@@ -372,8 +382,9 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 		if len(emailTo) == 0 {
 			emailTo = emailRecipients
 		}
+		textBody, htmlBody := s.emailBodies(ctx, firstNotif)
 		s.enqueueAndSend(ctx, firstNotif, "email", func() error {
-			return s.email.Send(ctx, emailTo, ev.title, ev.body)
+			return s.email.Send(ctx, emailTo, ev.title, textBody, htmlBody)
 		})
 	}
 
@@ -505,7 +516,8 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 		var to []string
 		to, sendErr = s.emailRecipients(ctx)
 		if sendErr == nil {
-			sendErr = s.email.Send(ctx, to, n.Title, n.Body)
+			text, html := s.emailBodies(ctx, n)
+			sendErr = s.email.Send(ctx, to, n.Title, text, html)
 		}
 	case "webhook":
 		var payload map[string]any
@@ -558,6 +570,51 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+// emailBodies returns the plain-text and HTML body of n's email. Job
+// notifications get both, built from the job: its details are loaded here, at
+// send time, rather than stored in the payload, which also goes to webhooks;
+// a retry loads them again. Every other notification, and a job notification
+// whose job can no longer be loaded, is sent as n.Body alone (html is "").
+// A failure is logged.
+func (s *NotificationService) emailBodies(ctx context.Context, n *db.Notification) (text, html string) {
+	if s.jobRepo == nil || (n.Type != "job_success" && n.Type != "job_failure") {
+		return n.Body, ""
+	}
+	warn := func(msg string, err error) (string, string) {
+		s.logger.Warn(msg+", sending the short plain-text email",
+			zap.String("notification_id", n.ID.String()),
+			zap.Error(err),
+		)
+		return n.Body, ""
+	}
+
+	var payload struct {
+		JobID string `json:"job_id"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(n.Payload), &payload); err != nil {
+		return warn("failed to decode job notification payload", err)
+	}
+	jobID, err := uuid.Parse(payload.JobID)
+	if err != nil {
+		return warn("job notification has no valid job ID", err)
+	}
+	job, dests, cmds, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
+	if err != nil {
+		return warn("failed to load job for email", err)
+	}
+
+	data := jobEmailDataFrom(job, dests, cmds)
+	if data.Error == "" {
+		data.Error = truncateEmailError(payload.Error)
+	}
+	text, html, err = jobEmailBodies(n.Type == "job_failure", n.Title, data, n.CreatedAt, s.baseURL)
+	if err != nil {
+		return warn("failed to render job email", err)
+	}
+	return text, html
+}
 
 // emailRecipients returns who a retried email goes to: the configured list or,
 // when none is set, every active admin, as on the first send (see notify).
