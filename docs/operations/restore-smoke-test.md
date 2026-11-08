@@ -98,6 +98,10 @@ echo "$VOL"   # /var/lib/docker/volumes/smokevol/_data
 5. Optional: `docker stop smoke-running`, restore in place again, and
    confirm `marker.txt` is now `original`.
 
+The agent asks Docker where it keeps volumes (`DockerRootDir` + `/volumes`),
+so a custom `data-root` is protected the same way. The volumes of running
+containers are excluded even when that directory is not visible to the agent.
+
 Cleanup:
 
 ```bash
@@ -105,7 +109,57 @@ docker rm -f smoke-running; docker volume rm smokevol
 rm -rf /tmp/arkeep-smoke
 ```
 
-## 6. Gated real-Docker Go test (root)
+## 6. Running container bind mounts are skipped
+
+```bash
+mkdir -p /tmp/arkeep-smoke/bind
+echo original > /tmp/arkeep-smoke/bind/marker.txt
+docker run -d --name smoke-bind -v /tmp/arkeep-smoke/bind:/data "$BUSYBOX" sleep 3600
+```
+
+1. GUI: back up a **path** source `/tmp/arkeep-smoke/bind`.
+2. `echo damaged > /tmp/arkeep-smoke/bind/marker.txt`
+3. GUI: restore in place.
+4. Expected: the job log contains
+   `skipping bind mount "/tmp/arkeep-smoke/bind" for in-place restore: container "smoke-bind" is running`,
+   and `marker.txt` still reads `damaged`. Only writable bind mounts are
+   protected (`:ro` ones are restored normally). Not protected, by design:
+   the agent's own bind mounts, binds of exactly the Docker volumes root or
+   Docker's data root (running containers' volumes are excluded one by one),
+   sockets such as `docker.sock`, and `/` or a drive root. A bind of any
+   folder above the data root (e.g. `/mnt/storage` with data root
+   `/mnt/storage/docker`) is protected like any other.
+5. A targeted in-place restore fails with `cannot restore … in place: it
+   contains …` if a selected folder (e.g. `/tmp/arkeep-smoke`) contains a
+   running container's bind mount or volume, even when that path is not in
+   the snapshot: restic does not accept `--include` and `--exclude` together.
+   Select more specific paths, stop the container, or restore to a folder.
+
+Docker Desktop reports bind sources on Windows drives as
+`/run/desktop/mnt/host/c/…` or `/host_mnt/c/…`; the agent maps them to
+`/hostfs/c/…`. A native Windows agent keeps the existing limitation: its
+snapshot paths (`/C/…`) are not matched against the excluded paths.
+
+Cleanup: `docker rm -f smoke-bind`.
+
+## 7. Without the Docker socket, volumes are skipped
+
+Remove the `/var/run/docker.sock` mount and restart the agent. Restore in
+place a snapshot that contains a Docker volume (step 5).
+
+Expected: the volume is **not** restored, everything else is, and the log
+warns: `cannot check which containers are running (Docker was not reachable
+when the agent started), so Docker volumes under … were skipped by the
+in-place restore`.
+The same happens if Docker cannot list the containers. To restore volumes in
+this setup, mount the socket, or stop the containers, restore to a folder and
+copy the files back.
+
+Without the socket the agent cannot see bind mounts either, so running
+containers' bind mounts (step 6) are only protected when the socket is
+mounted.
+
+## 8. Gated real-Docker Go test (root)
 
 ```bash
 cd agent/internal/executor && go test -c -o /tmp/executor.test . && sudo /tmp/executor.test -test.run 'TestInPlace_RealDocker' -test.v -test.count=1 -test.timeout=10m; rm -f /tmp/executor.test
