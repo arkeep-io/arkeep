@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark only">
+<meta name="supported-color-schemes" content="dark only">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
+<title>{{.Title}}</title>
+{{msoHead}}
+<style type="text/css">
+  :root { color-scheme: dark only; supported-color-schemes: dark only; }
+  body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+  table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+  img { border: 0; line-height: 100%; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+  a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; }
+
+  @media only screen and (max-width: 480px) {
+    .px { padding-left: 20px !important; padding-right: 20px !important; }
+    .outer { padding: 12px 8px !important; }
+    .headline { font-size: 22px !important; line-height: 28px !important; }
+    .metric-value { font-size: 16px !important; }
+    .metric { padding-left: 10px !important; padding-right: 10px !important; }
+  }
+
+</style>
+</head>
+<body bgcolor="#0d0806" style="margin:0;padding:0;width:100%;background-color:#0d0806;">
+
+<div style="display:none;max-height:0;max-width:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:#0d0806;">{{.Preheader}}</div>
+
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#0d0806" style="background-color:#0d0806;">
+<tr>
+<td align="left" class="outer" style="padding:32px 16px;">
+
+{{ghostOpen}}
+<table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;">
+
+  <!-- Card -->
+  <tr>
+    <td bgcolor="#17110e" style="background-color:#17110e;border:1px solid #2f2723;border-radius:8px;overflow:hidden;">
+      <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+
+        <!-- Status stripe -->
+        <tr>
+          <td height="4" bgcolor="{{.StatusColor}}" style="height:4px;font-size:0;line-height:0;mso-line-height-rule:exactly;background-color:{{.StatusColor}};border-radius:7px 7px 0 0;">&nbsp;</td>
+        </tr>
+
+        <!-- Headline -->
+        <tr>
+          <td class="px" style="padding:28px 32px 0 32px;">
+            <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+              <tr>
+                {{if .LogoSrc}}<td width="32" valign="middle" style="padding-right:12px;">
+                  <img src="{{.LogoSrc}}" width="32" height="32" alt="Arkeep" style="display:block;width:32px;height:32px;border-radius:6px;">
+                </td>{{end}}
+                <td valign="middle">
+                  <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td bgcolor="{{.StatusBG}}" style="background-color:{{.StatusBG}};border-radius:4px;padding:3px 9px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;font-weight:700;color:{{.StatusFG}};">{{.StatusLabel}}</td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+            <h1 class="headline" style="margin:14px 0 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:26px;line-height:32px;font-weight:700;color:#ece7e3;">{{.Headline}}</h1>
+            <p style="margin:6px 0 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:22px;color:#a39b96;">{{.Summary}}</p>
+          </td>
+        </tr>
+
+        {{if .Metrics}}
+        <!-- Key figures -->
+        <tr>
+          <td class="px" style="padding:24px 32px 0 32px;">
+            <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#1f1916" style="background-color:#1f1916;border-radius:6px;">
+              <tr>
+                {{range .Metrics}}
+                <td valign="top" class="metric" style="padding:14px 16px;">
+                  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">{{.Label}}</div>
+                  <div class="metric-value" style="margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:24px;font-weight:700;color:#ece7e3;">{{.Value}}</div>
+                </td>
+                {{end}}
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {{end}}
+
+        {{if .Error}}
+        <!-- Error -->
+        <tr>
+          <td class="px" style="padding:20px 32px 0 32px;">
+            <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="table-layout:fixed;">
+              <tr>
+                <td bgcolor="#2a1214" style="background-color:#2a1214;border:1px solid #5c1f25;border-radius:6px;padding:14px 16px;">
+                  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;font-weight:700;color:#ffb4b8;">{{.ErrorTitle}}</div>
+                  <div style="margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono','Courier New',monospace;font-size:13px;line-height:20px;color:#ffb4b8;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;">{{.Error}}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {{end}}
+
+        {{if .Destinations}}
+        <!-- Destinations -->
+        <tr>
+          <td class="px" style="padding:26px 32px 0 32px;">
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:20px;font-weight:700;color:#ece7e3;">Destinations</div>
+            <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top:6px;table-layout:fixed;">
+              {{range $i, $d := .Destinations}}
+              <tr>
+                <td style="padding:11px 0;{{if $i}}border-top:1px solid #2f2723;{{end}}">
+                  <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td valign="top" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;font-weight:600;color:#ece7e3;word-break:break-word;">{{$d.Name}}</td>
+                      <td valign="top" align="right" width="86" style="width:86px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:22px;font-weight:700;color:{{$d.StatusFG}};">{{$d.Status}}</td>
+                    </tr>
+                  </table>
+                  {{if $d.Meta}}<div style="margin-top:1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#a39b96;">{{$d.Meta}}</div>{{end}}
+                  {{if $d.Error}}<div style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono','Courier New',monospace;font-size:12px;line-height:18px;color:#ffb4b8;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;">{{$d.Error}}</div>{{end}}
+                </td>
+              </tr>
+              {{end}}
+            </table>
+          </td>
+        </tr>
+        {{end}}
+
+        {{if .Details}}
+        <!-- Details -->
+        <tr>
+          <td class="px" style="padding:22px 32px 0 32px;">
+            <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="table-layout:fixed;">
+              {{range .Details}}
+              <tr>
+                <td valign="top" width="96" style="width:96px;padding:3px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#a39b96;">{{.Label}}</td>
+                <td valign="top" style="padding:3px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;color:#ece7e3;word-break:break-word;">{{.Value}}</td>
+              </tr>
+              {{end}}
+            </table>
+          </td>
+        </tr>
+        {{end}}
+
+        {{if .ActionURL}}
+        <!-- Action -->
+        <tr>
+          <td class="px" style="padding:26px 32px 0 32px;">
+            <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+              <tr>
+                <td bgcolor="#f66921" style="background-color:#f66921;border-radius:5px;">
+                  <a href="{{.ActionURL}}" target="_blank" style="display:inline-block;padding:11px 20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:20px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:5px;">{{.ActionLabel}}</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {{end}}
+
+        <!-- Footer -->
+        <tr>
+          <td align="center" class="px" style="padding:30px 32px 24px 32px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;color:#a39b96;text-align:center;">{{.Footer}}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+{{ghostClose}}
+
+</td>
+</tr>
+</table>
+</body>
+</html>
