@@ -1,0 +1,6 @@
+post_install() {
+  cat <<'MSG'
+==> Set ARKEEP_SERVER_ADDR and ARKEEP_AGENT_SECRET in /etc/arkeep/agent.env,
+==> then start the agent: systemctl enable --now arkeep-agent
+MSG
+}
