@@ -199,7 +199,7 @@ func TestBuildBackupArgs_SourcesAfterEndOfOptions(t *testing.T) {
 // can never be parsed as a restic flag even though today's callers only ever
 // pass restic-generated snapshot hashes.
 func TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions(t *testing.T) {
-	args := buildRestoreArgs("--password-command=touch /tmp/pwned", "/restore/target", []string{"/inc"}, []string{"/exc"})
+	args := buildRestoreArgs("--password-command=touch /tmp/pwned", "/restore/target", []string{"/inc"}, []string{"/exc"}, "linux")
 
 	idx := slices.Index(args, "--")
 	if idx == -1 {
@@ -878,5 +878,96 @@ func TestBackup_RepositoryThatMustExist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// selinuxRemoveStderr is the stderr of restic 0.19.1 reported in issue #424:
+// restoring a file whose snapshot node has no security.selinux xattr onto an
+// SELinux host, where the kernel labels every new file and refuses to remove
+// the label, even for root.
+const selinuxRemoveStderr = `{"message_type":"error","error":{"message":"xattr.LRemove /opt/arkeep-agent/restore/mysql-dump security.selinux: permission denied"},"during":"restore","item":"/mysql-dump"}
+{"message_type":"exit_error","code":1,"message":"Fatal: There were 1 errors"}`
+
+// TestBuildRestoreArgs_SELinuxLabel verifies issue #424: a restore to a folder
+// on Linux leaves the security.selinux xattr to the destination's policy
+// (--exclude-xattr), while an in-place restore ("/") keeps restoring the
+// labels saved in the snapshot, and other systems are left unchanged.
+func TestBuildRestoreArgs_SELinuxLabel(t *testing.T) {
+	tests := []struct {
+		name      string
+		targetDir string
+		goos      string
+		want      bool
+	}{
+		{"linux folder restore", "/opt/arkeep-agent/restore", "linux", true},
+		{"linux in-place restore", "/", "linux", false},
+		{"darwin folder restore", "/Users/me/restore", "darwin", false},
+		{"windows folder restore", `C:\restore`, "windows", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildRestoreArgs("abc123", tt.targetDir, nil, nil, tt.goos)
+			end := slices.Index(args, "--")
+			i := slices.Index(args, "--exclude-xattr")
+			got := i != -1 && i+1 < len(args) && args[i+1] == "security.selinux" && i < end
+			if got != tt.want {
+				t.Errorf("buildRestoreArgs(target %q, %s) = %v, want --exclude-xattr security.selinux: %v", tt.targetDir, tt.goos, args, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsOnlyToleratedRestoreErrors covers the restic restore errors that do
+// not mean data loss: the removal of an SELinux label (issue #424) anywhere,
+// and lchown failures under hostRoot (Docker deployments on NTFS).
+func TestIsOnlyToleratedRestoreErrors(t *testing.T) {
+	const lchownHostRoot = `{"message_type":"error","error":{"message":"lchown /hostfs/c: permission denied"},"during":"restore","item":"/hostfs/c"}`
+	const otherError = `{"message_type":"error","error":{"message":"open /data/file: no space left on device"},"during":"restore","item":"/data/file"}`
+	const exitError = `{"message_type":"exit_error","code":1,"message":"Fatal: There were 2 errors"}`
+	tests := []struct {
+		name     string
+		stderr   string
+		hostRoot string
+		want     bool
+	}{
+		{"selinux label removal (issue #424)", selinuxRemoveStderr, "", true},
+		{"selinux label removal with hostRoot", selinuxRemoveStderr, "/hostfs", true},
+		{"selinux label removal plain text", "ignoring error for /mysql-dump: xattr.LRemove /restore/mysql-dump security.selinux: permission denied\nFatal: There were 1 errors", "", true},
+		{"selinux label and hostRoot lchown", lchownHostRoot + "\n" + selinuxRemoveStderr, "/hostfs", true},
+		{"lchown under hostRoot", lchownHostRoot + "\n" + exitError, "/hostfs", true},
+		{"lchown without hostRoot", lchownHostRoot + "\n" + exitError, "", false},
+		{"selinux label and another error", otherError + "\n" + selinuxRemoveStderr, "", false},
+		{"removal of another xattr", `{"message_type":"error","error":{"message":"xattr.LRemove /restore/f user.comment: permission denied"},"during":"restore","item":"/f"}`, "", false},
+		{"setting the selinux label", `{"message_type":"error","error":{"message":"xattr.LSet /restore/f security.selinux: invalid argument"},"during":"restore","item":"/f"}`, "", false},
+		{"fatal error", "Fatal: wrong password or no key found", "", false},
+		{"no errors", exitError, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isOnlyToleratedRestoreErrors(tt.stderr, tt.hostRoot); got != tt.want {
+				t.Errorf("isOnlyToleratedRestoreErrors(hostRoot %q) = %v, want %v", tt.hostRoot, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRestore_InPlaceToleratesSELinuxLabelRemoval runs Restore against a fake
+// restic that fails exactly as in issue #424: the in-place restore succeeds,
+// since the data was written and only the label removal was refused.
+func TestRestore_InPlaceToleratesSELinuxLabelRemoval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake restic is a shell script")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	body := fmt.Sprintf("#!/bin/sh\necho '{\"message_type\":\"summary\",\"total_files\":1,\"files_restored\":1}'\ncat >&2 <<'EOF'\n%s\nEOF\nexit 1\n", selinuxRemoveStderr)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: dir, Password: "pw"}
+
+	if err := w.Restore(context.Background(), dest, "abc123", "/", nil, nil, ""); err != nil {
+		t.Fatalf("Restore() = %v, want nil: only the SELinux label removal failed", err)
 	}
 }
