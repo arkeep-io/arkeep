@@ -532,7 +532,7 @@ func (w *Wrapper) Check(ctx context.Context, dest Destination, opts CheckOptions
 		runErr := cmd.Run()
 		result = parseCheckOutput(stdout.String(), stderr.String())
 		if runErr != nil {
-			return fmt.Errorf("restic: command failed: %w\n%s", runErr, strings.TrimSpace(stderr.String()))
+			return commandError(runErr, stderr.String())
 		}
 		return nil
 	})
@@ -625,6 +625,25 @@ func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, tar
 	return w.runRestoreJSON(ctx, dest, args, hostRoot)
 }
 
+// escapeGlob escapes the glob pattern characters in p, a literal path, so
+// restic matches it exactly in --include and --exclude (verified with restic
+// 0.19.1: an unescaped "app[1]" excludes "app1" instead). On Windows the backslash is
+// the path separator and cannot escape, so p is returned unchanged there.
+func escapeGlob(p, goos string) string {
+	if goos == "windows" {
+		return p
+	}
+	var b strings.Builder
+	for _, r := range p {
+		switch r {
+		case '\\', '*', '?', '[':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // buildRestoreArgs constructs the restic restore argument slice. snapshotID
 // is appended last, after a "--" end-of-options marker, so a snapshot ID (or
 // "latest") can never be interpreted by restic as a flag — see
@@ -645,10 +664,10 @@ func buildRestoreArgs(snapshotID, targetDir string, includePaths []string, exclu
 		args = append(args, "--exclude-xattr", "security.selinux")
 	}
 	for _, p := range includePaths {
-		args = append(args, "--include", p)
+		args = append(args, "--include", escapeGlob(p, goos))
 	}
 	for _, ex := range excludePaths {
-		args = append(args, "--exclude", ex)
+		args = append(args, "--exclude", escapeGlob(ex, goos))
 	}
 	args = append(args, "--", snapshotID)
 	return args
@@ -721,8 +740,7 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir stri
 	}
 
 	if err := cmd.Wait(); err != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		return nil, fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+		return nil, commandError(err, stderrBuf.String())
 	}
 	return entries, nil
 }
@@ -739,7 +757,7 @@ func (w *Wrapper) Dump(ctx context.Context, dest Destination, snapshotID, path s
 	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("restic: command failed: %w\n%s", err, strings.TrimSpace(stderrBuf.String()))
+		return commandError(err, stderrBuf.String())
 	}
 	return nil
 }
@@ -796,8 +814,7 @@ func (w *Wrapper) Stats(ctx context.Context, dest Destination) (StatsResult, err
 	}
 
 	if err := cmd.Wait(); err != nil {
-		stderr := strings.TrimSpace(stderrBuf.String())
-		return StatsResult{}, fmt.Errorf("restic: stats failed: %w\n%s", err, stderr)
+		return StatsResult{}, commandError(err, stderrBuf.String())
 	}
 	if !found {
 		return StatsResult{}, fmt.Errorf("restic: stats returned no parsable JSON output")
@@ -875,7 +892,7 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 			if isOnlyToleratedRestoreErrors(stderr, hostRoot) {
 				return nil
 			}
-			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+			return commandError(err, stderr)
 		}
 		if empty {
 			return ErrNothingRestored
@@ -990,6 +1007,69 @@ func isSELinuxLabelRemoval(msg string) bool {
 		strings.HasSuffix(msg, " security.selinux: permission denied")
 }
 
+// commandError is the error of a failed restic run: restic's own message (see
+// errorMessage), then err's text (the exit status). err stays wrapped, so
+// callers can still read the exit code with errors.As (see isLockConflict).
+func commandError(err error, stderr string) error {
+	if msg := errorMessage(stderr); msg != "" {
+		return fmt.Errorf("restic: %s (%w)", msg, err)
+	}
+	return fmt.Errorf("restic: command failed (%w)", err)
+}
+
+// maxErrorDetails caps the per-file errors errorMessage appends.
+const maxErrorDetails = 3
+
+// maxErrorFallback caps the stderr errorMessage returns when restic wrote no
+// exit_error line; the tail is kept, since restic ends with the fatal error.
+const maxErrorFallback = 2048
+
+// errorMessage returns the human-readable message in restic's stderr. With
+// --json, restic writes {"message_type":"exit_error","message":"Fatal: ..."}
+// before exiting: its message is returned, followed by the messages of the
+// per-file {"message_type":"error"} lines that caused it, if any. Otherwise
+// the trimmed stderr is returned (its last maxErrorFallback bytes). A leading
+// "Fatal: " is dropped either way.
+func errorMessage(stderr string) string {
+	var exitMsg string
+	var details []string
+	for _, line := range strings.Split(stderr, "\n") {
+		var ev struct {
+			MessageType string `json:"message_type"`
+			Message     string `json:"message"`
+			Error       struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(line)), &ev) != nil {
+			continue
+		}
+		switch ev.MessageType {
+		case "exit_error":
+			exitMsg = strings.TrimSpace(ev.Message)
+		case "error":
+			if ev.Error.Message != "" {
+				details = append(details, ev.Error.Message)
+			}
+		}
+	}
+	if exitMsg == "" {
+		msg := strings.TrimSpace(stderr)
+		if len(msg) > maxErrorFallback {
+			msg = "…" + strings.ToValidUTF8(msg[len(msg)-maxErrorFallback:], "")
+		}
+		return strings.TrimPrefix(msg, "Fatal: ")
+	}
+	msg := strings.TrimPrefix(exitMsg, "Fatal: ")
+	if len(details) > maxErrorDetails {
+		details = append(details[:maxErrorDetails], fmt.Sprintf("and %d more", len(details)-maxErrorDetails))
+	}
+	if len(details) > 0 {
+		msg += ": " + strings.Join(details, "; ")
+	}
+	return msg
+}
+
 // lockConflictExitCode is restic's dedicated, stable exit status for "unable
 // to create lock in backend: repository is already locked" — distinct from
 // its other error codes, so detecting it doesn't require matching the
@@ -1055,7 +1135,7 @@ func (w *Wrapper) run(ctx context.Context, dest Destination, args []string) erro
 		cmd := w.buildCmd(ctx, dest, args)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("restic: command failed: %w\n%s", err, strings.TrimSpace(string(out)))
+			return commandError(err, string(out))
 		}
 		return nil
 	})
@@ -1070,9 +1150,9 @@ func (w *Wrapper) output(ctx context.Context, dest Destination, args []string) (
 		if err != nil {
 			stderr := ""
 			if ee, ok := err.(*exec.ExitError); ok {
-				stderr = strings.TrimSpace(string(ee.Stderr))
+				stderr = string(ee.Stderr)
 			}
-			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+			return commandError(err, stderr)
 		}
 		result = out
 		return nil
@@ -1135,8 +1215,7 @@ func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []
 		}
 
 		if err := cmd.Wait(); err != nil {
-			stderr := strings.TrimSpace(stderrBuf.String())
-			return fmt.Errorf("restic: command failed: %w\n%s", err, stderr)
+			return commandError(err, stderrBuf.String())
 		}
 		return nil
 	})

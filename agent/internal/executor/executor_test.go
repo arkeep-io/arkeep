@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +26,34 @@ import (
 type fakeSink struct{}
 
 func (fakeSink) SendLog(jobID, level, message string) {}
+
+// recordingSink is a LogSink that keeps every message and optionally calls
+// onLog for each one.
+type recordingSink struct {
+	mu    sync.Mutex
+	logs  []string
+	onLog func(level, msg string)
+}
+
+func (s *recordingSink) SendLog(jobID, level, message string) {
+	s.mu.Lock()
+	s.logs = append(s.logs, message)
+	s.mu.Unlock()
+	if s.onLog != nil {
+		s.onLog(level, message)
+	}
+}
+
+func (s *recordingSink) contains(substr string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.logs {
+		if strings.Contains(l, substr) {
+			return true
+		}
+	}
+	return false
+}
 
 type destResult struct {
 	status string
@@ -51,6 +80,7 @@ type fakeReporter struct {
 	destResults      map[string]destResult
 	commandResults   []commandResult
 	retentionResults []retentionTagResult
+	snapshotIDs      map[string]string
 }
 
 func (r *fakeReporter) ReportStatus(jobID, status, message string) {
@@ -63,6 +93,10 @@ func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, sna
 		r.destResults = make(map[string]destResult)
 	}
 	r.destResults[destinationID] = destResult{status: status, errMsg: errMsg}
+	if r.snapshotIDs == nil {
+		r.snapshotIDs = make(map[string]string)
+	}
+	r.snapshotIDs[destinationID] = snapshotID
 }
 
 func (r *fakeReporter) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
@@ -485,7 +519,7 @@ func TestAnyPathOverlaps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := anyPathOverlaps(tt.paths, dockerVolRoot); got != tt.want {
+			if got := anyPathOverlaps(tt.paths, defaultDockerVolRoot); got != tt.want {
 				t.Errorf("anyPathOverlaps(%v) = %v, want %v", tt.paths, got, tt.want)
 			}
 		})
@@ -504,25 +538,25 @@ func TestReconcileRestoreFilters(t *testing.T) {
 	}{
 		{
 			name:     "no excludes — includes unchanged",
-			includes: []string{"/opt/a", dockerVolRoot + "/x/_data"},
-			wantKept: []string{"/opt/a", dockerVolRoot + "/x/_data"},
+			includes: []string{"/opt/a", defaultDockerVolRoot + "/x/_data"},
+			wantKept: []string{"/opt/a", defaultDockerVolRoot + "/x/_data"},
 		},
 		{
 			name:     "include outside excluded root is kept",
 			includes: []string{"/opt/apps/example-web/data/content"},
-			excludes: []string{dockerVolRoot},
+			excludes: []string{defaultDockerVolRoot},
 			wantKept: []string{"/opt/apps/example-web/data/content"},
 		},
 		{
 			name:     "shared prefix is not inside",
 			includes: []string{"/var/lib/docker/volumes-old/x"},
-			excludes: []string{dockerVolRoot},
+			excludes: []string{defaultDockerVolRoot},
 			wantKept: []string{"/var/lib/docker/volumes-old/x"},
 		},
 		{
 			name:        "mix of inside and outside",
 			includes:    []string{"/opt/a", vol + "/file", "/opt/b"},
-			excludes:    []string{dockerVolRoot},
+			excludes:    []string{defaultDockerVolRoot},
 			wantKept:    []string{"/opt/a", "/opt/b"},
 			wantSkipped: []string{vol + "/file"},
 		},
@@ -536,13 +570,13 @@ func TestReconcileRestoreFilters(t *testing.T) {
 		{
 			name:     "all includes inside excluded paths",
 			includes: []string{vol, vol + "/file"},
-			excludes: []string{dockerVolRoot},
+			excludes: []string{defaultDockerVolRoot},
 			wantErr:  true,
 		},
-		{"ancestor /var", []string{"/var"}, []string{dockerVolRoot}, nil, nil, true},
-		{"ancestor /var/lib/docker", []string{"/opt/a", "/var/lib/docker"}, []string{dockerVolRoot}, nil, nil, true},
-		{"ancestor of per-volume exclude", []string{dockerVolRoot}, []string{vol}, nil, nil, true},
-		{"filesystem root", []string{"/"}, []string{dockerVolRoot}, nil, nil, true},
+		{"ancestor /var", []string{"/var"}, []string{defaultDockerVolRoot}, nil, nil, true},
+		{"ancestor /var/lib/docker", []string{"/opt/a", "/var/lib/docker"}, []string{defaultDockerVolRoot}, nil, nil, true},
+		{"ancestor of per-volume exclude", []string{defaultDockerVolRoot}, []string{vol}, nil, nil, true},
+		{"filesystem root", []string{"/"}, []string{defaultDockerVolRoot}, nil, nil, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -658,11 +692,6 @@ func TestExecuteBackup_PostHookRunsOnEveryWayOut(t *testing.T) {
 	}
 }
 
-// recordingSink keeps every job log line.
-type recordingSink struct{ lines []string }
-
-func (s *recordingSink) SendLog(jobID, level, message string) { s.lines = append(s.lines, message) }
-
 // TestExecuteBackup_HookCommandStaysOutOfTheJobLog pins that the job log,
 // readable by every user, names a hook without its command line, which often
 // carries credentials.
@@ -689,7 +718,7 @@ func TestExecuteBackup_HookCommandStaysOutOfTheJobLog(t *testing.T) {
 	sink := &recordingSink{}
 	e.executeBackup(context.Background(), JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}, sink, &fakeReporter{})
 
-	all := strings.Join(sink.lines, "\n")
+	all := strings.Join(sink.logs, "\n")
 	if strings.Contains(all, secret) {
 		t.Errorf("job log contains the hook command:\n%s", all)
 	}
@@ -808,5 +837,43 @@ func TestEnqueue_FullQueue(t *testing.T) {
 	}
 	if err := e.Enqueue(JobAssignment{JobID: "one-too-many"}); !errors.Is(err, ErrQueueFull) {
 		t.Errorf("Enqueue on a full queue = %v, want ErrQueueFull", err)
+	}
+}
+
+func TestNew_NilDockerClientLeavesInterfaceNil(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
+	if e.docker != nil {
+		t.Error("docker interface must stay nil when no client is given")
+	}
+	if e.dockerVolRoot != "/var/lib/docker/volumes" {
+		t.Errorf("dockerVolRoot = %q", e.dockerVolRoot)
+	}
+}
+
+func TestDesktopHostPath(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"/srv/app", "/srv/app"},
+		{"/run/desktop/mnt/host/c/Users/u/app", "c:/Users/u/app"},
+		{"/host_mnt/d/data", "d:/data"},
+		{"/run/desktop/mnt/host/c", "c:/"},
+		{"/host_mnt/c/", "c:/"},
+		{"/host_mnt", "/host_mnt"},
+		{"/host_mntx/c/data", "/host_mntx/c/data"},
+	}
+	for _, tt := range tests {
+		if got := desktopHostPath(tt.in); got != tt.want {
+			t.Errorf("desktopHostPath(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestIsFilesystemRoot(t *testing.T) {
+	for p, want := range map[string]bool{
+		"/": true, `C:\`: true, "C:/": true, "c:": true, "c:/": true,
+		"/srv": false, "C:/Users": false, `C:\Users`: false,
+	} {
+		if got := isFilesystemRoot(p); got != want {
+			t.Errorf("isFilesystemRoot(%q) = %v, want %v", p, got, want)
+		}
 	}
 }
