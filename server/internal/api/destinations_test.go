@@ -450,6 +450,21 @@ func TestClassifyRepoCheckError(t *testing.T) {
 			raw:        "restic: command failed: exit status 1\nFatal: unable to open repo: connection refused",
 			wantStatus: "unknown",
 		},
+		{
+			name:       "agent's readable format, wrong password",
+			raw:        "restic: wrong password or no key found (exit status 12)",
+			wantStatus: "wrong_password",
+		},
+		{
+			name:       "agent's readable format, no repository",
+			raw:        "restic: repository does not exist: unable to open config file (exit status 10)",
+			wantStatus: "no_repo",
+		},
+		{
+			name:       "message mentioning another exit status",
+			raw:        "restic: rclone: hook exit status 1 (exit status 12)",
+			wantStatus: "wrong_password",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

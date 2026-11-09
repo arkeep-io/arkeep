@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -186,16 +187,29 @@ func (h *hookPayload) logLabel(kind string) string {
 // server will retry them on the next reconnect via DispatchPending.
 const queueSize = 16
 
+// dockerAPI is the part of the Docker client the executor uses. It is an
+// interface so tests can substitute a fake.
+type dockerAPI interface {
+	InspectVolume(ctx context.Context, name string) (*docker.VolumeInfo, error)
+	ListRunningContainerVolumes(ctx context.Context) ([]docker.RunningContainerVolumes, error)
+	VolumesRoot(ctx context.Context) (string, error)
+}
+
 // Executor receives job assignments, queues them, and executes them one at a
 // time using the restic wrapper, docker client, and hooks runner.
 type Executor struct {
 	wrapper        *restic.Wrapper
-	docker         *docker.Client // may be nil if Docker is unavailable on this host
+	docker         dockerAPI // nil if Docker is unavailable on this host
+	dockerVolRoot  string    // where Docker keeps named volumes when the daemon cannot tell; defaultDockerVolRoot except in tests
 	hooks          *hooks.Runner
 	queue          chan JobAssignment
 	logger         *zap.Logger
 	dockerHostRoot string // resolved by main.go: /hostfs when inside Docker, empty for native deployments, or user-supplied override
 	hostname       string // passed to restic as --host; resolved by main.go (host's name, not the container ID)
+
+	// selfContainerID is the ID (or short-ID prefix) of the container the
+	// agent runs in; "" for a native agent or when it cannot be told.
+	selfContainerID string
 
 	// cancelledMu protects cancelled — jobs marked for cancellation before
 	// they are dequeued. Populated by Cancel() when a job is still queued.
@@ -233,9 +247,9 @@ func New(
 	dockerHostRoot string,
 	hostname string,
 ) *Executor {
-	return &Executor{
+	e := &Executor{
 		wrapper:        wrapper,
-		docker:         dockerClient,
+		dockerVolRoot:  defaultDockerVolRoot,
 		hooks:          hooksRunner,
 		queue:          make(chan JobAssignment, queueSize),
 		logger:         logger.Named("executor"),
@@ -245,6 +259,17 @@ func New(
 		runningCancel:  make(map[string]context.CancelFunc),
 		jobs:           make(map[string]bool),
 	}
+	// Assign only a non-nil client: a nil *docker.Client stored in the
+	// interface would make every e.docker == nil check false.
+	if dockerClient != nil {
+		e.docker = dockerClient
+	}
+	// Inside Docker, the agent's own bind mounts are not a running
+	// container's data to protect (see buildInPlaceExcludes).
+	if dockerHostRoot != "" {
+		e.selfContainerID = docker.SelfContainerID()
+	}
+	return e
 }
 
 // TranslateLocalPath applies the same host-path translation used for backup
@@ -1084,29 +1109,36 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, targetPath))
 
 	// --- 3. Build exclude list for in-place restore ---
-	// When restoring in-place (target "/"), Docker named-volume paths may be
-	// read-only or in use by running containers. We build an --exclude list
+	// When restoring in-place (target "/"), Docker volume paths may be
+	// read-only, and paths used by running containers (volumes, writable bind
+	// mounts) must not be overwritten under them. We build an --exclude list
 	// before calling restic so the restore degrades gracefully instead of failing.
 	//
-	// restic rejects --include together with --exclude, so a targeted restore
-	// (IncludePaths set) never passes excludes: selected paths that fall inside
-	// an excluded area are dropped instead. The Docker checks run only when a
-	// selected path touches the Docker volumes root, so its writability does
-	// not affect restores elsewhere on the host.
+	// restic rejects --include together with --exclude (still true in 0.19.1),
+	// so a targeted restore (IncludePaths set) never passes excludes: selected
+	// paths that fall inside an excluded path are dropped instead. Only the
+	// warnings of excludes that touch a selected path are logged.
 	includePaths := payload.IncludePaths
 	var excludePaths []string
 	if payload.TargetPath == "/" {
-		switch {
-		case len(includePaths) == 0:
-			excludePaths = e.buildInPlaceExcludes(ctx, log)
-		case anyPathOverlaps(includePaths, dockerVolRoot):
-			kept, skipped, err := reconcileRestoreFilters(includePaths, e.buildInPlaceExcludes(ctx, log))
+		excludes := e.buildInPlaceExcludes(ctx)
+		var all []string
+		for _, ex := range excludes {
+			if len(includePaths) == 0 || slices.ContainsFunc(ex.paths, func(p string) bool { return anyPathOverlaps(includePaths, p) }) {
+				log("warn", ex.warning)
+			}
+			all = append(all, ex.paths...)
+		}
+		if len(includePaths) == 0 {
+			excludePaths = all
+		} else {
+			kept, skipped, err := reconcileRestoreFilters(includePaths, all)
 			if err != nil {
 				fail(err.Error())
 				return
 			}
 			for _, p := range skipped {
-				log("warn", fmt.Sprintf("skipping %q for in-place restore: it is inside an excluded Docker volume path", p))
+				log("warn", fmt.Sprintf("skipping %q for in-place restore: it is inside a path excluded from in-place restore", p))
 			}
 			includePaths = kept
 		}
@@ -1137,6 +1169,8 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 			// On Windows, restic cannot set timestamps or file attributes on
 			// system-protected directories reconstructed under the target path.
 			// Files are restored correctly — log as warning and continue.
+			// The message lists only the first few per-file errors (see
+			// restic.errorMessage), so this sees only those.
 			log("warn", "restore completed with warnings: some file metadata could not be set (Windows permission restriction)")
 			log("warn", "files were restored successfully — check the target path to verify")
 		} else {
@@ -1150,8 +1184,19 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	reporter.ReportStatus(job.JobID, "succeeded", "restore completed")
 }
 
-// dockerVolRoot is where Docker keeps named volumes on the host.
-const dockerVolRoot = "/var/lib/docker/volumes"
+// defaultDockerVolRoot is where Docker keeps named volumes on the host.
+const defaultDockerVolRoot = "/var/lib/docker/volumes"
+
+// withHostAlias returns p, a host path, and, in a Docker deployment, the same
+// path under the host root (e.g. /hostfs/var/lib/docker/volumes), which is
+// where a backup of / or one of its ancestors stores it.
+func (e *Executor) withHostAlias(p string) []string {
+	paths := []string{p}
+	if alias := translateLocalPath(p, e.dockerHostRoot); alias != p {
+		paths = append(paths, alias)
+	}
+	return paths
+}
 
 // pathWithin reports whether p is root itself or a path below it.
 func pathWithin(p, root string) bool {
@@ -1200,63 +1245,175 @@ func reconcileRestoreFilters(includes, excludes []string) (kept, skipped []strin
 	}
 	if len(kept) == 0 {
 		return nil, nil, fmt.Errorf(
-			"nothing to restore in place: all selected paths are inside excluded Docker volume paths (%s)",
+			"nothing to restore in place: all selected paths are inside paths excluded from in-place restore (%s)",
 			strings.Join(excludes, ", "))
 	}
 	return kept, skipped, nil
 }
 
-// buildInPlaceExcludes returns the --exclude paths for an in-place restore.
+// inPlaceExclude is a set of paths left out of an in-place restore, and the
+// warning that explains why.
+type inPlaceExclude struct {
+	paths   []string
+	warning string
+}
+
+// buildInPlaceExcludes returns what an in-place restore must leave out.
 //
-// Docker named-volume paths under /var/lib/docker/volumes may be:
+// The Docker volumes root (as reported by the daemon, else dockerVolRoot),
+// at its own path and under the host root, may be:
 //   - not writable (mounted :ro, or read-only under systemd) → exclude the whole root
-//   - in use by a running container                          → exclude per-volume paths with a warning
+//   - writable, but the running containers cannot be listed  → exclude the whole root (fail closed)
 //
-// Local filesystem paths are never excluded.
-func (e *Executor) buildInPlaceExcludes(ctx context.Context, log func(level, msg string)) []string {
-	// Check if the Docker volumes root is accessible at all. If Docker is not
-	// in use (native agent, no volume mount) there is nothing to exclude.
-	if _, err := os.Stat(dockerVolRoot); err != nil {
-		return nil
-	}
-
-	// Check writability by attempting to create a temporary file.
-	// A read-only bind-mount (:ro) makes this fail with EROFS.
-	tmp, err := os.CreateTemp(dockerVolRoot, ".arkeep-write-test-*")
-	if err != nil {
-		// Not writable — exclude the entire Docker volumes root.
-		log("warn", "docker volume paths excluded from in-place restore: "+
-			dockerVolRoot+" is not writable by the agent (read-only mount or insufficient permissions). "+
-			"To enable in-place restore of Docker volumes (stop affected containers first): "+
-			"in a Docker deployment change :ro to :rw in the docker-compose volume entry; "+
-			"for a native systemd agent, ProtectSystem=strict makes it read-only — add "+
-			"ReadWritePaths="+dockerVolRoot+" to the unit.")
-		return []string{dockerVolRoot}
-	}
-	_ = tmp.Close()
-	_ = os.Remove(tmp.Name())
-
-	// Mount is writable — exclude only volumes whose containers are running.
+// When the running containers can be listed, the volumes and writable bind
+// mounts they use are excluded too, whether or not a volumes root is visible
+// to the agent: excluding a path that does not exist is harmless.
+func (e *Executor) buildInPlaceExcludes(ctx context.Context) []inPlaceExclude {
+	volRoot := e.dockerVolRoot
+	var running []docker.RunningContainerVolumes
+	var uncheckedReason string
 	if e.docker == nil {
-		return nil
-	}
-	running, err := e.docker.ListRunningContainerVolumes(ctx)
-	if err != nil {
-		log("warn", fmt.Sprintf("could not list running containers for in-place restore: %v — proceeding without exclusions", err))
-		return nil
+		// main.go leaves the client nil when the daemon did not answer at startup.
+		uncheckedReason = "Docker was not reachable when the agent started"
+	} else {
+		if root, err := e.docker.VolumesRoot(ctx); err == nil {
+			volRoot = root
+		} else {
+			e.logger.Debug("could not get the Docker volumes root, using the default",
+				zap.String("default", volRoot), zap.Error(err))
+		}
+		var err error
+		if running, err = e.docker.ListRunningContainerVolumes(ctx); err != nil {
+			uncheckedReason = fmt.Sprintf("listing them failed: %v", err)
+		}
 	}
 
-	var excludes []string
+	var excludes []inPlaceExclude
+	var unchecked []string
+	for _, root := range e.withHostAlias(volRoot) {
+		// If the root is not accessible at all (native agent, no volume
+		// mount, Docker not in use) there is nothing to exclude under it.
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+
+		// Check writability by attempting to create a temporary file.
+		// A read-only bind-mount (:ro) makes this fail with EROFS. For the
+		// alias under the host root, a writable host-root mount means this
+		// creates (and removes) the file in the host's Docker volumes dir.
+		tmp, err := os.CreateTemp(root, ".arkeep-write-test-*")
+		if err != nil {
+			// Not writable — exclude the entire Docker volumes root.
+			warning := "docker volume paths excluded from in-place restore: " +
+				root + " (the host's Docker volumes directory under the host-root mount " + e.dockerHostRoot +
+				") is not writable by the agent. Restoring Docker volumes in place through it " +
+				"requires the host-root mount to be writable and the containers using those volumes stopped."
+			if root == volRoot {
+				warning = "docker volume paths excluded from in-place restore: " +
+					root + " is not writable by the agent (read-only mount or insufficient permissions). " +
+					"To enable in-place restore of Docker volumes (stop affected containers first): " +
+					"in a Docker deployment change :ro to :rw in the docker-compose volume entry; " +
+					"for a native systemd agent, ProtectSystem=strict makes it read-only — add " +
+					"ReadWritePaths=" + root + " to the unit."
+			}
+			excludes = append(excludes, inPlaceExclude{paths: []string{root}, warning: warning})
+			continue
+		}
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		if uncheckedReason != "" {
+			unchecked = append(unchecked, root)
+		}
+	}
+
+	// A writable root whose containers cannot be checked is left out whole.
+	if len(unchecked) > 0 {
+		excludes = append(excludes, inPlaceExclude{paths: unchecked, warning: fmt.Sprintf(
+			"cannot check which containers are running (%s), so Docker volumes under %s were skipped by the in-place restore. "+
+				"To restore them, mount the Docker socket into the agent, or stop the containers that use them, "+
+				"restore to a separate folder and copy the files back.",
+			uncheckedReason, strings.Join(unchecked, ", "))})
+	}
+
+	// Docker reports host paths; exclude them under the host root too.
 	for _, c := range running {
 		for _, p := range c.VolumePaths {
-			log("warn", fmt.Sprintf(
+			excludes = append(excludes, inPlaceExclude{paths: e.withHostAlias(p), warning: fmt.Sprintf(
 				"skipping volume %q for in-place restore: container %q is running. Stop it first to restore this volume.",
-				p, c.ContainerName,
-			))
-			excludes = append(excludes, p)
+				p, c.ContainerName)})
+		}
+		if e.isSelf(c) {
+			continue // the agent's own bind mounts; its volumes are kept above
+		}
+		for _, p := range c.BindPaths {
+			p = desktopHostPath(p)
+			if isFilesystemRoot(p) || e.isSocket(p) {
+				continue
+			}
+			if clean := path.Clean(p); clean == path.Clean(volRoot) || clean == path.Dir(path.Clean(volRoot)) {
+				// A bind of the volumes root or of Docker's data root (e.g. a
+				// Portainer agent) would block every volume; running
+				// containers' volumes are excluded one by one instead.
+				continue
+			}
+			excludes = append(excludes, inPlaceExclude{paths: e.withHostAlias(p), warning: fmt.Sprintf(
+				"skipping bind mount %q for in-place restore: container %q is running. Stop it first to restore this path.",
+				p, c.ContainerName)})
 		}
 	}
 	return excludes
+}
+
+// isSelf reports whether c is the container the agent runs in: its ID
+// matches selfContainerID and it mounts something at or under the host root.
+// The mount check matters with network_mode container:X, where the agent's
+// /etc/hostname (and so selfContainerID) comes from X.
+func (e *Executor) isSelf(c docker.RunningContainerVolumes) bool {
+	if e.selfContainerID == "" || e.dockerHostRoot == "" || !strings.HasPrefix(c.ContainerID, e.selfContainerID) {
+		return false
+	}
+	return slices.ContainsFunc(c.MountDestinations, func(d string) bool { return pathWithin(d, e.dockerHostRoot) })
+}
+
+// isSocket reports whether host path p is a unix socket (e.g. docker.sock
+// bind-mounted into Watchtower or Portainer), looked up under the host root
+// first. A path that cannot be checked is not a socket.
+func (e *Executor) isSocket(p string) bool {
+	paths := e.withHostAlias(p)
+	slices.Reverse(paths)
+	for _, q := range paths {
+		if fi, err := os.Stat(q); err == nil {
+			return fi.Mode()&os.ModeSocket != 0
+		}
+	}
+	return false
+}
+
+// desktopHostPath maps a Docker Desktop bind source on a Windows drive
+// (/run/desktop/mnt/host/c/… or /host_mnt/c/…, as the daemon reports it) to
+// its Windows form c:/…, which translateLocalPath turns into /hostfs/c/….
+// Other paths are returned unchanged.
+func desktopHostPath(p string) string {
+	for _, prefix := range []string{"/run/desktop/mnt/host/", "/host_mnt/"} {
+		rest, ok := strings.CutPrefix(p, prefix)
+		if !ok || rest == "" {
+			continue
+		}
+		drive, tail, _ := strings.Cut(rest, "/")
+		if len(drive) != 1 {
+			continue
+		}
+		return drive + ":/" + tail
+	}
+	return p
+}
+
+// isFilesystemRoot reports whether p is "/" or a Windows drive root (C:, C:/, C:\).
+func isFilesystemRoot(p string) bool {
+	if p == "/" {
+		return true
+	}
+	return len(p) >= 2 && len(p) <= 3 && p[1] == ':' && (len(p) == 2 || p[2] == '/' || p[2] == '\\')
 }
 
 // resolveSources parses the JSON sources array and resolves any

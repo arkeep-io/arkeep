@@ -1,0 +1,14 @@
+{
+  "restic_snapshot_id": "abc123def456",
+  "repo_password": "repo-secret",
+  "destination": {
+    "destination_id": "dest-1",
+    "type": "s3",
+    "repo_url": "s3:https://s3.example.com/bucket/repo",
+    "env": {
+      "AWS_ACCESS_KEY_ID": "key"
+    }
+  },
+  "path": "/data/docs",
+  "archive": true
+}
