@@ -16,6 +16,10 @@
 // behaviour on Linux, macOS, and Windows without any external tools beyond
 // the Go toolchain itself.
 //
+// restic archives are downloaded through the GitHub API, authenticated with
+// GITHUB_TOKEN when it is set (CI and GoReleaser set it; locally it is
+// optional), and transient failures are retried.
+//
 // Restic release format per platform:
 //   - Linux/macOS: restic_<ver>_<os>_<arch>.bz2  (single binary, bzip2-compressed)
 //   - Windows:     restic_<ver>_windows_<arch>.zip (zip containing restic.exe)
@@ -33,6 +37,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/bzip2"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -43,6 +48,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -164,11 +170,59 @@ func downloadRestic(goos, goarch string) error {
 	return downloadResticBz2(resticOS, goarch, out)
 }
 
+// resticReleaseAPI is the GitHub API endpoint of a restic release, by version.
+const resticReleaseAPI = "https://api.github.com/repos/restic/restic/releases/tags/v%s"
+
+// resticAssets maps the archive names of the pinned restic release to their
+// GitHub API download URLs. Filled on first use by resticAssetURL.
+var resticAssets map[string]string
+
+// resticAssetURL returns the GitHub API URL of archive in the pinned restic
+// release. restic is downloaded through api.github.com rather than the
+// github.com/.../releases/download links: GitHub sheds anonymous traffic to
+// those links when under load (an immediate 504, see the November 2026
+// incident), while the API accepts the GITHUB_TOKEN available in CI. The
+// archive is still checked against its pinned SHA-256, wherever it comes from.
+func resticAssetURL(archive string) (string, error) {
+	if resticAssets == nil {
+		data, err := download(fmt.Sprintf(resticReleaseAPI, resticVersion), "application/vnd.github+json")
+		if err != nil {
+			return "", err
+		}
+		var release struct {
+			Assets []struct {
+				Name string `json:"name"`
+				URL  string `json:"url"`
+			} `json:"assets"`
+		}
+		if err := json.Unmarshal(data, &release); err != nil {
+			return "", fmt.Errorf("parse restic release v%s: %w", resticVersion, err)
+		}
+		resticAssets = map[string]string{}
+		for _, a := range release.Assets {
+			resticAssets[a.Name] = a.URL
+		}
+	}
+	url, ok := resticAssets[archive]
+	if !ok {
+		return "", fmt.Errorf("restic release v%s has no asset %s", resticVersion, archive)
+	}
+	return url, nil
+}
+
+// fetchRestic downloads archive from the pinned restic release.
+func fetchRestic(archive string) ([]byte, error) {
+	url, err := resticAssetURL(archive)
+	if err != nil {
+		return nil, err
+	}
+	return fetch(archive, url, "application/octet-stream")
+}
+
 func downloadResticBz2(resticOS, goarch, out string) error {
 	archive := fmt.Sprintf("restic_%s_%s_%s.bz2", resticVersion, resticOS, goarch)
-	url := fmt.Sprintf("https://github.com/restic/restic/releases/download/v%s/%s", resticVersion, archive)
 
-	data, err := fetch(url)
+	data, err := fetchRestic(archive)
 	if err != nil {
 		return err
 	}
@@ -183,9 +237,8 @@ func downloadResticBz2(resticOS, goarch, out string) error {
 
 func downloadResticZip(resticOS, goarch, out string) error {
 	archiveName := fmt.Sprintf("restic_%s_%s_%s", resticVersion, resticOS, goarch)
-	url := fmt.Sprintf("https://github.com/restic/restic/releases/download/v%s/%s.zip", resticVersion, archiveName)
 
-	data, err := fetch(url)
+	data, err := fetchRestic(archiveName + ".zip")
 	if err != nil {
 		return err
 	}
@@ -218,7 +271,7 @@ func downloadRclone(goos, goarch string) error {
 
 	fmt.Printf("Downloading rclone %s for %s/%s...\n", rcloneVersion, rcloneOS, goarch)
 
-	data, err := fetch(url)
+	data, err := fetch(archiveName+".zip", url, "")
 	if err != nil {
 		return err
 	}
@@ -235,28 +288,31 @@ func downloadRclone(goos, goarch string) error {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-// fetch downloads url and checks the body against the pinned digest of its
-// file name in deps.json. An unpinned file is an error, not a warning.
-func fetch(url string) ([]byte, error) {
-	name := url[strings.LastIndex(url, "/")+1:]
+// retryDelays are the waits before each new attempt at a download that failed
+// transiently (network error, 5xx or 429).
+var retryDelays = []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// httpClient bounds each attempt, so a stalled download is retried instead of
+// hanging the build.
+var httpClient = &http.Client{Timeout: 5 * time.Minute}
+
+// githubAPIHost is the only host that receives GITHUB_TOKEN. The client drops
+// the Authorization header when the API redirects to the asset storage host.
+const githubAPIHost = "api.github.com"
+
+// fetch downloads url (with the given Accept header, if any) and checks the
+// body against the pinned digest of name, the archive file name in deps.json.
+// An unpinned file is an error, not a warning; a digest mismatch is never
+// retried.
+func fetch(name, url, accept string) ([]byte, error) {
 	want, ok := archiveSHA256[name]
 	if !ok {
 		return nil, fmt.Errorf("no pinned SHA-256 for %s in %s: run scripts/update-deps-pins.sh", name, pinsFile)
 	}
 
-	resp, err := http.Get(url) //nolint:noctx
+	data, err := download(url, accept)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return nil, err
 	}
 
 	sum := sha256.Sum256(data)
@@ -264,6 +320,61 @@ func fetch(url string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: SHA-256 mismatch: got %s, want %s", name, got, want)
 	}
 	return data, nil
+}
+
+// download gets url, retrying transient failures after each of retryDelays.
+func download(url, accept string) ([]byte, error) {
+	for attempt := 0; ; attempt++ {
+		data, transient, err := get(url, accept)
+		if err == nil {
+			return data, nil
+		}
+		if !transient || attempt == len(retryDelays) {
+			return nil, err
+		}
+		fmt.Printf("%v; retrying in %s...\n", err, retryDelays[attempt])
+		time.Sleep(retryDelays[attempt])
+	}
+}
+
+// get downloads url once. Requests to the GitHub API carry GITHUB_TOKEN when
+// it is set (CI, GoReleaser), so they are not subject to the anonymous rate
+// limit of 60 requests per hour per IP. transient reports whether a failure
+// is worth retrying: a network error, a truncated body, a 5xx or a 429. Any
+// other status (404 for a wrong version, 403) fails at once.
+func get(url, accept string) (data []byte, transient bool, err error) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("GET %s: %w", url, err)
+	}
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	token := os.Getenv("GITHUB_TOKEN")
+	if token != "" && req.URL.Host == githubAPIHost {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, true, fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		transient = resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		err = fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
+		if resp.StatusCode == http.StatusForbidden && req.URL.Host == githubAPIHost && token == "" {
+			err = fmt.Errorf("%w (anonymous GitHub API rate limit: set GITHUB_TOKEN)", err)
+		}
+		return nil, transient, err
+	}
+
+	data, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, true, fmt.Errorf("read body: %w", err)
+	}
+	return data, false, nil
 }
 
 func extractFromZip(data []byte, target string) ([]byte, error) {

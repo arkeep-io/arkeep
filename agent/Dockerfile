@@ -14,8 +14,11 @@ COPY shared/  ./shared/
 COPY agent/   ./agent/
 
 # Run from /src/agent with GOWORK=off — server/ is not in the build context.
+# The optional github_token secret authenticates the restic download through
+# the GitHub API (CI passes it); a secret mount never ends up in a layer.
 WORKDIR /src/agent
-RUN GOWORK=off go run ./scripts/download_deps.go
+RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
+    GOWORK=off go run ./scripts/download_deps.go
 
 # ─── Stage 2: compile ─────────────────────────────────────────────────────────
 FROM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
