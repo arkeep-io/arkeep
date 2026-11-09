@@ -49,10 +49,14 @@ jobs:
       #   restic/extractor.go G302  — extracted restic/rclone binaries must be executable (0755)
       #   api/auth.go      G124     — Secure flag follows --secure-cookies (off for plain-HTTP LAN installs)
       #   api/auth.go      G710     — OIDC login redirects to the configured IdP authorization URL
+      #
+      # Excluded directories, treated like _test.go files (which gosec skips):
+      #   restic/restictest         — helpers imported only by tests (fixtures, tree compare)
       - name: Run gosec on ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: >-
           gosec -exclude-generated
+          -exclude-dir=internal/restic/restictest
           -exclude-rules='internal/hooks/runner\.go:G204;internal/restic/wrapper\.go:G204;internal/restic/extractor\.go:G302;internal/api/auth\.go:G124,G710'
           ./...
 
