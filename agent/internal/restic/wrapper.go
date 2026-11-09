@@ -617,9 +617,11 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 // hostRoot are silently tolerated: they occur because the host filesystem
 // (typically Windows NTFS) does not support Unix ownership operations, but the
 // file data is restored correctly. When empty (native Linux/Windows deployments),
-// all errors are propagated as-is.
+// lchown errors are propagated as-is.
+// On SELinux hosts the removal of a security label is always tolerated (issue
+// #424, see isSELinuxLabelRemoval).
 func (w *Wrapper) Restore(ctx context.Context, dest Destination, snapshotID, targetDir string, includePaths []string, excludePaths []string, hostRoot string) error {
-	args := buildRestoreArgs(snapshotID, targetDir, includePaths, excludePaths)
+	args := buildRestoreArgs(snapshotID, targetDir, includePaths, excludePaths, runtime.GOOS)
 	return w.runRestoreJSON(ctx, dest, args, hostRoot)
 }
 
@@ -646,13 +648,26 @@ func escapeGlob(p, goos string) string {
 // is appended last, after a "--" end-of-options marker, so a snapshot ID (or
 // "latest") can never be interpreted by restic as a flag — see
 // buildBackupArgs for why this matters.
-func buildRestoreArgs(snapshotID, targetDir string, includePaths []string, excludePaths []string) []string {
+//
+// On Linux, a restore to a folder (anything but the in-place sentinel "/")
+// passes --exclude-xattr security.selinux (issue #424): the restored files
+// take the SELinux label of the destination folder, as any new file there
+// would, instead of a label saved on another path or host. Without it restic
+// tries to remove the label the kernel gave the new file whenever the
+// snapshot has none (a command source dump, a backup from a host without
+// SELinux), which SELinux always refuses. An in-place restore keeps restoring
+// the labels saved in the snapshot. goos is a parameter so the function can
+// be tested without cross-compiling.
+func buildRestoreArgs(snapshotID, targetDir string, includePaths []string, excludePaths []string, goos string) []string {
 	args := []string{"restore", "--target", targetDir, "--json"}
+	if goos == "linux" && targetDir != "/" {
+		args = append(args, "--exclude-xattr", "security.selinux")
+	}
 	for _, p := range includePaths {
-		args = append(args, "--include", escapeGlob(p, runtime.GOOS))
+		args = append(args, "--include", escapeGlob(p, goos))
 	}
 	for _, ex := range excludePaths {
-		args = append(args, "--exclude", escapeGlob(ex, runtime.GOOS))
+		args = append(args, "--exclude", escapeGlob(ex, goos))
 	}
 	args = append(args, "--", snapshotID)
 	return args
@@ -837,11 +852,12 @@ func parseResticStats(r io.Reader) (StatsResult, bool, error) {
 
 // runRestoreJSON runs restic restore --json, consuming stdout as a JSON event
 // stream (to prevent pipe stalls) and capturing stderr separately.
-// On exit error, only stderr is inspected for lchown failures — mixing JSON
+// On exit error, only stderr is inspected for tolerated failures — mixing JSON
 // stdout with text stderr via CombinedOutput would risk false-positive matches.
 // lchown tolerance is applied only when hostRoot is non-empty (Docker deployments
-// with a bind-mounted host filesystem); on native binaries hostRoot is "" and
-// all errors are propagated unchanged.
+// with a bind-mounted host filesystem); SELinux label removals are tolerated
+// everywhere (see isOnlyToleratedRestoreErrors). Any other error is propagated
+// unchanged.
 func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []string, hostRoot string) error {
 	return w.withLockRetry(ctx, dest, func() error {
 		cmd := w.buildCmd(ctx, dest, args)
@@ -873,7 +889,7 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 
 		if err := cmd.Wait(); err != nil {
 			stderr := strings.TrimSpace(stderrBuf.String())
-			if hostRoot != "" && isOnlyHostRootLchownErrors(stderr, hostRoot) {
+			if isOnlyToleratedRestoreErrors(stderr, hostRoot) {
 				return nil
 			}
 			return commandError(err, stderr)
@@ -907,19 +923,22 @@ func emptyRestoreSummary(line []byte) (empty, ok bool) {
 	return ev.TotalFiles == 0, true
 }
 
-// isOnlyHostRootLchownErrors returns true when every error restic encountered
-// was an lchown/permission-denied failure on a directory that lives under
-// hostRoot. This pattern occurs during in-place restores when the snapshot
-// paths include host-OS mount point ancestors (e.g. /hostfs/c, /hostfs/c/Users)
-// that the container cannot chown because the underlying filesystem (Windows
-// NTFS) does not support Unix ownership. File data is intact in these cases.
-// Errors on paths outside hostRoot are always treated as real failures.
+// isOnlyToleratedRestoreErrors returns true when every error restic
+// encountered left the file data intact and is one of:
+//
+//   - an lchown/permission-denied failure on a path under hostRoot (only when
+//     hostRoot is non-empty). This occurs during in-place restores when the
+//     snapshot paths include host-OS mount point ancestors (e.g. /hostfs/c,
+//     /hostfs/c/Users) that the container cannot chown because the underlying
+//     filesystem (Windows NTFS) does not support Unix ownership. Errors on
+//     paths outside hostRoot are always treated as real failures.
+//   - the removal of an SELinux label (see isSELinuxLabelRemoval).
 //
 // Handles both output formats:
 //   - JSON (restic --json): {"message_type":"error","error":{"message":"lchown ..."},"item":"..."}
 //   - Plain text (fallback): "ignoring error for /hostfs/c: lchown /hostfs/c: permission denied"
-func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
-	foundLchownError := false
+func isOnlyToleratedRestoreErrors(stderr, hostRoot string) bool {
+	foundTolerated := false
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -940,15 +959,15 @@ func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 				case "error":
 					isLchown := strings.Contains(ev.Error.Message, "lchown") &&
 						strings.Contains(ev.Error.Message, "permission denied")
-					isUnderHostRoot := strings.HasPrefix(ev.Item, hostRoot)
-					if isLchown && isUnderHostRoot {
-						foundLchownError = true
+					isUnderHostRoot := hostRoot != "" && strings.HasPrefix(ev.Item, hostRoot)
+					if (isLchown && isUnderHostRoot) || isSELinuxLabelRemoval(ev.Error.Message) {
+						foundTolerated = true
 						continue
 					}
-					return false // non-lchown or outside hostRoot → real error
+					return false // any other error → real failure
 				case "exit_error":
 					// {"message_type":"exit_error","code":1,"message":"Fatal: There were N errors\n"}
-					// Acceptable summary when all individual errors are lchown.
+					// Acceptable summary when all individual errors are tolerated.
 					continue
 				}
 				continue // other JSON event types on stderr — skip
@@ -959,9 +978,9 @@ func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 		// "ignoring error for /hostfs/c: lchown /hostfs/c: permission denied"
 		if strings.HasPrefix(line, "ignoring error for ") {
 			isLchown := strings.Contains(line, "lchown") && strings.Contains(line, "permission denied")
-			isUnderHostRoot := strings.Contains(line, hostRoot)
-			if isLchown && isUnderHostRoot {
-				foundLchownError = true
+			isUnderHostRoot := hostRoot != "" && strings.Contains(line, hostRoot)
+			if (isLchown && isUnderHostRoot) || isSELinuxLabelRemoval(line) {
+				foundTolerated = true
 				continue
 			}
 			return false
@@ -973,7 +992,19 @@ func isOnlyHostRootLchownErrors(stderr, hostRoot string) bool {
 			return false
 		}
 	}
-	return foundLchownError
+	return foundTolerated
+}
+
+// isSELinuxLabelRemoval reports whether msg is restic failing to remove the
+// security.selinux xattr of a restored file (issue #424), e.g.
+// "xattr.LRemove /restore/mysql-dump security.selinux: permission denied".
+// restic removes the xattrs the snapshot does not have, but on an SELinux host
+// the kernel labels every new file and refuses to remove a label, even for
+// root and in permissive mode. The file data and the rest of its metadata are
+// restored regardless, and the file keeps the label of its folder.
+func isSELinuxLabelRemoval(msg string) bool {
+	return strings.Contains(msg, "xattr.LRemove ") &&
+		strings.HasSuffix(msg, " security.selinux: permission denied")
 }
 
 // commandError is the error of a failed restic run: restic's own message (see
