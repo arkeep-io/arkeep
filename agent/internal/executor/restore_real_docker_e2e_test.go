@@ -39,7 +39,7 @@ func TestInPlace_RealDocker_RunningContainerVolumeSkipped(t *testing.T) {
 	if err != nil {
 		t.Skipf("docker client unavailable: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if err := client.Ping(ctx); err != nil {

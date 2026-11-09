@@ -168,7 +168,7 @@ func TestDump_DirArchive(t *testing.T) {
 			t.Fatalf("open %s: %v", f.Name, err)
 		}
 		data, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			t.Fatalf("read %s: %v", f.Name, err)
 		}
