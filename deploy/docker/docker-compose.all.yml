@@ -12,7 +12,7 @@
 
 services:
   server:
-    image: ghcr.io/arkeep-io/arkeep-server:v0.9.1
+    image: ghcr.io/arkeep-io/arkeep-server:v0.10.0
     container_name: arkeep-server
     restart: unless-stopped
     ports:
@@ -54,7 +54,7 @@ services:
       start_period: 10s
 
   agent:
-    image: ghcr.io/arkeep-io/arkeep-agent:v0.9.1
+    image: ghcr.io/arkeep-io/arkeep-agent:v0.10.0
     container_name: arkeep-agent
     restart: unless-stopped
     depends_on:
