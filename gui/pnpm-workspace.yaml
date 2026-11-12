@@ -35,6 +35,7 @@ minimumReleaseAgeExclude:
   - '@vitest/spy@5.1.0'
   - tailwindcss@4.3.4
   - vitest@5.1.0
+  - '@vitejs/plugin-vue@6.0.11'
 
 # ADR 0013: dependencies are added with their exact version (no ^ or ~ range).
 permissions:
