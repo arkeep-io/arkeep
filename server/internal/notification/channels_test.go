@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -90,6 +91,10 @@ func TestNotify_Channels(t *testing.T) {
 				w.WriteHeader(http.StatusNoContent)
 			}))
 			t.Cleanup(srv.Close)
+			// SMTP is configured, so only the channel toggles decide; without
+			// it email gets no delivery (see TestNotify_EmailDeliveryNeedsSMTP).
+			port, _ := startFakeSMTP(t)
+			setSettings(t, settings, map[string]string{KeySMTPHost: "127.0.0.1", KeySMTPPort: strconv.Itoa(port), KeySMTPFrom: "noreply@test.local"})
 			if tt.settings[KeyWebhookEnabled] == "true" {
 				setSettings(t, settings, map[string]string{KeyWebhookURL: srv.URL})
 			}

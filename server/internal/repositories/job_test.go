@@ -88,8 +88,8 @@ func TestUpdateDestinationStatus_MultipleJobsSameDestination(t *testing.T) {
 
 // TestListDestinationCommandsByJob_ResolvesDestinationName verifies that
 // ListDestinationCommandsByJob resolves the destination's display name via
-// LEFT JOIN, mirroring ListDestinationsByJob, and that GetByIDWithDetails
-// surfaces the same rows.
+// LEFT JOIN, mirroring ListDestinationsByJob, and that GetByIDWithDetails and
+// GetByIDWithDestinations surface the same rows.
 func TestListDestinationCommandsByJob_ResolvesDestinationName(t *testing.T) {
 	gormDB := newTestDB(t)
 	repo := NewJobRepository(gormDB)
@@ -147,6 +147,15 @@ func TestListDestinationCommandsByJob_ResolvesDestinationName(t *testing.T) {
 	}
 	if len(commandResults) != 1 || commandResults[0].DestinationName != "my-destination" {
 		t.Errorf("GetByIDWithDetails command results = %+v, want 1 row with DestinationName=my-destination", commandResults)
+	}
+
+	// So must GetByIDWithDestinations.
+	_, _, commandResults, err = repo.GetByIDWithDestinations(ctx, jobID)
+	if err != nil {
+		t.Fatalf("GetByIDWithDestinations: %v", err)
+	}
+	if len(commandResults) != 1 || commandResults[0].DestinationName != "my-destination" {
+		t.Errorf("GetByIDWithDestinations command results = %+v, want 1 row with DestinationName=my-destination", commandResults)
 	}
 }
 

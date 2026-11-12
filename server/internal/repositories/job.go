@@ -53,35 +53,9 @@ func (r *gormJobRepository) GetByID(ctx context.Context, id uuid.UUID) (*db.Job,
 // Logs are ordered by timestamp ascending so the caller can replay execution
 // order without additional sorting.
 func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobRetentionTag, []db.JobLog, error) {
-	var row JobWithNames
-	err := r.db.WithContext(ctx).
-		Model(&db.Job{}).
-		Select(listJobsJoin).
-		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
-		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
-		Where("jobs.id = ?", id).
-		Scan(&row).Error
+	row, destinations, commandResults, err := r.GetByIDWithDestinations(ctx, id)
 	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
-	}
-	// GORM Scan does not set ErrRecordNotFound — detect a missing row via zero UUID.
-	if row.ID == (uuid.UUID{}) {
-		return nil, nil, nil, nil, nil, ErrNotFound
-	}
-
-	var destinations []JobDestinationWithName
-	if err := r.db.WithContext(ctx).
-		Model(&db.JobDestination{}).
-		Select(listDestinationsJoin).
-		Joins("LEFT JOIN destinations ON destinations.id = job_destinations.destination_id").
-		Where("job_id = ?", id).
-		Scan(&destinations).Error; err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
-	}
-
-	commandResults, err := r.ListDestinationCommandsByJob(ctx, id)
-	if err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get destination commands for job %s: %w", id, err)
+		return nil, nil, nil, nil, nil, err
 	}
 
 	retentionTags, err := r.ListRetentionTagsByJob(ctx, id)
@@ -97,7 +71,46 @@ func (r *gormJobRepository) GetByIDWithDetails(ctx context.Context, id uuid.UUID
 		return nil, nil, nil, nil, nil, fmt.Errorf("jobs: get logs for job %s: %w", id, err)
 	}
 
-	return &row, destinations, commandResults, retentionTags, logs, nil
+	return row, destinations, commandResults, retentionTags, logs, nil
+}
+
+// GetByIDWithDestinations retrieves a job (with policy and agent names) and
+// the results on its destinations and command sources, as GetByIDWithDetails
+// does but without the retention tags and the logs, for callers that only
+// need the outcome.
+func (r *gormJobRepository) GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, error) {
+	var row JobWithNames
+	err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select(listJobsJoin).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Where("jobs.id = ?", id).
+		Scan(&row).Error
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("jobs: get by id with details: %w", err)
+	}
+	// GORM Scan does not set ErrRecordNotFound — detect a missing row via zero UUID.
+	if row.ID == (uuid.UUID{}) {
+		return nil, nil, nil, ErrNotFound
+	}
+
+	var destinations []JobDestinationWithName
+	if err := r.db.WithContext(ctx).
+		Model(&db.JobDestination{}).
+		Select(listDestinationsJoin).
+		Joins("LEFT JOIN destinations ON destinations.id = job_destinations.destination_id").
+		Where("job_id = ?", id).
+		Scan(&destinations).Error; err != nil {
+		return nil, nil, nil, fmt.Errorf("jobs: get destinations for job %s: %w", id, err)
+	}
+
+	commandResults, err := r.ListDestinationCommandsByJob(ctx, id)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("jobs: get destination commands for job %s: %w", id, err)
+	}
+
+	return &row, destinations, commandResults, nil
 }
 
 // Update persists all fields of an existing job record.
