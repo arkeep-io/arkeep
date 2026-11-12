@@ -117,14 +117,3 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof FetchError) return fallback
   return typeof e?.message === 'string' && e.message !== '' ? e.message : fallback
 }
-
-// tooManyAttemptsMessage is shown when a sign-in step answers 429.
-export const tooManyAttemptsMessage = 'Too many failed attempts. Try again in a few minutes.'
-
-// isTooManyAttempts reports whether err is a 429 from the server: the rate
-// limit of the caller's address, or the lock of an account after repeated
-// failed sign-ins. Neither says the credentials were wrong.
-export function isTooManyAttempts(err: unknown): boolean {
-  const e = err as any
-  return e?.status === 429 || e?.response?.status === 429
-}

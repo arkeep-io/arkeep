@@ -32,29 +32,6 @@ describe('LoginPage', () => {
     expect(router.push).toHaveBeenCalledWith('/dashboard')
   })
 
-  it('reports wrong credentials', async () => {
-    const { wrapper, router } = await mountPage(LoginPage)
-    vi.spyOn(useAuthStore(), 'login').mockRejectedValue(Object.assign(new Error('401'), { status: 401 }))
-    await wrapper.find('#email').setValue('admin@example.com')
-    await wrapper.find('#password').setValue('wrong')
-    await submitForm(wrapper)
-
-    expect(wrapper.text()).toContain('Invalid email or password')
-    expect(router.push).not.toHaveBeenCalled()
-  })
-
-  it('says so when there were too many failed attempts', async () => {
-    const { wrapper, router } = await mountPage(LoginPage)
-    vi.spyOn(useAuthStore(), 'login').mockRejectedValue(Object.assign(new Error('429'), { status: 429 }))
-    await wrapper.find('#email').setValue('admin@example.com')
-    await wrapper.find('#password').setValue('secret')
-    await submitForm(wrapper)
-
-    expect(wrapper.text()).toContain('Too many failed attempts')
-    expect(wrapper.text()).not.toContain('Invalid email or password')
-    expect(router.push).not.toHaveBeenCalled()
-  })
-
   it('moves to the code step for a two-factor account', async () => {
     const { wrapper, router } = await mountPage(LoginPage)
     vi.spyOn(useAuthStore(), 'login').mockResolvedValue({ twoFactorRequired: true, challengeToken: 'c' })

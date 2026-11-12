@@ -150,20 +150,7 @@ each code carries 80 bits of entropy, unlike a user-chosen password.
 
 A login challenge (the interim state between a correct password and a valid second
 factor) expires after 5 minutes and tolerates at most 5 wrong codes before it is
-burned, forcing the password step to be repeated. Each attempt is counted before the
-code is checked, so parallel requests cannot get more codes checked, and a challenge
-yields one session only.
-
-Failed sign-ins are also counted per account, from any address: 10 wrong passwords
-or second factors within 15 minutes lock the account's sign-in for 15 minutes (HTTP
-429), and a new challenge does not reset the count. The count is kept in memory and
-cleared by a restart. Someone who knows an account's email can keep it locked by
-failing on purpose; the server logs every lock.
-
-Rate limits and the audit log use the client address. `X-Forwarded-For` is believed
-only from the proxies in `ARKEEP_TRUSTED_PROXIES`, by default loopback alone: list a
-proxy that runs in another container, pod or host explicitly, and nothing else, since
-a trusted peer can claim any client address. Enabling two-factor authentication
+burned, forcing the password step to be repeated. Enabling two-factor authentication
 revokes every other active session for the account except the one used to enroll;
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.

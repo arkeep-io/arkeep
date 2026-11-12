@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,6 +250,62 @@ func TestTwoFactorLogin(t *testing.T) {
 			"code":            currentCode(t, secret),
 		})
 		assertStatus(t, fresh, http.StatusOK)
+	})
+}
+
+// TestTwoFactorLogin_Concurrent covers parallel code submissions: the
+// attempts of a challenge are counted atomically, and a challenge yields one
+// session only.
+func TestTwoFactorLogin_Concurrent(t *testing.T) {
+	// submitAll posts n codes in parallel and returns their status codes.
+	submitAll := func(t *testing.T, e *testEnv, challenge, code string, n int) []int {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"challenge_token": challenge, "code": code})
+		statuses := make([]int, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Go(func() {
+				resp, err := http.Post(e.URL+"/api/v1/auth/login/2fa", "application/json", bytes.NewReader(body))
+				if err != nil {
+					t.Errorf("POST: %v", err)
+					return
+				}
+				statuses[i] = resp.StatusCode
+				_ = resp.Body.Close()
+			})
+		}
+		wg.Wait()
+		return statuses
+	}
+
+	t.Run("parallel wrong codes use up the challenge", func(t *testing.T) {
+		e := newTestEnv(t)
+		secret := enable2FA(t, e.deps, createDBUser(t, e.deps, "tfa@test.local", "user"))
+		out := loginStepOne(t, e, "tfa@test.local")
+
+		submitAll(t, e, out.ChallengeToken, "000000", maxTwoFactorAttempts+3)
+
+		resp := e.post(t, "/api/v1/auth/login/2fa", "", map[string]string{
+			"challenge_token": out.ChallengeToken,
+			"code":            currentCode(t, secret),
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("parallel right codes issue one session", func(t *testing.T) {
+		e := newTestEnv(t)
+		secret := enable2FA(t, e.deps, createDBUser(t, e.deps, "tfa@test.local", "user"))
+		out := loginStepOne(t, e, "tfa@test.local")
+
+		ok := 0
+		for _, s := range submitAll(t, e, out.ChallengeToken, currentCode(t, secret), 5) {
+			if s == http.StatusOK {
+				ok++
+			}
+		}
+		if ok != 1 {
+			t.Errorf("%d sessions issued for one challenge, want 1", ok)
+		}
 	})
 }
 

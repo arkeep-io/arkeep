@@ -5,13 +5,12 @@ import { PinInput } from '@/components/ui/pin-input'
 import TwoFactorCodeForm from './TwoFactorCodeForm.vue'
 
 // mountForm mounts the form for challenge "c" with completeTwoFactor stubbed.
-async function mountForm(outcome: 'ok' | 'rejected' | 'locked' | 'password-change' = 'ok') {
+async function mountForm(outcome: 'ok' | 'rejected' | 'password-change' = 'ok') {
   // Attached to the document so focus can be asserted.
   const { wrapper } = await mountPage(TwoFactorCodeForm, { props: { challengeToken: 'c' }, attachTo: document.body })
   const complete = vi.spyOn(useAuthStore(), 'completeTwoFactor')
   if (outcome === 'ok') complete.mockResolvedValue(undefined)
   else if (outcome === 'password-change') complete.mockResolvedValue({ passwordChangeRequired: true, challengeToken: 'p' })
-  else if (outcome === 'locked') complete.mockRejectedValue(Object.assign(new Error('429'), { status: 429 }))
   else complete.mockRejectedValue(new Error('400'))
   return { wrapper, complete }
 }
@@ -95,15 +94,5 @@ describe('TwoFactorCodeForm', () => {
     expect(slots.every((s) => s.element.value === '')).toBe(true)
     expect(document.activeElement).toBe(slots[0]!.element)
     expect(wrapper.find('button[type=submit]').attributes('disabled')).toBeUndefined()
-  })
-
-  it('says so when there were too many failed attempts', async () => {
-    const { wrapper } = await mountForm('locked')
-    await typePin(wrapper, '123456')
-    await settle()
-
-    expect(wrapper.text()).toContain('Too many failed attempts')
-    expect(wrapper.text()).not.toContain('Invalid or expired code')
-    expect(wrapper.emitted('verified')).toBeUndefined()
   })
 })
