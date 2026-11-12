@@ -15,6 +15,7 @@ import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
 import { useAuthStore } from '@/stores/auth'
+import { isTooManyAttempts, tooManyAttemptsMessage } from '@/services/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -91,8 +92,8 @@ const onSubmit = handleSubmit(async (values) => {
             return
         }
         router.push(redirectTo.value)
-    } catch {
-        serverError.value = 'Invalid email or password'
+    } catch (e) {
+        serverError.value = isTooManyAttempts(e) ? tooManyAttemptsMessage : 'Invalid email or password'
     }
 })
 

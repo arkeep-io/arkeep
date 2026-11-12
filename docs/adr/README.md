@@ -58,3 +58,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0014](0014-publish-the-helm-chart-as-an-oci-artifact.md) | Publish the Helm chart as an OCI artifact on GHCR and Docker Hub | Accepted |
 | [0015](0015-bundle-postgresql-in-the-helm-chart-with-the-official-image.md) | Bundle PostgreSQL in the Helm chart with the official image | Accepted |
 | [0016](0016-validate-release-tags-and-keep-latest-for-stable-releases.md) | Validate release tags and keep latest for stable releases | Accepted |
+| [0017](0017-trust-only-loopback-proxies-and-lock-accounts-after-failed-sign-ins.md) | Trust only loopback proxies by default and lock accounts after failed sign-ins | Proposed |

@@ -178,6 +178,13 @@ func newTestEnv(t *testing.T) *testEnv {
 // request host.
 func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 	t.Helper()
+	return newTestEnvWith(t, func(cfg *RouterConfig) { cfg.PublicBaseURL = baseURL })
+}
+
+// newTestEnvWith is newTestEnv with the router configuration adjusted by
+// configure before the server starts.
+func newTestEnvWith(t *testing.T, configure func(*RouterConfig)) *testEnv {
+	t.Helper()
 
 	deps := newTestDeps(t)
 	authSvc := newTestAuthService(t, deps)
@@ -212,13 +219,14 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		RecoveryCodes: deps.recoveryCodes,
 		Mailer:        mailer,
 		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),
-		PublicBaseURL: baseURL,
+		PublicBaseURL: "",
 		Secure:        false,
 		AutoCerts:     nil,
 		ServerVersion: "0.0.0-test",
 		DB:            deps.sqlDB,
 	}
 
+	configure(&cfg)
 	srv := httptest.NewServer(NewRouter(cfg))
 	t.Cleanup(srv.Close)
 

@@ -11,6 +11,7 @@ import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
 import { useAuthStore } from '@/stores/auth'
+import { isTooManyAttempts, tooManyAttemptsMessage } from '@/services/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -98,8 +99,12 @@ const onSubmit = handleSubmit(async (values) => {
             return
         }
         emit('verified')
-    } catch {
+    } catch (e) {
         verifying.value = false
+        if (isTooManyAttempts(e)) {
+            serverError.value = tooManyAttemptsMessage
+            return
+        }
         if (values.useRecoveryCode) {
             serverError.value = 'Invalid or already-used recovery code'
             return

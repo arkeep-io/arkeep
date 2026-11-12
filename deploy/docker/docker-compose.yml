@@ -32,8 +32,9 @@ services:
       ARKEEP_UPDATE_CHECK: "${ARKEEP_UPDATE_CHECK:-true}"
       # "true" when the interface is served over HTTPS (behind a reverse proxy).
       ARKEEP_SECURE_COOKIES: "${ARKEEP_SECURE_COOKIES:-false}"
-      # Reverse proxies whose X-Forwarded-For is trusted; empty = loopback and
-      # private networks, "none" = no proxy.
+      # Reverse proxies whose X-Forwarded-For is trusted; empty = loopback only,
+      # "none" = no proxy. A proxy in another container needs its address or
+      # network here, or every client shares the proxy's address.
       ARKEEP_TRUSTED_PROXIES: "${ARKEEP_TRUSTED_PROXIES:-}"
       # Bearer token required on /metrics; empty = /metrics is public.
       ARKEEP_METRICS_TOKEN: "${ARKEEP_METRICS_TOKEN:-}"

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,11 @@ const (
 	// twoFactorChallengeTTL is how long the interim login challenge is valid.
 	twoFactorChallengeTTL = 5 * time.Minute
 
-	// maxTwoFactorAttempts is how many wrong codes a single challenge tolerates
-	// before it is burned. This is the per-account lockout: the per-IP rate
-	// limiter alone is weak against a six-digit code.
+	// maxTwoFactorAttempts is how many codes a single challenge lets be
+	// checked before it is used up and the password step must be redone.
+	// Wrong codes also count towards the per-account lockout
+	// (accountLockout), across challenges: the per-IP rate limiter alone is
+	// weak against a six-digit code.
 	maxTwoFactorAttempts = 5
 
 	// invalidTwoFactorMessage is deliberately identical for an unknown,
@@ -66,8 +69,10 @@ type AuthHandler struct {
 	// passwordChanges holds the step of a login that must set a new password.
 	passwordChanges repositories.PasswordChangeChallengeRepository
 	auditRepo       repositories.AuditRepository
-	logger          *zap.Logger
-	secure          bool // true in production (HTTPS), false in development
+	// lockout counts failed passwords and second factors per account.
+	lockout *accountLockout
+	logger  *zap.Logger
+	secure  bool // true in production (HTTPS), false in development
 }
 
 // NewAuthHandler creates a new AuthHandler.
@@ -88,6 +93,7 @@ func NewAuthHandler(
 		recoveryCodes:   recoveryCodes,
 		passwordChanges: passwordChanges,
 		auditRepo:       auditRepo,
+		lockout:         newAccountLockout(),
 		logger:          logger.Named("auth_handler"),
 		secure:          secure,
 	}
@@ -129,6 +135,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		ErrBadRequest(w, "email and password are required")
 		return
 	}
+	if h.refuseLockedAccount(w, req.Email) {
+		return
+	}
 
 	pair, err := h.svc.LoginLocal(r.Context(), auth.LoginRequest{
 		Email:    req.Email,
@@ -146,6 +155,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, auth.ErrUserDisabled) {
+			h.recordSignInFailure(req.Email)
 			ErrUnauthorized(w)
 			return
 		}
@@ -153,6 +163,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		ErrInternal(w)
 		return
 	}
+	h.lockout.reset(req.Email)
 
 	// Log the login event. The JWT claims must be parsed from the issued token
 	// because the Authenticate middleware hasn't run yet at this point.
@@ -485,20 +496,45 @@ func (h *AuthHandler) LoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 		ErrUnauthorized(w)
 		return
 	}
+	if h.refuseLockedAccount(w, user.Email) {
+		return
+	}
+
+	// The attempt is counted before the code is checked, in one conditional
+	// update: parallel requests cannot get more than maxTwoFactorAttempts
+	// codes checked against one challenge (S-02). A used-up challenge forces
+	// the password step to be redone.
+	if err := h.challenges.ReserveAttempt(ctx, challenge.ID, maxTwoFactorAttempts); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidTwoFactorMessage)
+			return
+		}
+		h.logger.Error("2fa login: counting the attempt failed", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
 
 	valid, usedRecovery := h.verifySecondFactor(ctx, user, req.Code)
 	if !valid {
-		h.registerFailedAttempt(ctx, challenge)
+		h.recordSignInFailure(user.Email)
 		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
 			"auth.2fa.challenge_failed", "user", user.ID.String(), map[string]any{})
 		ErrBadRequest(w, invalidTwoFactorMessage)
 		return
 	}
 
-	// Consume the challenge before issuing tokens so it cannot be replayed.
-	if err := h.challenges.MarkUsed(ctx, challenge.ID); err != nil {
-		h.logger.Warn("2fa login: marking challenge used failed", zap.Error(err))
+	// Consume the challenge before issuing tokens so it cannot be replayed:
+	// of parallel requests with a right code, only one gets a session.
+	if err := h.challenges.Consume(ctx, challenge.ID); err != nil {
+		if errors.Is(err, repositories.ErrNotFound) {
+			ErrBadRequest(w, invalidTwoFactorMessage)
+			return
+		}
+		h.logger.Error("2fa login: consuming the challenge failed", zap.Error(err))
+		ErrInternal(w)
+		return
 	}
+	h.lockout.reset(user.Email)
 
 	if usedRecovery {
 		logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,
@@ -548,24 +584,37 @@ func (h *AuthHandler) verifySecondFactor(ctx context.Context, user *db.User, cod
 	if stored.UserID != user.ID {
 		return false, false
 	}
-	if err := h.recoveryCodes.MarkUsed(ctx, stored.ID); err != nil {
-		h.logger.Error("2fa login: marking recovery code used failed", zap.Error(err))
+	// Only one of parallel requests with the same code consumes it.
+	if err := h.recoveryCodes.Consume(ctx, stored.ID); err != nil {
+		if !errors.Is(err, repositories.ErrNotFound) {
+			h.logger.Error("2fa login: consuming recovery code failed", zap.Error(err))
+		}
 		return false, false
 	}
 	return true, true
 }
 
-// registerFailedAttempt counts a wrong code against the challenge and burns it
-// once maxTwoFactorAttempts is reached, forcing the password step to be redone.
-func (h *AuthHandler) registerFailedAttempt(ctx context.Context, challenge *db.TwoFactorChallenge) {
-	if challenge.Attempts+1 >= maxTwoFactorAttempts {
-		if err := h.challenges.MarkUsed(ctx, challenge.ID); err != nil {
-			h.logger.Warn("2fa login: burning challenge failed", zap.Error(err))
-		}
-		return
+// refuseLockedAccount answers 429 when the account has too many recent
+// sign-in failures (S-01, S-02), without checking the credentials, and
+// reports whether it did.
+func (h *AuthHandler) refuseLockedAccount(w http.ResponseWriter, email string) bool {
+	wait, locked := h.lockout.locked(email)
+	if !locked {
+		return false
 	}
-	if err := h.challenges.IncrementAttempts(ctx, challenge.ID); err != nil {
-		h.logger.Warn("2fa login: incrementing attempts failed", zap.Error(err))
+	w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+	errJSON(w, http.StatusTooManyRequests, "too many failed sign-in attempts, try again later", "too_many_attempts")
+	return true
+}
+
+// recordSignInFailure counts a wrong password or second factor against the
+// account, and logs when that locks it.
+func (h *AuthHandler) recordSignInFailure(email string) {
+	if h.lockout.fail(email) {
+		h.logger.Warn("account locked after repeated failed sign-ins",
+			zap.String("email", accountKey(email)),
+			zap.Duration("for", accountLockDuration),
+		)
 	}
 }
 
