@@ -228,6 +228,67 @@ func TestAuthHandler_Refresh(t *testing.T) {
 	})
 }
 
+// TestAuthHandler_RefreshCookieOnFailure covers G-01: of two refreshes sent
+// with the same cookie, the one that loses finds its token already rotated,
+// and must not clear the newer cookie the winner just set. A session that is
+// really over still gets its cookie cleared.
+func TestAuthHandler_RefreshCookieOnFailure(t *testing.T) {
+	// clearsCookie reports whether resp tells the browser to drop the cookie.
+	clearsCookie := func(resp *http.Response) bool {
+		for _, c := range resp.Cookies() {
+			if c.Name == refreshTokenCookie && c.MaxAge < 0 {
+				return true
+			}
+		}
+		return false
+	}
+	login := func(t *testing.T, e *testEnv, email string) *http.Cookie {
+		t.Helper()
+		resp := e.post(t, "/api/v1/auth/login", "", map[string]string{"email": email, "password": "test-password-123"})
+		assertStatus(t, resp, http.StatusOK)
+		for _, c := range resp.Cookies() {
+			if c.Name == refreshTokenCookie {
+				return c
+			}
+		}
+		t.Fatal("no refresh cookie after login")
+		return nil
+	}
+
+	t.Run("a token already rotated keeps the cookie", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBUser(t, e.deps, "user@example.com", "user")
+		old := login(t, e, "user@example.com")
+		assertStatus(t, e.postWithCookie(t, "/api/v1/auth/refresh", "", old, nil), http.StatusOK)
+
+		resp := e.postWithCookie(t, "/api/v1/auth/refresh", "", old, nil)
+		assertStatus(t, resp, http.StatusUnauthorized)
+		if clearsCookie(resp) {
+			t.Error("a rotated token cleared the cookie, which may already hold the newer one")
+		}
+	})
+
+	t.Run("a disabled account clears the cookie", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "user@example.com", "user")
+		cookie := login(t, e, "user@example.com")
+		user, err := e.deps.users.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("GetByID: %v", err)
+		}
+		user.IsActive = false
+		if err := e.deps.users.Update(context.Background(), user); err != nil {
+			t.Fatalf("disable user: %v", err)
+		}
+
+		resp := e.postWithCookie(t, "/api/v1/auth/refresh", "", cookie, nil)
+		assertStatus(t, resp, http.StatusUnauthorized)
+		if !clearsCookie(resp) {
+			t.Error("the cookie of a session that is over was kept")
+		}
+	})
+}
+
 // TestAuthHandler_OIDCLoginDisabledProvider guards against logging in through
 // a provider an admin disabled: only the login buttons used to honour Enabled.
 func TestAuthHandler_OIDCLoginDisabledProvider(t *testing.T) {

@@ -215,9 +215,23 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pair, err := h.svc.RefreshToken(r.Context(), cookie.Value)
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, auth.ErrRefreshTokenNotFound):
+		// Most often another tab, or another request of this one, rotated
+		// the token a moment ago and its response set a newer cookie:
+		// clearing the cookie here could drop that one too (G-01).
+		ErrUnauthorized(w)
+		return
+	case errors.Is(err, auth.ErrTokenExpired), errors.Is(err, auth.ErrUserNotFound), errors.Is(err, auth.ErrUserDisabled):
 		h.clearRefreshCookie(w)
 		ErrUnauthorized(w)
+		return
+	default:
+		// A failure of the server says nothing about the session: the
+		// client keeps it and tries again.
+		h.logger.Error("token refresh failed", zap.Error(err))
+		ErrInternal(w)
 		return
 	}
 

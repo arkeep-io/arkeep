@@ -9,9 +9,8 @@
 //
 // Refresh deduplication:
 //   Multiple concurrent requests may 401 at the same time (e.g. page load
-//   fires 3 API calls after the access token has expired). We keep a single
-//   shared refreshPromise so only one refresh call hits the server regardless
-//   of how many requests are waiting.
+//   fires 3 API calls after the access token has expired). auth.refresh()
+//   shares one refresh call among all of them, and with the refresh timer.
 //
 // Usage:
 //   import { api } from '@/services/api'
@@ -20,9 +19,6 @@
 import { ofetch, FetchError, type FetchOptions } from 'ofetch'
 import { useAuthStore } from '@/stores/auth'
 import { router } from '@/router'
-
-// Shared in-flight refresh promise — deduplicates concurrent refresh attempts.
-let refreshPromise: Promise<boolean> | null = null
 
 // Normalize any HeadersInit variant into a plain Record so we can safely
 // spread and extend it with the Authorization header.
@@ -76,13 +72,9 @@ export async function api<T = unknown>(
   }
 
   // ── Token refresh ──────────────────────────────────────────────────────────
-  // Deduplicate: if another request already started a refresh, join it
-  // instead of firing a second one.
-  if (!refreshPromise) {
-    refreshPromise = auth.refresh().finally(() => { refreshPromise = null })
-  }
-
-  const refreshed = await refreshPromise
+  // Joins a refresh already in flight. A failure other than a refused cookie
+  // (network, 5xx) rejects here and reaches the caller, session intact.
+  const refreshed = await auth.refresh()
 
   if (!refreshed || !auth.accessToken) {
     // Refresh token is also expired — the session is gone.
