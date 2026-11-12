@@ -330,6 +330,7 @@ type JobRepository interface {
 	Create(ctx context.Context, job *db.Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
 	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobRetentionTag, []db.JobLog, error)
+	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, error)
 	Update(ctx context.Context, job *db.Job) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
 	MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)

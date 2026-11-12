@@ -129,7 +129,7 @@ type destinationResult struct {
 }
 
 // jobEmailDataFrom builds the email data of a job loaded with
-// JobRepository.GetByIDWithDetails.
+// JobRepository.GetByIDWithDestinations.
 func jobEmailDataFrom(job *repositories.JobWithNames, dests []repositories.JobDestinationWithName, cmds []repositories.JobDestinationCommandWithName) jobEmailData {
 	data := jobEmailData{
 		JobID:      job.ID.String(),

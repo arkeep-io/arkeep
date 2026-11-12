@@ -375,17 +375,20 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 	}
 
 	// A channel that is turned off gets no delivery row at all: nothing is
-	// attempted, retried or logged for it.
-	if channelEnabled(ctx, s.settingsRepo, "email") {
+	// attempted, retried or logged for it. Neither does email without SMTP
+	// or without recipients, since nothing would be sent.
+	if channelEnabled(ctx, s.settingsRepo, "email") && !s.smtpMissing(ctx) {
 		// Email: resolve recipients (explicit config list, fall back to admin emails).
 		emailTo := s.configuredRecipients(ctx)
 		if len(emailTo) == 0 {
 			emailTo = emailRecipients
 		}
-		textBody, htmlBody := s.emailBodies(ctx, firstNotif)
-		s.enqueueAndSend(ctx, firstNotif, "email", func() error {
-			return s.email.Send(ctx, emailTo, ev.title, textBody, htmlBody)
-		})
+		if len(emailTo) > 0 {
+			textBody, htmlBody := s.emailBodies(ctx, firstNotif)
+			s.enqueueAndSend(ctx, firstNotif, "email", func() error {
+				return s.email.Send(ctx, emailTo, ev.title, textBody, htmlBody)
+			})
+		}
 	}
 
 	// Webhook: one delivery per event.
@@ -487,14 +490,12 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 	// The channel was turned off after the event: give the delivery up instead
 	// of sending a stale notification if the channel is turned back on later.
 	if !channelEnabled(ctx, s.settingsRepo, d.Type) {
-		d.Status = "exhausted"
-		d.LastError = d.Type + " notifications are turned off"
-		if err := s.notifRepo.UpdateDelivery(ctx, d); err != nil {
-			s.logger.Error("retrier: failed to update delivery row",
-				zap.String("delivery_id", d.ID.String()),
-				zap.Error(err),
-			)
-		}
+		s.giveUp(ctx, d, d.Type+" notifications are turned off")
+		return
+	}
+	// Likewise when SMTP was removed or left incomplete after the event.
+	if d.Type == "email" && s.smtpMissing(ctx) {
+		s.giveUp(ctx, d, "SMTP is not configured")
 		return
 	}
 
@@ -515,6 +516,10 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 	case "email":
 		var to []string
 		to, sendErr = s.emailRecipients(ctx)
+		if sendErr == nil && len(to) == 0 {
+			s.giveUp(ctx, d, "no email recipients")
+			return
+		}
 		if sendErr == nil {
 			text, html := s.emailBodies(ctx, n)
 			sendErr = s.email.Send(ctx, to, n.Title, text, html)
@@ -567,9 +572,30 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 	}
 }
 
+// giveUp marks d exhausted without counting an attempt, for a delivery that
+// can no longer be sent at all.
+func (s *NotificationService) giveUp(ctx context.Context, d *db.NotificationDelivery, reason string) {
+	d.Status = "exhausted"
+	d.LastError = reason
+	if err := s.notifRepo.UpdateDelivery(ctx, d); err != nil {
+		s.logger.Error("retrier: failed to update delivery row",
+			zap.String("delivery_id", d.ID.String()),
+			zap.Error(err),
+		)
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
+
+// smtpMissing reports whether SMTP is not configured or incomplete, so no
+// email can be sent. A failure to read the settings does not count: the email
+// is then attempted and retried rather than dropped.
+func (s *NotificationService) smtpMissing(ctx context.Context) bool {
+	_, err := loadSMTPConfig(ctx, s.settingsRepo)
+	return errors.Is(err, ErrConfigNotFound) || errors.Is(err, ErrInvalidConfig)
+}
 
 // emailBodies returns the plain-text and HTML body of n's email. Job
 // notifications get both, built from the job: its details are loaded here, at
@@ -600,7 +626,7 @@ func (s *NotificationService) emailBodies(ctx context.Context, n *db.Notificatio
 	if err != nil {
 		return warn("job notification has no valid job ID", err)
 	}
-	job, dests, cmds, _, _, err := s.jobRepo.GetByIDWithDetails(ctx, jobID)
+	job, dests, cmds, err := s.jobRepo.GetByIDWithDestinations(ctx, jobID)
 	if err != nil {
 		return warn("failed to load job for email", err)
 	}

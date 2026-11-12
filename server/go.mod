@@ -2,7 +2,7 @@ module github.com/arkeep-io/arkeep/server
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/arkeep-io/arkeep/shared v0.0.0
