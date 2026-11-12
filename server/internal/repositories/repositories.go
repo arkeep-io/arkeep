@@ -308,10 +308,15 @@ type PolicyRepository interface {
 	// Used by telemetry.
 	ActivePoliciesCount(ctx context.Context) int
 
+	// CreateWithDestinations and UpdateWithDestinations write a policy and
+	// its destination associations in one transaction. A nil dests leaves
+	// the associations of an update unchanged.
+	CreateWithDestinations(ctx context.Context, policy *db.Policy, dests []db.PolicyDestination) error
+	UpdateWithDestinations(ctx context.Context, policy *db.Policy, dests []db.PolicyDestination) error
+
 	// PolicyDestination
 	AddDestination(ctx context.Context, pd *db.PolicyDestination) error
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error
-	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
 	DeleteDestinationAssociations(ctx context.Context, destinationID uuid.UUID) error
 	// GetDestinations returns the destination associations of a policy ordered by
 	// priority. It does not filter soft-deleted destinations: deleting one removes
