@@ -9,8 +9,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-26.04
-    # The Docker Hub secrets live in this environment, which only v* tags can
-    # deploy to: a workflow pushed on any other ref cannot read them (P-01).
+    # The Docker Hub secrets live in this environment, which only v* tags and
+    # main can deploy to: a workflow pushed on any other ref cannot read them
+    # (P-01, ADR 0017).
     environment: release
     permissions:
       contents: write

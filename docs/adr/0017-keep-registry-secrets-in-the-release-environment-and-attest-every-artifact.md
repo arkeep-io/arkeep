@@ -23,9 +23,12 @@ root on every machine it backs up.
 
 ## Decision
 
-- The release job runs in the `release` environment, which only `v*` tags
-  can deploy to. Credentials for publishing (Docker Hub today) are
-  environment secrets of `release`, never repository secrets.
+- Credentials for publishing (Docker Hub today) are secrets of the `release`
+  environment, never repository secrets. Only `v*` tags and `main` can
+  deploy to it: the release job, and the job that updates the Docker Hub
+  repository pages from `main` (`registry-metadata.yml`), run in it. A new
+  workflow that needs those credentials runs in it too, from one of those
+  refs.
 - Every artifact the release publishes gets a build provenance attestation
   from the release workflow (`actions/attest-build-provenance`, signed with
   Sigstore, stored by GitHub): the archives, `checksums.txt`, the server and
@@ -41,9 +44,11 @@ root on every machine it backs up.
 
 ## Consequences
 
-- A workflow on any branch other than a `v*` tag cannot read the Docker Hub
-  credentials. The environment and its secrets are GitHub settings, outside
-  the repository: they are set up once by an administrator.
+- A workflow on any other branch cannot read the Docker Hub credentials.
+  `main` takes changes through pull requests only, administrators excepted,
+  so the code that reads them has been merged. The environment, its deployment rules and
+  its secrets are GitHub settings, outside the repository: they are set up
+  once by an administrator.
 - Users can check that a download, image or chart was built by the release
   workflow of this repository from a given commit, without keys to manage.
 - GHCR is still written with `GITHUB_TOKEN`, which a workflow on any branch
@@ -65,6 +70,7 @@ root on every machine it backs up.
 
 - `.github/workflows/release.yml` (job `environment`, steps "Collect the
   artifacts to attest" and "Attest build provenance").
+- `.github/workflows/registry-metadata.yml` (job `dockerhub`).
 - `.goreleaser.yml` (release notes footer, "Verify").
 - ADR 0011, ADR 0013, ADR 0016.
 - [Using artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds)

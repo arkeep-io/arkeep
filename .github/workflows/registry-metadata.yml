@@ -35,6 +35,9 @@ jobs:
   dockerhub:
     name: Docker Hub descriptions
     runs-on: ubuntu-26.04
+    # The Docker Hub secrets live in the release environment, which only main
+    # and v* tags can deploy to (ADR 0017).
+    environment: release
     # Editing a repository page needs a personal access token with the Read,
     # Write, Delete scope (see scripts/dockerhub-description.sh).
     env:
