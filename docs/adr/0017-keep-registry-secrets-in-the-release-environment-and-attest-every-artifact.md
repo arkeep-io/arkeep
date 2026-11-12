@@ -1,4 +1,4 @@
-# 0017. Keep registry secrets in environments and attest every published artifact
+# 0017. Keep registry secrets in the release environment and attest every published artifact
 
 - **Status:** Proposed
 - **Date:** 2026-11-12
@@ -23,18 +23,14 @@ root on every machine it backs up.
 
 ## Decision
 
-- Registry credentials are environment secrets, never repository secrets,
-  each in the environment of the only job that needs it:
-  - `release`, which only `v*` tags can deploy to, holds the Docker Hub
-    organization access token of the release job, limited to pushing to the
-    `arkeepio` repositories;
-  - `dockerhub-metadata`, which only `main` can deploy to, holds the
-    personal access token that updates the Docker Hub repository pages
-    (`registry-metadata.yml`): Docker Hub refuses an organization access
-    token there.
-
-  A new workflow that needs one of them runs in its environment, from the
-  same refs.
+- Registry credentials are secrets of the `release` environment, never
+  repository secrets. Only `v*` tags and `main` can deploy to it. Docker Hub
+  takes one organization access token of `arkeepio`, not tied to a person,
+  with only the Image Push and Repository Edit scopes on the `arkeepio`
+  repositories: the release job pushes images and the chart with it, and the
+  job that updates the Docker Hub repository pages from `main`
+  (`registry-metadata.yml`) edits their descriptions. A new workflow that
+  needs it runs in the same environment, from one of those refs.
 - Every artifact the release publishes gets a build provenance attestation
   from the release workflow (`actions/attest-build-provenance`, signed with
   Sigstore, stored by GitHub): the archives, `checksums.txt`, the server and
@@ -50,13 +46,15 @@ root on every machine it backs up.
 
 ## Consequences
 
-- A workflow on any other ref cannot read the Docker Hub credentials, and
-  each job reads only its own token. `main` takes changes through pull
-  requests only, administrators excepted, so the code that reads the
-  personal access token has been merged. The release no longer depends on a
-  personal account. The environments, their deployment rules and their
-  secrets are GitHub settings, outside the repository: they are set up once
+- A workflow on any other ref cannot read the Docker Hub token. `main` takes
+  changes through pull requests only, administrators excepted, so the code
+  that reads it has been merged. Publishing does not depend on a personal
+  account, and the token cannot touch anything outside the `arkeepio`
+  repositories it was given. The environment, its deployment rules and its
+  secret are GitHub settings, outside the repository: they are set up once
   by an administrator.
+- An organization access token has a fixed expiry: it must be renewed
+  before it expires, or publishing to Docker Hub fails.
 - Users can check that a download, image or chart was built by the release
   workflow of this repository from a given commit, without keys to manage.
 - GHCR is still written with `GITHUB_TOKEN`, which a workflow on any branch
@@ -78,7 +76,8 @@ root on every machine it backs up.
 
 - `.github/workflows/release.yml` (job `environment`, steps "Collect the
   artifacts to attest" and "Attest build provenance").
-- `.github/workflows/registry-metadata.yml` (job `dockerhub`).
+- `.github/workflows/registry-metadata.yml` (job `dockerhub`) and
+  `scripts/dockerhub-description.sh`.
 - `.goreleaser.yml` (release notes footer, "Verify").
 - ADR 0011, ADR 0013, ADR 0016.
 - [Using artifact attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds)

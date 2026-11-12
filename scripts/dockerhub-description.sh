@@ -3,10 +3,11 @@
 #
 # Usage: scripts/dockerhub-description.sh <namespace/repo> <short description> <markdown file>
 #
-# Requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the environment: a
-# personal account with edit rights on the repository and one of its personal
-# access tokens with the Read, Write, Delete scope (an organization access
-# token is refused). Also needs curl and jq.
+# Requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the environment: the
+# organization name and an organization access token with the Repository Edit
+# scope on the repository (or a personal account with edit rights and one of
+# its personal access tokens with the Read, Write, Delete scope). Also needs
+# curl and jq.
 # Used by .github/workflows/registry-metadata.yml. Calls the Docker Hub API directly
 # so that the token is never handed to third-party code.
 set -euo pipefail
@@ -18,6 +19,10 @@ fi
 repo=$1
 short=$2
 file=$3
+if [[ "$repo" != */* ]]; then
+  echo "repository must be <namespace/repo>, got ${repo}" >&2
+  exit 2
+fi
 
 # Docker Hub limits: 100 characters for the short description, 25,000 for the
 # full one. Fail here rather than let the API truncate or reject them.
@@ -44,11 +49,12 @@ if [ -z "$token" ]; then
   exit 1
 fi
 
-# A token that can log in but lacks the Read, Write, Delete scope (or an
-# organization access token) is refused here with 403.
+# The namespaced route: the legacy /v2/repositories/ one refuses organization
+# access tokens. A token that can log in but lacks the edit scope is refused
+# here with 403.
 resp=$(jq -n --arg short "$short" --rawfile full "$file" \
     '{description: $short, full_description: $full}' \
-  | curl -sS --fail-with-body -X PATCH "https://hub.docker.com/v2/repositories/${repo}/" \
+  | curl -sS --fail-with-body -X PATCH "https://hub.docker.com/v2/namespaces/${repo%%/*}/repositories/${repo#*/}" \
       -H "Authorization: Bearer ${token}" \
       -H "Content-Type: application/json" --data @-) || {
   echo "Docker Hub refused to update ${repo}: ${resp}" >&2

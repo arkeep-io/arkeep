@@ -35,14 +35,14 @@ jobs:
   dockerhub:
     name: Docker Hub descriptions
     runs-on: ubuntu-26.04
-    # The Docker Hub secrets live in the dockerhub-metadata environment, which
-    # only main can deploy to (ADR 0017).
-    environment: dockerhub-metadata
-    # Editing a repository page needs a personal access token with the Read,
-    # Write, Delete scope (see scripts/dockerhub-description.sh).
+    # The Docker Hub organization access token lives in the release
+    # environment, which only main and v* tags can deploy to (ADR 0017).
+    # Editing a repository page needs its Repository Edit scope (see
+    # scripts/dockerhub-description.sh).
+    environment: release
     env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      DOCKERHUB_USERNAME: arkeepio
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_ORG_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
