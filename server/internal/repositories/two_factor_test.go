@@ -46,25 +46,36 @@ func TestTwoFactorChallengeRepository(t *testing.T) {
 		}
 	})
 
-	t.Run("IncrementAttempts increments", func(t *testing.T) {
-		if err := repo.IncrementAttempts(ctx, c.ID); err != nil {
-			t.Fatalf("IncrementAttempts: %v", err)
+	t.Run("ReserveAttempt counts up to the maximum", func(t *testing.T) {
+		for i := 0; i < 2; i++ {
+			if err := repo.ReserveAttempt(ctx, c.ID, 2); err != nil {
+				t.Fatalf("ReserveAttempt %d: %v", i+1, err)
+			}
+		}
+		if err := repo.ReserveAttempt(ctx, c.ID, 2); !errors.Is(err, ErrNotFound) {
+			t.Errorf("attempt over the maximum: err = %v, want ErrNotFound", err)
 		}
 		got, err := repo.GetUnusedByHash(ctx, "hash-a")
 		if err != nil {
 			t.Fatalf("GetUnusedByHash: %v", err)
 		}
-		if got.Attempts != 1 {
-			t.Errorf("attempts = %d, want 1", got.Attempts)
+		if got.Attempts != 2 {
+			t.Errorf("attempts = %d, want 2", got.Attempts)
 		}
 	})
 
-	t.Run("MarkUsed makes it unfindable", func(t *testing.T) {
-		if err := repo.MarkUsed(ctx, c.ID); err != nil {
-			t.Fatalf("MarkUsed: %v", err)
+	t.Run("Consume makes it unfindable, once", func(t *testing.T) {
+		if err := repo.Consume(ctx, c.ID); err != nil {
+			t.Fatalf("Consume: %v", err)
 		}
 		if _, err := repo.GetUnusedByHash(ctx, "hash-a"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+		if err := repo.Consume(ctx, c.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("second Consume: err = %v, want ErrNotFound", err)
+		}
+		if err := repo.ReserveAttempt(ctx, c.ID, 100); !errors.Is(err, ErrNotFound) {
+			t.Errorf("ReserveAttempt on a used challenge: err = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -108,8 +119,11 @@ func TestRecoveryCodeRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetUnusedByHash: %v", err)
 	}
-	if err := repo.MarkUsed(ctx, got.ID); err != nil {
-		t.Fatalf("MarkUsed: %v", err)
+	if err := repo.Consume(ctx, got.ID); err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if err := repo.Consume(ctx, got.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second Consume: err = %v, want ErrNotFound", err)
 	}
 
 	if _, err := repo.GetUnusedByHash(ctx, "rc-1"); !errors.Is(err, ErrNotFound) {

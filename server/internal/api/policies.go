@@ -24,6 +24,7 @@ import (
 type PolicyHandler struct {
 	repo      repositories.PolicyRepository
 	agentRepo repositories.AgentRepository
+	jobRepo   repositories.JobRepository
 	destRepo  repositories.DestinationRepository
 	scheduler *scheduler.Scheduler
 	pinger    *healthcheck.Pinger // may be nil
@@ -32,10 +33,11 @@ type PolicyHandler struct {
 }
 
 // NewPolicyHandler creates a new PolicyHandler.
-func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, pinger *healthcheck.Pinger, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
+func NewPolicyHandler(repo repositories.PolicyRepository, agentRepo repositories.AgentRepository, jobRepo repositories.JobRepository, destRepo repositories.DestinationRepository, sched *scheduler.Scheduler, pinger *healthcheck.Pinger, auditRepo repositories.AuditRepository, logger *zap.Logger) *PolicyHandler {
 	return &PolicyHandler{
 		repo:      repo,
 		agentRepo: agentRepo,
+		jobRepo:   jobRepo,
 		destRepo:  destRepo,
 		scheduler: sched,
 		pinger:    pinger,
@@ -79,6 +81,40 @@ type policyResponse struct {
 	LastRunAt         *string                     `json:"last_run_at"`
 	NextRunAt         *string                     `json:"next_run_at"`
 	CreatedAt         string                      `json:"created_at"`
+	// RecentJobs holds the policy's latest backup runs, newest first. Only
+	// the list endpoint fills it; it is omitted elsewhere.
+	RecentJobs []policyRecentJobResponse `json:"recent_jobs,omitempty"`
+}
+
+// recentJobsPerPolicy is how many of a policy's latest backup runs the
+// policies list returns, for the run history shown next to each policy.
+const recentJobsPerPolicy = 5
+
+// policyRecentJobResponse is a compact view of one of a policy's recent
+// backup jobs: enough to show its outcome and link to it.
+type policyRecentJobResponse struct {
+	ID        string  `json:"id"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"created_at"`
+	StartedAt *string `json:"started_at"`
+	EndedAt   *string `json:"ended_at"`
+}
+
+func recentJobToResponse(j *db.Job) policyRecentJobResponse {
+	resp := policyRecentJobResponse{
+		ID:        j.ID.String(),
+		Status:    j.Status,
+		CreatedAt: j.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if j.StartedAt != nil {
+		s := j.StartedAt.UTC().Format(time.RFC3339)
+		resp.StartedAt = &s
+	}
+	if j.EndedAt != nil {
+		s := j.EndedAt.UTC().Format(time.RFC3339)
+		resp.EndedAt = &s
+	}
+	return resp
 }
 
 // policyToResponse converts a db.Policy and its associated PolicyDestination
@@ -184,9 +220,26 @@ func (h *PolicyHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The latest runs of the whole page of policies, in one query.
+	policyIDs := make([]uuid.UUID, len(policies))
+	for i := range policies {
+		policyIDs[i] = policies[i].ID
+	}
+	recentJobs, err := h.jobRepo.ListRecentBackupsByPolicies(r.Context(), policyIDs, recentJobsPerPolicy)
+	if err != nil {
+		h.logger.Error("failed to list recent policy jobs", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+
 	items := make([]policyResponse, len(policies))
 	for i := range policies {
 		items[i] = policyToResponse(&policies[i], nil, agentNameByID[policies[i].AgentID.String()]).forReader(r)
+		jobs := recentJobs[policies[i].ID]
+		items[i].RecentJobs = make([]policyRecentJobResponse, len(jobs))
+		for k := range jobs {
+			items[i].RecentJobs[k] = recentJobToResponse(&jobs[k])
+		}
 	}
 
 	Ok(w, listPoliciesResponse{Items: items, Total: total})
@@ -277,6 +330,11 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	dests, ok := h.policyDestinations(w, r, req.Destinations)
+	if !ok {
+		return
+	}
+
 	repoPassword := req.RepoPassword
 	if req.UseDestinationPassword {
 		resolved, err := h.resolveDestinationPassword(r.Context(), req.Destinations)
@@ -303,33 +361,10 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		HealthcheckURL:    req.HealthcheckURL,
 	}
 
-	if err := h.repo.Create(r.Context(), policy); err != nil {
+	if err := h.repo.CreateWithDestinations(r.Context(), policy, dests); err != nil {
 		h.logger.Error("failed to create policy", zap.Error(err))
 		ErrInternal(w)
 		return
-	}
-
-	// Add destination associations.
-	for _, d := range req.Destinations {
-		destID, err := uuid.Parse(d.DestinationID)
-		if err != nil {
-			h.logger.Warn("skipping invalid destination_id in policy create",
-				zap.String("destination_id", d.DestinationID),
-			)
-			continue
-		}
-		pd := &db.PolicyDestination{
-			PolicyID:      policy.ID,
-			DestinationID: destID,
-			Priority:      d.Priority,
-		}
-		if err := h.repo.AddDestination(r.Context(), pd); err != nil {
-			h.logger.Error("failed to add destination to policy",
-				zap.String("policy_id", policy.ID.String()),
-				zap.String("destination_id", d.DestinationID),
-				zap.Error(err),
-			)
-		}
 	}
 
 	// Reload with destinations to return the full representation.
@@ -357,6 +392,38 @@ func (h *PolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	logAudit(r, h.auditRepo, h.logger, "policy.create", "policy", policy.ID.String(), map[string]any{"name": policy.Name, "schedule": policy.Schedule, "enabled": policy.Enabled})
 	Created(w, policyToResponse(full, destinations, agentName))
+}
+
+// policyDestinations checks the destination entries of a create or update
+// before anything is written (R-08, R-09): each must name an existing
+// destination, not deleted, once. On a bad entry it writes the error response
+// and reports false.
+func (h *PolicyHandler) policyDestinations(w http.ResponseWriter, r *http.Request, entries []destinationEntryRequest) ([]db.PolicyDestination, bool) {
+	dests := make([]db.PolicyDestination, 0, len(entries))
+	seen := make(map[uuid.UUID]bool, len(entries))
+	for _, d := range entries {
+		destID, err := uuid.Parse(d.DestinationID)
+		if err != nil {
+			ErrBadRequest(w, "invalid destination_id: "+d.DestinationID)
+			return nil, false
+		}
+		if seen[destID] {
+			ErrBadRequest(w, "destination "+d.DestinationID+" is listed more than once")
+			return nil, false
+		}
+		seen[destID] = true
+		if _, err := h.destRepo.GetByID(r.Context(), destID); err != nil {
+			if errors.Is(err, repositories.ErrNotFound) {
+				ErrBadRequest(w, "destination "+d.DestinationID+" not found")
+				return nil, false
+			}
+			h.logger.Error("failed to look up destination for policy", zap.String("destination_id", d.DestinationID), zap.Error(err))
+			ErrInternal(w)
+			return nil, false
+		}
+		dests = append(dests, db.PolicyDestination{DestinationID: destID, Priority: d.Priority})
+	}
+	return dests, true
 }
 
 // resolveDestinationPassword looks up the stored repository password on each
@@ -582,42 +649,25 @@ func (h *PolicyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		policy.ExcludePatterns = normalizeJSONArray(*req.ExcludePatterns)
 	}
 
+	var dests []db.PolicyDestination // nil leaves the destinations unchanged
 	if len(req.Destinations) > 0 {
-		if err := h.repo.DeleteAllDestinations(r.Context(), id); err != nil {
-			h.logger.Error("failed to remove destinations on update", zap.String("id", id.String()), zap.Error(err))
-			ErrInternal(w)
+		if dests, ok = h.policyDestinations(w, r, req.Destinations); !ok {
 			return
 		}
-		for _, d := range req.Destinations {
-			destID, err := uuid.Parse(d.DestinationID)
-			if err != nil {
-				ErrBadRequest(w, "invalid destination_id: "+d.DestinationID)
-				return
-			}
-			pd := &db.PolicyDestination{
-				PolicyID:      id,
-				DestinationID: destID,
-				Priority:      d.Priority,
-			}
-			if err := h.repo.AddDestination(r.Context(), pd); err != nil {
-				h.logger.Error("failed to add destination on update", zap.String("id", id.String()), zap.Error(err))
-				ErrInternal(w)
-				return
-			}
-		}
-		var err error
+	}
+
+	if err := h.repo.UpdateWithDestinations(r.Context(), policy, dests); err != nil {
+		h.logger.Error("failed to update policy", zap.String("id", id.String()), zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	if dests != nil {
 		destinations, err = h.repo.GetDestinations(r.Context(), id)
 		if err != nil {
 			h.logger.Error("failed to reload destinations after update", zap.String("id", id.String()), zap.Error(err))
 			ErrInternal(w)
 			return
 		}
-	}
-
-	if err := h.repo.Update(r.Context(), policy); err != nil {
-		h.logger.Error("failed to update policy", zap.String("id", id.String()), zap.Error(err))
-		ErrInternal(w)
-		return
 	}
 
 	// Sync scheduler: handles enable/disable and schedule changes.

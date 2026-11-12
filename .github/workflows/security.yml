@@ -32,6 +32,9 @@ jobs:
       - name: Download agent deps (restic + rclone) for agent module
         if: matrix.module == 'agent'
         run: cd agent && go run ./scripts/download_deps.go
+        env:
+          # restic is downloaded through the GitHub API (scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
 
       # Installed from tools/go.mod instead of the securego/gosec Docker action:
       # the action's image bundles its own Go (with GOTOOLCHAIN=local) and
@@ -49,10 +52,14 @@ jobs:
       #   restic/extractor.go G302  — extracted restic/rclone binaries must be executable (0755)
       #   api/auth.go      G124     — Secure flag follows --secure-cookies (off for plain-HTTP LAN installs)
       #   api/auth.go      G710     — OIDC login redirects to the configured IdP authorization URL
+      #
+      # Excluded directories, treated like _test.go files (which gosec skips):
+      #   restic/restictest         — helpers imported only by tests (fixtures, tree compare)
       - name: Run gosec on ${{ matrix.module }}
         working-directory: ${{ matrix.module }}
         run: >-
           gosec -exclude-generated
+          -exclude-dir=internal/restic/restictest
           -exclude-rules='internal/hooks/runner\.go:G204;internal/restic/wrapper\.go:G204;internal/restic/extractor\.go:G302;internal/api/auth\.go:G124,G710'
           ./...
 
@@ -77,6 +84,9 @@ jobs:
       - name: Download agent deps (restic + rclone) for agent module
         if: matrix.module == 'agent'
         run: cd agent && go run ./scripts/download_deps.go
+        env:
+          # restic is downloaded through the GitHub API (scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Install govulncheck
         working-directory: tools
@@ -122,6 +132,9 @@ jobs:
 
       - name: Download agent deps (restic + rclone)
         run: cd agent && go run ./scripts/download_deps.go
+        env:
+          # restic is downloaded through the GitHub API (scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -143,6 +156,8 @@ jobs:
           tags: arkeep-agent:scan
           load: true
           push: false
+          secrets: |
+            github_token=${{ github.token }}
 
       - name: Scan server image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

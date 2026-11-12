@@ -64,6 +64,9 @@ jobs:
 
       - name: Download agent deps (restic + rclone)
         run: cd agent && go run ./scripts/download_deps.go
+        env:
+          # restic is downloaded through the GitHub API (scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Test shared
         run: cd shared && go test -v -race -count=1 -timeout 20m ./...
@@ -97,6 +100,9 @@ jobs:
       - name: Download agent deps (restic + rclone) for agent module
         if: matrix.module == 'agent'
         run: cd agent && go run ./scripts/download_deps.go
+        env:
+          # restic is downloaded through the GitHub API (scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Lint ${{ matrix.module }}
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
@@ -126,6 +132,9 @@ jobs:
 
       - name: Download agent deps (restic + rclone) for all release platforms
         run: cd agent && go run ./scripts/download_deps.go --all-platforms
+        env:
+          # restic is downloaded through the GitHub API (scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Cross-compile for linux/arm, linux/mips, linux/mipsle
         run: |

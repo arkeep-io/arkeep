@@ -92,9 +92,14 @@ type TwoFactorChallengeRepository interface {
 	// Expiry is checked by the caller in Go, mirroring password reset tokens.
 	// Returns ErrNotFound if no unconsumed challenge matches.
 	GetUnusedByHash(ctx context.Context, hash string) (*db.TwoFactorChallenge, error)
-	// IncrementAttempts bumps the failed-code counter by one.
-	IncrementAttempts(ctx context.Context, id uuid.UUID) error
-	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// ReserveAttempt counts one code attempt against the challenge before the
+	// code is checked, only while the challenge is unused and has fewer than
+	// max attempts. Returns ErrNotFound when it is used up, so parallel
+	// requests cannot get more than max codes checked.
+	ReserveAttempt(ctx context.Context, id uuid.UUID, max int) error
+	// Consume marks the challenge used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
 	// DeleteByUserID removes all outstanding challenges for a user, so a new
 	// login attempt invalidates any previous one.
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
@@ -130,7 +135,9 @@ type RecoveryCodeRepository interface {
 	// ErrNotFound if no unused code matches. Callers must verify the returned
 	// code belongs to the expected user.
 	GetUnusedByHash(ctx context.Context, hash string) (*db.RecoveryCode, error)
-	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// Consume marks the code used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
 	// CountUnused reports how many codes the user has left.
 	CountUnused(ctx context.Context, userID uuid.UUID) (int64, error)
 	// DeleteByUserID removes every code for a user, used when regenerating the
@@ -301,10 +308,15 @@ type PolicyRepository interface {
 	// Used by telemetry.
 	ActivePoliciesCount(ctx context.Context) int
 
+	// CreateWithDestinations and UpdateWithDestinations write a policy and
+	// its destination associations in one transaction. A nil dests leaves
+	// the associations of an update unchanged.
+	CreateWithDestinations(ctx context.Context, policy *db.Policy, dests []db.PolicyDestination) error
+	UpdateWithDestinations(ctx context.Context, policy *db.Policy, dests []db.PolicyDestination) error
+
 	// PolicyDestination
 	AddDestination(ctx context.Context, pd *db.PolicyDestination) error
 	RemoveDestination(ctx context.Context, policyID, destinationID uuid.UUID) error
-	DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error
 	DeleteDestinationAssociations(ctx context.Context, destinationID uuid.UUID) error
 	// GetDestinations returns the destination associations of a policy ordered by
 	// priority. It does not filter soft-deleted destinations: deleting one removes
@@ -330,6 +342,7 @@ type JobRepository interface {
 	Create(ctx context.Context, job *db.Job) error
 	GetByID(ctx context.Context, id uuid.UUID) (*db.Job, error)
 	GetByIDWithDetails(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, []db.JobRetentionTag, []db.JobLog, error)
+	GetByIDWithDestinations(ctx context.Context, id uuid.UUID) (*JobWithNames, []JobDestinationWithName, []JobDestinationCommandWithName, error)
 	Update(ctx context.Context, job *db.Job) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string, startedAt *time.Time, endedAt *time.Time, errMsg string) error
 	MarkRunningJobsInterruptedForAgent(ctx context.Context, agentID uuid.UUID, errMsg string) (int64, error)
@@ -340,6 +353,11 @@ type JobRepository interface {
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]JobWithNames, int64, error)
 	ListByAgentAndStatus(ctx context.Context, agentID uuid.UUID, jobStatus string, opts ListOptions) ([]JobWithNames, error)
 	HasJobForPolicyAfter(ctx context.Context, policyID uuid.UUID, after time.Time) (bool, error)
+	// ListRecentBackupsByPolicies returns up to perPolicy of each policy's
+	// most recent backup jobs, newest first, keyed by policy ID, in a single
+	// query. Policies without any backup job are absent from the map. Only
+	// ID, PolicyID, Status, CreatedAt, StartedAt and EndedAt are filled.
+	ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
 
 	// Destination queue (issue #285). A job whose destinations are held by

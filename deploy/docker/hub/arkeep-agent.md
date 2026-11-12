@@ -41,7 +41,7 @@ Every tag is a multi-platform image for `linux/amd64` and `linux/arm64`. The sam
 |---|---|
 | `/var/lib/arkeep-agent` | Agent identity and certificates. Persist it, or the agent enrolls again. |
 | `/:/hostfs:ro` | Host filesystem, so the paths you enter in the GUI resolve. Use `:rw` to restore in place. |
-| `/var/run/docker.sock` | Docker volume discovery and pre/post-backup hooks. Optional: it gives full control of Docker. |
+| `/var/run/docker.sock` | Docker volume discovery and pre/post-backup hooks. Optional: it gives full control of Docker. Without it, in-place restores skip all Docker volumes and can't protect bind mounts of running containers. |
 | `/var/lib/docker/volumes` | Back up Docker named volumes (same path as on the host). |
 
 The agent runs as root by default, to read files owned by any user. Set `PUID` (and optionally `PGID`) to drop to a specific user.

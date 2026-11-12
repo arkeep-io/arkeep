@@ -112,9 +112,11 @@ dockers_v2:
     images:
       - "ghcr.io/arkeep-io/arkeep-server"
       - "docker.io/arkeepio/arkeep-server"
+    # A pre-release gets its version tag only: latest moves on stable
+    # releases. An empty tag is skipped.
     tags:
       - "{{ .Tag }}"
-      - "latest"
+      - "{{ if not .Prerelease }}latest{{ end }}"
     platforms:
       - linux/amd64
       - linux/arm64
@@ -144,7 +146,7 @@ dockers_v2:
       - "docker.io/arkeepio/arkeep-agent"
     tags:
       - "{{ .Tag }}"
-      - "latest"
+      - "{{ if not .Prerelease }}latest{{ end }}"
     platforms:
       - linux/amd64
       - linux/arm64
@@ -244,8 +246,12 @@ release:
     {{ end }}
     ## 🔐 Verify
 
+    Every archive, both images and the Helm chart carry a build provenance attestation from the release workflow, checked with the [GitHub CLI](https://cli.github.com/):
+
     ```bash
     sha256sum --check --ignore-missing checksums.txt
+    gh attestation verify arkeep-server_linux_amd64.tar.gz --repo arkeep-io/arkeep --signer-workflow arkeep-io/arkeep/.github/workflows/release.yml
+    gh attestation verify oci://ghcr.io/arkeep-io/arkeep-server:{{ .Tag }} --repo arkeep-io/arkeep --signer-workflow arkeep-io/arkeep/.github/workflows/release.yml
     ```
     {{ if .PreviousTag }}
     **Full Changelog**: https://github.com/arkeep-io/arkeep/compare/{{ .PreviousTag }}...{{ .Tag }}

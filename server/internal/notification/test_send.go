@@ -12,7 +12,7 @@ func SendTestEmail(ctx context.Context, cfg SMTPConfig, to string) error {
 	// The body is a constant: no request-supplied value (host, port, sender)
 	// is echoed into the message content.
 	return s.Send(ctx, []string{to}, "Arkeep test email",
-		"This is a test email from Arkeep.\r\n\r\nIf you can read it, notifications by email work.")
+		"This is a test email from Arkeep.\r\n\r\nIf you can read it, notifications by email work.", "")
 }
 
 // TestWebhookType is the event type of a test webhook, so receivers can tell

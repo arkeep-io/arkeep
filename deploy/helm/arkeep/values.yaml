@@ -53,8 +53,11 @@ config:
 
   # Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For header is
   # trusted for the client address (login rate limits, audit log). Empty trusts
-  # loopback and private networks, which covers most ingress controllers inside
-  # the cluster; "none" trusts no proxy.
+  # loopback only; "none" trusts no proxy. Behind an ingress controller, set it
+  # to the network of the controller pods (e.g. the cluster pod CIDR), or every
+  # client shares the controller's address and one client's failed logins slow
+  # down everyone. A trusted peer can name any client address, so with the pod
+  # CIDR any pod in the cluster can.
   trustedProxies: ""
 
   # HTTP and gRPC listen addresses inside the container.

@@ -10,30 +10,39 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/websocket"
 )
 
 // newRetryTestService returns a service backed by an in-memory database.
 func newRetryTestService(t *testing.T) (*NotificationService, repositories.UserRepository, repositories.SettingsRepository, repositories.NotificationRepository) {
 	t.Helper()
+	svc, gdb := newTestService(t)
+	return svc, repositories.NewUserRepository(gdb), repositories.NewSettingsRepository(gdb), repositories.NewNotificationRepository(gdb)
+}
+
+// newTestService returns a service backed by an in-memory database, and the
+// database for building further repositories.
+func newTestService(t *testing.T) (*NotificationService, *gorm.DB) {
+	t.Helper()
 	if err := db.InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
 		t.Fatalf("db.InitEncryption: %v", err)
 	}
 	gdb := dbtest.New(t)
-	users := repositories.NewUserRepository(gdb)
-	settings := repositories.NewSettingsRepository(gdb)
-	notifs := repositories.NewNotificationRepository(gdb)
 	svc := NewService(Config{
-		NotifRepo:    notifs,
-		UserRepo:     users,
-		SettingsRepo: settings,
+		NotifRepo:    repositories.NewNotificationRepository(gdb),
+		UserRepo:     repositories.NewUserRepository(gdb),
+		SettingsRepo: repositories.NewSettingsRepository(gdb),
 		PolicyRepo:   repositories.NewPolicyRepository(gdb),
+		JobRepo:      repositories.NewJobRepository(gdb),
+		Hub:          websocket.NewHub(),
 		Logger:       zap.NewNop(),
 	})
-	return svc, users, settings, notifs
+	return svc, gdb
 }
 
 func TestRetryBackoff(t *testing.T) {

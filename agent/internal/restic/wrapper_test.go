@@ -199,7 +199,7 @@ func TestBuildBackupArgs_SourcesAfterEndOfOptions(t *testing.T) {
 // can never be parsed as a restic flag even though today's callers only ever
 // pass restic-generated snapshot hashes.
 func TestBuildRestoreArgs_SnapshotIDAfterEndOfOptions(t *testing.T) {
-	args := buildRestoreArgs("--password-command=touch /tmp/pwned", "/restore/target", []string{"/inc"}, []string{"/exc"})
+	args := buildRestoreArgs("--password-command=touch /tmp/pwned", "/restore/target", []string{"/inc"}, []string{"/exc"}, "linux")
 
 	idx := slices.Index(args, "--")
 	if idx == -1 {
@@ -878,5 +878,217 @@ func TestBackup_RepositoryThatMustExist(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestErrorMessage(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "json exit_error",
+			stderr: `{"message_type":"exit_error","code":12,"message":"Fatal: wrong password or no key found\n"}` + "\n",
+			want:   "wrong password or no key found",
+		},
+		{
+			name:   "plain text",
+			stderr: "\nFatal: unable to open repo at /x: connection refused\n",
+			want:   "unable to open repo at /x: connection refused",
+		},
+		{
+			name: "per-file errors and exit_error",
+			stderr: `{"message_type":"error","error":{"message":"open /a: permission denied"},"during":"restore","item":"/a"}` + "\n" +
+				`{"message_type":"error","error":{"message":"open /b: permission denied"},"during":"restore","item":"/b"}` + "\n" +
+				`{"message_type":"exit_error","code":1,"message":"Fatal: There were 2 errors\n"}` + "\n",
+			want: "There were 2 errors: open /a: permission denied; open /b: permission denied",
+		},
+		{
+			name: "more per-file errors than shown",
+			stderr: `{"message_type":"error","error":{"message":"e1"},"item":"/1"}` + "\n" +
+				`{"message_type":"error","error":{"message":"e2"},"item":"/2"}` + "\n" +
+				`{"message_type":"error","error":{"message":"e3"},"item":"/3"}` + "\n" +
+				`{"message_type":"error","error":{"message":"e4"},"item":"/4"}` + "\n" +
+				`{"message_type":"exit_error","code":1,"message":"Fatal: There were 4 errors\n"}` + "\n",
+			want: "There were 4 errors: e1; e2; e3; and 1 more",
+		},
+		{
+			name:   "json without exit_error falls back to stderr",
+			stderr: `{"message_type":"status","percent_done":0.5}` + "\nsomething broke\n",
+			want:   `{"message_type":"status","percent_done":0.5}` + "\nsomething broke",
+		},
+		{
+			name:   "empty",
+			stderr: " \n",
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := errorMessage(tt.stderr); got != tt.want {
+				t.Errorf("errorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRun_ReadableErrorKeepsExitStatus checks the error of a failed restic
+// run: restic's own message, then the exit status, still unwrappable to the
+// *exec.ExitError (lock-conflict detection and exit-code checks rely on it).
+func TestRun_ReadableErrorKeepsExitStatus(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	body := "#!/bin/sh\nif [ \"$1\" = \"unlock\" ]; then exit 1; fi\n" +
+		`printf '%s\n' '{"message_type":"exit_error","code":11,"message":"Fatal: unable to create lock in backend: repository is already locked\n"}' >&2` +
+		"\nexit 11\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: dir, Password: "pw"}
+
+	err := w.run(context.Background(), dest, []string{"forget"})
+	want := "restic: unable to create lock in backend: repository is already locked (exit status 11)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("run() = %v, want %q", err, want)
+	}
+	if !isLockConflict(err) {
+		t.Error("isLockConflict(err) = false, want true")
+	}
+}
+
+// TestEscapeGlob: restic reads --exclude values as glob patterns, so a
+// literal path must have its pattern characters escaped (except on Windows,
+// where the backslash is the path separator and cannot escape).
+func TestEscapeGlob(t *testing.T) {
+	tests := []struct {
+		in, goos, want string
+	}{
+		{"/srv/app", "linux", "/srv/app"},
+		{"/srv/app[1]", "linux", `/srv/app\[1]`},
+		{"/srv/b*x?", "linux", `/srv/b\*x\?`},
+		{`/srv/c\d`, "linux", `/srv/c\\d`},
+		{"/srv/app[1]", "darwin", `/srv/app\[1]`},
+		{`C:\srv\app[1]`, "windows", `C:\srv\app[1]`},
+	}
+	for _, tt := range tests {
+		if got := escapeGlob(tt.in, tt.goos); got != tt.want {
+			t.Errorf("escapeGlob(%q, %q) = %q, want %q", tt.in, tt.goos, got, tt.want)
+		}
+	}
+}
+
+// TestBuildRestoreArgs_EscapesPaths: include and exclude paths are literal
+// paths, passed to restic escaped.
+func TestBuildRestoreArgs_EscapesPaths(t *testing.T) {
+	args := buildRestoreArgs("latest", "/", []string{"/srv/app[1]"}, []string{"/srv/b*x"}, "linux")
+	for _, want := range [][2]string{{"--include", `/srv/app\[1]`}, {"--exclude", `/srv/b\*x`}} {
+		i := slices.Index(args, want[0])
+		if i == -1 || args[i+1] != want[1] {
+			t.Errorf("args = %v, want %s %q", args, want[0], want[1])
+		}
+	}
+}
+
+func TestErrorMessage_FallbackKeepsTail(t *testing.T) {
+	stderr := strings.Repeat("noise line\n", 1000) + "Fatal: the real cause"
+	got := errorMessage(stderr)
+	if len(got) > maxErrorFallback+len("…") {
+		t.Errorf("errorMessage() is %d bytes, want at most %d", len(got), maxErrorFallback+len("…"))
+	}
+	if !strings.HasPrefix(got, "…") || !strings.HasSuffix(got, "Fatal: the real cause") {
+		t.Errorf("errorMessage() = %q…, want the tail of stderr, marked as cut", got[:40])
+	}
+}
+
+// selinuxRemoveStderr is the stderr of restic 0.19.1 reported in issue #424:
+// restoring a file whose snapshot node has no security.selinux xattr onto an
+// SELinux host, where the kernel labels every new file and refuses to remove
+// the label, even for root.
+const selinuxRemoveStderr = `{"message_type":"error","error":{"message":"xattr.LRemove /opt/arkeep-agent/restore/mysql-dump security.selinux: permission denied"},"during":"restore","item":"/mysql-dump"}
+{"message_type":"exit_error","code":1,"message":"Fatal: There were 1 errors"}`
+
+// TestBuildRestoreArgs_SELinuxLabel verifies issue #424: a restore to a folder
+// on Linux leaves the security.selinux xattr to the destination's policy
+// (--exclude-xattr), while an in-place restore ("/") keeps restoring the
+// labels saved in the snapshot, and other systems are left unchanged.
+func TestBuildRestoreArgs_SELinuxLabel(t *testing.T) {
+	tests := []struct {
+		name      string
+		targetDir string
+		goos      string
+		want      bool
+	}{
+		{"linux folder restore", "/opt/arkeep-agent/restore", "linux", true},
+		{"linux in-place restore", "/", "linux", false},
+		{"darwin folder restore", "/Users/me/restore", "darwin", false},
+		{"windows folder restore", `C:\restore`, "windows", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := buildRestoreArgs("abc123", tt.targetDir, nil, nil, tt.goos)
+			end := slices.Index(args, "--")
+			i := slices.Index(args, "--exclude-xattr")
+			got := i != -1 && i+1 < len(args) && args[i+1] == "security.selinux" && i < end
+			if got != tt.want {
+				t.Errorf("buildRestoreArgs(target %q, %s) = %v, want --exclude-xattr security.selinux: %v", tt.targetDir, tt.goos, args, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsOnlyToleratedRestoreErrors covers the restic restore errors that do
+// not mean data loss: the removal of an SELinux label (issue #424) anywhere,
+// and lchown failures under hostRoot (Docker deployments on NTFS).
+func TestIsOnlyToleratedRestoreErrors(t *testing.T) {
+	const lchownHostRoot = `{"message_type":"error","error":{"message":"lchown /hostfs/c: permission denied"},"during":"restore","item":"/hostfs/c"}`
+	const otherError = `{"message_type":"error","error":{"message":"open /data/file: no space left on device"},"during":"restore","item":"/data/file"}`
+	const exitError = `{"message_type":"exit_error","code":1,"message":"Fatal: There were 2 errors"}`
+	tests := []struct {
+		name     string
+		stderr   string
+		hostRoot string
+		want     bool
+	}{
+		{"selinux label removal (issue #424)", selinuxRemoveStderr, "", true},
+		{"selinux label removal with hostRoot", selinuxRemoveStderr, "/hostfs", true},
+		{"selinux label removal plain text", "ignoring error for /mysql-dump: xattr.LRemove /restore/mysql-dump security.selinux: permission denied\nFatal: There were 1 errors", "", true},
+		{"selinux label and hostRoot lchown", lchownHostRoot + "\n" + selinuxRemoveStderr, "/hostfs", true},
+		{"lchown under hostRoot", lchownHostRoot + "\n" + exitError, "/hostfs", true},
+		{"lchown without hostRoot", lchownHostRoot + "\n" + exitError, "", false},
+		{"selinux label and another error", otherError + "\n" + selinuxRemoveStderr, "", false},
+		{"removal of another xattr", `{"message_type":"error","error":{"message":"xattr.LRemove /restore/f user.comment: permission denied"},"during":"restore","item":"/f"}`, "", false},
+		{"setting the selinux label", `{"message_type":"error","error":{"message":"xattr.LSet /restore/f security.selinux: invalid argument"},"during":"restore","item":"/f"}`, "", false},
+		{"fatal error", "Fatal: wrong password or no key found", "", false},
+		{"no errors", exitError, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isOnlyToleratedRestoreErrors(tt.stderr, tt.hostRoot); got != tt.want {
+				t.Errorf("isOnlyToleratedRestoreErrors(hostRoot %q) = %v, want %v", tt.hostRoot, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRestore_InPlaceToleratesSELinuxLabelRemoval runs Restore against a fake
+// restic that fails exactly as in issue #424: the in-place restore succeeds,
+// since the data was written and only the label removal was refused.
+func TestRestore_InPlaceToleratesSELinuxLabelRemoval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake restic is a shell script")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	body := fmt.Sprintf("#!/bin/sh\necho '{\"message_type\":\"summary\",\"total_files\":1,\"files_restored\":1}'\ncat >&2 <<'EOF'\n%s\nEOF\nexit 1\n", selinuxRemoveStderr)
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: dir, Password: "pw"}
+
+	if err := w.Restore(context.Background(), dest, "abc123", "/", nil, nil, ""); err != nil {
+		t.Fatalf("Restore() = %v, want nil: only the SELinux label removal failed", err)
 	}
 }

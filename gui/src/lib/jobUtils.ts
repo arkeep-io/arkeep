@@ -50,6 +50,24 @@ export function statusClass(status: string): string {
     }
 }
 
+/**
+ * Solid dot colour for a job status, matching the hue of its chip
+ * (statusClass) — used where a status is shown as a small dot rather than a
+ * labelled chip, such as the run history on the policies list.
+ */
+export function statusDotClass(status: string): string {
+    switch (status) {
+        case 'succeeded': return 'bg-green-500'
+        case 'running': return 'bg-blue-500'
+        case 'pending': return 'bg-amber-500'
+        case 'waiting': return 'bg-violet-500'
+        case 'interrupted': return 'bg-amber-500'
+        case 'failed': return 'bg-destructive'
+        case 'cancelled': return 'bg-slate-400 dark:bg-slate-500'
+        default: return 'bg-muted-foreground'
+    }
+}
+
 export function statusLabel(status: string): string {
     return status.charAt(0).toUpperCase() + status.slice(1)
 }

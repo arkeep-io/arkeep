@@ -11,16 +11,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// DefaultTrustedProxies are the networks a reverse proxy usually sits in:
-// loopback and the private ranges Docker, Kubernetes and LANs use. A request
-// arriving from one of them may name the real client in X-Forwarded-For.
+// DefaultTrustedProxies trusts only a reverse proxy on the same host. Private
+// networks are not trusted by default (S-01): anyone on the LAN, in another
+// container or in the cluster could otherwise name any client address in
+// X-Forwarded-For and get a fresh rate-limit budget with every request. A
+// proxy in another container or pod is added with ARKEEP_TRUSTED_PROXIES.
 var DefaultTrustedProxies = []netip.Prefix{
 	netip.MustParsePrefix("127.0.0.0/8"),
-	netip.MustParsePrefix("10.0.0.0/8"),
-	netip.MustParsePrefix("172.16.0.0/12"),
-	netip.MustParsePrefix("192.168.0.0/16"),
 	netip.MustParsePrefix("::1/128"),
-	netip.MustParsePrefix("fc00::/7"),
 }
 
 // ParseTrustedProxies parses ARKEEP_TRUSTED_PROXIES: a comma-separated list of

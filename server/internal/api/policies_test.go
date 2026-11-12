@@ -73,6 +73,55 @@ func TestPolicyHandler_List(t *testing.T) {
 	})
 }
 
+// TestPolicyHandler_ListRecentJobs: the list carries each policy's latest
+// backup runs, newest first, for the run history column.
+func TestPolicyHandler_ListRecentJobs(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := context.Background()
+	agentID := createDBAgent(t, e.deps, "test-agent").ID
+	busy := createDBPolicy(t, e.deps, "a-busy", agentID)
+	createDBPolicy(t, e.deps, "b-idle", agentID)
+
+	base := time.Now().UTC().Add(-time.Hour)
+	statuses := []string{"succeeded", "failed", "succeeded", "succeeded", "failed", "pending"}
+	for i, status := range statuses {
+		job := &db.Job{PolicyID: &busy.ID, AgentID: agentID, Type: "backup", Status: status}
+		job.CreatedAt = base.Add(time.Duration(i) * time.Minute)
+		if err := e.deps.jobs.Create(ctx, job); err != nil {
+			t.Fatalf("create job: %v", err)
+		}
+	}
+
+	resp := e.get(t, "/api/v1/policies", e.adminToken(t))
+	assertStatus(t, resp, http.StatusOK)
+
+	var data struct {
+		Items []struct {
+			Name       string `json:"name"`
+			RecentJobs []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"recent_jobs"`
+		} `json:"items"`
+	}
+	decodeData(t, resp, &data)
+	if len(data.Items) != 2 {
+		t.Fatalf("items len = %d, want 2", len(data.Items))
+	}
+
+	var got []string
+	for _, j := range data.Items[0].RecentJobs {
+		got = append(got, j.Status)
+	}
+	want := []string{"pending", "failed", "succeeded", "succeeded", "failed"}
+	if !slices.Equal(got, want) {
+		t.Errorf("%s recent statuses = %v, want %v", data.Items[0].Name, got, want)
+	}
+	if n := len(data.Items[1].RecentJobs); n != 0 {
+		t.Errorf("%s recent jobs = %d, want 0", data.Items[1].Name, n)
+	}
+}
+
 // TestPolicyHandler_ListSortByAgent: the policies list sorts by the agent's
 // name on ?sort=agent (issue #320), and by policy name by default.
 func TestPolicyHandler_ListSortByAgent(t *testing.T) {
@@ -1009,4 +1058,132 @@ func TestPolicyHandler_TestHealthcheck(t *testing.T) {
 
 	status = http.StatusNotFound
 	assertStatus(t, e.post(t, path, e.adminToken(t), map[string]any{"url": target.URL + "/abc"}), http.StatusUnprocessableEntity)
+}
+
+// TestPolicyHandler_Destinations covers R-08 and R-09: the destination list of
+// a create or update is checked before anything is written, so a bad entry
+// leaves the policy as it was instead of half-saved.
+func TestPolicyHandler_Destinations(t *testing.T) {
+	ctx := context.Background()
+	entries := func(ids ...string) []map[string]any {
+		out := make([]map[string]any, len(ids))
+		for i, id := range ids {
+			out[i] = map[string]any{"destination_id": id, "priority": i}
+		}
+		return out
+	}
+	destIDs := func(t *testing.T, e *testEnv, policyID uuid.UUID) []uuid.UUID {
+		t.Helper()
+		dests, err := e.deps.policies.GetDestinations(ctx, policyID)
+		if err != nil {
+			t.Fatalf("GetDestinations: %v", err)
+		}
+		ids := make([]uuid.UUID, len(dests))
+		for i, d := range dests {
+			ids[i] = d.DestinationID
+		}
+		return ids
+	}
+	// badLists returns, for a setup with destinations a and b, the lists
+	// that must be refused, each with one bad entry after a valid one.
+	badLists := func(t *testing.T, e *testEnv, a, b *db.Destination) map[string][]map[string]any {
+		t.Helper()
+		deleted := createDBDestination(t, e.deps, "deleted", "local")
+		if err := e.deps.dests.Delete(ctx, deleted.ID); err != nil {
+			t.Fatalf("delete destination: %v", err)
+		}
+		return map[string][]map[string]any{
+			"invalid id":          entries(b.ID.String(), "not-a-uuid"),
+			"unknown destination": entries(b.ID.String(), uuid.New().String()),
+			"deleted destination": entries(b.ID.String(), deleted.ID.String()),
+			"listed twice":        entries(b.ID.String(), b.ID.String()),
+		}
+	}
+
+	t.Run("create refuses a bad entry and creates nothing", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "agent").ID.String()
+		a := createDBDestination(t, e.deps, "a", "local")
+		b := createDBDestination(t, e.deps, "b", "local")
+		for name, list := range badLists(t, e, a, b) {
+			resp := e.post(t, "/api/v1/policies", e.adminToken(t), map[string]any{
+				"name": "p", "agent_id": agentID, "schedule": "@daily",
+				"sources": `[{"type":"directory","path":"/data"}]`, "repo_password": "supersecret",
+				"destinations": list,
+			})
+			assertStatus(t, resp, http.StatusBadRequest)
+			var n int64
+			if err := e.deps.gdb.Model(&db.Policy{}).Count(&n).Error; err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if n != 0 {
+				t.Errorf("%s: %d policies created, want none", name, n)
+			}
+		}
+	})
+
+	t.Run("create saves every destination", func(t *testing.T) {
+		e := newTestEnv(t)
+		agentID := createDBAgent(t, e.deps, "agent").ID.String()
+		a := createDBDestination(t, e.deps, "a", "local")
+		b := createDBDestination(t, e.deps, "b", "local")
+		resp := e.post(t, "/api/v1/policies", e.adminToken(t), map[string]any{
+			"name": "p", "agent_id": agentID, "schedule": "@daily",
+			"sources": `[{"type":"directory","path":"/data"}]`, "repo_password": "supersecret",
+			"destinations": entries(a.ID.String(), b.ID.String()),
+		})
+		assertStatus(t, resp, http.StatusCreated)
+		var data struct {
+			ID uuid.UUID `json:"id"`
+		}
+		decodeData(t, resp, &data)
+		if got := destIDs(t, e, data.ID); !slices.Equal(got, []uuid.UUID{a.ID, b.ID}) {
+			t.Errorf("destinations = %v, want %v", got, []uuid.UUID{a.ID, b.ID})
+		}
+	})
+
+	t.Run("update refuses a bad entry and changes nothing", func(t *testing.T) {
+		e := newTestEnv(t)
+		policy := createDBPolicy(t, e.deps, "original", createDBAgent(t, e.deps, "agent").ID)
+		a := createDBDestination(t, e.deps, "a", "local")
+		b := createDBDestination(t, e.deps, "b", "local")
+		if err := e.deps.policies.AddDestination(ctx, &db.PolicyDestination{PolicyID: policy.ID, DestinationID: a.ID}); err != nil {
+			t.Fatalf("AddDestination: %v", err)
+		}
+		for name, list := range badLists(t, e, a, b) {
+			resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
+				"name":         "renamed",
+				"destinations": list,
+			})
+			assertStatus(t, resp, http.StatusBadRequest)
+			if got := destIDs(t, e, policy.ID); !slices.Equal(got, []uuid.UUID{a.ID}) {
+				t.Errorf("%s: destinations = %v, want the original %v", name, got, a.ID)
+			}
+			stored, err := e.deps.policies.GetByID(ctx, policy.ID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			if stored.Name != "original" {
+				t.Errorf("%s: name = %q, want the original", name, stored.Name)
+			}
+		}
+	})
+
+	t.Run("update replaces the destinations", func(t *testing.T) {
+		e := newTestEnv(t)
+		policy := createDBPolicy(t, e.deps, "original", createDBAgent(t, e.deps, "agent").ID)
+		a := createDBDestination(t, e.deps, "a", "local")
+		b := createDBDestination(t, e.deps, "b", "local")
+		if err := e.deps.policies.AddDestination(ctx, &db.PolicyDestination{PolicyID: policy.ID, DestinationID: a.ID}); err != nil {
+			t.Fatalf("AddDestination: %v", err)
+		}
+		resp := e.patch(t, "/api/v1/policies/"+policy.ID.String(), e.adminToken(t), map[string]any{
+			"name":         "renamed",
+			"destinations": entries(b.ID.String()),
+		})
+		assertStatus(t, resp, http.StatusOK)
+		if got := destIDs(t, e, policy.ID); !slices.Equal(got, []uuid.UUID{b.ID}) {
+			t.Errorf("destinations = %v, want %v", got, []uuid.UUID{b.ID})
+		}
+	})
 }

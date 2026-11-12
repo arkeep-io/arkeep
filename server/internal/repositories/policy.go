@@ -74,6 +74,51 @@ func (r *gormPolicyRepository) GetByIDWithDestinations(ctx context.Context, id u
 	return &policy, destinations, nil
 }
 
+// CreateWithDestinations inserts a policy and its destination associations in
+// one transaction: if one association fails, no policy is created.
+func (r *gormPolicyRepository) CreateWithDestinations(ctx context.Context, policy *db.Policy, dests []db.PolicyDestination) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(policy).Error; err != nil {
+			return fmt.Errorf("policies: create: %w", err)
+		}
+		return addDestinations(tx, policy.ID, dests)
+	})
+}
+
+// UpdateWithDestinations persists all fields of a policy and, when dests is
+// not nil, replaces its destination associations, in one transaction: if one
+// association fails, the policy keeps its previous fields and destinations.
+// Returns ErrNotFound if no live record exists.
+func (r *gormPolicyRepository) UpdateWithDestinations(ctx context.Context, policy *db.Policy, dests []db.PolicyDestination) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Save(policy)
+		if result.Error != nil {
+			return fmt.Errorf("policies: update: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		if dests == nil {
+			return nil
+		}
+		if err := tx.Where("policy_id = ?", policy.ID).Delete(&db.PolicyDestination{}).Error; err != nil {
+			return fmt.Errorf("policies: remove destinations: %w", err)
+		}
+		return addDestinations(tx, policy.ID, dests)
+	})
+}
+
+// addDestinations inserts the destination associations of a policy within tx.
+func addDestinations(tx *gorm.DB, policyID uuid.UUID, dests []db.PolicyDestination) error {
+	for i := range dests {
+		dests[i].PolicyID = policyID
+		if err := tx.Create(&dests[i]).Error; err != nil {
+			return fmt.Errorf("policies: add destination: %w", err)
+		}
+	}
+	return nil
+}
+
 // Update persists all fields of an existing policy record.
 func (r *gormPolicyRepository) Update(ctx context.Context, policy *db.Policy) error {
 	result := r.db.WithContext(ctx).Save(policy)
@@ -253,14 +298,6 @@ func (r *gormPolicyRepository) RemoveDestination(ctx context.Context, policyID, 
 func (r *gormPolicyRepository) DeleteDestinationAssociations(ctx context.Context, destinationID uuid.UUID) error {
 	return r.db.WithContext(ctx).
 		Where("destination_id = ?", destinationID).
-		Delete(&db.PolicyDestination{}).Error
-}
-
-// DeleteAllDestinations removes all destination associations for a policy.
-// Used during policy update to replace the full set of destinations.
-func (r *gormPolicyRepository) DeleteAllDestinations(ctx context.Context, policyID uuid.UUID) error {
-	return r.db.WithContext(ctx).
-		Where("policy_id = ?", policyID).
 		Delete(&db.PolicyDestination{}).Error
 }
 

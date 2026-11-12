@@ -106,7 +106,7 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
 	root.PersistentFlags().BoolVar(&cfg.updateCheck, "update-check", envOrDefault("ARKEEP_UPDATE_CHECK", "true") != "false", "Check GitHub for new Arkeep releases (set to false to never contact api.github.com)")
-	root.PersistentFlags().StringVar(&cfg.trustedProxies, "trusted-proxies", envOrDefault("ARKEEP_TRUSTED_PROXIES", ""), "Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the client address (default: loopback and private networks; \"none\" to trust none)")
+	root.PersistentFlags().StringVar(&cfg.trustedProxies, "trusted-proxies", envOrDefault("ARKEEP_TRUSTED_PROXIES", ""), "Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the client address (default: loopback only; \"none\" to trust none)")
 	root.PersistentFlags().StringVar(&cfg.metricsToken, "metrics-token", envOrDefault("ARKEEP_METRICS_TOKEN", ""), "Bearer token required to read /metrics (unset: /metrics is public)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 
@@ -377,8 +377,10 @@ func run(ctx context.Context, cfg *config) error {
 		UserRepo:     userRepo,
 		SettingsRepo: settingsRepo,
 		PolicyRepo:   policyRepo,
+		JobRepo:      jobRepo,
 		Hub:          wsHub,
 		Logger:       logger,
+		BaseURL:      cfg.baseURL,
 	})
 	// Start the background delivery retrier. It polls every 30 s for pending
 	// email/webhook deliveries and retries them with exponential backoff

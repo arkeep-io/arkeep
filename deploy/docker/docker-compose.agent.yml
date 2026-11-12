@@ -10,7 +10,7 @@
 
 services:
   agent:
-    image: ghcr.io/arkeep-io/arkeep-agent:v0.9.1
+    image: ghcr.io/arkeep-io/arkeep-agent:v0.10.0
     container_name: arkeep-agent
     restart: unless-stopped
     environment:
@@ -72,11 +72,13 @@ services:
       # mount mode, the socket gives full control of Docker: :ro only makes the socket
       # file read-only, not the API calls made through it. Remove this line if the agent
       # needs neither, or put a Docker socket proxy in front of it to restrict the API.
+      # Without it, in-place restores skip all Docker volumes and can't protect bind mounts of running containers.
       - /var/run/docker.sock:/var/run/docker.sock:rw
       # Docker volumes root — required to back up Docker named volumes.
       # The agent resolves volume paths via the Docker API (host paths), so the
       # same path must be accessible inside the container. Adjust if your Docker
       # data root differs from /var/lib/docker (check: docker info | grep "Docker Root Dir").
+      # (In-place restore protection finds the data root itself via the socket; this mount must still be adjusted.)
       #
       # :ro (default) — safe for backup; prevents accidental writes.
       #   In-place restore of Docker volumes is not supported with :ro.
