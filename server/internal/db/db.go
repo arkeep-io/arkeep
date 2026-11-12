@@ -153,6 +153,10 @@ func New(cfg Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("db: migrations failed: %w", err)
 	}
 
+	// Every time goes to the database in UTC, whatever the server's zone.
+	database.ConnPool = &utcConnPool{database.ConnPool}
+	database.Statement.ConnPool = database.ConnPool
+
 	return database, nil
 }
 
