@@ -9,9 +9,9 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-26.04
-    # The Docker Hub secrets live in this environment, which only v* tags and
-    # main can deploy to: a workflow pushed on any other ref cannot read them
-    # (P-01, ADR 0017).
+    # The Docker Hub organization access token lives in this environment,
+    # which only v* tags and main can deploy to: a workflow pushed on any
+    # other ref cannot read it (P-01, ADR 0017).
     environment: release
     permissions:
       contents: write
@@ -118,8 +118,9 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          # An organization access token logs in as the organization.
+          username: arkeepio
+          password: ${{ secrets.DOCKERHUB_ORG_TOKEN }}
 
       # Collects the GitHub logins of everyone who authored their first commit
       # since the previous tag (bots excluded) and exposes them to GoReleaser
@@ -168,15 +169,14 @@ jobs:
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_ORG_TOKEN: ${{ secrets.DOCKERHUB_ORG_TOKEN }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           chart_dir="${RUNNER_TEMP}/chart"
           helm package deploy/helm/arkeep --version "$version" --app-version "$GITHUB_REF_NAME" --destination "$chart_dir"
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin
-          echo "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          echo "$DOCKERHUB_ORG_TOKEN" | helm registry login registry-1.docker.io --username arkeepio --password-stdin
           helm push "${chart_dir}/arkeep-${version}.tgz" oci://ghcr.io/arkeep-io/charts 2>&1 | tee "${RUNNER_TEMP}/helm-push.log"
           helm push "${chart_dir}/arkeep-${version}.tgz" oci://registry-1.docker.io/arkeepio
 
