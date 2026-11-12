@@ -322,6 +322,35 @@ func translateLocalPath(path, hostRoot string) string {
 	return path
 }
 
+// translateExcludePatterns maps the absolute restic --exclude patterns of a
+// policy to the container-accessible paths, as resolveSources does for the
+// sources. restic anchors a pattern starting with "/" to the absolute path of
+// the file, so "/home/user/.cache" never matches "/hostfs/home/user/.cache".
+// Relative patterns ("**/tmp", "*.log") match at any depth and are left as
+// they are, and a leading "!" (restic's negation) is kept.
+//
+// Unix patterns are prefixed rather than passed through translateLocalPath:
+// filepath.Join would clean the pattern and drop a trailing slash.
+func translateExcludePatterns(patterns []string, hostRoot string) []string {
+	if hostRoot == "" {
+		return patterns
+	}
+	out := make([]string, len(patterns))
+	for i, p := range patterns {
+		neg := ""
+		if strings.HasPrefix(p, "!") {
+			neg, p = "!", p[1:]
+		}
+		if strings.HasPrefix(p, "/") && !strings.HasPrefix(p, strings.TrimSuffix(hostRoot, "/")+"/") {
+			p = strings.TrimSuffix(hostRoot, "/") + p
+		} else {
+			p = translateLocalPath(p, hostRoot)
+		}
+		out[i] = neg + p
+	}
+	return out
+}
+
 // liveSnapshotIDs extracts the full snapshot IDs from a repository listing.
 // Entries with an empty ID are skipped: the server treats the returned set as
 // authoritative and evicts everything outside it, so a malformed entry must
@@ -664,7 +693,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			opts := restic.BackupOptions{
 				Sources:         sources,
 				Tags:            payload.Tags,
-				ExcludePatterns: payload.ExcludePatterns,
+				ExcludePatterns: translateExcludePatterns(payload.ExcludePatterns, e.dockerHostRoot),
 				Host:            e.hostname,
 			}
 

@@ -402,6 +402,60 @@ func TestTranslateLocalPath(t *testing.T) {
 	}
 }
 
+func TestTranslateExcludePatterns(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		hostRoot string
+		want     []string
+	}{
+		{
+			name:     "absolute patterns are prefixed, relative ones untouched",
+			patterns: []string{"/dev", "/home/*/.cache", "**/tmp", "*.log", "cache"},
+			hostRoot: "/hostfs",
+			want:     []string{"/hostfs/dev", "/hostfs/home/*/.cache", "**/tmp", "*.log", "cache"},
+		},
+		{
+			name:     "negated absolute pattern keeps the negation",
+			patterns: []string{"!/home/user/keep"},
+			hostRoot: "/hostfs",
+			want:     []string{"!/hostfs/home/user/keep"},
+		},
+		{
+			name:     "trailing slash is preserved",
+			patterns: []string{"/var/cache/"},
+			hostRoot: "/hostfs",
+			want:     []string{"/hostfs/var/cache/"},
+		},
+		{
+			name:     "already under hostRoot — no double-prefix",
+			patterns: []string{"/hostfs/dev"},
+			hostRoot: "/hostfs",
+			want:     []string{"/hostfs/dev"},
+		},
+		{
+			name:     "windows path",
+			patterns: []string{`C:\Users\*\AppData`},
+			hostRoot: "/hostfs",
+			want:     []string{"/hostfs/c/Users/*/AppData"},
+		},
+		{
+			name:     "empty hostRoot — unchanged",
+			patterns: []string{"/dev", "**/tmp"},
+			hostRoot: "",
+			want:     []string{"/dev", "**/tmp"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := translateExcludePatterns(tt.patterns, tt.hostRoot)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("translateExcludePatterns(%q, %q) = %q, want %q", tt.patterns, tt.hostRoot, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureWritableDir(t *testing.T) {
 	t.Run("existing leaf with read-only intermediate (Unraid scenario)", func(t *testing.T) {
 		base := t.TempDir()
