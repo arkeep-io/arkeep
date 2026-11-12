@@ -1,12 +1,18 @@
 package notification
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -29,10 +35,14 @@ func newEmailSender(loader func(ctx context.Context) (*SMTPConfig, error)) *emai
 }
 
 // Send delivers an email notification to all provided recipient addresses.
+// htmlBody is optional: when set, the email carries it next to the plain-text
+// body (multipart/alternative) with the Arkeep logo attached inline; when
+// empty, the email is plain text only (notifications not about a job,
+// password reset, test email).
 // If the SMTP configuration is missing (ErrConfigNotFound) the send is skipped
 // silently — SMTP is optional and may not be configured. Any other error is
 // returned wrapped in ErrSendFailed.
-func (s *emailSender) Send(ctx context.Context, to []string, subject, body string) error {
+func (s *emailSender) Send(ctx context.Context, to []string, subject, body, htmlBody string) error {
 	if len(to) == 0 {
 		return nil
 	}
@@ -52,7 +62,10 @@ func (s *emailSender) Send(ctx context.Context, to []string, subject, body strin
 		return fmt.Errorf("%w: invalid from address", ErrSendFailed)
 	}
 
-	msg := buildEmail(cfg.From, cfg.FromName, to, subject, body)
+	msg, err := buildEmail(cfg.From, cfg.FromName, to, subject, body, htmlBody)
+	if err != nil {
+		return fmt.Errorf("%w: build message: %s", ErrSendFailed, err)
+	}
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 
 	if cfg.TLS {
@@ -191,10 +204,20 @@ func sanitizeHeader(s string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
-// buildEmail composes a minimal RFC 5322 email message. When fromName is set
-// the From header uses the "Name <address>" form (encoded/quoted via net/mail);
+// buildEmail composes an RFC 5322 email message. When fromName is set the
+// From header uses the "Name <address>" form (encoded/quoted via net/mail);
 // otherwise it falls back to the bare address.
-func buildEmail(from, fromName string, to []string, subject, body string) []byte {
+//
+// Text parts are quoted-printable: SMTP limits lines to 998 characters, and
+// an error message in a notification is often one long line. With
+// htmlBody set the message is
+//
+//	multipart/alternative
+//	├── text/plain
+//	└── multipart/related
+//	    ├── text/html
+//	    └── image/png  (Content-ID <arkeep-logo>)
+func buildEmail(from, fromName string, to []string, subject, body, htmlBody string) ([]byte, error) {
 	recipients := make([]string, len(to))
 	for i, r := range to {
 		recipients[i] = sanitizeHeader(r)
@@ -207,14 +230,100 @@ func buildEmail(from, fromName string, to []string, subject, body string) []byte
 		fromHeader = sanitizeHeader((&mail.Address{Name: fromName, Address: from}).String())
 	}
 
-	var sb strings.Builder
-	sb.WriteString("From: ");sb.WriteString(fromHeader);sb.WriteString("\r\n")
-	sb.WriteString("To: ");sb.WriteString(strings.Join(recipients, ", "));sb.WriteString("\r\n")
-	sb.WriteString("Subject: ");sb.WriteString(sanitizeHeader(subject));sb.WriteString("\r\n")
-	sb.WriteString("Date: ");sb.WriteString(time.Now().UTC().Format(time.RFC1123Z));sb.WriteString("\r\n")
-	sb.WriteString("MIME-Version: 1.0\r\n")
-	sb.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-	sb.WriteString("\r\n")
-	sb.WriteString(body)
-	return []byte(sb.String())
+	var buf bytes.Buffer
+	buf.WriteString("From: " + fromHeader + "\r\n")
+	buf.WriteString("To: " + strings.Join(recipients, ", ") + "\r\n")
+	buf.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
+	buf.WriteString("Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n")
+	buf.WriteString("MIME-Version: 1.0\r\n")
+
+	if htmlBody == "" {
+		buf.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+		buf.WriteString("Content-Transfer-Encoding: quoted-printable\r\n")
+		buf.WriteString("\r\n")
+		if err := writeQuotedPrintable(&buf, body); err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	// The related part is built first: its boundary goes into the header of
+	// the alternative part that contains it.
+	var related bytes.Buffer
+	rw := multipart.NewWriter(&related)
+	if err := writeTextPart(rw, "text/html; charset=UTF-8", htmlBody); err != nil {
+		return nil, err
+	}
+	// No Content-Disposition and no file name: several clients (Apple Mail,
+	// Thunderbird, Outlook) list a part that has a file name as an attachment,
+	// even when the HTML shows it inline.
+	logo, err := rw.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {"image/png"},
+		"Content-Transfer-Encoding": {"base64"},
+		"Content-ID":                {"<" + logoCID + ">"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := writeBase64Lines(logo, logoPNG); err != nil {
+		return nil, err
+	}
+	if err := rw.Close(); err != nil {
+		return nil, err
+	}
+
+	var alt bytes.Buffer
+	aw := multipart.NewWriter(&alt)
+	buf.WriteString("Content-Type: multipart/alternative; boundary=\"" + aw.Boundary() + "\"\r\n")
+	buf.WriteString("\r\n")
+	if err := writeTextPart(aw, "text/plain; charset=UTF-8", body); err != nil {
+		return nil, err
+	}
+	rp, err := aw.CreatePart(textproto.MIMEHeader{
+		"Content-Type": {`multipart/related; type="text/html"; boundary="` + rw.Boundary() + `"`},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := rp.Write(related.Bytes()); err != nil {
+		return nil, err
+	}
+	if err := aw.Close(); err != nil {
+		return nil, err
+	}
+	buf.Write(alt.Bytes())
+	return buf.Bytes(), nil
+}
+
+// writeTextPart adds a quoted-printable text part of the given content type.
+func writeTextPart(w *multipart.Writer, contentType, text string) error {
+	part, err := w.CreatePart(textproto.MIMEHeader{
+		"Content-Type":              {contentType},
+		"Content-Transfer-Encoding": {"quoted-printable"},
+	})
+	if err != nil {
+		return err
+	}
+	return writeQuotedPrintable(part, text)
+}
+
+func writeQuotedPrintable(w io.Writer, text string) error {
+	qp := quotedprintable.NewWriter(w)
+	if _, err := qp.Write([]byte(text)); err != nil {
+		return err
+	}
+	return qp.Close()
+}
+
+// writeBase64Lines writes data base64-encoded in lines of 76 characters.
+func writeBase64Lines(w io.Writer, data []byte) error {
+	enc := base64.StdEncoding.EncodeToString(data)
+	for len(enc) > 0 {
+		n := min(76, len(enc))
+		if _, err := w.Write([]byte(enc[:n] + "\r\n")); err != nil {
+			return err
+		}
+		enc = enc[n:]
+	}
+	return nil
 }
