@@ -23,6 +23,13 @@ import { ofetch } from 'ofetch'
 import type { User, ApiResponse, TokenResponse } from '@/types'
 import { router } from '@/router'
 
+// refreshRetryDelayMs is how long a refresh refused with 401 waits before its
+// one retry, for the cookie another tab rotated to arrive.
+const refreshRetryDelayMs = 1000
+// refreshFailureRetryMs is how long a scheduled refresh that failed for a
+// temporary reason waits before trying again.
+const refreshFailureRetryMs = 30_000
+
 // PasswordChangeStep is returned instead of a session when the account must
 // set a new password (an admin's Set password): call completePasswordChange().
 type PasswordChangeStep = { passwordChangeRequired: true; challengeToken: string }
@@ -50,6 +57,11 @@ export const useAuthStore = defineStore('auth', () => {
   // rapid navigation before the first refresh completes.
   let initPromise: Promise<void> | null = null
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+  // The refresh in flight, shared by every caller in this tab (the timer,
+  // api() on a 401, initialize): the server rotates the refresh token on each
+  // use, so two refreshes sent with the same cookie make one of them fail.
+  let refreshPromise: Promise<boolean> | null = null
 
   // ─── Getters ─────────────────────────────────────────────────────────────────
 
@@ -125,18 +137,35 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   // refresh silently exchanges the httpOnly refresh token cookie for a new
-  // access token. Returns true on success, false if the session has expired.
-  async function refresh(): Promise<boolean> {
-    try {
-      const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/refresh', {
-        method: 'POST',
-        credentials: 'include',
-      })
-      await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
-      return true
-    } catch {
-      _clearSession()
-      return false
+  // access token. Resolves true on success, and false once the server refused
+  // the cookie (401), after clearing the session. Any other failure (network,
+  // 5xx, 429) rejects and keeps the session: it says nothing about the
+  // session, and the next attempt may well succeed.
+  function refresh(): Promise<boolean> {
+    refreshPromise ??= _refresh().finally(() => { refreshPromise = null })
+    return refreshPromise
+  }
+
+  async function _refresh(): Promise<boolean> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const res = await ofetch<ApiResponse<TokenResponse>>('/api/v1/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        })
+        await setTokenAndFetchUser(res.data.access_token!, res.data.expires_in!)
+        return true
+      } catch (err: any) {
+        if (err?.status !== 401 && err?.response?.status !== 401) throw err
+        // Another tab may have rotated the token a moment ago: once its
+        // response has set the new cookie, the browser sends that one.
+        if (attempt === 1) {
+          await new Promise((resolve) => setTimeout(resolve, refreshRetryDelayMs))
+          continue
+        }
+        _clearSession()
+        return false
+      }
     }
   }
 
@@ -146,7 +175,8 @@ export const useAuthStore = defineStore('auth', () => {
     if (isInitialized.value) return
     if (initPromise) return initPromise
 
-    initPromise = refresh().then(() => {}).finally(() => {
+    // A server that cannot be reached at boot leaves the app signed out.
+    initPromise = refresh().then(() => {}, () => {}).finally(() => {
       isInitialized.value = true
       initPromise = null
     })
@@ -168,12 +198,17 @@ export const useAuthStore = defineStore('auth', () => {
   // ─── Private ──────────────────────────────────────────────────────────────────
 
   function _scheduleRefresh(expiresInSeconds: number): void {
+    _refreshIn(Math.max((expiresInSeconds - 60) * 1000, 0))
+  }
+
+  function _refreshIn(delayMs: number): void {
     _cancelRefresh()
-    const delayMs = Math.max((expiresInSeconds - 60) * 1000, 0)
     refreshTimer = setTimeout(async () => {
-      const ok = await refresh()
-      if (!ok) {
-        router.push('/login')
+      try {
+        if (!(await refresh())) router.push('/login')
+      } catch {
+        // Temporary failure: keep the session and try again shortly.
+        _refreshIn(refreshFailureRetryMs)
       }
     }, delayMs)
   }
