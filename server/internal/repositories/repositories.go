@@ -92,9 +92,14 @@ type TwoFactorChallengeRepository interface {
 	// Expiry is checked by the caller in Go, mirroring password reset tokens.
 	// Returns ErrNotFound if no unconsumed challenge matches.
 	GetUnusedByHash(ctx context.Context, hash string) (*db.TwoFactorChallenge, error)
-	// IncrementAttempts bumps the failed-code counter by one.
-	IncrementAttempts(ctx context.Context, id uuid.UUID) error
-	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// ReserveAttempt counts one code attempt against the challenge before the
+	// code is checked, only while the challenge is unused and has fewer than
+	// max attempts. Returns ErrNotFound when it is used up, so parallel
+	// requests cannot get more than max codes checked.
+	ReserveAttempt(ctx context.Context, id uuid.UUID, max int) error
+	// Consume marks the challenge used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
 	// DeleteByUserID removes all outstanding challenges for a user, so a new
 	// login attempt invalidates any previous one.
 	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
@@ -130,7 +135,9 @@ type RecoveryCodeRepository interface {
 	// ErrNotFound if no unused code matches. Callers must verify the returned
 	// code belongs to the expected user.
 	GetUnusedByHash(ctx context.Context, hash string) (*db.RecoveryCode, error)
-	MarkUsed(ctx context.Context, id uuid.UUID) error
+	// Consume marks the code used, only if it still is unused. Returns
+	// ErrNotFound when another request consumed it first.
+	Consume(ctx context.Context, id uuid.UUID) error
 	// CountUnused reports how many codes the user has left.
 	CountUnused(ctx context.Context, userID uuid.UUID) (int64, error)
 	// DeleteByUserID removes every code for a user, used when regenerating the

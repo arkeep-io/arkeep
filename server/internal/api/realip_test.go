@@ -10,7 +10,7 @@ import (
 
 func TestParseTrustedProxies(t *testing.T) {
 	if p, err := ParseTrustedProxies(""); err != nil || len(p) != len(DefaultTrustedProxies) {
-		t.Errorf("empty spec = %v, %v; want the default private ranges", p, err)
+		t.Errorf("empty spec = %v, %v; want the default loopback addresses", p, err)
 	}
 	if p, err := ParseTrustedProxies("none"); err != nil || len(p) != 0 {
 		t.Errorf("none = %v, %v; want no trusted proxy", p, err)
@@ -26,7 +26,7 @@ func TestParseTrustedProxies(t *testing.T) {
 // TestRealIP covers SEC-19: behind a reverse proxy every client used to share
 // the proxy's address, so one client's failed logins locked everyone out.
 func TestRealIP(t *testing.T) {
-	trusted, err := ParseTrustedProxies("")
+	trusted, err := ParseTrustedProxies("127.0.0.0/8, ::1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")
 	if err != nil {
 		t.Fatalf("ParseTrustedProxies: %v", err)
 	}
@@ -57,6 +57,40 @@ func TestRealIP(t *testing.T) {
 			for k, v := range tt.headers {
 				req.Header.Set(k, v)
 			}
+			h.ServeHTTP(httptest.NewRecorder(), req)
+			if got != tt.want {
+				t.Errorf("client IP = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRealIP_DefaultTrustsLoopbackOnly covers S-01: by default only a proxy
+// on the same host may name the client. A peer on a private network (the
+// LAN, another container, a pod) cannot pick the address its requests are
+// rate limited and audited under.
+func TestRealIP_DefaultTrustsLoopbackOnly(t *testing.T) {
+	trusted, err := ParseTrustedProxies("")
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+	tests := []struct{ name, remote, want string }{
+		{"IPv4 loopback proxy", "127.0.0.1:4000", "198.51.100.9"},
+		{"IPv6 loopback proxy", "[::1]:4000", "198.51.100.9"},
+		{"LAN peer", "192.168.1.20:4000", "192.168.1.20"},
+		{"container peer", "172.18.0.2:4000", "172.18.0.2"},
+		{"cluster peer", "10.42.0.7:4000", "10.42.0.7"},
+		{"IPv6 ULA peer", "[fd00::5]:4000", "fd00::5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got string
+			h := RealIP(trusted, zap.NewNop())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				got = clientIP(r)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = tt.remote
+			req.Header.Set("X-Forwarded-For", "198.51.100.9")
 			h.ServeHTTP(httptest.NewRecorder(), req)
 			if got != tt.want {
 				t.Errorf("client IP = %q, want %q", got, tt.want)

@@ -44,29 +44,29 @@ func (r *gormTwoFactorChallengeRepository) GetUnusedByHash(ctx context.Context, 
 	return &challenge, nil
 }
 
-func (r *gormTwoFactorChallengeRepository) IncrementAttempts(ctx context.Context, id uuid.UUID) error {
+func (r *gormTwoFactorChallengeRepository) ReserveAttempt(ctx context.Context, id uuid.UUID, max int) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.TwoFactorChallenge{}).
-		Where("id = ?", id).
+		Where("id = ? AND used_at IS NULL AND attempts < ?", id, max).
 		Update("attempts", gorm.Expr("attempts + 1"))
 	if result.Error != nil {
-		return fmt.Errorf("two_factor_challenges: increment attempts: %w", result.Error)
+		return fmt.Errorf("two_factor_challenges: reserve attempt: %w", result.Error)
 	}
-	if result.RowsAffected == 0 {
+	if result.RowsAffected != 1 {
 		return ErrNotFound
 	}
 	return nil
 }
 
-func (r *gormTwoFactorChallengeRepository) MarkUsed(ctx context.Context, id uuid.UUID) error {
+func (r *gormTwoFactorChallengeRepository) Consume(ctx context.Context, id uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.TwoFactorChallenge{}).
-		Where("id = ?", id).
+		Where("id = ? AND used_at IS NULL", id).
 		Update("used_at", gorm.Expr("CURRENT_TIMESTAMP"))
 	if result.Error != nil {
-		return fmt.Errorf("two_factor_challenges: mark used: %w", result.Error)
+		return fmt.Errorf("two_factor_challenges: consume: %w", result.Error)
 	}
-	if result.RowsAffected == 0 {
+	if result.RowsAffected != 1 {
 		return ErrNotFound
 	}
 	return nil
@@ -119,15 +119,15 @@ func (r *gormRecoveryCodeRepository) GetUnusedByHash(ctx context.Context, hash s
 	return &code, nil
 }
 
-func (r *gormRecoveryCodeRepository) MarkUsed(ctx context.Context, id uuid.UUID) error {
+func (r *gormRecoveryCodeRepository) Consume(ctx context.Context, id uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.RecoveryCode{}).
-		Where("id = ?", id).
+		Where("id = ? AND used_at IS NULL", id).
 		Update("used_at", gorm.Expr("CURRENT_TIMESTAMP"))
 	if result.Error != nil {
-		return fmt.Errorf("recovery_codes: mark used: %w", result.Error)
+		return fmt.Errorf("recovery_codes: consume: %w", result.Error)
 	}
-	if result.RowsAffected == 0 {
+	if result.RowsAffected != 1 {
 		return ErrNotFound
 	}
 	return nil
