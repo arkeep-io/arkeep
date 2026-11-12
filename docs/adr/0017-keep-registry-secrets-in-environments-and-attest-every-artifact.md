@@ -1,4 +1,4 @@
-# 0017. Keep registry secrets in the release environment and attest every published artifact
+# 0017. Keep registry secrets in environments and attest every published artifact
 
 - **Status:** Proposed
 - **Date:** 2026-11-12
@@ -23,12 +23,18 @@ root on every machine it backs up.
 
 ## Decision
 
-- Credentials for publishing (Docker Hub today) are secrets of the `release`
-  environment, never repository secrets. Only `v*` tags and `main` can
-  deploy to it: the release job, and the job that updates the Docker Hub
-  repository pages from `main` (`registry-metadata.yml`), run in it. A new
-  workflow that needs those credentials runs in it too, from one of those
-  refs.
+- Registry credentials are environment secrets, never repository secrets,
+  each in the environment of the only job that needs it:
+  - `release`, which only `v*` tags can deploy to, holds the Docker Hub
+    organization access token of the release job, limited to pushing to the
+    `arkeepio` repositories;
+  - `dockerhub-metadata`, which only `main` can deploy to, holds the
+    personal access token that updates the Docker Hub repository pages
+    (`registry-metadata.yml`): Docker Hub refuses an organization access
+    token there.
+
+  A new workflow that needs one of them runs in its environment, from the
+  same refs.
 - Every artifact the release publishes gets a build provenance attestation
   from the release workflow (`actions/attest-build-provenance`, signed with
   Sigstore, stored by GitHub): the archives, `checksums.txt`, the server and
@@ -44,11 +50,13 @@ root on every machine it backs up.
 
 ## Consequences
 
-- A workflow on any other branch cannot read the Docker Hub credentials.
-  `main` takes changes through pull requests only, administrators excepted,
-  so the code that reads them has been merged. The environment, its deployment rules and
-  its secrets are GitHub settings, outside the repository: they are set up
-  once by an administrator.
+- A workflow on any other ref cannot read the Docker Hub credentials, and
+  each job reads only its own token. `main` takes changes through pull
+  requests only, administrators excepted, so the code that reads the
+  personal access token has been merged. The release no longer depends on a
+  personal account. The environments, their deployment rules and their
+  secrets are GitHub settings, outside the repository: they are set up once
+  by an administrator.
 - Users can check that a download, image or chart was built by the release
   workflow of this repository from a given commit, without keys to manage.
 - GHCR is still written with `GITHUB_TOKEN`, which a workflow on any branch
