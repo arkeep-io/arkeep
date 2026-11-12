@@ -9,9 +9,16 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-26.04
+    # The Docker Hub secrets live in this environment, which only v* tags and
+    # main can deploy to: a workflow pushed on any other ref cannot read them
+    # (P-01, ADR 0017).
+    environment: release
     permissions:
       contents: write
       packages: write
+      # Signing and storing the build provenance (P-02).
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -164,10 +171,42 @@ jobs:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
+          set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           chart_dir="${RUNNER_TEMP}/chart"
           helm package deploy/helm/arkeep --version "$version" --app-version "$GITHUB_REF_NAME" --destination "$chart_dir"
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin
           echo "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
-          helm push "${chart_dir}/arkeep-${version}.tgz" oci://ghcr.io/arkeep-io/charts
+          helm push "${chart_dir}/arkeep-${version}.tgz" oci://ghcr.io/arkeep-io/charts 2>&1 | tee "${RUNNER_TEMP}/helm-push.log"
           helm push "${chart_dir}/arkeep-${version}.tgz" oci://registry-1.docker.io/arkeepio
+
+      # Build provenance (P-02): one attestation, signed with Sigstore and kept
+      # by GitHub, covering every published artifact: the archives and
+      # checksums.txt, the server and agent images (GHCR and Docker Hub get the
+      # same build, so one digest each) and the Helm chart. Users check a
+      # download or an image with `gh attestation verify ... --repo
+      # arkeep-io/arkeep`.
+      - name: Collect the artifacts to attest
+        shell: bash
+        run: |
+          set -euo pipefail
+          subjects="${RUNNER_TEMP}/subjects.txt"
+          cp dist/checksums.txt "$subjects"
+          (cd dist && sha256sum checksums.txt) >> "$subjects"
+          add() {
+            if [[ ! "$1" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::No digest found for $2."
+              exit 1
+            fi
+            echo "${1#sha256:}  $2" >> "$subjects"
+          }
+          for image in arkeep-server arkeep-agent; do
+            add "$(docker buildx imagetools inspect "ghcr.io/arkeep-io/${image}:${GITHUB_REF_NAME}" --format '{{.Manifest.Digest}}')" "ghcr.io/arkeep-io/${image}"
+          done
+          add "$(grep -o 'sha256:[0-9a-f]\{64\}' "${RUNNER_TEMP}/helm-push.log" | head -n 1)" "ghcr.io/arkeep-io/charts/arkeep"
+          cat "$subjects"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/subjects.txt
