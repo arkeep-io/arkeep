@@ -6,6 +6,7 @@
 [![CI](https://github.com/arkeep-io/arkeep/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/arkeep-io/arkeep/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/arkeep-io/arkeep)](LICENSE)
 [![Docker pulls](https://img.shields.io/docker/pulls/arkeepio/arkeep-server)](https://hub.docker.com/r/arkeepio/arkeep-server)
+[![Docker-Sponsored Open Source](https://img.shields.io/badge/Docker-Sponsored_Open_Source-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/arkeepio/arkeep-server)
 
 **Manage backups across all your servers from a single dashboard.**
 
