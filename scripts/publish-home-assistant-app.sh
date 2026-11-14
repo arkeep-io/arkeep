@@ -47,7 +47,9 @@ for config in "$tree_dir"/*/config.yaml; do
     echo "${config#"$tree_dir"/}: expected exactly one top-level version" >&2
     exit 1
   fi
-  sed -i -E "s/^version:.*/version: \"${tag}\"/" "$config"
+  # Not sed -i: its syntax differs between GNU and BSD sed.
+  sed -E "s/^version:.*/version: \"${tag}\"/" "$config" >"${config}.new"
+  mv "${config}.new" "$config"
   # Shown by Home Assistant next to the update.
   cat >"$(dirname "$config")/CHANGELOG.md" <<EOF
 # Changelog
@@ -85,7 +87,8 @@ sign=()
 if [ "$(git config --bool commit.gpgsign || true)" = "true" ]; then
   sign=(-S)
 fi
-commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} "${sign[@]}" \
+# ${sign[@]+...}: bash before 4.4 treats an empty array as unset under set -u.
+commit=$(git commit-tree "$tree" ${parent:+-p "$parent"} ${sign[@]+"${sign[@]}"} \
   -m "Arkeep ${tag}" \
   -m "Built from ${source_dir} at $(git rev-parse HEAD) by scripts/publish-home-assistant-app.sh.")
 
