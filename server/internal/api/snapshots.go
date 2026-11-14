@@ -469,6 +469,15 @@ func (h *SnapshotHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A folder restore recreates each path's full absolute path below the
+	// target, so a target that is the original location of what is restored
+	// (or a folder above it) nests a copy inside it and leaves the original
+	// files as they were. Refuse it before anything is written.
+	if msg, nested := nestedRestoreTarget(req.TargetPath, restoreSelection(req.IncludePaths, snapshot.Sources)); nested {
+		ErrBadRequest(w, msg)
+		return
+	}
+
 	// --- 2. Load destination ---
 	// A deleted destination is still loaded: its type and config give the
 	// repository address, and the caller supplies the wiped credentials.

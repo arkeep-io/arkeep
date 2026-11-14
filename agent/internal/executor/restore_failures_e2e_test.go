@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/arkeep-io/arkeep/agent/internal/restic/restictest"
 )
 
 // These tests run real restic restores that must fail, and assert the job
@@ -162,4 +164,39 @@ func TestRestoreE2E_CancelledMidRestore(t *testing.T) {
 	}}
 	r := env.restore(t, ctx, restorePayload{ResticSnapshotID: id, TargetPath: env.path("/home/u/restore")}, sink)
 	mustEndAs(t, r, sink, "cancelled")
+}
+
+// A folder restore whose target is the original location of the selected
+// paths (or a folder above it) would recreate their absolute path below the
+// target, nesting a copy and leaving the originals unchanged while the job
+// succeeds. The include paths are the ones the snapshot browser lists.
+func TestRestoreE2E_TargetIsOriginalLocation(t *testing.T) {
+	forEachDeployment(t, func(t *testing.T, env *e2eEnv) {
+		want := env.writeSource(t)
+		id := env.backup(t, e2eSource)
+		include := env.hostPath(e2eSource) + "/dir with space"
+
+		for _, target := range []string{e2eSource, e2eSource + "/dir with space", "/home/u"} {
+			t.Run(target, func(t *testing.T) {
+				sink := &recordingSink{}
+				r := env.restore(t, context.Background(), restorePayload{
+					ResticSnapshotID: id,
+					TargetPath:       env.path(target),
+					IncludePaths:     []string{include},
+				}, sink)
+				mustEndAs(t, r, sink, "failed")
+				if !strings.Contains(r.lastMsg, "original location") {
+					t.Errorf("last message = %q, want it to point to the original location", r.lastMsg)
+				}
+				if sink.contains("restore started") {
+					t.Errorf("restic ran; the target must be refused before anything is written; logs:\n%v", sink.logs)
+				}
+				nested := env.hostPath(target) + include
+				if _, err := os.Stat(nested); !os.IsNotExist(err) {
+					t.Errorf("nested copy %s exists (err %v), want nothing written", nested, err)
+				}
+				restictest.AssertTreeMatches(t, want, env.hostPath(e2eSource))
+			})
+		}
+	})
 }

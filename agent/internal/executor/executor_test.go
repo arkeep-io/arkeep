@@ -598,6 +598,37 @@ func TestAnyPathOverlaps(t *testing.T) {
 	}
 }
 
+func TestNestedRestoreTarget(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     string
+		translated string
+		includes   []string
+		nested     bool
+	}{
+		{"in-place sentinel", "/", "/", []string{"/data/app"}, false},
+		{"target is the include's parent (docker volume)", "/var/lib/docker/volumes/X", "/hostfs/var/lib/docker/volumes/X", []string{"/var/lib/docker/volumes/X/_data"}, true},
+		{"target equals the include", "/data/app", "/data/app", []string{"/data/app"}, true},
+		{"include under the host root", "/home/u/data", "/hostfs/home/u/data", []string{"/hostfs/home/u/data/sub"}, true},
+		{"separate folder", "/tmp/restore", "/hostfs/tmp/restore", []string{"/hostfs/home/u/data"}, false},
+		{"sibling with a common prefix", "/data/app", "/data/app", []string{"/data/application"}, false},
+		{"target below the include", "/data/app/restore", "/data/app/restore", []string{"/data/app"}, false},
+		{"whole snapshot (no includes)", "/data", "/data", nil, false},
+		{"windows target", `C:\restore`, `C:\restore`, []string{"/C/Users/me"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, nested := nestedRestoreTarget(tt.target, tt.translated, tt.includes)
+			if nested != tt.nested {
+				t.Fatalf("nested = %v (%q), want %v", nested, msg, tt.nested)
+			}
+			if nested && !strings.Contains(msg, "original location") {
+				t.Errorf("msg = %q, want it to point to the original location", msg)
+			}
+		})
+	}
+}
+
 func TestReconcileRestoreFilters(t *testing.T) {
 	const vol = "/var/lib/docker/volumes/x/_data"
 	tests := []struct {

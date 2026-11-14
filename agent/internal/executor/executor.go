@@ -1137,6 +1137,10 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	if payload.TargetPath != "/" {
 		targetPath = translateLocalPath(payload.TargetPath, e.dockerHostRoot)
 	}
+	if msg, nested := nestedRestoreTarget(payload.TargetPath, targetPath, payload.IncludePaths); nested {
+		fail(msg)
+		return
+	}
 	log("info", fmt.Sprintf("restore started: snapshot %s → %s", payload.ResticSnapshotID, targetPath))
 
 	// --- 3. Build exclude list for in-place restore ---
@@ -1223,6 +1227,36 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 	// --- 5. Final status ---
 	log("info", fmt.Sprintf("restore completed successfully: files written to %s", targetPath))
 	reporter.ReportStatus(job.JobID, "succeeded", "restore completed")
+}
+
+// nestedRestoreTarget reports whether a folder restore to target would nest
+// the selected paths inside their own original location. restic recreates
+// each path's full absolute path below the target, so restoring
+// /data/app/_data to /data/app writes /data/app/data/app/_data and leaves the
+// original files as they were. Snapshot paths of a Docker agent carry the host
+// root (/hostfs/data/app), so each one is compared with both the target as
+// sent and translatedTarget. The in-place sentinel "/" is never nested; the
+// server refuses whole-snapshot restores to a source folder, since only it
+// knows the sources.
+func nestedRestoreTarget(target, translatedTarget string, includePaths []string) (msg string, nested bool) {
+	if target == "/" {
+		return "", false
+	}
+	for _, p := range includePaths {
+		if !strings.HasPrefix(p, "/") {
+			continue
+		}
+		for _, t := range []string{target, translatedTarget} {
+			if !strings.HasPrefix(t, "/") || !pathWithin(p, t) {
+				continue
+			}
+			return fmt.Sprintf(
+				"refusing to restore %q to %q: the target is its original location or a folder above it, so the files would be written to %q "+
+					"and the originals left unchanged — restore to the original location to put them back, or choose a folder outside %q",
+				p, target, path.Join(t, p), target), true
+		}
+	}
+	return "", false
 }
 
 // defaultDockerVolRoot is where Docker keeps named volumes on the host.
