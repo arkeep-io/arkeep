@@ -74,6 +74,7 @@ to deploy the server and add agents on other machines.
 Other deployment options:
 [Standalone binary](https://arkeep.io/docs/installation/binary/) ·
 [Agent via systemd](https://arkeep.io/docs/installation/agent-systemd/) ·
+[Agent on Home Assistant](deploy/home-assistant/README.md) ·
 [Kubernetes (Helm)](https://arkeep.io/docs/installation/kubernetes/) ·
 [Reverse proxy and TLS](https://arkeep.io/docs/installation/reverse-proxy-tls/).
 

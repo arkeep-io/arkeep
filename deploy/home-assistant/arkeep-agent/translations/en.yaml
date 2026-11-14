@@ -1,0 +1,28 @@
+configuration:
+  ARKEEP_SERVER_ADDR:
+    name: Server gRPC address
+    description: >-
+      host:port of the Arkeep server's gRPC endpoint, without a scheme, for
+      example arkeep.example.com:9090.
+  ARKEEP_AGENT_SECRET:
+    name: Agent secret
+    description: The shared secret set as ARKEEP_AGENT_SECRET on the server.
+  ARKEEP_SERVER_HTTP_ADDR:
+    name: Server HTTP URL
+    description: >-
+      URL of the server's HTTP API, used once to enroll the agent. Required
+      when the server is behind a reverse proxy, for example
+      https://arkeep.example.com. By default, the gRPC host on port 8080.
+  ARKEEP_AGENT_HOSTNAME:
+    name: Hostname
+    description: >-
+      Name of this agent in Arkeep and on its snapshots. Keep it stable:
+      snapshots are grouped by hostname.
+  ARKEEP_GRPC_TLS_CA:
+    name: CA certificate
+    description: >-
+      Only for a server certificate from a private CA: path of the CA
+      certificate, under /ssl.
+  ARKEEP_LOG_LEVEL:
+    name: Log level
+    description: Detail of the app log.
