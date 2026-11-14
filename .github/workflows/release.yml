@@ -210,3 +210,25 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: ${{ runner.temp }}/subjects.txt
+
+      # The Home Assistant app describes the agent image of this release
+      # (ADR 0018). Moving the home-assistant branch is what offers the new
+      # version to Home Assistant users, so it comes last, once the image is
+      # published and attested, and only for stable releases. The checkout
+      # keeps no credentials: the token is passed to git for this push only.
+      - name: Publish the Home Assistant app
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          echo "::add-mask::${auth}"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
+          scripts/publish-home-assistant-app.sh "$GITHUB_REF_NAME" origin
