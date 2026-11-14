@@ -112,9 +112,9 @@ environment variables.
 
 - `deploy/home-assistant/`, `scripts/publish-home-assistant-app.sh`,
   `.github/workflows/release.yml`, `.github/workflows/deps-pins.yml`.
-- Home Assistant developer documentation:
-  [app configuration](https://developers.home-assistant.io/docs/apps/configuration),
-  [publishing](https://developers.home-assistant.io/docs/apps/publishing),
-  [security](https://developers.home-assistant.io/docs/apps/security).
+- Home Assistant documentation for app developers:
+  [app configuration](https://contributors.home-assistant.io/apps/reference/configuration/),
+  [publishing](https://contributors.home-assistant.io/apps/guides/publishing/),
+  [security](https://contributors.home-assistant.io/apps/guides/security/).
 - ADR 0013 (dependency pinning), ADR 0014 (Helm chart, published the same
   way), ADR 0016 (release tags), ADR 0017 (attestations).
