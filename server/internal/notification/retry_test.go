@@ -39,6 +39,7 @@ func newTestService(t *testing.T) (*NotificationService, *gorm.DB) {
 		SettingsRepo: repositories.NewSettingsRepository(gdb),
 		PolicyRepo:   repositories.NewPolicyRepository(gdb),
 		JobRepo:      repositories.NewJobRepository(gdb),
+		ProviderRepo: repositories.NewNotificationProviderRepository(gdb),
 		Hub:          websocket.NewHub(),
 		Logger:       zap.NewNop(),
 	})

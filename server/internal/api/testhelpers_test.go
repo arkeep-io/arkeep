@@ -74,6 +74,8 @@ type testDeps struct {
 	challenges    repositories.TwoFactorChallengeRepository
 	recoveryCodes repositories.RecoveryCodeRepository
 	passwordChanges repositories.PasswordChangeChallengeRepository
+
+	notifProviders repositories.NotificationProviderRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -98,6 +100,8 @@ func newTestDeps(t *testing.T) *testDeps {
 		challenges:    repositories.NewTwoFactorChallengeRepository(gdb),
 		recoveryCodes: repositories.NewRecoveryCodeRepository(gdb),
 		passwordChanges: repositories.NewPasswordChangeChallengeRepository(gdb),
+
+		notifProviders: repositories.NewNotificationProviderRepository(gdb),
 	}
 }
 
@@ -209,6 +213,8 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		RefreshTokens: deps.tokens,
 		Challenges:    deps.challenges,
 		PasswordChanges: deps.passwordChanges,
+
+		NotificationProviders: deps.notifProviders,
 		RecoveryCodes: deps.recoveryCodes,
 		Mailer:        mailer,
 		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),

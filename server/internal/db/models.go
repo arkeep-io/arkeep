@@ -506,8 +506,8 @@ type Notification struct {
 }
 
 // NotificationDelivery tracks the delivery state of a single notification over
-// a single external channel (email or webhook). Each Notification can have at
-// most one NotificationDelivery row per channel type.
+// a single external channel (email, webhook or one notification provider). Each
+// Notification can have at most one NotificationDelivery row per channel.
 //
 // Status transitions:
 //
@@ -520,15 +520,41 @@ type Notification struct {
 type NotificationDelivery struct {
 	Base
 	NotificationID uuid.UUID  `gorm:"type:text;not null;index"`
-	Type           string     `gorm:"not null"`                   // "email" | "webhook"
+	Type           string     `gorm:"not null"`                   // "email" | "webhook" | "provider"
 	Status         string     `gorm:"not null;default:'pending'"` // "pending" | "sent" | "exhausted"
 	Attempts       int        `gorm:"not null;default:0"`
 	LastError      string     `gorm:"type:text;not null;default:''"`
 	NextRetryAt    *time.Time // nil = ready to process immediately
+	// ProviderID is the NotificationProvider of a "provider" delivery; nil for
+	// email and webhook. The row is deleted with the provider.
+	ProviderID *uuid.UUID `gorm:"type:text"`
 }
 
 // TableName maps to the migration-created table name.
 func (NotificationDelivery) TableName() string { return "notification_delivery_queue" }
+
+// NotificationProvider is a push or chat service (Gotify, ntfy, Telegram...)
+// that receives notification events, sent through shoutrrr (ADR 0018). The
+// shoutrrr URL is built from Type, Config and Secrets at send time by the
+// notification package, which also validates them.
+type NotificationProvider struct {
+	Base
+	Name string `gorm:"not null"`
+	Type string `gorm:"not null"` // notification.Provider* constants
+	// Config holds the non-secret fields as a JSON object of strings.
+	Config string `gorm:"type:text;not null;default:'{}'"`
+	// Secrets holds the secret fields (tokens, passwords, webhook URLs) as a
+	// JSON object of strings, encrypted at rest. Never returned by the API.
+	Secrets EncryptedString `gorm:"type:text;not null;default:''"`
+	// Enabled has no GORM default: GORM would replace false with it on create.
+	Enabled bool `gorm:"not null"`
+	// Priority* is shoutrrr's priority parameter for each event type; empty
+	// leaves the service default. The accepted values depend on the service.
+	PriorityJobSuccess   string `gorm:"not null;default:''"`
+	PriorityJobFailure   string `gorm:"not null;default:''"`
+	PriorityAgentOffline string `gorm:"not null;default:''"`
+	PriorityAgentOnline  string `gorm:"not null;default:''"`
+}
 
 // -----------------------------------------------------------------------------
 // Audit Log
