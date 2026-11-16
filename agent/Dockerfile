@@ -69,5 +69,10 @@ VOLUME ["/var/lib/arkeep-agent"]
 
 ENV ARKEEP_STATE_DIR=/var/lib/arkeep-agent
 
+# rclone reads its config from $HOME/.config/rclone, and HOME changes from
+# /root to /home/arkeep when PUID is set. A fixed path lets one documented
+# mount work in both modes (see deploy/docker/docker-compose.agent.yml).
+ENV RCLONE_CONFIG=/etc/arkeep/rclone/rclone.conf
+
 ENTRYPOINT ["entrypoint.sh"]
 CMD ["arkeep-agent"]
