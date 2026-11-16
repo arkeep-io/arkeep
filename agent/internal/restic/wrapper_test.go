@@ -1092,3 +1092,73 @@ func TestRestore_InPlaceToleratesSELinuxLabelRemoval(t *testing.T) {
 		t.Fatalf("Restore() = %v, want nil: only the SELinux label removal failed", err)
 	}
 }
+
+// writeScript writes a fake restic made of the given shell body.
+func writeScript(t *testing.T, body string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// TestSnapshotsFailFast is the regression for issue #448: restic retries an
+// unreachable backend for many minutes, so an import of a REST repository the
+// agent cannot reach outlived the server's wait and its cause was never shown.
+func TestSnapshotsFailFast(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake restic is a shell script")
+	}
+	dest := Destination{Type: DestRest, RepoURL: "rest:http://192.0.2.1:8181/", Password: "pw"}
+
+	t.Run("stops restic at the first retried request and returns its cause", func(t *testing.T) {
+		// The retry line is the one restic 0.19 writes; exec makes sleep the
+		// process that receives the interrupt.
+		script := writeScript(t, `echo 'Stat(<config/>) returned error, retrying after 1.46s: Head "http://:***@192.0.2.1:8181/config": dial tcp 192.0.2.1:8181: connect: connection refused' >&2
+exec sleep 60
+`)
+		w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+
+		start := time.Now()
+		_, err := w.SnapshotsFailFast(context.Background(), dest)
+		if err == nil {
+			t.Fatal("SnapshotsFailFast() = nil error, want the connection failure")
+		}
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Errorf("SnapshotsFailFast() took %s, want it to stop restic at once", elapsed)
+		}
+		want := `restic: cannot reach the repository: Head "http://:***@192.0.2.1:8181/config": dial tcp 192.0.2.1:8181: connect: connection refused`
+		if err.Error() != want {
+			t.Errorf("error = %q\nwant    %q", err, want)
+		}
+	})
+
+	t.Run("returns the snapshots of a reachable repository", func(t *testing.T) {
+		script := writeScript(t, `echo '[{"id":"abc123","time":"2026-11-01T10:00:00Z","paths":["/data"],"hostname":"nas"}]'
+`)
+		w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+
+		snaps, err := w.SnapshotsFailFast(context.Background(), dest)
+		if err != nil {
+			t.Fatalf("SnapshotsFailFast() = %v, want nil", err)
+		}
+		if len(snaps) != 1 || snaps[0].ID != "abc123" || snaps[0].Hostname != "nas" {
+			t.Errorf("snapshots = %+v, want the one listed", snaps)
+		}
+	})
+
+	t.Run("reports other failures like any restic command", func(t *testing.T) {
+		// check-repo classifies the exit status: it must still be there.
+		script := writeScript(t, `echo '{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file"}' >&2
+exit 10
+`)
+		w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+
+		_, err := w.SnapshotsFailFast(context.Background(), dest)
+		want := "restic: repository does not exist: unable to open config file (exit status 10)"
+		if err == nil || err.Error() != want {
+			t.Errorf("error = %v\nwant    %q", err, want)
+		}
+	})
+}

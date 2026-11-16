@@ -16,6 +16,7 @@ package restic
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -605,6 +606,86 @@ func (w *Wrapper) Snapshots(ctx context.Context, dest Destination) ([]SnapshotIn
 		return nil, fmt.Errorf("restic: failed to parse snapshots output: %w", err)
 	}
 	return snapshots, nil
+}
+
+// SnapshotsFailFast is Snapshots for someone waiting on the answer, such as an
+// import of an existing repository. restic retries a failed backend request
+// with backoff for many minutes, even when the connection is refused, so the
+// caller would give up long before learning why. SnapshotsFailFast stops restic
+// at the first retried request and returns that request's error instead.
+func (w *Wrapper) SnapshotsFailFast(ctx context.Context, dest Destination) ([]SnapshotInfo, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var stdout bytes.Buffer
+	stderr := &retryWatcher{onRetry: cancel}
+	cmd := w.buildCmd(ctx, dest, []string{"snapshots", "--json", "--no-lock"})
+	cmd.Stdout = &stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if stderr.cause != "" {
+		return nil, fmt.Errorf("restic: cannot reach the repository: %s", stderr.cause)
+	}
+	if err != nil {
+		return nil, commandError(err, stderr.buf.String())
+	}
+
+	var snapshots []SnapshotInfo
+	if err := json.Unmarshal(stdout.Bytes(), &snapshots); err != nil {
+		return nil, fmt.Errorf("restic: failed to parse snapshots output: %w", err)
+	}
+	return snapshots, nil
+}
+
+// retryMarker introduces the error in the line restic writes to stderr before
+// retrying a failed backend request, e.g.
+//
+//	Stat(<config/>) returned error, retrying after 1.46s: Head "http://:***@host/config": dial tcp host: connect: connection refused
+//
+// restic redacts the password in the URL it prints.
+const retryMarker = " returned error, retrying after "
+
+// retryWatcher collects a restic command's stderr and calls onRetry once, at
+// the first line announcing a retried backend request, keeping its error in
+// cause. exec writes stderr from a single goroutine, and cause is read after
+// the command has finished.
+type retryWatcher struct {
+	buf     bytes.Buffer
+	partial []byte
+	cause   string
+	onRetry func()
+}
+
+func (r *retryWatcher) Write(p []byte) (int, error) {
+	r.buf.Write(p)
+	r.partial = append(r.partial, p...)
+	for {
+		i := bytes.IndexByte(r.partial, '\n')
+		if i < 0 {
+			break
+		}
+		r.checkLine(string(r.partial[:i]))
+		r.partial = r.partial[i+1:]
+	}
+	return len(p), nil
+}
+
+func (r *retryWatcher) checkLine(line string) {
+	if r.cause != "" {
+		return
+	}
+	i := strings.Index(line, retryMarker)
+	if i < 0 {
+		return
+	}
+	// Skip the delay ("1.46s: ") that follows the marker.
+	rest := line[i+len(retryMarker):]
+	j := strings.Index(rest, ": ")
+	if j < 0 {
+		return
+	}
+	r.cause = strings.TrimSpace(rest[j+2:])
+	r.onRetry()
 }
 
 // Restore restores a snapshot (or specific paths within it) to targetDir.
