@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises } from '@vue/test-utils'
 import { mountPage, submitForm } from '@/test/mount'
 import { api } from '@/services/api'
 import ForgotPasswordPage from './ForgotPasswordPage.vue'
@@ -12,6 +13,36 @@ describe('ForgotPasswordPage', () => {
   beforeEach(() => {
     // Password reset is available: the form is shown.
     vi.mocked(api).mockReset().mockResolvedValue({ data: { smtp_configured: true, base_url_configured: true } })
+  })
+
+  it('checks the reset status without using the browser cache', async () => {
+    await mountPage(ForgotPasswordPage)
+
+    expect(api).toHaveBeenCalledWith('/api/v1/auth/password-reset/status', { cache: 'no-store' })
+  })
+
+  it('shows a retryable error, not "SMTP not configured", when the status check fails', async () => {
+    vi.mocked(api).mockRejectedValueOnce(new Error('network down'))
+    const { wrapper } = await mountPage(ForgotPasswordPage)
+
+    expect(wrapper.text()).toContain('Could not check whether password reset is available')
+    expect(wrapper.text()).not.toContain('does not have an SMTP server configured')
+    expect(wrapper.find('#email').exists()).toBe(false)
+
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Try again')
+    expect(retry).toBeDefined()
+    await retry!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('#email').exists()).toBe(true)
+  })
+
+  it('tells the user to contact the administrator when SMTP is not configured', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ data: { smtp_configured: false, base_url_configured: true } })
+    const { wrapper } = await mountPage(ForgotPasswordPage)
+
+    expect(wrapper.text()).toContain('does not have an SMTP server configured')
+    expect(wrapper.find('#email').exists()).toBe(false)
   })
 
   it('rejects an invalid email and sends no request', async () => {

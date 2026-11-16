@@ -954,7 +954,10 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 
 	dest := p.destination(repoURL)
 
-	snapshots, err := m.wrapper.Snapshots(ctx, dest)
+	// An admin is waiting on this answer and the server stops waiting after a
+	// few minutes: fail at the first retried request (unreachable server,
+	// refused connection) rather than let restic retry for many minutes.
+	snapshots, err := m.wrapper.SnapshotsFailFast(ctx, dest)
 	if err != nil {
 		report.Error = err.Error()
 	} else {

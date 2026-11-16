@@ -104,6 +104,45 @@ describe('SMTPPage', () => {
       expect(wrapper.find('[data-testid="smtp-test-result"]').text()).toBe('Test email sent to admin@example.com.')
     })
 
+    // A successful test of unsaved values must not read as "email is set up":
+    // password reset and notifications use the saved settings only (#447).
+    const unsaved = (wrapper: Awaited<ReturnType<typeof openPage>>) => wrapper.find('[data-testid="smtp-test-unsaved"]')
+
+    it('reminds to save when the tested values differ from the saved ones', async () => {
+      const wrapper = await openPage(saved)
+      await wrapper.find('#smtp-host').setValue('smtp.other.com')
+      await clickTest(wrapper, { data: { sent_to: 'admin@example.com' } })
+
+      expect(unsaved(wrapper).exists()).toBe(true)
+      expect(unsaved(wrapper).text()).toContain('not saved yet')
+    })
+
+    it('reminds to save when nothing is saved yet', async () => {
+      const wrapper = await openPage(null)
+      await wrapper.find('#smtp-host').setValue('smtp.example.com')
+      await wrapper.find('#smtp-from').setValue('arkeep@example.com')
+      await clickTest(wrapper, { data: { sent_to: 'admin@example.com' } })
+
+      expect(unsaved(wrapper).exists()).toBe(true)
+    })
+
+    it('does not remind to save when the tested values are the saved ones', async () => {
+      const wrapper = await openPage(saved)
+      await clickTest(wrapper, { data: { sent_to: 'admin@example.com' } })
+
+      expect(unsaved(wrapper).exists()).toBe(false)
+    })
+
+    it('does not remind to save after the tested values are saved', async () => {
+      const wrapper = await openPage(saved)
+      await wrapper.find('#smtp-host').setValue('smtp.other.com')
+      await wrapper.find('#smtp-password').setValue('typed')
+      await submitForm(wrapper)
+      await clickTest(wrapper, { data: { sent_to: 'admin@example.com' } })
+
+      expect(unsaved(wrapper).exists()).toBe(false)
+    })
+
     it('shows why the test failed', async () => {
       const wrapper = await openPage(saved)
       const refusal = Object.assign(new Error('422'), { data: { error: { message: 'smtp auth: 535 bad credentials' } } })

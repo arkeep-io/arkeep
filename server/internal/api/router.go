@@ -169,6 +169,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Get("/auth/oidc/callback", authHandler.OIDCCallback)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(NoStore)
 
 		// --- Public routes ---
 		r.Group(func(r chi.Router) {

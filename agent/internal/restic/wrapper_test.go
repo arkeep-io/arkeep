@@ -394,6 +394,51 @@ func TestBuildCmd_NonRcloneNoRcloneProgram(t *testing.T) {
 	}
 }
 
+// TestBuildCmd_ResticCacheDir: restic keeps its cache under the agent's state
+// directory, which outlives a container recreate, unless the operator chose a
+// cache location with RESTIC_CACHE_DIR or XDG_CACHE_HOME (#455).
+func TestBuildCmd_ResticCacheDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		cacheDir string
+		env      map[string]string
+		want     string
+	}{
+		{"default under the state dir", "/state/cache", nil, "/state/cache"},
+		{"RESTIC_CACHE_DIR set by the operator", "/state/cache", map[string]string{"RESTIC_CACHE_DIR": "/fast/cache"}, "/fast/cache"},
+		{"XDG_CACHE_HOME set by the operator", "/state/cache", map[string]string{"XDG_CACHE_HOME": "/data/cache"}, ""},
+		{"empty RESTIC_CACHE_DIR counts as unset", "/state/cache", map[string]string{"RESTIC_CACHE_DIR": ""}, "/state/cache"},
+		{"no cache dir configured", "", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, k := range []string{"RESTIC_CACHE_DIR", "XDG_CACHE_HOME"} {
+				t.Setenv(k, "") // restored after the test
+				if v, ok := tt.env[k]; ok {
+					t.Setenv(k, v)
+				} else if err := os.Unsetenv(k); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone", cacheDir: tt.cacheDir}
+			dest := Destination{Type: DestLocal, RepoURL: "/mnt/backups"}
+
+			cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+
+			// exec uses the last value of a duplicated variable.
+			got := ""
+			for _, kv := range cmd.Env {
+				if v, ok := strings.CutPrefix(kv, "RESTIC_CACHE_DIR="); ok {
+					got = v
+				}
+			}
+			if got != tt.want {
+				t.Errorf("RESTIC_CACHE_DIR = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // hasRcloneProgramOpt reports whether args contains the consecutive pair
 // "-o" "rclone.program=<bin>".
 func hasRcloneProgramOpt(args []string, bin string) bool {
@@ -472,7 +517,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Daily: 7},
 			tags:   []string{"policy:11111111-2222-3333-4444-555555555555"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags",
 				"--tag", "policy:11111111-2222-3333-4444-555555555555",
 				"--keep-daily", "7",
 			},
@@ -482,7 +527,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 1, Hourly: 2, Daily: 3, Weekly: 4, Monthly: 5, Yearly: 6},
 			tags:   []string{"policy:abc"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags", "--tag", "policy:abc",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags", "--tag", "policy:abc",
 				"--keep-last", "1", "--keep-hourly", "2", "--keep-daily", "3",
 				"--keep-weekly", "4", "--keep-monthly", "5", "--keep-yearly", "6",
 			},
@@ -492,7 +537,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Weekly: 4},
 			tags:   []string{"policy:abc"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags", "--tag", "policy:abc",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags", "--tag", "policy:abc",
 				"--keep-weekly", "4",
 			},
 		},
@@ -501,7 +546,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 1},
 			tags:   []string{"policy:abc", "env:prod"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags",
 				"--tag", "policy:abc", "--tag", "env:prod",
 				"--keep-last", "1",
 			},
@@ -521,7 +566,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 7},
 			tags:   []string{"policy:abc:command:pgdump"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags",
 				"--tag", "policy:abc:command:pgdump",
 				"--keep-last", "7",
 			},
@@ -724,6 +769,30 @@ func TestBuildDumpArgs(t *testing.T) {
 			got := buildDumpArgs("abc123", tt.path, tt.archive)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("buildDumpArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildLsArgs: browsing a snapshot only reads the repository, so it takes
+// no lock — no lock file round trip on a remote backend, and no failure while
+// a prune holds the exclusive lock (#455). The "--" marker keeps a dir
+// beginning with "-" from being read as a flag.
+func TestBuildLsArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string
+		want []string
+	}{
+		{"snapshot root", "/", []string{"ls", "--json", "--no-lock", "--", "abc123", "/"}},
+		{"subdirectory", "/etc", []string{"ls", "--json", "--no-lock", "--", "abc123", "/etc"}},
+		{"dir looking like a flag", "--password-command=id", []string{"ls", "--json", "--no-lock", "--", "abc123", "--password-command=id"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildLsArgs("abc123", tt.dir)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("buildLsArgs() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1091,4 +1160,74 @@ func TestRestore_InPlaceToleratesSELinuxLabelRemoval(t *testing.T) {
 	if err := w.Restore(context.Background(), dest, "abc123", "/", nil, nil, ""); err != nil {
 		t.Fatalf("Restore() = %v, want nil: only the SELinux label removal failed", err)
 	}
+}
+
+// writeScript writes a fake restic made of the given shell body.
+func writeScript(t *testing.T, body string) string {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// TestSnapshotsFailFast is the regression for issue #448: restic retries an
+// unreachable backend for many minutes, so an import of a REST repository the
+// agent cannot reach outlived the server's wait and its cause was never shown.
+func TestSnapshotsFailFast(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake restic is a shell script")
+	}
+	dest := Destination{Type: DestRest, RepoURL: "rest:http://192.0.2.1:8181/", Password: "pw"}
+
+	t.Run("stops restic at the first retried request and returns its cause", func(t *testing.T) {
+		// The retry line is the one restic 0.19 writes; exec makes sleep the
+		// process that receives the interrupt.
+		script := writeScript(t, `echo 'Stat(<config/>) returned error, retrying after 1.46s: Head "http://:***@192.0.2.1:8181/config": dial tcp 192.0.2.1:8181: connect: connection refused' >&2
+exec sleep 60
+`)
+		w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+
+		start := time.Now()
+		_, err := w.SnapshotsFailFast(context.Background(), dest)
+		if err == nil {
+			t.Fatal("SnapshotsFailFast() = nil error, want the connection failure")
+		}
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Errorf("SnapshotsFailFast() took %s, want it to stop restic at once", elapsed)
+		}
+		want := `restic: cannot reach the repository: Head "http://:***@192.0.2.1:8181/config": dial tcp 192.0.2.1:8181: connect: connection refused`
+		if err.Error() != want {
+			t.Errorf("error = %q\nwant    %q", err, want)
+		}
+	})
+
+	t.Run("returns the snapshots of a reachable repository", func(t *testing.T) {
+		script := writeScript(t, `echo '[{"id":"abc123","time":"2026-11-01T10:00:00Z","paths":["/data"],"hostname":"nas"}]'
+`)
+		w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+
+		snaps, err := w.SnapshotsFailFast(context.Background(), dest)
+		if err != nil {
+			t.Fatalf("SnapshotsFailFast() = %v, want nil", err)
+		}
+		if len(snaps) != 1 || snaps[0].ID != "abc123" || snaps[0].Hostname != "nas" {
+			t.Errorf("snapshots = %+v, want the one listed", snaps)
+		}
+	})
+
+	t.Run("reports other failures like any restic command", func(t *testing.T) {
+		// check-repo classifies the exit status: it must still be there.
+		script := writeScript(t, `echo '{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file"}' >&2
+exit 10
+`)
+		w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+
+		_, err := w.SnapshotsFailFast(context.Background(), dest)
+		want := "restic: repository does not exist: unable to open config file (exit status 10)"
+		if err == nil || err.Error() != want {
+			t.Errorf("error = %v\nwant    %q", err, want)
+		}
+	})
 }
