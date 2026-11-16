@@ -37,8 +37,8 @@ func TestProviderURL(t *testing.T) {
 			Config: map[string]string{"devices": "phone, tablet"}, Secrets: map[string]string{"api_token": "app", "user_key": "usr"}},
 			"pushover://shoutrrr:app@usr/?devices=phone%2Ctablet", false},
 		{"telegram", ProviderSettings{Type: ProviderTelegram,
-			Config: map[string]string{"chats": "123, @channel"}, Secrets: map[string]string{"bot_token": "110201543:AAHdq"}},
-			"telegram://110201543:AAHdq@telegram?chats=123%2C%40channel", false},
+			Config: map[string]string{"chats": "123, @channel"}, Secrets: map[string]string{"bot_token": "123456789:abc"}},
+			"telegram://123456789:abc@telegram?chats=123%2C%40channel", false},
 		{"matrix", ProviderSettings{Type: ProviderMatrix,
 			Config: map[string]string{"url": "https://matrix.example.com", "user": "bot", "rooms": "!a:example.com"}, Secrets: map[string]string{"password": "p@ss"}},
 			"matrix://bot:p%40ss@matrix.example.com/?rooms=%21a%3Aexample.com", false},
@@ -80,6 +80,11 @@ func TestProviderURL(t *testing.T) {
 	}
 }
 
+// fakeTelegramToken has the shape of a bot token (ID, colon, 35 characters).
+// It is built at run time so that no literal in the source looks like a real
+// token to secret scanners.
+var fakeTelegramToken = "123456789:" + strings.Repeat("x", 35)
+
 func TestValidateProvider(t *testing.T) {
 	gotify := func(priority string) ProviderSettings {
 		return ProviderSettings{Type: ProviderGotify,
@@ -105,7 +110,7 @@ func TestValidateProvider(t *testing.T) {
 			Config: map[string]string{"url": "ntfy.sh"}, Secrets: map[string]string{"topic": "backups"},
 			Priorities: map[string]string{"job_success": "0"}}, "job_success priority"},
 		{"telegram", ProviderSettings{Type: ProviderTelegram,
-			Config: map[string]string{"chats": "123"}, Secrets: map[string]string{"bot_token": "110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"}}, ""},
+			Config: map[string]string{"chats": "123"}, Secrets: map[string]string{"bot_token": fakeTelegramToken}}, ""},
 		{"matrix password with @", ProviderSettings{Type: ProviderMatrix,
 			Config: map[string]string{"url": "https://matrix.example.com", "user": "bot"}, Secrets: map[string]string{"password": "p@ss/word"}}, ""},
 		{"discord has no priority", ProviderSettings{Type: ProviderDiscord,

@@ -76,7 +76,7 @@ export const PROVIDER_TYPES: ProviderTypeDef[] = [
   {
     type: 'telegram', label: 'Telegram', iconPath: LOGOS.telegram,
     fields: [
-      { key: 'bot_token', label: 'Bot token', secret: true, required: true, placeholder: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw',
+      { key: 'bot_token', label: 'Bot token', secret: true, required: true, placeholder: '123456789:ABC…',
         help: 'Create a bot with @BotFather and add it to the chats.' },
       { key: 'chats', label: 'Chat IDs', required: true, placeholder: '123456789, @mychannel',
         help: 'Comma-separated chat IDs or @channel names.' },
