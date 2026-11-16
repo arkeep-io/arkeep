@@ -159,6 +159,21 @@ type OIDCProviderRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// NotificationProviderRepository
+// -----------------------------------------------------------------------------
+
+// NotificationProviderRepository manages the push and chat services that
+// receive notification events (db.NotificationProvider).
+type NotificationProviderRepository interface {
+	Create(ctx context.Context, p *db.NotificationProvider) error
+	GetByID(ctx context.Context, id uuid.UUID) (*db.NotificationProvider, error)
+	List(ctx context.Context) ([]*db.NotificationProvider, error)
+	ListEnabled(ctx context.Context) ([]*db.NotificationProvider, error)
+	Update(ctx context.Context, p *db.NotificationProvider) error
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// -----------------------------------------------------------------------------
 // AgentRepository
 // -----------------------------------------------------------------------------
 

@@ -386,6 +386,29 @@ export interface WebhookSettings {
   enabled: boolean
 }
 
+// NotificationProviderPriorities is the priority sent with each event type;
+// empty leaves the service default.
+export interface NotificationProviderPriorities {
+  job_success: string
+  job_failure: string
+  agent_offline: string
+  agent_online: string
+}
+
+// NotificationProvider is a push or chat service (Gotify, Telegram...) events
+// are sent to. Secret fields are write-only: secrets_set lists those stored.
+export interface NotificationProvider {
+  id: string
+  name: string
+  type: string
+  enabled: boolean
+  config: Record<string, string>
+  secrets_set: string[]
+  priorities: NotificationProviderPriorities
+  created_at: string
+  updated_at: string
+}
+
 // NotificationSettings controls which event types trigger external delivery
 // (email + webhook). In-app notifications are always shown regardless.
 export interface NotificationSettings {

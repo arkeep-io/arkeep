@@ -54,6 +54,10 @@ type RouterConfig struct {
 	Challenges    repositories.TwoFactorChallengeRepository
 	RecoveryCodes repositories.RecoveryCodeRepository
 
+	// NotificationProviders manages the push and chat services events are
+	// sent to (Settings → Notifications).
+	NotificationProviders repositories.NotificationProviderRepository
+
 	// PasswordChanges holds the login step of an account that must set a new
 	// password before a session is issued.
 	PasswordChanges repositories.PasswordChangeChallengeRepository
@@ -151,6 +155,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
+	notificationProviderHandler := NewNotificationProviderHandler(cfg.NotificationProviders, cfg.Audit, cfg.Logger)
 	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler := newVersionHandler(cfg.ServerVersion, cfg.UpdateCheck)
@@ -333,6 +338,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/webhook", settingsHandler.GetWebhook)
 				r.Put("/settings/webhook", settingsHandler.UpsertWebhook)
 				r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/settings/webhook/test", settingsHandler.TestWebhook)
+
+				// Notification providers (Gotify, ntfy, Telegram...)
+				r.Get("/settings/notification-providers", notificationProviderHandler.List)
+				r.Post("/settings/notification-providers", notificationProviderHandler.Create)
+				r.Put("/settings/notification-providers/{id}", notificationProviderHandler.Update)
+				r.Delete("/settings/notification-providers/{id}", notificationProviderHandler.Delete)
+				r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/settings/notification-providers/test", notificationProviderHandler.Test)
 
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)
