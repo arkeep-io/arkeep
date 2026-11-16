@@ -120,22 +120,23 @@ async function fetchSMTP() {
         const res = await api<ApiResponse<SMTPSettings>>('/api/v1/settings/smtp')
         const s = res.data
         smtpExists.value = true
-        resetForm({
-            values: {
-                ...defaultValues(),
-                host: s.host ?? '',
-                port: s.port ?? 587,
-                tls: s.tls ?? false,
-                auth_enabled: !!s.username,
-                username: s.username ?? '',
-                from: s.from ?? '',
-                from_name: s.from_name ?? '',
-                recipients: s.recipients ?? [],
-            },
-        })
+        const stored = {
+            ...defaultValues(),
+            host: s.host ?? '',
+            port: s.port ?? 587,
+            tls: s.tls ?? false,
+            auth_enabled: !!s.username,
+            username: s.username ?? '',
+            from: s.from ?? '',
+            from_name: s.from_name ?? '',
+            recipients: s.recipients ?? [],
+        }
+        resetForm({ values: stored })
+        savedBody = savedBodyOf(stored)
     } catch (e: any) {
         if (e?.status === 404 || e?.response?.status === 404) {
             smtpExists.value = false
+            savedBody = null
         }
     } finally {
         loading.value = false
@@ -164,6 +165,18 @@ function requestBody(values: FormValues) {
     }
 }
 
+// savedBody is the request body of the stored settings, or null when none are
+// stored. A test email that succeeds with other values proves a server that
+// nothing uses yet: notifications and password reset read the saved settings.
+let savedBody: string | null = null
+
+// savedBodyOf serializes the settings as stored: a blank password, which the
+// server reads as "keep the stored one". A password typed in the form is
+// therefore an unsaved change.
+function savedBodyOf(values: FormValues): string {
+    return JSON.stringify(requestBody({ ...values, password: '' }))
+}
+
 const submit = handleSubmit(async (values) => {
     submitError.value = null
     success.value = false
@@ -175,6 +188,7 @@ const submit = handleSubmit(async (values) => {
             body: requestBody(values),
         })
         smtpExists.value = true
+        savedBody = savedBodyOf(values)
         smtpPassword.value = ''
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
@@ -190,7 +204,7 @@ const submit = handleSubmit(async (values) => {
 // The server sends the test to the signed-in admin, with the values in the
 // form, saved or not. A blank password means the saved one, for the saved host.
 const testing = ref(false)
-const testResult = ref<{ ok: boolean; message: string } | null>(null)
+const testResult = ref<{ ok: boolean; message: string; unsaved?: boolean } | null>(null)
 
 const sendTest = handleSubmit(async (values) => {
     submitError.value = null
@@ -202,7 +216,11 @@ const sendTest = handleSubmit(async (values) => {
             method: 'POST',
             body: requestBody(values),
         })
-        testResult.value = { ok: true, message: `Test email sent to ${res.data.sent_to}.` }
+        testResult.value = {
+            ok: true,
+            message: `Test email sent to ${res.data.sent_to}.`,
+            unsaved: JSON.stringify(requestBody(values)) !== savedBody,
+        }
     } catch (e: any) {
         testResult.value = { ok: false, message: apiErrorMessage(e, 'Failed to send the test email') }
     } finally {
@@ -262,6 +280,14 @@ const sendTest = handleSubmit(async (values) => {
             <Alert v-if="testResult" :variant="testResult.ok ? 'default' : 'destructive'" data-testid="smtp-test-result"
                 :class="testResult.ok ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' : ''">
                 <AlertDescription>{{ testResult.message }}</AlertDescription>
+            </Alert>
+            <Alert v-if="testResult?.unsaved" data-testid="smtp-test-unsaved"
+                class="border-amber-500/30 bg-amber-500/5 text-amber-600 dark:text-amber-400">
+                <AlertCircle class="size-4" />
+                <AlertDescription>
+                    These settings are not saved yet: notifications and password reset emails
+                    still use the saved ones. Click Save Settings to apply them.
+                </AlertDescription>
             </Alert>
 
             <!-- ── Connection ──────────────────────────────────────────────── -->
