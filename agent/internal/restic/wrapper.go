@@ -258,6 +258,13 @@ type Wrapper struct {
 	rcloneBin string // absolute path to the extracted rclone binary
 	logger    *zap.Logger
 
+	// cacheDir is restic's cache directory, under the agent's state directory
+	// so that it outlives a container recreate: without it restic falls back
+	// to $HOME/.cache, which in Docker is not on a volume, and downloads every
+	// repository's index again after each image update (#455). Empty means
+	// restic's own default. Applied in buildCmd.
+	cacheDir string
+
 	// knownHostsDir is a private (0700) directory, created on first use, that
 	// holds the known_hosts files of SFTP destinations with a pinned host key.
 	knownHostsOnce sync.Once
@@ -282,6 +289,7 @@ func NewWrapper(extractor *Extractor, logger *zap.Logger) (*Wrapper, error) {
 		resticBin: resticBin,
 		rcloneBin: rcloneBin,
 		logger:    logger.Named("restic"),
+		cacheDir:  filepath.Join(extractor.stateDir, "cache"),
 	}, nil
 }
 
@@ -466,7 +474,10 @@ func buildForgetArgs(policy RetentionPolicy, tags []string) ([]string, error) {
 	// group alone, so old groups were never pruned (#284). Every Arkeep
 	// snapshot carries exactly one pool tag, so grouping by tags keeps each
 	// pool separate — also when a sweep passes several pools' tags at once.
-	args := []string{"forget", "--prune", "--json", "--group-by", "paths,tags"}
+	// --cleanup-cache removes the cache directories of repositories this
+	// agent has not used for 30 days (a destination deleted or moved), which
+	// restic otherwise keeps forever in the persistent cache.
+	args := []string{"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags"}
 	for _, tag := range tags {
 		args = append(args, "--tag", tag)
 	}
@@ -762,14 +773,12 @@ func buildRestoreArgs(snapshotID, targetDir string, includePaths []string, exclu
 // entry itself are skipped, so the result is exactly the directory's children.
 // dir defaults to "/" (the snapshot root) when empty.
 //
-// The "--" end-of-options marker separates flags from the positional snapshotID
-// and dir, so a dir that begins with "-" (it originates from a user-supplied
-// ?path= query) can never be interpreted by restic as a flag.
+// See buildLsArgs for the flags.
 func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir string) ([]LsEntry, error) {
 	if dir == "" {
 		dir = "/"
 	}
-	cmd := w.buildCmd(ctx, dest, []string{"ls", "--json", "--", snapshotID, dir})
+	cmd := w.buildCmd(ctx, dest, buildLsArgs(snapshotID, dir))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("restic: failed to open stdout pipe: %w", err)
@@ -841,6 +850,20 @@ func (w *Wrapper) Dump(ctx context.Context, dest Destination, snapshotID, path s
 		return commandError(err, stderrBuf.String())
 	}
 	return nil
+}
+
+// buildLsArgs constructs the restic ls argument slice.
+//
+// --no-lock: listing only reads the repository. Without it every directory
+// opened in the GUI creates and deletes a lock file on the backend (two
+// round trips on a remote one), and browsing fails while a prune holds the
+// exclusive lock.
+//
+// The "--" end-of-options marker separates flags from the positional snapshotID
+// and dir, so a dir that begins with "-" (it originates from a user-supplied
+// ?path= query) can never be interpreted by restic as a flag.
+func buildLsArgs(snapshotID, dir string) []string {
+	return []string{"ls", "--json", "--no-lock", "--", snapshotID, dir}
 }
 
 // buildDumpArgs constructs the restic dump argument slice. As in Ls, the "--"
@@ -1337,6 +1360,11 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 		"RESTIC_REPOSITORY="+dest.RepoURL,
 		"RESTIC_PASSWORD="+dest.Password,
 	)
+	// An operator who chose a cache location keeps it: restic reads
+	// RESTIC_CACHE_DIR first, then XDG_CACHE_HOME.
+	if w.cacheDir != "" && os.Getenv("RESTIC_CACHE_DIR") == "" && os.Getenv("XDG_CACHE_HOME") == "" {
+		env = append(env, "RESTIC_CACHE_DIR="+w.cacheDir)
+	}
 
 	allowed, rejected := filterDestEnv(dest.Env)
 	if len(rejected) > 0 {

@@ -394,6 +394,51 @@ func TestBuildCmd_NonRcloneNoRcloneProgram(t *testing.T) {
 	}
 }
 
+// TestBuildCmd_ResticCacheDir: restic keeps its cache under the agent's state
+// directory, which outlives a container recreate, unless the operator chose a
+// cache location with RESTIC_CACHE_DIR or XDG_CACHE_HOME (#455).
+func TestBuildCmd_ResticCacheDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		cacheDir string
+		env      map[string]string
+		want     string
+	}{
+		{"default under the state dir", "/state/cache", nil, "/state/cache"},
+		{"RESTIC_CACHE_DIR set by the operator", "/state/cache", map[string]string{"RESTIC_CACHE_DIR": "/fast/cache"}, "/fast/cache"},
+		{"XDG_CACHE_HOME set by the operator", "/state/cache", map[string]string{"XDG_CACHE_HOME": "/data/cache"}, ""},
+		{"empty RESTIC_CACHE_DIR counts as unset", "/state/cache", map[string]string{"RESTIC_CACHE_DIR": ""}, "/state/cache"},
+		{"no cache dir configured", "", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, k := range []string{"RESTIC_CACHE_DIR", "XDG_CACHE_HOME"} {
+				t.Setenv(k, "") // restored after the test
+				if v, ok := tt.env[k]; ok {
+					t.Setenv(k, v)
+				} else if err := os.Unsetenv(k); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone", cacheDir: tt.cacheDir}
+			dest := Destination{Type: DestLocal, RepoURL: "/mnt/backups"}
+
+			cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+
+			// exec uses the last value of a duplicated variable.
+			got := ""
+			for _, kv := range cmd.Env {
+				if v, ok := strings.CutPrefix(kv, "RESTIC_CACHE_DIR="); ok {
+					got = v
+				}
+			}
+			if got != tt.want {
+				t.Errorf("RESTIC_CACHE_DIR = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // hasRcloneProgramOpt reports whether args contains the consecutive pair
 // "-o" "rclone.program=<bin>".
 func hasRcloneProgramOpt(args []string, bin string) bool {
@@ -472,7 +517,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Daily: 7},
 			tags:   []string{"policy:11111111-2222-3333-4444-555555555555"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags",
 				"--tag", "policy:11111111-2222-3333-4444-555555555555",
 				"--keep-daily", "7",
 			},
@@ -482,7 +527,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 1, Hourly: 2, Daily: 3, Weekly: 4, Monthly: 5, Yearly: 6},
 			tags:   []string{"policy:abc"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags", "--tag", "policy:abc",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags", "--tag", "policy:abc",
 				"--keep-last", "1", "--keep-hourly", "2", "--keep-daily", "3",
 				"--keep-weekly", "4", "--keep-monthly", "5", "--keep-yearly", "6",
 			},
@@ -492,7 +537,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Weekly: 4},
 			tags:   []string{"policy:abc"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags", "--tag", "policy:abc",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags", "--tag", "policy:abc",
 				"--keep-weekly", "4",
 			},
 		},
@@ -501,7 +546,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 1},
 			tags:   []string{"policy:abc", "env:prod"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags",
 				"--tag", "policy:abc", "--tag", "env:prod",
 				"--keep-last", "1",
 			},
@@ -521,7 +566,7 @@ func TestBuildForgetArgs(t *testing.T) {
 			policy: RetentionPolicy{Last: 7},
 			tags:   []string{"policy:abc:command:pgdump"},
 			want: []string{
-				"forget", "--prune", "--json", "--group-by", "paths,tags",
+				"forget", "--prune", "--json", "--cleanup-cache", "--group-by", "paths,tags",
 				"--tag", "policy:abc:command:pgdump",
 				"--keep-last", "7",
 			},
@@ -724,6 +769,30 @@ func TestBuildDumpArgs(t *testing.T) {
 			got := buildDumpArgs("abc123", tt.path, tt.archive)
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("buildDumpArgs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildLsArgs: browsing a snapshot only reads the repository, so it takes
+// no lock — no lock file round trip on a remote backend, and no failure while
+// a prune holds the exclusive lock (#455). The "--" marker keeps a dir
+// beginning with "-" from being read as a flag.
+func TestBuildLsArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string
+		want []string
+	}{
+		{"snapshot root", "/", []string{"ls", "--json", "--no-lock", "--", "abc123", "/"}},
+		{"subdirectory", "/etc", []string{"ls", "--json", "--no-lock", "--", "abc123", "/etc"}},
+		{"dir looking like a flag", "--password-command=id", []string{"ls", "--json", "--no-lock", "--", "abc123", "--password-command=id"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildLsArgs("abc123", tt.dir)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("buildLsArgs() = %v, want %v", got, tt.want)
 			}
 		})
 	}
