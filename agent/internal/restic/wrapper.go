@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -1171,7 +1172,30 @@ func errorMessage(stderr string) string {
 	if len(details) > 0 {
 		msg += ": " + strings.Join(details, "; ")
 	}
+	if hint := missingRcloneRemote(stderr); hint != "" {
+		msg += ": " + hint
+	}
 	return msg
+}
+
+// rcloneMissingRemote matches rclone's plain-text stderr line for a remote
+// that is not in its config file. restic's own exit_error only says "error
+// talking HTTP to rclone", so without it the cause would be lost.
+var rcloneMissingRemote = regexp.MustCompile(`didn't find section in config file \("([^"]*)"\)`)
+
+// missingRcloneRemote explains a missing rclone remote found in stderr, naming
+// the config file rclone read (it inherits RCLONE_CONFIG from the agent; the
+// Docker image sets it). It returns "" when stderr reports no such error.
+func missingRcloneRemote(stderr string) string {
+	m := rcloneMissingRemote.FindStringSubmatch(stderr)
+	if m == nil {
+		return ""
+	}
+	config := os.Getenv("RCLONE_CONFIG")
+	if config == "" {
+		config = "rclone's default config file (~/.config/rclone/rclone.conf of the user running the agent)"
+	}
+	return fmt.Sprintf("rclone remote %q is not defined in %s", m[1], config)
 }
 
 // lockConflictExitCode is restic's dedicated, stable exit status for "unable
