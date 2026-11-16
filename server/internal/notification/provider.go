@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -364,15 +365,20 @@ func providerURL(s ProviderSettings) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		u := &url.URL{Scheme: "gotify", Host: base.Host}
-		u = u.JoinPath(base.Path, sec["token"])
+		if !validPathSegment(sec["token"]) {
+			return "", errors.New("token must contain only letters, digits, '.', '-' and '_'")
+		}
+		u := &url.URL{Scheme: "gotify", Host: base.Host, Path: base.Path + "/" + sec["token"]}
 		return withTLS(u, base), nil
 	case ProviderNtfy:
 		base, err := parseServerURL(c["url"], true)
 		if err != nil {
 			return "", err
 		}
-		u := (&url.URL{Scheme: "ntfy", Host: base.Host}).JoinPath(base.Path, sec["topic"])
+		if !validPathSegment(sec["topic"]) {
+			return "", errors.New("topic must contain only letters, digits, '.', '-' and '_'")
+		}
+		u := &url.URL{Scheme: "ntfy", Host: base.Host, Path: base.Path + "/" + sec["topic"]}
 		q := url.Values{"scheme": {base.Scheme}}
 		if t := sec["token"]; t != "" {
 			q.Set("token", t)
@@ -438,6 +444,15 @@ func providerURL(s ProviderSettings) (string, error) {
 		return sec["url"], nil
 	}
 	return "", fmt.Errorf("unknown provider type %q", s.Type)
+}
+
+// segmentCharsRe matches the characters of a Gotify token or an ntfy topic.
+var segmentCharsRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validPathSegment reports whether v can be appended as one URL path segment
+// without changing the rest of the path: no "/", and not "." or "..".
+func validPathSegment(v string) bool {
+	return segmentCharsRe.MatchString(v) && v != "." && v != ".."
 }
 
 // parseServerURL parses the URL of a self-hosted server. A bare host means
