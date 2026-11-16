@@ -1002,6 +1002,48 @@ func TestErrorMessage(t *testing.T) {
 	}
 }
 
+// TestErrorMessage_MissingRcloneRemote checks that a remote missing from
+// rclone.conf is named, with the config file rclone read: restic's exit_error
+// alone only says "error talking HTTP to rclone" (issue #463).
+func TestErrorMessage_MissingRcloneRemote(t *testing.T) {
+	const exitErr = `{"message_type":"exit_error","code":1,"message":"Fatal: Fatal: create repository at rclone:gdrive:repo failed: error talking HTTP to rclone: exit status 1"}` + "\n"
+	const rcloneLine = `rclone: 2026/11/16 15:42:48 CRITICAL: Failed to create file system for "gdrive:repo": didn't find section in config file ("gdrive")` + "\n"
+	const base = "Fatal: create repository at rclone:gdrive:repo failed: error talking HTTP to rclone: exit status 1"
+
+	tests := []struct {
+		name         string
+		rcloneConfig string
+		stderr       string
+		want         string
+	}{
+		{
+			name:         "RCLONE_CONFIG set",
+			rcloneConfig: "/etc/arkeep/rclone/rclone.conf",
+			stderr:       rcloneLine + exitErr,
+			want:         base + `: rclone remote "gdrive" is not defined in /etc/arkeep/rclone/rclone.conf`,
+		},
+		{
+			name:   "default config",
+			stderr: rcloneLine + exitErr,
+			want:   base + `: rclone remote "gdrive" is not defined in rclone's default config file (~/.config/rclone/rclone.conf of the user running the agent)`,
+		},
+		{
+			name:         "other rclone error unchanged",
+			rcloneConfig: "/etc/arkeep/rclone/rclone.conf",
+			stderr:       `rclone: 2026/11/16 15:42:48 CRITICAL: Failed to create file system for "gdrive:repo": couldn't fetch token` + "\n" + exitErr,
+			want:         base,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RCLONE_CONFIG", tt.rcloneConfig)
+			if got := errorMessage(tt.stderr); got != tt.want {
+				t.Errorf("errorMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestRun_ReadableErrorKeepsExitStatus checks the error of a failed restic
 // run: restic's own message, then the exit status, still unwrappable to the
 // *exec.ExitError (lock-conflict detection and exit-code checks rely on it).
