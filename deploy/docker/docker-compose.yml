@@ -10,7 +10,7 @@
 
 services:
   server:
-    image: ghcr.io/arkeep-io/arkeep-server:v0.11.0
+    image: ghcr.io/arkeep-io/arkeep-server:v0.11.1
     container_name: arkeep-server
     restart: unless-stopped
     ports:
