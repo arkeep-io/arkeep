@@ -9,10 +9,12 @@ import (
 // page to check a configuration before (or after) saving it.
 func SendTestEmail(ctx context.Context, cfg SMTPConfig, to string) error {
 	s := newEmailSender(func(context.Context) (*SMTPConfig, error) { return &cfg, nil })
-	// The body is a constant: no request-supplied value (host, port, sender)
-	// is echoed into the message content.
-	return s.Send(ctx, []string{to}, "Arkeep test email",
-		"This is a test email from Arkeep.\r\n\r\nIf you can read it, notifications by email work.", "")
+	text, html, err := renderEmailBodies(newTestEmail())
+	if err != nil {
+		// The test is about the SMTP settings: it still runs, as plain text.
+		html = ""
+	}
+	return s.Send(ctx, []string{to}, testEmailSubject, text, html)
 }
 
 // TestWebhookType is the event type of a test webhook, so receivers can tell

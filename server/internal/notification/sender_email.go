@@ -37,8 +37,8 @@ func newEmailSender(loader func(ctx context.Context) (*SMTPConfig, error)) *emai
 // Send delivers an email notification to all provided recipient addresses.
 // htmlBody is optional: when set, the email carries it next to the plain-text
 // body (multipart/alternative) with the Arkeep logo attached inline; when
-// empty, the email is plain text only (notifications not about a job,
-// password reset, test email).
+// empty, the email is plain text only. Callers pass "" when they have no HTML
+// body for the email or could not build one.
 // If the SMTP configuration is missing (ErrConfigNotFound) the send is skipped
 // silently — SMTP is optional and may not be configured. Any other error is
 // returned wrapped in ErrSendFailed.

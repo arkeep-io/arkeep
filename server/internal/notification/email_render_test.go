@@ -72,9 +72,9 @@ var (
 	failureError = "Fatal: unable to open repository at s3:s3.eu-central-1.amazonaws.com/acme-backups: 403 Forbidden"
 )
 
-// The emails of the design preview, as job.html was designed against them.
+// The emails of the design preview, as email.html was designed against them.
 var (
-	wantSuccess = jobEmail{
+	wantSuccess = emailContent{
 		Title:       "Backup completed: Daily server backup",
 		Preheader:   "Daily server backup finished in 12m 4s. 2.4 GB added, 2 of 2 destinations succeeded.",
 		StatusLabel: "Succeeded", StatusColor: greenStripe, StatusBG: greenBG, StatusFG: green,
@@ -97,7 +97,7 @@ var (
 		ActionURL: "https://arkeep.example.com/jobs/3f0c8a52-6d1e-4b7a-9c44-1e2f7ab90d13", ActionLabel: "View job",
 		Footer: "Sent by your Arkeep server. Times are in UTC.",
 	}
-	wantFailure = jobEmail{
+	wantFailure = emailContent{
 		Title:       "Backup failed: Daily server backup",
 		Preheader:   "Daily server backup failed after 4m 37s. 1 of 2 destinations succeeded.",
 		StatusLabel: "Failed", StatusColor: red, StatusBG: redBG, StatusFG: redFG,
@@ -125,7 +125,7 @@ var (
 )
 
 // emailFor builds the email of a job with the title the service gives it.
-func emailFor(data jobEmailData, failed bool, baseURL string) jobEmail {
+func emailFor(data jobEmailData, failed bool, baseURL string) emailContent {
 	operation, name, _ := JobSubject{Type: data.JobType, PolicyName: data.PolicyName, DestinationName: data.DestinationName}.describe()
 	title := operation + " completed: " + name
 	if failed {
@@ -265,7 +265,7 @@ View job: https://arkeep.example.com/jobs/b81d47e0-2c3a-49f6-8e15-7a60cd13f2e8
 -- 
 Sent by your Arkeep server. Times are in UTC.
 `
-	if got := renderJobEmailText(e); got != want {
+	if got := renderEmailText(e); got != want {
 		t.Errorf("text email:\n%s\nwant:\n%s", got, want)
 	}
 }
@@ -316,9 +316,9 @@ func TestJobEmail_MissingData(t *testing.T) {
 		t.Errorf("ActionURL = %q, want none without a base URL", e.ActionURL)
 	}
 
-	html, err := renderJobEmail(e)
+	html, err := renderEmailHTML(e)
 	if err != nil {
-		t.Fatalf("renderJobEmail: %v", err)
+		t.Fatalf("renderEmailHTML: %v", err)
 	}
 	for _, bad := range []string{"<img", "View job", "Key figures", "Destinations</div>"} {
 		if strings.Contains(html, bad) {
@@ -455,12 +455,14 @@ func seedJob(t *testing.T, gdb *gorm.DB, jobErr string) *db.Job {
 }
 
 // TestEmailBodies_PlainText covers the emails that stay short plain text:
-// those not about a job, and those whose job can no longer be loaded.
+// those of an unknown type, and those whose email cannot be built.
 func TestEmailBodies_PlainText(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newTestService(t)
 	tests := []struct{ name, typ, payload string }{
-		{"agent event", "agent_offline", `{"agent_name":"web-01"}`},
+		{"unknown type", "something_else", `{"agent_name":"web-01"}`},
+		{"agent without name", "agent_offline", `{}`},
+		{"agent payload broken", "agent_online", `not json`},
 		{"job deleted", "job_failure", `{"job_id":"` + uuid.Must(uuid.NewV7()).String() + `","error":"boom"}`},
 		{"no job id", "job_success", `{}`},
 	}
