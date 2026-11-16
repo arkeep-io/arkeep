@@ -136,3 +136,13 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// NoStore forbids browsers and proxies from storing the response. API
+// responses are live state (or authenticated data): a stored copy would show
+// stale state, e.g. a password reset status taken before SMTP was configured.
+func NoStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
