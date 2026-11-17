@@ -117,10 +117,11 @@ func (s *NotificationService) SMTPConfigured(ctx context.Context) bool {
 
 // SendEmail delivers a one-off email through the configured SMTP server. Unlike
 // the notification fan-out, this is a direct send for transactional flows such
-// as password reset. If SMTP is not configured the send is skipped silently
+// as password reset. html is the optional HTML body; when empty, the email is
+// plain text only. If SMTP is not configured the send is skipped silently
 // (see emailSender.Send) — callers should gate on SMTPConfigured first.
-func (s *NotificationService) SendEmail(ctx context.Context, to []string, subject, body string) error {
-	return s.email.Send(ctx, to, subject, body, "")
+func (s *NotificationService) SendEmail(ctx context.Context, to []string, subject, text, html string) error {
+	return s.email.Send(ctx, to, subject, text, html)
 }
 
 // Start launches the background delivery retrier. It runs until ctx is
@@ -671,18 +672,41 @@ func (s *NotificationService) smtpMissing(ctx context.Context) bool {
 // emailBodies returns the plain-text and HTML body of n's email. Job
 // notifications get both, built from the job: its details are loaded here, at
 // send time, rather than stored in the payload, which also goes to webhooks;
-// a retry loads them again. Every other notification, and a job notification
-// whose job can no longer be loaded, is sent as n.Body alone (html is "").
+// a retry loads them again. Agent notifications get both, built from the
+// payload. Any other notification, and one whose email cannot be built (e.g.
+// the job can no longer be loaded), is sent as n.Body alone (html is "").
 // A failure is logged.
 func (s *NotificationService) emailBodies(ctx context.Context, n *db.Notification) (text, html string) {
-	if s.jobRepo == nil || (n.Type != "job_success" && n.Type != "job_failure") {
-		return n.Body, ""
-	}
 	warn := func(msg string, err error) (string, string) {
 		s.logger.Warn(msg+", sending the short plain-text email",
 			zap.String("notification_id", n.ID.String()),
 			zap.Error(err),
 		)
+		return n.Body, ""
+	}
+
+	switch n.Type {
+	case "agent_offline", "agent_online":
+		var agent struct {
+			Name string `json:"agent_name"`
+		}
+		if err := json.Unmarshal([]byte(n.Payload), &agent); err != nil {
+			return warn("failed to decode agent notification payload", err)
+		}
+		if agent.Name == "" {
+			return warn("agent notification has no agent name", errors.New("empty agent_name"))
+		}
+		var err error
+		text, html, err = renderEmailBodies(newAgentEmail(n.Type == "agent_online", n.Title, agent.Name, n.CreatedAt))
+		if err != nil {
+			return warn("failed to render agent email", err)
+		}
+		return text, html
+	case "job_success", "job_failure":
+		if s.jobRepo == nil {
+			return n.Body, ""
+		}
+	default:
 		return n.Body, ""
 	}
 
