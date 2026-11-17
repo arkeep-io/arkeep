@@ -88,7 +88,7 @@ func (r *fakeReporter) ReportStatus(jobID, status, message string) {
 	r.lastMsg = message
 }
 
-func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string) {
+func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, summary *restic.SnapshotSummary, repoSizeBytes int64, errMsg string) {
 	if r.destResults == nil {
 		r.destResults = make(map[string]destResult)
 	}
@@ -99,7 +99,7 @@ func (r *fakeReporter) ReportDestinationResult(jobID, destinationID, status, sna
 	r.snapshotIDs[destinationID] = snapshotID
 }
 
-func (r *fakeReporter) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+func (r *fakeReporter) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, summary *restic.SnapshotSummary, errMsg string) {
 	r.commandResults = append(r.commandResults, commandResult{
 		destinationID: destinationID,
 		sourceName:    sourceName,

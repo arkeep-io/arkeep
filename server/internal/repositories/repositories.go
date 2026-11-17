@@ -436,6 +436,7 @@ type SnapshotRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteStaleByDestination(ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time) (int64, error)
 	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)
+	FillMissingSummary(ctx context.Context, destinationID uuid.UUID, snapshotID string, fileCount int64, summary db.SnapshotSummary) (bool, error)
 	List(ctx context.Context, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByPolicy(ctx context.Context, policyID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)
 	ListByDestination(ctx context.Context, destinationID uuid.UUID, opts ListOptions) ([]SnapshotWithNames, int64, error)

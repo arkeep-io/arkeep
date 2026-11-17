@@ -330,6 +330,35 @@ message DestinationStatusReport {
   // A forget never creates a snapshot, so snapshot_id/size_bytes are unused
   // on these reports.
   string retention_tag = 11;
+  // summary is the restic summary of the snapshot this backup created. Unset
+  // when no snapshot was created, and on reports from agents built before it
+  // existed.
+  SnapshotSummary summary = 12;
+}
+
+// SnapshotSummary holds the statistics restic records about a snapshot: the
+// summary event of `restic backup --json`, or the summary stored in the
+// snapshot itself and listed by `restic snapshots --json` (restic >= 0.17).
+// The data_added_packed and total_files_processed figures are also sent as
+// size_bytes and file_count, which predate this message.
+message SnapshotSummary {
+  // backup_start and backup_end bound the restic run that created the
+  // snapshot.
+  google.protobuf.Timestamp backup_start = 1;
+  google.protobuf.Timestamp backup_end   = 2;
+  // files_new, files_changed and files_unmodified count the files of the
+  // snapshot by how they compare with the parent snapshot.
+  int64 files_new                        = 3;
+  int64 files_changed                    = 4;
+  int64 files_unmodified                 = 5;
+  // total_files_processed and total_bytes_processed are the number and the
+  // logical size of the files the backup read.
+  int64 total_files_processed            = 6;
+  int64 total_bytes_processed            = 7;
+  // data_added is what the snapshot added to the repository after
+  // deduplication; data_added_packed is the same after compression.
+  int64 data_added                       = 8;
+  int64 data_added_packed                = 9;
 }
 
 // DestinationStatusResponse acknowledges receipt of the destination report.
@@ -480,6 +509,9 @@ message ImportedSnapshotInfo {
   // file_count is the number of files the snapshot processed
   // (total_files_processed from the summary). Zero when unavailable.
   int64 file_count          = 7;
+  // summary is the summary stored in the snapshot. Unset for snapshots
+  // created by restic < 0.17, and from agents built before it existed.
+  SnapshotSummary summary   = 8;
 }
 
 // SnapshotImportReport is sent by the agent in response to a

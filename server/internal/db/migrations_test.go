@@ -695,13 +695,18 @@ func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
 	rows := []any{
 		&JobDestination{JobID: job.ID, DestinationID: dests["backed-up"].ID, Status: "succeeded"},
 		&JobDestinationCommand{JobID: job.ID, DestinationID: dests["command"].ID, SourceName: "db", Status: "succeeded"},
-		&Snapshot{DestinationID: dests["snapshot"].ID, SnapshotID: "abc", SnapshotAt: now},
 		&JobDestination{JobID: job.ID, DestinationID: dests["failed"].ID, Status: "failed"},
 	}
 	for _, row := range rows {
 		if err := gdb.Create(row).Error; err != nil {
 			t.Fatalf("create %T: %v", row, err)
 		}
+	}
+	// The summary columns of snapshots only exist from 000044 on.
+	snap := &Snapshot{DestinationID: dests["snapshot"].ID, SnapshotID: "abc", SnapshotAt: now}
+	if err := gdb.Omit("backup_start", "backup_end", "files_new", "files_changed", "files_unmodified",
+		"total_bytes_processed", "data_added").Create(snap).Error; err != nil {
+		t.Fatalf("create snapshot: %v", err)
 	}
 	if err := gdb.Model(dests["sized"]).Update("repo_size_updated_at", now).Error; err != nil {
 		t.Fatalf("set repo size: %v", err)
@@ -813,5 +818,58 @@ func TestSQLiteMigration_NotificationProviders(t *testing.T) {
 	}
 	if gdb.Migrator().HasTable("notification_providers") {
 		t.Error("notification_providers still exists after down")
+	}
+}
+
+// TestSQLiteMigration_SnapshotSummary checks that 000044 adds the summary
+// columns to snapshots, leaving an existing record with an unknown summary
+// (backup_end NULL, figures zero), and that its down migration drops them.
+func TestSQLiteMigration_SnapshotSummary(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/summary.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(43); err != nil {
+		t.Fatalf("down 000044: %v", err)
+	}
+	columns := []string{"backup_start", "backup_end", "files_new", "files_changed", "files_unmodified",
+		"total_bytes_processed", "data_added"}
+	for _, c := range columns {
+		if gdb.Migrator().HasColumn(&Snapshot{}, c) {
+			t.Errorf("down migration kept snapshots.%s", c)
+		}
+	}
+
+	dest := &Destination{Name: "dest", Type: "local", Config: `{"path":"/r"}`, Enabled: true}
+	if err := gdb.Create(dest).Error; err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	snap := &Snapshot{DestinationID: dest.ID, SnapshotID: "abc", SizeBytes: 10, SnapshotAt: time.Now().UTC()}
+	if err := gdb.Omit(columns...).Create(snap).Error; err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	var got Snapshot
+	if err := gdb.First(&got, "id = ?", snap.ID).Error; err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if got.SnapshotSummary != (SnapshotSummary{}) || got.SizeBytes != 10 {
+		t.Errorf("existing snapshot after Up: summary %+v, size %d; want an unknown summary and the size kept", got.SnapshotSummary, got.SizeBytes)
 	}
 }

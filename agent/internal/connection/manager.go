@@ -971,6 +971,7 @@ func (m *Manager) handleSnapshotImportRequest(correlationID, agentID string, pay
 				Hostname:         s.Hostname,
 				SizeBytes:        s.Summary.DataAddedPacked,
 				FileCount:        s.Summary.TotalFilesProcessed,
+				Summary:          summaryProto(&s.Summary),
 			}
 		}
 		// Capture the repo's real size so imported destinations show accurate
@@ -1117,7 +1118,7 @@ func (m *Manager) ReportStatus(jobID, status, message string) {
 // ReportDestinationResult implements executor.StatusReporter. It calls
 // ReportDestinationStatus via gRPC to persist the per-destination outcome
 // (snapshot ID, size, status, started_at) after each destination backup completes or fails.
-func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string) {
+func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, summary *restic.SnapshotSummary, repoSizeBytes int64, errMsg string) {
 	m.mu.RLock()
 	client := m.client
 	agentID := m.agentID
@@ -1138,10 +1139,11 @@ func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshot
 		DestinationId: destinationID,
 		Status:        status,
 		SnapshotId:    snapshotID,
-		SizeBytes:     sizeBytes,
+		SizeBytes:     addedBytes(summary),
 		RepoSizeBytes: repoSizeBytes,
 		Error:         errMsg,
 		StartedAt:     timestamppb.New(startedAt),
+		Summary:       summaryProto(summary),
 	})
 	if err != nil {
 		m.logger.Warn("ReportDestinationResult: RPC failed",
@@ -1161,7 +1163,7 @@ func (m *Manager) ReportDestinationResult(jobID, destinationID, status, snapshot
 // job_destinations row. RepoSizeBytes is left at 0: the destination's
 // post-prune repository size is still reported once, by
 // ReportSnapshotReconcile.
-func (m *Manager) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string) {
+func (m *Manager) ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, summary *restic.SnapshotSummary, errMsg string) {
 	m.mu.RLock()
 	client := m.client
 	agentID := m.agentID
@@ -1183,10 +1185,11 @@ func (m *Manager) ReportCommandSourceResult(jobID, destinationID, sourceName, st
 		DestinationId:     destinationID,
 		Status:            status,
 		SnapshotId:        snapshotID,
-		SizeBytes:         sizeBytes,
+		SizeBytes:         addedBytes(summary),
 		Error:             errMsg,
 		StartedAt:         timestamppb.New(startedAt),
 		CommandSourceName: sourceName,
+		Summary:           summaryProto(summary),
 	})
 	if err != nil {
 		m.logger.Warn("ReportCommandSourceResult: RPC failed",
@@ -1372,4 +1375,33 @@ func randFloat64() float64 {
 	// crypto/rand.Read never returns an error since Go 1.24.
 	_, _ = rand.Read(b[:])
 	return float64(binary.BigEndian.Uint64(b[:])>>11) / (1 << 53)
+}
+
+// addedBytes is the size of the snapshot summary describes, 0 when summary is
+// nil.
+func addedBytes(summary *restic.SnapshotSummary) int64 {
+	if summary == nil {
+		return 0
+	}
+	return summary.AddedBytes()
+}
+
+// summaryProto converts a restic snapshot summary for the server. It returns
+// nil when there is no summary: summary is nil, or restic recorded none (a
+// snapshot made by restic < 0.17 has no backup_end).
+func summaryProto(summary *restic.SnapshotSummary) *proto.SnapshotSummary {
+	if summary == nil || summary.BackupEnd.IsZero() {
+		return nil
+	}
+	return &proto.SnapshotSummary{
+		BackupStart:         timestamppb.New(summary.BackupStart),
+		BackupEnd:           timestamppb.New(summary.BackupEnd),
+		FilesNew:            summary.FilesNew,
+		FilesChanged:        summary.FilesChanged,
+		FilesUnmodified:     summary.FilesUnmodified,
+		TotalFilesProcessed: summary.TotalFilesProcessed,
+		TotalBytesProcessed: summary.TotalBytesProcessed,
+		DataAdded:           summary.DataAdded,
+		DataAddedPacked:     summary.DataAddedPacked,
+	}
 }

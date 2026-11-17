@@ -17,6 +17,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db/dbtest"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // fakeLister stands in for the agent manager: it reports a fixed set of agents
@@ -505,6 +506,116 @@ func TestPersistImported(t *testing.T) {
 			t.Errorf("RepoSizeBytes = %d, want 4096", stored.RepoSizeBytes)
 		}
 	})
+}
+
+// testSummary is a restic summary as an agent reports it. files_new tells
+// summaries apart.
+func testSummary(filesNew int64) *proto.SnapshotSummary {
+	start := time.Date(2026, 11, 17, 8, 46, 7, 0, time.UTC)
+	return &proto.SnapshotSummary{
+		BackupStart:         timestamppb.New(start),
+		BackupEnd:           timestamppb.New(start.Add(90 * time.Second)),
+		FilesNew:            filesNew,
+		FilesChanged:        2,
+		FilesUnmodified:     3,
+		TotalFilesProcessed: filesNew + 5,
+		TotalBytesProcessed: 4096,
+		DataAdded:           3066,
+		DataAddedPacked:     2048,
+	}
+}
+
+// storedSnapshot returns the record of snapshotID for dest.
+func (e *testEnv) storedSnapshot(t *testing.T, dest *db.Destination, snapshotID string) db.Snapshot {
+	t.Helper()
+	var snap db.Snapshot
+	if err := e.gdb.Where("destination_id = ? AND snapshot_id = ?", dest.ID, snapshotID).First(&snap).Error; err != nil {
+		t.Fatalf("load snapshot %s: %v", snapshotID, err)
+	}
+	return snap
+}
+
+// checkSummary fails unless snap holds testSummary(filesNew).
+func checkSummary(t *testing.T, snap db.Snapshot, filesNew int64) {
+	t.Helper()
+	want := testSummary(filesNew)
+	if snap.BackupStart == nil || !snap.BackupStart.Equal(want.BackupStart.AsTime()) ||
+		snap.BackupEnd == nil || !snap.BackupEnd.Equal(want.BackupEnd.AsTime()) {
+		t.Errorf("snapshot %s: backup %v - %v, want %v - %v", snap.SnapshotID, snap.BackupStart, snap.BackupEnd, want.BackupStart.AsTime(), want.BackupEnd.AsTime())
+	}
+	if snap.FilesNew != filesNew || snap.FilesChanged != 2 || snap.FilesUnmodified != 3 ||
+		snap.FileCount != filesNew+5 || snap.TotalBytesProcessed != 4096 || snap.DataAdded != 3066 {
+		t.Errorf("snapshot %s: figures %+v (file count %d), want those of testSummary(%d)", snap.SnapshotID, snap.SnapshotSummary, snap.FileCount, filesNew)
+	}
+}
+
+func TestPersistImported_Summary(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("stores the summary of new snapshots", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := e.createDestination(t, "imported")
+		res := listing("aaa111", "bbb222")
+		res.Snapshots[0].Summary = testSummary(1)
+		res.Snapshots[0].FileCount = 6
+
+		if out := e.svc.PersistImported(ctx, dest, &res); out != (ImportOutcome{Imported: 2}) {
+			t.Fatalf("outcome = %+v, want 2 imported", out)
+		}
+		checkSummary(t, e.storedSnapshot(t, dest, "aaa111"), 1)
+		if old := e.storedSnapshot(t, dest, "bbb222"); old.BackupEnd != nil || old.FilesNew != 0 {
+			t.Errorf("snapshot without summary got %+v, want none", old.SnapshotSummary)
+		}
+	})
+
+	t.Run("fills the summary of known records that lack one", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := e.createDestination(t, "imported")
+		at := time.Now().UTC().Add(-time.Hour)
+		e.createSnapshot(t, dest, "aaa111", at)
+		e.createSnapshot(t, dest, "bbb222", at)
+
+		res := listing("aaa111", "bbb222")
+		res.Snapshots[0].Summary = testSummary(1)
+		out := e.svc.PersistImported(ctx, dest, &res)
+
+		if out != (ImportOutcome{Skipped: 2, Filled: 1}) {
+			t.Fatalf("outcome = %+v, want {Skipped:2 Filled:1}", out)
+		}
+		checkSummary(t, e.storedSnapshot(t, dest, "aaa111"), 1)
+		if got := e.storedSnapshot(t, dest, "bbb222"); got.BackupEnd != nil {
+			t.Errorf("snapshot listed without summary got one: %+v", got.SnapshotSummary)
+		}
+	})
+
+	t.Run("leaves a summary already recorded unchanged", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := e.createDestination(t, "imported")
+		first := listing("aaa111")
+		first.Snapshots[0].Summary = testSummary(1)
+		first.Snapshots[0].FileCount = 6
+		e.svc.PersistImported(ctx, dest, &first)
+
+		second := listing("aaa111")
+		second.Snapshots[0].Summary = testSummary(9)
+		if out := e.svc.PersistImported(ctx, dest, &second); out != (ImportOutcome{Skipped: 1}) {
+			t.Fatalf("outcome = %+v, want {Skipped:1}", out)
+		}
+		checkSummary(t, e.storedSnapshot(t, dest, "aaa111"), 1)
+	})
+}
+
+func TestSummaryFromProto(t *testing.T) {
+	if got := SummaryFromProto(nil); got != (db.SnapshotSummary{}) {
+		t.Errorf("SummaryFromProto(nil) = %+v, want zero", got)
+	}
+	if got := SummaryFromProto(&proto.SnapshotSummary{FilesNew: 3}); got != (db.SnapshotSummary{}) {
+		t.Errorf("summary without backup_end = %+v, want zero", got)
+	}
+	got := SummaryFromProto(testSummary(1))
+	if got.BackupEnd == nil || got.BackupEnd.Location() != time.UTC || got.FilesNew != 1 || got.DataAdded != 3066 {
+		t.Errorf("SummaryFromProto = %+v", got)
+	}
 }
 
 func TestPeriodicSweep(t *testing.T) {

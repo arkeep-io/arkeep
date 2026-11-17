@@ -39,6 +39,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 	"github.com/google/uuid"
@@ -1049,7 +1050,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	// restic snapshot ID, persist a Snapshot record. This is the primary way
 	// snapshots are created — there is no separate catalog sync step.
 	if req.Status == "succeeded" && req.SnapshotId != "" {
-		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
+		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, req.GetSummary(), now)
 	}
 
 	// Release the busy gate (issue #130): this destination's terminal result
@@ -1098,7 +1099,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 //
 // The job record is fetched to resolve PolicyID, which is not carried in the
 // DestinationStatusReport proto message.
-func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UUID, snapshotID string, sizeBytes int64, at time.Time) {
+func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UUID, snapshotID string, sizeBytes int64, summary *proto.SnapshotSummary, at time.Time) {
 	job, err := s.jobRepo.GetByID(ctx, jobID)
 	if err != nil {
 		s.logger.Warn("createSnapshotRecord: could not fetch job for snapshot creation",
@@ -1124,9 +1125,13 @@ func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UU
 		JobID:         &jobID,
 		SnapshotID:    snapshotID,
 		SizeBytes:     sizeBytes,
-		Tags:          "[]",
-		Sources:       snapshotSources,
-		SnapshotAt:    at,
+		// Zero, like the summary, when the agent predates summaries; the
+		// next snapshot sync fills both in.
+		FileCount:       summary.GetTotalFilesProcessed(),
+		Tags:            "[]",
+		Sources:         snapshotSources,
+		SnapshotAt:      at,
+		SnapshotSummary: snapshotsync.SummaryFromProto(summary),
 	}
 	if err := s.snapshotRepo.Create(ctx, snap); err != nil {
 		s.logger.Error("createSnapshotRecord: failed to create snapshot record",
@@ -1162,7 +1167,7 @@ func (s *Server) reportCommandSourceStatus(ctx context.Context, req *proto.Desti
 	}
 
 	if req.Status == "succeeded" && req.SnapshotId != "" {
-		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
+		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, req.GetSummary(), now)
 	}
 
 	s.logger.Info("destination command source status recorded",
