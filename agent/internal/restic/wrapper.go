@@ -171,15 +171,42 @@ type SnapshotInfo struct {
 	Summary SnapshotSummary `json:"summary"`
 }
 
-// SnapshotSummary holds the subset of a snapshot's stored statistics that is
-// needed to report its size, as emitted by `restic snapshots --json`.
+// SnapshotSummary holds the statistics restic records about a snapshot. It
+// decodes both the summary stored in a snapshot (`restic snapshots --json`)
+// and the summary event of `restic backup --json`, which carry the same
+// fields.
 type SnapshotSummary struct {
-	// DataAddedPacked is the footprint the snapshot added to the repository
-	// after compression and deduplication — the same metric recorded for
-	// snapshots produced by a backup.
-	DataAddedPacked int64 `json:"data_added_packed"`
-	// TotalFilesProcessed is the number of files the snapshot covered.
+	// BackupStart and BackupEnd bound the restic run that created the
+	// snapshot. Zero when restic recorded no summary.
+	BackupStart time.Time `json:"backup_start"`
+	BackupEnd   time.Time `json:"backup_end"`
+	// FilesNew, FilesChanged and FilesUnmodified count the files by how they
+	// compare with the parent snapshot.
+	FilesNew        int64 `json:"files_new"`
+	FilesChanged    int64 `json:"files_changed"`
+	FilesUnmodified int64 `json:"files_unmodified"`
+	// TotalFilesProcessed and TotalBytesProcessed are the number and the
+	// logical size of the files the backup read.
 	TotalFilesProcessed int64 `json:"total_files_processed"`
+	TotalBytesProcessed int64 `json:"total_bytes_processed"`
+	// DataAdded is what the snapshot added to the repository after
+	// deduplication.
+	DataAdded int64 `json:"data_added"`
+	// DataAddedPacked is the footprint the snapshot added to the repository
+	// after compression and deduplication — the size recorded for snapshots.
+	DataAddedPacked int64 `json:"data_added_packed"`
+}
+
+// AddedBytes is the footprint the snapshot added to the repository:
+// DataAddedPacked, or DataAdded when restic reported no packed size. It is
+// recorded as the snapshot's size so per-snapshot and per-day figures
+// reconcile with the destination's real repo size — TotalBytesProcessed is
+// the logical source size and would double-count across snapshots.
+func (s SnapshotSummary) AddedBytes() int64 {
+	if s.DataAddedPacked == 0 {
+		return s.DataAdded
+	}
+	return s.DataAddedPacked
 }
 
 // RetentionPolicy mirrors the keep_* fields from db.Policy.
@@ -216,15 +243,8 @@ type ProgressEvent struct {
 
 	// Summary-only fields — only present when MessageType == "summary".
 	// SnapshotID is the full SHA256 ID of the snapshot created by this backup run.
+	// The other summary figures are decoded from Raw (see summaryInterceptor).
 	SnapshotID string `json:"snapshot_id"`
-	// TotalBytesProcessed is the total size of all source files examined.
-	TotalBytesProcessed uint64 `json:"total_bytes_processed"`
-	// DataAdded is the number of new bytes added to the repository (deduplicated,
-	// before compression).
-	DataAdded uint64 `json:"data_added"`
-	// DataAddedPacked is the compressed bytes actually written to the repository
-	// by this backup (deduplicated + compressed) — the real incremental footprint.
-	DataAddedPacked uint64 `json:"data_added_packed"`
 
 	// Raw is the original JSON line, forwarded as-is to the log stream.
 	Raw string `json:"-"`
@@ -237,13 +257,8 @@ type BackupResult struct {
 	// SnapshotID is the full ID of the snapshot created by this run.
 	// Empty if the backup failed before creating a snapshot.
 	SnapshotID string
-	// TotalBytesProcessed is the total size of all files examined.
-	TotalBytesProcessed uint64
-	// DataAdded is the net bytes added to the repository after deduplication.
-	DataAdded uint64
-	// DataAddedPacked is the compressed bytes actually written to the repository
-	// by this run — the real incremental footprint on disk.
-	DataAddedPacked uint64
+	// Summary holds the figures of the restic summary event.
+	Summary SnapshotSummary
 }
 
 // ProgressFunc is called for each progress event emitted during a long-running
@@ -374,9 +389,11 @@ func summaryInterceptor(result *BackupResult, onProgress ProgressFunc) ProgressF
 	return func(ev ProgressEvent) error {
 		if ev.MessageType == "summary" {
 			result.SnapshotID = ev.SnapshotID
-			result.TotalBytesProcessed = ev.TotalBytesProcessed
-			result.DataAdded = ev.DataAdded
-			result.DataAddedPacked = ev.DataAddedPacked
+			// The line already decoded as a ProgressEvent, so it is valid
+			// JSON: an error can only be a field of an unexpected type, which
+			// is left at zero. The figures are informational, the snapshot
+			// exists either way.
+			_ = json.Unmarshal([]byte(ev.Raw), &result.Summary)
 		}
 		if onProgress != nil {
 			return onProgress(ev)

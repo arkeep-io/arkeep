@@ -85,6 +85,39 @@ type snapshotResponse struct {
 	Hostname             string `json:"hostname"`
 	IsImported           bool   `json:"is_imported"`
 	CreatedAt            string `json:"created_at"`
+	// Summary is null when the restic summary of the snapshot is unknown (see
+	// db.SnapshotSummary).
+	Summary *snapshotSummaryResponse `json:"summary"`
+}
+
+// snapshotSummaryResponse is the restic summary of a snapshot. The size it
+// added after compression is snapshotResponse.SizeBytes.
+type snapshotSummaryResponse struct {
+	BackupStart         string `json:"backup_start"`
+	BackupEnd           string `json:"backup_end"`
+	FilesNew            int64  `json:"files_new"`
+	FilesChanged        int64  `json:"files_changed"`
+	FilesUnmodified     int64  `json:"files_unmodified"`
+	TotalFilesProcessed int64  `json:"total_files_processed"`
+	TotalBytesProcessed int64  `json:"total_bytes_processed"`
+	DataAdded           int64  `json:"data_added"`
+}
+
+// newSnapshotSummaryResponse returns nil when the summary of s is unknown.
+func newSnapshotSummaryResponse(s *db.Snapshot) *snapshotSummaryResponse {
+	if s.BackupStart == nil || s.BackupEnd == nil {
+		return nil
+	}
+	return &snapshotSummaryResponse{
+		BackupStart:         s.BackupStart.UTC().Format(time.RFC3339),
+		BackupEnd:           s.BackupEnd.UTC().Format(time.RFC3339),
+		FilesNew:            s.FilesNew,
+		FilesChanged:        s.FilesChanged,
+		FilesUnmodified:     s.FilesUnmodified,
+		TotalFilesProcessed: s.FileCount,
+		TotalBytesProcessed: s.TotalBytesProcessed,
+		DataAdded:           s.DataAdded,
+	}
 }
 
 // listSnapshotsResponse wraps a paginated list of snapshots.
@@ -195,6 +228,7 @@ func snapshotWithNamesToResponse(s repositories.SnapshotWithNames) snapshotRespo
 		Hostname:             s.Hostname,
 		IsImported:           s.IsImported,
 		CreatedAt:            s.SnapshotAt.UTC().Format(time.RFC3339),
+		Summary:              newSnapshotSummaryResponse(&s.Snapshot),
 	}
 }
 

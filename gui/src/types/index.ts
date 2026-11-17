@@ -349,6 +349,26 @@ export interface Snapshot {
   hostname: string
   is_imported: boolean
   created_at: string
+  // summary is null when the restic summary of the snapshot is unknown: the
+  // record predates it and no snapshot sync has filled it in yet, or the
+  // snapshot was made by restic < 0.17.
+  summary: SnapshotSummary | null
+}
+
+// SnapshotSummary is the statistics restic records about a snapshot. What it
+// added after compression is Snapshot.size_bytes.
+export interface SnapshotSummary {
+  backup_start: string
+  backup_end: string
+  // Files compared with the parent snapshot.
+  files_new: number
+  files_changed: number
+  files_unmodified: number
+  // Number and logical size of the files the backup read.
+  total_files_processed: number
+  total_bytes_processed: number
+  // Added to the repository after deduplication, before compression.
+  data_added: number
 }
 
 // ─── Notification ─────────────────────────────────────────────────────────────

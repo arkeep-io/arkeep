@@ -186,6 +186,29 @@ func (r *gormSnapshotRepository) ExistsBySnapshotIDAndDestination(ctx context.Co
 	return count > 0, nil
 }
 
+// FillMissingSummary stores the restic summary, and the file count that comes
+// with it, on the destination's record of the snapshot when the record has no
+// summary yet (backup_end is NULL). A record that already has one is left
+// unchanged. Returns whether a record was updated.
+func (r *gormSnapshotRepository) FillMissingSummary(ctx context.Context, destinationID uuid.UUID, snapshotID string, fileCount int64, summary db.SnapshotSummary) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&db.Snapshot{}).
+		Where("snapshot_id = ? AND destination_id = ? AND backup_end IS NULL", snapshotID, destinationID).
+		Updates(map[string]any{
+			"file_count":            fileCount,
+			"backup_start":          summary.BackupStart,
+			"backup_end":            summary.BackupEnd,
+			"files_new":             summary.FilesNew,
+			"files_changed":         summary.FilesChanged,
+			"files_unmodified":      summary.FilesUnmodified,
+			"total_bytes_processed": summary.TotalBytesProcessed,
+			"data_added":            summary.DataAdded,
+		})
+	if res.Error != nil {
+		return false, fmt.Errorf("snapshots: fill missing summary: %w", res.Error)
+	}
+	return res.RowsAffected > 0, nil
+}
+
 // DeleteStaleByDestination removes cached snapshot records for a destination
 // whose opaque engine snapshot ID is absent from liveIDs — that is, snapshots
 // the backup engine has pruned. This is how the database learns about retention

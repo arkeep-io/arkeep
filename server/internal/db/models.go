@@ -487,6 +487,28 @@ type Snapshot struct {
 	Hostname   string    `gorm:"not null;default:''"`
 	IsImported bool      `gorm:"not null;default:false"`
 	SnapshotAt time.Time `gorm:"not null;index"`
+	SnapshotSummary
+}
+
+// SnapshotSummary holds the statistics restic records about a snapshot that
+// Snapshot does not already carry as SizeBytes (data_added_packed) and
+// FileCount (total_files_processed). BackupEnd is nil while the summary is
+// unknown: the record predates it and no snapshot sync has filled it yet, or
+// the snapshot was made by restic < 0.17, which records none.
+type SnapshotSummary struct {
+	// BackupStart and BackupEnd bound the restic run that created the snapshot.
+	BackupStart *time.Time
+	BackupEnd   *time.Time
+	// FilesNew, FilesChanged and FilesUnmodified count the files of the
+	// snapshot by how they compare with the parent snapshot.
+	FilesNew        int64 `gorm:"not null;default:0"`
+	FilesChanged    int64 `gorm:"not null;default:0"`
+	FilesUnmodified int64 `gorm:"not null;default:0"`
+	// TotalBytesProcessed is the logical size of the files the backup read.
+	TotalBytesProcessed int64 `gorm:"not null;default:0"`
+	// DataAdded is what the snapshot added to the repository after
+	// deduplication, before compression.
+	DataAdded int64 `gorm:"not null;default:0"`
 }
 
 // -----------------------------------------------------------------------------
