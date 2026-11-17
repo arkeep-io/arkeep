@@ -688,6 +688,7 @@ func (s *NotificationService) emailBodies(ctx context.Context, n *db.Notificatio
 	switch n.Type {
 	case "agent_offline", "agent_online":
 		var agent struct {
+			ID   string `json:"agent_id"`
 			Name string `json:"agent_name"`
 		}
 		if err := json.Unmarshal([]byte(n.Payload), &agent); err != nil {
@@ -697,7 +698,7 @@ func (s *NotificationService) emailBodies(ctx context.Context, n *db.Notificatio
 			return warn("agent notification has no agent name", errors.New("empty agent_name"))
 		}
 		var err error
-		text, html, err = renderEmailBodies(newAgentEmail(n.Type == "agent_online", n.Title, agent.Name, n.CreatedAt))
+		text, html, err = renderEmailBodies(newAgentEmail(n.Type == "agent_online", n.Title, agent.Name, agent.ID, n.CreatedAt, s.baseURL))
 		if err != nil {
 			return warn("failed to render agent email", err)
 		}

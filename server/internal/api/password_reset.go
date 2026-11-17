@@ -166,9 +166,9 @@ func (h *PasswordResetHandler) processRequest(r *http.Request, email string) {
 	link := fmt.Sprintf("%s/auth/reset-password?token=%s", h.baseURL, raw)
 	subject, text, html, err := notification.PasswordResetEmail(link, resetTokenTTL)
 	if err != nil {
-		// The reset must not depend on the HTML email: the plain text has the link.
+		// The reset must not depend on the HTML email: html is empty, and the
+		// plain text has the link.
 		h.logger.Warn("password reset: rendering HTML email failed, sending plain text", zap.Error(err))
-		html = ""
 	}
 
 	if err := h.mailer.SendEmail(ctx, []string{user.Email}, subject, text, html); err != nil {

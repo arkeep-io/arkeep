@@ -9,11 +9,9 @@ import (
 // page to check a configuration before (or after) saving it.
 func SendTestEmail(ctx context.Context, cfg SMTPConfig, to string) error {
 	s := newEmailSender(func(context.Context) (*SMTPConfig, error) { return &cfg, nil })
-	text, html, err := renderEmailBodies(newTestEmail())
-	if err != nil {
-		// The test is about the SMTP settings: it still runs, as plain text.
-		html = ""
-	}
+	// The test is about the SMTP settings: if the HTML body cannot be
+	// rendered, html is empty and the test still runs, as plain text.
+	text, html, _ := renderEmailBodies(newTestEmail())
 	return s.Send(ctx, []string{to}, testEmailSubject, text, html)
 }
 

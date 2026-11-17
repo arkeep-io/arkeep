@@ -14,7 +14,7 @@ import (
 func TestNewAgentEmail(t *testing.T) {
 	when := time.Date(2026, 11, 5, 2, 0, 0, 0, time.UTC)
 
-	got := newAgentEmail(false, "Agent offline: web-01", "web-01", when)
+	got := newAgentEmail(false, "Agent offline: web-01", "web-01", "", when, "")
 	want := emailContent{
 		Title:       "Agent offline: web-01",
 		Preheader:   "web-01 stopped responding.",
@@ -28,7 +28,7 @@ func TestNewAgentEmail(t *testing.T) {
 		t.Errorf("offline email:\n%+v\nwant:\n%+v", got, want)
 	}
 
-	got = newAgentEmail(true, "Agent back online: web-01", "web-01", when)
+	got = newAgentEmail(true, "Agent back online: web-01", "web-01", "", when, "")
 	want = emailContent{
 		Title:       "Agent back online: web-01",
 		Preheader:   "web-01 reconnected.",
@@ -41,11 +41,26 @@ func TestNewAgentEmail(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("online email:\n%+v\nwant:\n%+v", got, want)
 	}
+
+	// The link needs both the agent ID and the server's base URL.
+	const id = "0192f3a1-7c2e-7b3a-9d41-5e6f7a8b9c0d"
+	got = newAgentEmail(true, "Agent back online: web-01", "web-01", id, when, "https://arkeep.example.com/")
+	if got.ActionURL != "https://arkeep.example.com/agents/"+id || got.ActionLabel != "View agent" {
+		t.Errorf("action = %q %q, want View agent linking to the agent", got.ActionLabel, got.ActionURL)
+	}
+	for _, e := range []emailContent{
+		newAgentEmail(true, "t", "web-01", id, when, ""),
+		newAgentEmail(true, "t", "web-01", "", when, "https://arkeep.example.com"),
+	} {
+		if e.ActionURL != "" || e.ActionLabel != "" {
+			t.Errorf("action = %q %q without agent ID or base URL, want none", e.ActionLabel, e.ActionURL)
+		}
+	}
 }
 
 // TestEmailBodies_Agent checks that agent notifications are sent as text and
-// HTML built from the payload, with the agent name escaped and the time in
-// the server's zone.
+// HTML built from the payload, with the agent name escaped, the time in the
+// server's zone and a link to the agent's page.
 func TestEmailBodies_Agent(t *testing.T) {
 	old := emailLocation
 	emailLocation = time.FixedZone("CET", 3600)
@@ -62,10 +77,13 @@ func TestEmailBodies_Agent(t *testing.T) {
 	}
 	text, html := svc.emailBodies(context.Background(), n)
 
+	agentURL := strings.TrimRight(testBaseURL, "/") + "/agents/0192f3a1-7c2e-7b3a-9d41-5e6f7a8b9c0d"
 	wantText := `Agent offline
 <b>web</b> stopped responding.
 
 Offline since:  Nov 5, 2026, 03:00
+
+View agent: ` + agentURL + `
 
 -- 
 Sent by your Arkeep server. Times are in CET.
@@ -73,15 +91,13 @@ Sent by your Arkeep server. Times are in CET.
 	if text != wantText {
 		t.Errorf("text:\n%s\nwant:\n%s", text, wantText)
 	}
-	for _, want := range []string{"Agent offline</h1>", "&lt;b&gt;web&lt;/b&gt; stopped responding.", ">Offline<", ">Offline since<", "Nov 5, 2026, 03:00", "Times are in CET.", `src="cid:arkeep-logo"`} {
+	for _, want := range []string{"Agent offline</h1>", "&lt;b&gt;web&lt;/b&gt; stopped responding.", ">Offline<", ">Offline since<", "Nov 5, 2026, 03:00", "Times are in CET.", `src="cid:arkeep-logo"`, `href="` + agentURL + `"`, ">View agent</a>"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("HTML is missing %q", want)
 		}
 	}
-	for _, bad := range []string{"<b>web</b>", "<a ", "View agent"} {
-		if strings.Contains(html, bad) {
-			t.Errorf("HTML contains %q", bad)
-		}
+	if strings.Contains(html, "<b>web</b>") {
+		t.Error("HTML contains the agent name unescaped")
 	}
 
 	n.Type, n.Title = "agent_online", "Agent back online: web"

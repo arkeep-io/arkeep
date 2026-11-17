@@ -2,6 +2,8 @@ package notification
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -9,8 +11,9 @@ import (
 // SMTP test. They use the same template as job emails (see email_render.go).
 
 // newAgentEmail decides what the email about an agent that went offline or
-// came back online shows. at is when the notification was created.
-func newAgentEmail(online bool, title, agentName string, at time.Time) emailContent {
+// came back online shows. at is when the notification was created. The email
+// links to the agent's page when both agentID and baseURL are known.
+func newAgentEmail(online bool, title, agentName, agentID string, at time.Time, baseURL string) emailContent {
 	e := emailContent{Title: title, Footer: fmt.Sprintf(emailFooter, zoneLabel(at.In(emailLocation)))}
 	if online {
 		e.StatusLabel, e.StatusColor, e.StatusBG, e.StatusFG = "Online", greenStripe, greenBG, green
@@ -24,6 +27,10 @@ func newAgentEmail(online bool, title, agentName string, at time.Time) emailCont
 		e.Details = []emailItem{{"Offline since", formatEmailTime(at)}}
 	}
 	e.Preheader = e.Summary
+	if agentID != "" && baseURL != "" {
+		e.ActionURL = strings.TrimRight(baseURL, "/") + "/agents/" + url.PathEscape(agentID)
+		e.ActionLabel = "View agent"
+	}
 	return e
 }
 
@@ -32,8 +39,8 @@ const resetEmailSubject = "Reset your Arkeep password"
 // PasswordResetEmail returns the subject and both bodies of the email with
 // the password reset link, which is valid for expiresIn. text is always set
 // and holds the link: when err is not nil, the HTML body could not be
-// rendered and the caller sends text alone, so that a reset never depends on
-// the HTML email.
+// rendered, html is empty and the caller sends text alone, so that a reset
+// never depends on the HTML email.
 func PasswordResetEmail(link string, expiresIn time.Duration) (subject, text, html string, err error) {
 	text, html, err = renderEmailBodies(newPasswordResetEmail(link, expiresIn))
 	return resetEmailSubject, text, html, err

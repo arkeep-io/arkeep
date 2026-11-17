@@ -195,8 +195,8 @@ func jobEmailBodies(failed bool, title string, data jobEmailData, at time.Time, 
 }
 
 // renderEmailBodies renders e as plain text and as HTML with the attached
-// logo. text is always set: when err is not nil, the caller can still send it
-// as a plain-text email.
+// logo. text is always set: when err is not nil, html is empty and the caller
+// can still send text as a plain-text email.
 func renderEmailBodies(e emailContent) (text, html string, err error) {
 	text = renderEmailText(e)
 	e.LogoSrc = template.URL("cid:" + logoCID)
