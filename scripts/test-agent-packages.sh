@@ -4,15 +4,20 @@
 # package and its scripts (deploy/packaging/agent) do on install, upgrade,
 # removal and purge.
 #
-# Usage: scripts/test-agent-packages.sh [<dist dir>]   (default: dist)
+# Usage: scripts/test-agent-packages.sh [<dist dir> [<repository dir>]]
 #
-# Needs Docker, and the linux_amd64 packages in <dist dir>, for instance from
-# `goreleaser release --snapshot --clean --skip=docker`. systemd does not run
-# in the containers: the checks cover the files and the enabled state, which
-# systemctl manages offline, not a running service.
+# Needs Docker, and the linux_amd64 packages in <dist dir> (default: dist),
+# for instance from `goreleaser release --snapshot --clean --skip=docker`.
+# systemd does not run in the containers: the checks cover the files and the
+# enabled state, which systemctl manages offline, not a running service.
+#
+# With <repository dir>, a repository built by `scripts/agent-repository.sh
+# build` from those packages, also installs the agent from it with apt and
+# dnf, set up as the documentation tells users, which checks its signatures.
 set -euo pipefail
 
 dist=$(cd "${1:-dist}" && pwd)
+repository=${2:+$(cd "$2" && pwd)}
 deb=arkeep-agent_linux_amd64.deb
 rpm=arkeep-agent_linux_amd64.rpm
 for f in "$deb" "$rpm"; do
@@ -116,5 +121,37 @@ grep -qx 'ARKEEP_SERVER_ADDR=arkeep.example.com:9090' \"\${env_file}.rpmsave\" |
 [ -f /var/lib/arkeep-agent/agent-state.json ] || fail 'state deleted by remove'
 echo ok
 "
+
+if [ -n "$repository" ]; then
+  echo "== repository with apt on Debian and Ubuntu"
+  for image in "$debian" "$ubuntu"; do
+    echo "-- ${image%@*}"
+    docker run --rm -v "${repository}:/repo:ro" -e DEBIAN_FRONTEND=noninteractive "$image" bash -c "
+${common}
+apt-get update -qq && apt-get install -y -qq systemd >/dev/null
+install -d /etc/apt/keyrings
+cp /repo/gpg.key /etc/apt/keyrings/arkeep.asc
+echo 'deb [signed-by=/etc/apt/keyrings/arkeep.asc] file:/repo/apt stable main' > /etc/apt/sources.list.d/arkeep.list
+# An unsigned or wrongly signed index is an error here, not a warning.
+apt-get update 2>&1 | tee /tmp/update.log >/dev/null
+! grep -qE '^(W|E):' /tmp/update.log || { cat /tmp/update.log; fail 'apt update reported a problem'; }
+apt-get install -y -qq arkeep-agent >/dev/null
+check_installed
+echo ok
+"
+  done
+
+  echo "== repository with dnf on Fedora"
+  docker run --rm -v "${repository}:/repo:ro" "$fedora" bash -c "
+${common}
+dnf install -y -q systemd >/dev/null 2>&1
+# The repo file users download, pointed at the local copy.
+sed 's|https://pkg.arkeep.io|file:///repo|' /repo/rpm/arkeep.repo > /etc/yum.repos.d/arkeep.repo
+dnf install -y -q arkeep-agent >/dev/null 2>&1 || { dnf install -y arkeep-agent; fail 'dnf install from the repository'; }
+check_installed
+rpm -q --qf '%{SIGPGP:pgpsig}%{RSAHEADER:pgpsig}\n' arkeep-agent | grep -q 'Key ID' || fail 'installed package is not signed'
+echo ok
+"
+fi
 
 echo "All package checks passed."

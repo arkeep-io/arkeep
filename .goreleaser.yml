@@ -165,6 +165,13 @@ nfpms:
       postinstall: deploy/packaging/agent/postinstall.sh
       preremove: deploy/packaging/agent/preremove.sh
       postremove: deploy/packaging/agent/postremove.sh
+    # Signed with the package repository key (ADR 0020), so that dnf checks
+    # each package and not only the repository index. The release workflow
+    # always sets the key file; a build without it, such as a local
+    # snapshot, produces unsigned packages.
+    rpm:
+      signature:
+        key_file: '{{ index .Env "ARKEEP_PACKAGES_SIGNING_KEY_FILE" }}'
 
 checksum:
   name_template: "checksums.txt"
