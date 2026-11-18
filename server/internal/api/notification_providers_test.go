@@ -116,7 +116,7 @@ func TestNotificationProviders_Validation(t *testing.T) {
 func TestNotificationProviders_TestUsesStoredSecret(t *testing.T) {
 	var gotToken string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotToken = r.URL.Query().Get("token")
+		gotToken = r.Header.Get("X-Gotify-Key")
 		_, _ = w.Write([]byte(`{"id":1}`))
 	}))
 	t.Cleanup(srv.Close)
