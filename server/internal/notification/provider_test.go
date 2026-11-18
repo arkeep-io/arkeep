@@ -153,7 +153,7 @@ func TestSendProvider_TitleAndPriority(t *testing.T) {
 	var got map[string]any
 	var gotToken string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotToken = r.URL.Query().Get("token")
+		gotToken = r.Header.Get("X-Gotify-Key")
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
 		_, _ = w.Write([]byte(`{"id":1}`))

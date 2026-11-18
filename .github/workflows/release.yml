@@ -149,6 +149,22 @@ jobs:
           echo "First-time contributors since ${prev}: ${contributors}"
           echo "CONTRIBUTORS=${contributors}" >> "$GITHUB_ENV"
 
+      # GoReleaser signs the agent .rpm packages with the package repository
+      # key (ADR 0020), read from this file. A missing secret stops the
+      # release rather than publish unsigned packages.
+      - name: Prepare the package signing key
+        env:
+          PACKAGES_SIGNING_KEY: ${{ secrets.PACKAGES_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PACKAGES_SIGNING_KEY" ]; then
+            echo "::error::The PACKAGES_SIGNING_KEY secret of the release environment is empty."
+            exit 1
+          fi
+          key_file="${RUNNER_TEMP}/packages-signing-key.asc"
+          (umask 077 && printf '%s\n' "$PACKAGES_SIGNING_KEY" > "$key_file")
+          echo "ARKEEP_PACKAGES_SIGNING_KEY_FILE=${key_file}" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -210,6 +226,29 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: ${{ runner.temp }}/subjects.txt
+
+      # The APT and RPM repository at pkg.arkeep.io (ADR 0020), rebuilt from
+      # the agent packages of the last stable releases, this one included,
+      # once their attestation exists: the script checks it before signing.
+      # Stable releases only. The rclone binary is the pinned and verified
+      # one the GoReleaser hooks downloaded for the agent (ADR 0013). If this
+      # step fails, the release is otherwise complete: run the Agent
+      # repository workflow from main.
+      - name: Publish the agent package repository
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RCLONE: agent/internal/restic/bin/rclone_linux_amd64
+          PACKAGES_R2_ENDPOINT: ${{ vars.PACKAGES_R2_ENDPOINT }}
+          PACKAGES_R2_ACCESS_KEY_ID: ${{ secrets.PACKAGES_R2_ACCESS_KEY_ID }}
+          PACKAGES_R2_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c
+          scripts/agent-repository.sh fetch "${RUNNER_TEMP}/releases"
+          scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
+          scripts/agent-repository.sh upload "${RUNNER_TEMP}/repository"
 
       # The Home Assistant app describes the agent image of this release
       # (ADR 0018). Moving the home-assistant branch is what offers the new

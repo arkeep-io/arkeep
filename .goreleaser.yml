@@ -52,10 +52,12 @@ builds:
       - -X main.date={{.Date}}
 
   # Linux-only targets for embedded backup sources (e.g. DVB-S2 receivers).
-  # Kept as a separate build id rather than extending the agent build's
+  # Kept as separate build ids rather than extending the agent build's
   # matrix, to avoid a long ignore: list for the darwin/windows combinations
-  # that don't apply to these architectures.
-  - id: agent-embedded
+  # that don't apply to these architectures. armv7 (Raspberry Pi and similar
+  # boards) also gets .deb and .rpm packages; mips and mipsle, whose devices
+  # run no dpkg or rpm, are published as archives only.
+  - id: agent-arm
     binary: arkeep-agent
     main: ./cmd/agent
     dir: agent
@@ -66,10 +68,26 @@ builds:
       - linux
     goarch:
       - arm
-      - mips
-      - mipsle
     goarm:
       - "7"
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  - id: agent-mips
+    binary: arkeep-agent
+    main: ./cmd/agent
+    dir: agent
+    env:
+      - CGO_ENABLED=0
+      - GOWORK=off
+    goos:
+      - linux
+    goarch:
+      - mips
+      - mipsle
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -87,7 +105,7 @@ archives:
       - deploy/systemd/arkeep-server.service
 
   - id: agent
-    ids: [agent, agent-embedded]
+    ids: [agent, agent-arm, agent-mips]
     name_template: "arkeep-agent_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
@@ -96,6 +114,64 @@ archives:
       - LICENSE
       - README.md
       - deploy/systemd/arkeep-agent.service
+
+# .deb and .rpm packages of the agent for linux amd64, arm64 and armv7. Like
+# the archives, their file names carry no version, so that
+# releases/latest/download/<name> always points to the latest release. The
+# package ships deploy/systemd/arkeep-agent.service unchanged, with a drop-in
+# for its /usr/bin path, and a config file that upgrades never overwrite. The
+# scripts in deploy/packaging/agent enable the service on a first install and
+# restart it on an upgrade. Packages land in checksums.txt, so the release
+# attestation covers them like the archives.
+nfpms:
+  - id: agent
+    ids: [agent, agent-arm]
+    package_name: arkeep-agent
+    file_name_template: "{{ .PackageName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [deb, rpm]
+    vendor: Arkeep
+    homepage: https://arkeep.io
+    maintainer: Arkeep maintainers <hello@arkeep.io>
+    description: |-
+      Arkeep backup agent
+      Runs the backups and restores an Arkeep server assigns to this machine,
+      with embedded Restic and Rclone. It connects out to the server over gRPC
+      and needs no open port.
+    license: Apache-2.0
+    section: admin
+    priority: optional
+    bindir: /usr/bin
+    # HTTPS destinations and a server certificate from a public CA need the
+    # system CA bundle.
+    recommends:
+      - ca-certificates
+    contents:
+      - src: deploy/systemd/arkeep-agent.service
+        dst: /usr/lib/systemd/system/arkeep-agent.service
+      - src: deploy/packaging/agent/package.conf
+        dst: /usr/lib/systemd/system/arkeep-agent.service.d/package.conf
+      - dst: /etc/arkeep
+        type: dir
+        file_info:
+          mode: 0755
+      - src: deploy/packaging/agent/agent.env
+        dst: /etc/arkeep/agent.env
+        type: config|noreplace
+        file_info:
+          mode: 0600
+      - src: LICENSE
+        dst: /usr/share/doc/arkeep-agent/LICENSE
+    scripts:
+      postinstall: deploy/packaging/agent/postinstall.sh
+      preremove: deploy/packaging/agent/preremove.sh
+      postremove: deploy/packaging/agent/postremove.sh
+    # Signed with the package repository key (ADR 0020), so that dnf checks
+    # each package and not only the repository index. The release workflow
+    # always sets the key file; a build without it, such as a local
+    # snapshot, produces unsigned packages.
+    rpm:
+      signature:
+        key_file: '{{ index .Env "ARKEEP_PACKAGES_SIGNING_KEY_FILE" }}'
 
 checksum:
   name_template: "checksums.txt"
