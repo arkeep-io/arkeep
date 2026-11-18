@@ -74,6 +74,8 @@ type testDeps struct {
 	challenges    repositories.TwoFactorChallengeRepository
 	recoveryCodes repositories.RecoveryCodeRepository
 	passwordChanges repositories.PasswordChangeChallengeRepository
+
+	notifProviders repositories.NotificationProviderRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -98,6 +100,8 @@ func newTestDeps(t *testing.T) *testDeps {
 		challenges:    repositories.NewTwoFactorChallengeRepository(gdb),
 		recoveryCodes: repositories.NewRecoveryCodeRepository(gdb),
 		passwordChanges: repositories.NewPasswordChangeChallengeRepository(gdb),
+
+		notifProviders: repositories.NewNotificationProviderRepository(gdb),
 	}
 }
 
@@ -107,7 +111,8 @@ func newTestDeps(t *testing.T) *testDeps {
 type sentEmail struct {
 	to      []string
 	subject string
-	body    string
+	body    string // plain text
+	html    string
 }
 
 // fakeMailer is a test double for the Mailer interface. configured controls the
@@ -119,8 +124,8 @@ type fakeMailer struct {
 
 func (m *fakeMailer) SMTPConfigured(context.Context) bool { return m.configured }
 
-func (m *fakeMailer) SendEmail(_ context.Context, to []string, subject, body string) error {
-	m.sent = append(m.sent, sentEmail{to: to, subject: subject, body: body})
+func (m *fakeMailer) SendEmail(_ context.Context, to []string, subject, body, html string) error {
+	m.sent = append(m.sent, sentEmail{to: to, subject: subject, body: body, html: html})
 	return nil
 }
 
@@ -209,6 +214,8 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		RefreshTokens: deps.tokens,
 		Challenges:    deps.challenges,
 		PasswordChanges: deps.passwordChanges,
+
+		NotificationProviders: deps.notifProviders,
 		RecoveryCodes: deps.recoveryCodes,
 		Mailer:        mailer,
 		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),

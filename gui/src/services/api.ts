@@ -97,7 +97,10 @@ export async function api<T = unknown>(
 // api(). The server reports failures as { error: { message, code } }, so that
 // message is preferred. ofetch's own message ("[POST] "/api/...": 409 ...")
 // is never shown to users: for an HTTP or network failure without a server
-// message the caller's fallback is used instead. Other errors (e.g. "Session
+// message the caller's fallback is used instead, except for a gateway error:
+// a 502/503/504 without Arkeep's message comes from a reverse proxy in front of
+// it, most often one that timed out on a long request (e.g. an import, which
+// can take minutes), so the message says so. Other errors (e.g. "Session
 // expired" thrown above) keep their message.
 //
 // Usage:
@@ -106,6 +109,11 @@ export function apiErrorMessage(err: unknown, fallback: string): string {
   const e = err as any
   const serverMessage = e?.data?.error?.message
   if (typeof serverMessage === 'string' && serverMessage !== '') return serverMessage
-  if (err instanceof FetchError) return fallback
+  if (err instanceof FetchError) {
+    if (e.status === 502 || e.status === 503 || e.status === 504) {
+      return `No answer from the Arkeep server (HTTP ${e.status}). If it is behind a reverse proxy, the proxy may have given up on this request: raise its timeout.`
+    }
+    return fallback
+  }
   return typeof e?.message === 'string' && e.message !== '' ? e.message : fallback
 }

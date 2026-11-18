@@ -4,7 +4,8 @@
 // Only local accounts can reset their password (OIDC users are managed by their
 // identity provider). The flow depends on a configured SMTP server: on mount we
 // query GET /api/v1/auth/password-reset/status and, when SMTP is not configured,
-// show a "contact your administrator" message instead of the request form.
+// show a "contact your administrator" message instead of the request form. A
+// failed status check is reported as such, with a retry, never as missing SMTP.
 //
 // The request response is intentionally generic regardless of whether the email
 // maps to a local account, so this page never reveals which addresses exist.
@@ -51,23 +52,28 @@ const smtpConfigured = ref<boolean | null>(null)
 // Reset links are built only from the server's configured base URL
 // (ARKEEP_BASE_URL); without it reset emails are disabled even with SMTP.
 const baseUrlConfigured = ref<boolean | null>(null)
+// The status check itself failed (network, server error): whether reset is
+// available is unknown, so neither the form nor a "not configured" message fits.
+const statusError = ref(false)
 const submitted = ref(false)
 const serverError = ref<string | null>(null)
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 async function fetchStatus(): Promise<void> {
+    statusError.value = false
+    smtpConfigured.value = null
     try {
+        // no-store: a copy cached before SMTP was configured would keep this
+        // page saying it is missing.
         const res = await api<{ data: { smtp_configured: boolean; base_url_configured: boolean } }>(
             '/api/v1/auth/password-reset/status',
+            { cache: 'no-store' },
         )
         smtpConfigured.value = res.data.smtp_configured
         baseUrlConfigured.value = res.data.base_url_configured
     } catch {
-        // If the status check fails, assume SMTP is unavailable so the user is
-        // pointed to their administrator rather than a form that cannot work.
-        smtpConfigured.value = false
-        baseUrlConfigured.value = false
+        statusError.value = true
     }
 }
 
@@ -120,8 +126,20 @@ onMounted(fetchStatus)
                             </p>
                         </div>
 
+                        <!-- Status check failed — availability unknown, offer a retry -->
+                        <template v-if="statusError">
+                            <Alert variant="destructive">
+                                <AlertCircle class="size-4" />
+                                <AlertDescription>
+                                    Could not check whether password reset is available. Check your
+                                    connection and try again.
+                                </AlertDescription>
+                            </Alert>
+                            <Button variant="outline" class="w-full" @click="fetchStatus">Try again</Button>
+                        </template>
+
                         <!-- Loading status -->
-                        <div v-if="smtpConfigured === null" class="flex justify-center py-4 text-muted-foreground">
+                        <div v-else-if="smtpConfigured === null" class="flex justify-center py-4 text-muted-foreground">
                             <Loader2 class="size-5 animate-spin" />
                         </div>
 

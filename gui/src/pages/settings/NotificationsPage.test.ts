@@ -15,6 +15,7 @@ async function openPage(webhook: { url: string; enabled: boolean } | null) {
   vi.mocked(api).mockImplementation((url: string, opts?: { method?: string }) => {
     if (opts?.method === 'PUT') return Promise.resolve({ data: {} })
     if (url === '/api/v1/settings/notifications') return Promise.resolve({ data: events })
+    if (url === '/api/v1/settings/notification-providers') return Promise.resolve({ data: [] })
     return webhook ? Promise.resolve({ data: { ...webhook, secret: '***' } }) : Promise.reject({ status: 404 })
   })
   const { wrapper } = await mountPage(NotificationsPage)

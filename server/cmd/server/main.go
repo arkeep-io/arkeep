@@ -211,6 +211,7 @@ func run(ctx context.Context, cfg *config) error {
 	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
+	notificationProviderRepo := repositories.NewNotificationProviderRepository(gormDB)
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
 	auditRepo := repositories.NewAuditRepository(gormDB)
@@ -378,6 +379,7 @@ func run(ctx context.Context, cfg *config) error {
 		SettingsRepo: settingsRepo,
 		PolicyRepo:   policyRepo,
 		JobRepo:      jobRepo,
+		ProviderRepo: notificationProviderRepo,
 		Hub:          wsHub,
 		Logger:       logger,
 		BaseURL:      cfg.baseURL,
@@ -512,6 +514,8 @@ func run(ctx context.Context, cfg *config) error {
 		AgentSecret:        cfg.agentSecret,
 		ServerVersion:      version,
 		UpdateCheck:        cfg.updateCheck,
+
+		NotificationProviders: notificationProviderRepo,
 	})
 	api.MountGUI(router, guiFS())
 

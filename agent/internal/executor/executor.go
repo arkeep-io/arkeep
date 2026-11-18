@@ -49,16 +49,16 @@ type StatusReporter interface {
 	ReportStatus(jobID, status, message string)
 	// ReportDestinationResult reports the outcome of a backup to a single
 	// destination. Called once per destination after it completes or fails.
-	// sizeBytes is TotalBytesProcessed from the restic summary event.
-	// repoSizeBytes is the real deduplicated repo size from `restic stats`
-	// (0 when unavailable or on failure).
-	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, sizeBytes, repoSizeBytes int64, errMsg string)
+	// summary is the restic summary of the snapshot the backup created, nil
+	// when it created none. repoSizeBytes is the real deduplicated repo size
+	// from `restic stats` (0 when unavailable or on failure).
+	ReportDestinationResult(jobID, destinationID, status, snapshotID string, startedAt time.Time, summary *restic.SnapshotSummary, repoSizeBytes int64, errMsg string)
 	// ReportCommandSourceResult reports the outcome of one command source's
 	// own restic invocation for one destination. Called once per
 	// (destination, command source). No repo size: the destination's
 	// post-prune repository size is still reported once, by
-	// ReportSnapshotReconcile.
-	ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, sizeBytes int64, errMsg string)
+	// ReportSnapshotReconcile. summary is nil when no snapshot was created.
+	ReportCommandSourceResult(jobID, destinationID, sourceName, status, snapshotID string, startedAt time.Time, summary *restic.SnapshotSummary, errMsg string)
 	// ReportRetentionTagResult reports the outcome of one restic tag's own
 	// forget --prune sweep within a standalone retention job (JOB_TYPE_FORGET,
 	// issue #130). Called once per tag. No snapshot/size: a forget never
@@ -613,7 +613,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		if dest.RepoURL == "" {
 			errMsg := fmt.Sprintf("destination %s has empty repo_url; check its configuration", dest.DestinationID)
 			log("error", errMsg)
-			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", time.Now().UTC(), 0, 0, errMsg)
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", time.Now().UTC(), nil, 0, errMsg)
 			backupFailed = true
 			continue
 		}
@@ -640,7 +640,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if _, statErr := os.Stat(dest.RepoURL); dest.RepoMustExist && os.IsNotExist(statErr) {
 				errMsg := restic.RepositoryNotFoundError(dest.RepoURL).Error()
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
-				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, errMsg)
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, errMsg)
 				backupFailed = true
 				continue
 			}
@@ -664,7 +664,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 					)
 				}
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
-				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, errMsg)
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, errMsg)
 				backupFailed = true
 				continue
 			}
@@ -701,22 +701,12 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if err != nil {
 				errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
 				log("error", errMsg)
-				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, 0, 0, err.Error())
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, err.Error())
 				backupFailed = true
 			} else {
 				destSucceeded = true
-				// addedBytes is the real deduplicated/compressed footprint this backup added
-				// to the repo (data_added_packed, falling back to data_added on older restic).
-				// Stored as the snapshot's size so per-snapshot and per-day figures reconcile
-				// with the destination's real repo size — total_bytes_processed is the logical
-				// source size and would inflate/double-count across snapshots.
-				addedBytes := restic.ClampInt64(result.DataAddedPacked)
-				if addedBytes == 0 {
-					addedBytes = restic.ClampInt64(result.DataAdded)
-				}
-
 				log("info", fmt.Sprintf("backup to destination %s completed (snapshot: %s, added: %d bytes)",
-					dest.DestinationID, result.SnapshotID, addedBytes))
+					dest.DestinationID, result.SnapshotID, result.Summary.AddedBytes()))
 
 				// Repository size is left at 0 here and reported after the Stats
 				// call at the end of this destination's processing instead (see
@@ -729,7 +719,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 					"succeeded",
 					result.SnapshotID,
 					destStartedAt,
-					addedBytes,
+					&result.Summary,
 					0,
 					"",
 				)
@@ -758,20 +748,16 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 				// never stores a partial dump.
 				errMsg := fmt.Sprintf("command source %q to destination %s failed: %v", cs.Name, dest.DestinationID, err)
 				log("error", errMsg)
-				reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "failed", "", cmdStartedAt, 0, err.Error())
+				reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "failed", "", cmdStartedAt, nil, err.Error())
 				cmdFailed = true
 				backupFailed = true
 				continue
 			}
 
-			addedBytes := restic.ClampInt64(res.DataAddedPacked)
-			if addedBytes == 0 {
-				addedBytes = restic.ClampInt64(res.DataAdded)
-			}
 			destSucceeded = true
 			log("info", fmt.Sprintf("command source %q to destination %s completed (snapshot: %s, added: %d bytes)",
-				cs.Name, dest.DestinationID, res.SnapshotID, addedBytes))
-			reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "succeeded", res.SnapshotID, cmdStartedAt, addedBytes, "")
+				cs.Name, dest.DestinationID, res.SnapshotID, res.Summary.AddedBytes()))
+			reporter.ReportCommandSourceResult(job.JobID, dest.DestinationID, cs.Name, "succeeded", res.SnapshotID, cmdStartedAt, &res.Summary, "")
 		}
 
 		// With no regular sources, nothing above reports this destination, so
@@ -783,7 +769,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			if cmdFailed {
 				st, errMsg = "failed", "one or more command sources failed"
 			}
-			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, st, "", destStartedAt, 0, 0, errMsg)
+			reporter.ReportDestinationResult(job.JobID, dest.DestinationID, st, "", destStartedAt, nil, 0, errMsg)
 		}
 
 		// Nothing reached the repository, so it is most likely unreachable or
@@ -966,7 +952,7 @@ func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink
 	if sweepFailed {
 		destStatus, destErrMsg = "failed", "one or more retention tags failed"
 	}
-	reporter.ReportDestinationResult(job.JobID, payload.Destination.DestinationID, destStatus, "", time.Now().UTC(), 0, repoSizeBytes, destErrMsg)
+	reporter.ReportDestinationResult(job.JobID, payload.Destination.DestinationID, destStatus, "", time.Now().UTC(), nil, repoSizeBytes, destErrMsg)
 
 	if ctx.Err() != nil {
 		log("warn", "retention sweep cancelled: agent shutting down")
@@ -1039,7 +1025,7 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 	result, err := e.wrapper.Check(ctx, d, restic.CheckOptions{Mode: payload.Mode, SubsetPercent: payload.SubsetPercent})
 
 	if ctx.Err() != nil {
-		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, 0, 0, "integrity check cancelled")
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, "integrity check cancelled")
 		log("warn", "integrity check cancelled")
 		reporter.ReportStatus(job.JobID, "cancelled", "integrity check cancelled")
 		return
@@ -1061,7 +1047,7 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 				errMsg = result.Messages[len(result.Messages)-1]
 			}
 		}
-		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, 0, 0, errMsg)
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, errMsg)
 		// The job error stays the bare cause: it is shown next to the
 		// destination's name in notifications and the GUI.
 		log("error", fmt.Sprintf("integrity check of destination %s failed: %s", destID, errMsg))
@@ -1072,7 +1058,7 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 	for _, m := range result.Messages {
 		log("warn", m)
 	}
-	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, 0, 0, "")
+	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, nil, 0, "")
 	log("info", fmt.Sprintf("integrity check of destination %s passed: no errors found", destID))
 	reporter.ReportStatus(job.JobID, "succeeded", "integrity check passed")
 }

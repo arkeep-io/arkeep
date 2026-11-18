@@ -3,7 +3,7 @@
 #   docker build -f server/Dockerfile -t arkeep-server .
 
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
-FROM node:26.12.1-alpine3.24@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797 AS gui-builder
+FROM node:26.13.0-alpine3.24@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS gui-builder
 
 # Node >= 25 no longer bundles corepack; install it to get the pnpm version
 # pinned by the packageManager field in gui/package.json. Corepack checks
@@ -51,7 +51,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOWORK=off \
     ./cmd/server
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 # sqlite provides sqlite3 for the documented online backup of the database
 # (docker exec arkeep-server sqlite3 … ".backup …", scripts/backup-arkeep-db.sh).

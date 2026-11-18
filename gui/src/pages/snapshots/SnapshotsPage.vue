@@ -31,11 +31,12 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, Loader2, MoreHorizontal, RefreshCcw, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
+import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Destination, PaginatedResponse, Snapshot, SyncDestinationResponse } from '@/types'
 import { summariseSync } from '@/lib/syncSummary'
 import RestoreSheet from '@/components/snapshots/RestoreSheet.vue'
+import SnapshotDetailsSheet from '@/components/snapshots/SnapshotDetailsSheet.vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,6 +67,10 @@ const totalPages = computed(() => Math.ceil(total.value / pageSize))
 // Filters — empty string means "no filter"
 const policyFilter = ref('')
 const destinationFilter = ref('')
+
+// Details sheet
+const detailsSheetOpen = ref(false)
+const detailsSnapshot = ref<Snapshot | null>(null)
 
 // Restore sheet
 const restoreSheetOpen = ref(false)
@@ -139,6 +144,15 @@ async function applyFilters() {
 }
 
 watch([policyFilter, destinationFilter], applyFilters)
+
+// ---------------------------------------------------------------------------
+// Details
+// ---------------------------------------------------------------------------
+
+function openDetailsSheet(snapshot: Snapshot) {
+    detailsSnapshot.value = snapshot
+    detailsSheetOpen.value = true
+}
 
 // ---------------------------------------------------------------------------
 // Restore
@@ -298,7 +312,8 @@ onMounted(fetchSnapshots)
                         <TableHead>Policy</TableHead>
                         <TableHead>Destination</TableHead>
                         <TableHead>Snapshot ID</TableHead>
-                        <TableHead>Added</TableHead>
+                        <TableHead title="Size of the files the backup read">Size</TableHead>
+                        <TableHead title="Added to the repository, after deduplication and compression">Added</TableHead>
                         <TableHead>Created</TableHead>
                         <TableHead class="w-13" />
                     </TableRow>
@@ -309,7 +324,7 @@ onMounted(fetchSnapshots)
                     <!-- Loading skeletons -->
                     <template v-if="loading">
                         <TableRow v-for="n in 5" :key="n">
-                            <TableCell v-for="col in 6" :key="col">
+                            <TableCell v-for="col in 7" :key="col">
                                 <Skeleton class="w-full h-4" />
                             </TableCell>
                         </TableRow>
@@ -318,7 +333,7 @@ onMounted(fetchSnapshots)
                     <!-- Empty state -->
                     <template v-else-if="snapshots.length === 0">
                         <TableRow>
-                            <TableCell colspan="6">
+                            <TableCell colspan="7">
                                 <div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
                                     <div class="p-4 rounded-full bg-muted">
                                         <Camera class="w-10 h-10 text-muted-foreground" />
@@ -362,15 +377,18 @@ onMounted(fetchSnapshots)
                                 </RouterLink>
                             </TableCell>
                             <TableCell class="text-sm text-muted-foreground">
+                                {{ snapshot.summary ? formatBytes(snapshot.summary.total_bytes_processed) : '—' }}
+                            </TableCell>
+                            <TableCell class="text-sm text-muted-foreground">
                                 {{ formatBytes(snapshot.size_bytes) }}
                             </TableCell>
                             <TableCell class="text-sm text-muted-foreground">
                                 {{ formatDate(snapshot.created_at) }}
                             </TableCell>
 
-                            <!-- Actions dropdown — only admins can restore/delete -->
+                            <!-- Actions dropdown — details for everyone, restore/delete for admins -->
                             <TableCell>
-                                <DropdownMenu v-if="authStore.isAdmin">
+                                <DropdownMenu>
                                     <DropdownMenuTrigger as-child>
                                         <Button variant="ghost" size="icon" class="w-8 h-8">
                                             <MoreHorizontal class="w-4 h-4" />
@@ -378,16 +396,22 @@ onMounted(fetchSnapshots)
                                         </Button>
                                     </DropdownMenuTrigger>
                                     <DropdownMenuContent align="end">
-                                        <DropdownMenuItem @click="openRestoreSheet(snapshot)">
-                                            <RotateCcw class="w-4 h-4 mr-2" />
-                                            Restore
+                                        <DropdownMenuItem @click="openDetailsSheet(snapshot)">
+                                            <Info class="w-4 h-4 mr-2" />
+                                            Details
                                         </DropdownMenuItem>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem class="text-destructive focus:text-destructive"
-                                            @click="openDeleteDialog(snapshot)">
-                                            <Trash2 class="w-4 h-4 mr-2" />
-                                            Delete
-                                        </DropdownMenuItem>
+                                        <template v-if="authStore.isAdmin">
+                                            <DropdownMenuItem @click="openRestoreSheet(snapshot)">
+                                                <RotateCcw class="w-4 h-4 mr-2" />
+                                                Restore
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem class="text-destructive focus:text-destructive"
+                                                @click="openDeleteDialog(snapshot)">
+                                                <Trash2 class="w-4 h-4 mr-2" />
+                                                Delete
+                                            </DropdownMenuItem>
+                                        </template>
                                     </DropdownMenuContent>
                                 </DropdownMenu>
                             </TableCell>
@@ -415,6 +439,9 @@ onMounted(fetchSnapshots)
         </div>
 
     </div>
+
+    <!-- Details sheet -->
+    <SnapshotDetailsSheet :open="detailsSheetOpen" :snapshot="detailsSnapshot" @update:open="detailsSheetOpen = $event" />
 
     <!-- Restore sheet -->
     <RestoreSheet :open="restoreSheetOpen" :snapshot="restoreSnapshot" @update:open="restoreSheetOpen = $event" />

@@ -12,6 +12,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
@@ -28,8 +29,9 @@ const genericResetMessage = "if an account with that email exists, a password re
 type Mailer interface {
 	// SMTPConfigured reports whether a usable SMTP configuration exists.
 	SMTPConfigured(ctx context.Context) bool
-	// SendEmail delivers a one-off email to the given recipients.
-	SendEmail(ctx context.Context, to []string, subject, body string) error
+	// SendEmail delivers a one-off email to the given recipients. html is the
+	// optional HTML body; when empty, the email is plain text only.
+	SendEmail(ctx context.Context, to []string, subject, text, html string) error
 }
 
 // PasswordResetHandler implements the self-service "forgot password" flow for
@@ -162,16 +164,14 @@ func (h *PasswordResetHandler) processRequest(r *http.Request, email string) {
 	}
 
 	link := fmt.Sprintf("%s/auth/reset-password?token=%s", h.baseURL, raw)
-	subject := "Reset your Arkeep password"
-	body := fmt.Sprintf(
-		"A password reset was requested for your Arkeep account.\r\n\r\n"+
-			"Open the link below to choose a new password. It expires in %d hour(s):\r\n\r\n"+
-			"%s\r\n\r\n"+
-			"If you did not request this, you can safely ignore this email — your password will not change.\r\n",
-		int(resetTokenTTL.Hours()), link,
-	)
+	subject, text, html, err := notification.PasswordResetEmail(link, resetTokenTTL)
+	if err != nil {
+		// The reset must not depend on the HTML email: html is empty, and the
+		// plain text has the link.
+		h.logger.Warn("password reset: rendering HTML email failed, sending plain text", zap.Error(err))
+	}
 
-	if err := h.mailer.SendEmail(ctx, []string{user.Email}, subject, body); err != nil {
+	if err := h.mailer.SendEmail(ctx, []string{user.Email}, subject, text, html); err != nil {
 		h.logger.Error("password reset: sending email failed", zap.Error(err))
 		return
 	}

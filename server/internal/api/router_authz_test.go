@@ -32,6 +32,11 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodGet, "/api/v1/snapshots/" + id + "/browse"},
 		{http.MethodPost, "/api/v1/settings/smtp/test"},
 		{http.MethodPost, "/api/v1/settings/webhook/test"},
+		{http.MethodGet, "/api/v1/settings/notification-providers"},
+		{http.MethodPost, "/api/v1/settings/notification-providers"},
+		{http.MethodPut, "/api/v1/settings/notification-providers/" + id},
+		{http.MethodDelete, "/api/v1/settings/notification-providers/" + id},
+		{http.MethodPost, "/api/v1/settings/notification-providers/test"},
 		{http.MethodPost, "/api/v1/users/" + id + "/password"},
 	}
 

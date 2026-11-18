@@ -12,7 +12,7 @@
 
 services:
   server:
-    image: ghcr.io/arkeep-io/arkeep-server:v0.10.0
+    image: ghcr.io/arkeep-io/arkeep-server:v0.11.1
     container_name: arkeep-server
     restart: unless-stopped
     depends_on:
@@ -61,7 +61,7 @@ services:
       start_period: 10s
 
   agent:
-    image: ghcr.io/arkeep-io/arkeep-agent:v0.10.0
+    image: ghcr.io/arkeep-io/arkeep-agent:v0.11.1
     container_name: arkeep-agent
     restart: unless-stopped
     depends_on:
@@ -92,6 +92,16 @@ services:
       # Windows (Docker Desktop) — one entry per drive (replace the line above):
       #   - C:/:/hostfs/c:ro
       #   - D:/:/hostfs/d:ro
+      # ── Rclone destinations ───────────────────────────────────────────────────
+      # Rclone destinations use remotes defined in rclone.conf on the agent. The
+      # image reads it from /etc/arkeep/rclone/rclone.conf (RCLONE_CONFIG), so
+      # mount the host folder that holds it. Mount the folder, not the file, and
+      # keep :rw: rclone saves refreshed OAuth tokens (Google Drive, OneDrive,
+      # Dropbox) back to rclone.conf by writing a new file and renaming it.
+      # Paths in rclone.conf (local/alias remotes) are container paths: a host
+      # path needs its own :rw mount, since /hostfs is read-only. With PUID
+      # set, the folder and file must be readable and writable by that UID.
+      # - /root/.config/rclone:/etc/arkeep/rclone:rw
       # Docker socket — required for Docker volume discovery and for pre/post-backup
       # hooks that run `docker stop`/`docker start`/`docker compose ...`. Whatever the
       # mount mode, the socket gives full control of Docker: :ro only makes the socket

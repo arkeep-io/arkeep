@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { AlertCircle, Loader2, RefreshCw, Send } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
+import NotificationProviders from '@/components/notifications/NotificationProviders.vue'
 import type { ApiResponse, NotificationSettings, WebhookSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -185,7 +186,7 @@ const sendTestWebhook = handleSubmit(async (values) => {
         <div>
             <h2 class="text-base font-semibold">Notification Events</h2>
             <p class="mt-1 text-sm text-muted-foreground">
-                Choose which events trigger external notifications (email and webhook).
+                Choose which events trigger external notifications (email, webhook and notification providers).
                 In-app notifications are always shown regardless of these settings.
             </p>
         </div>
@@ -355,4 +356,10 @@ const sendTestWebhook = handleSubmit(async (values) => {
 
         </div>
     </form>
+
+    <!-- Providers are saved on their own, outside the form above. -->
+    <template v-if="!loading">
+        <Separator class="my-6" />
+        <NotificationProviders />
+    </template>
 </template>

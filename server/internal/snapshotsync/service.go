@@ -29,6 +29,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destutil"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
 // KeyIntervalHours is the settings key holding how often, in hours, every
@@ -80,6 +81,7 @@ type destinationStore interface {
 type snapshotStore interface {
 	Create(ctx context.Context, snapshot *db.Snapshot) error
 	ExistsBySnapshotIDAndDestination(ctx context.Context, snapshotID string, destinationID uuid.UUID) (bool, error)
+	FillMissingSummary(ctx context.Context, destinationID uuid.UUID, snapshotID string, fileCount int64, summary db.SnapshotSummary) (bool, error)
 	DeleteStaleByDestination(ctx context.Context, destinationID uuid.UUID, liveIDs []string, cutoff time.Time) (int64, error)
 }
 
@@ -126,6 +128,9 @@ type ImportOutcome struct {
 	Imported int
 	// Skipped counts snapshots already recorded for this destination.
 	Skipped int
+	// Filled counts the skipped snapshots whose record had no restic summary
+	// and got it from the listing.
+	Filled int
 	// Failed counts snapshots that could not be persisted.
 	Failed int
 }
@@ -237,6 +242,7 @@ func (s *Service) SyncDestination(ctx context.Context, destID uuid.UUID) (Result
 		zap.String("agent_id", agentID),
 		zap.Int("found", res.Found),
 		zap.Int("imported", res.Imported),
+		zap.Int("summaries_filled", res.Filled),
 		zap.Int64("removed", res.Removed),
 		zap.Int("failed", res.Failed),
 	)
@@ -259,8 +265,9 @@ func (s *Service) pickAgent(dest *db.Destination, policies []db.Policy) string {
 }
 
 // PersistImported records the listed snapshots that are not yet known for this
-// destination and caches the repository size the agent reported. The listing
-// succeeded, so it also records that the repository exists.
+// destination, fills in the restic summary of known records that lack it, and
+// caches the repository size the agent reported. The listing succeeded, so it
+// also records that the repository exists.
 //
 // Imported snapshots carry no policy and no job: they were not produced by a
 // backup run, so PolicyID and JobID stay nil.
@@ -279,8 +286,22 @@ func (s *Service) PersistImported(ctx context.Context, dest *db.Destination, res
 			out.Failed++
 			continue
 		}
+		summary := SummaryFromProto(info.GetSummary())
 		if exists {
 			out.Skipped++
+			if summary.BackupEnd == nil {
+				continue
+			}
+			filled, err := s.snapshots.FillMissingSummary(ctx, dest.ID, info.ResticSnapshotId, info.GetSummary().GetTotalFilesProcessed(), summary)
+			if err != nil {
+				// The record exists and stays usable: only its details are missing.
+				s.logger.Warn("failed to fill snapshot summary",
+					zap.String("restic_snapshot_id", info.ResticSnapshotId),
+					zap.Error(err),
+				)
+			} else if filled {
+				out.Filled++
+			}
 			continue
 		}
 
@@ -305,15 +326,16 @@ func (s *Service) PersistImported(ctx context.Context, dest *db.Destination, res
 		tagsJSON, _ := json.Marshal(info.Tags)
 
 		snap := &db.Snapshot{
-			DestinationID: dest.ID,
-			IsImported:    true,
-			SnapshotID:    info.ResticSnapshotId,
-			Hostname:      info.Hostname,
-			Sources:       string(sourcesJSON),
-			Tags:          string(tagsJSON),
-			SizeBytes:     info.SizeBytes,
-			FileCount:     info.FileCount,
-			SnapshotAt:    snapshotAt,
+			DestinationID:   dest.ID,
+			IsImported:      true,
+			SnapshotID:      info.ResticSnapshotId,
+			Hostname:        info.Hostname,
+			Sources:         string(sourcesJSON),
+			Tags:            string(tagsJSON),
+			SizeBytes:       info.SizeBytes,
+			FileCount:       info.FileCount,
+			SnapshotAt:      snapshotAt,
+			SnapshotSummary: summary,
 		}
 		if err := s.snapshots.Create(ctx, snap); err != nil {
 			s.logger.Error("failed to create imported snapshot",
@@ -335,6 +357,26 @@ func (s *Service) PersistImported(ctx context.Context, dest *db.Destination, res
 	}
 
 	return out
+}
+
+// SummaryFromProto converts the restic summary an agent reported for a
+// snapshot. A nil summary — the snapshot was made by restic < 0.17, or the
+// agent predates summaries — gives the zero value, whose nil BackupEnd marks
+// it unknown.
+func SummaryFromProto(p *proto.SnapshotSummary) db.SnapshotSummary {
+	if p.GetBackupEnd() == nil {
+		return db.SnapshotSummary{}
+	}
+	start, end := p.GetBackupStart().AsTime().UTC(), p.GetBackupEnd().AsTime().UTC()
+	return db.SnapshotSummary{
+		BackupStart:         &start,
+		BackupEnd:           &end,
+		FilesNew:            p.GetFilesNew(),
+		FilesChanged:        p.GetFilesChanged(),
+		FilesUnmodified:     p.GetFilesUnmodified(),
+		TotalBytesProcessed: p.GetTotalBytesProcessed(),
+		DataAdded:           p.GetDataAdded(),
+	}
 }
 
 // Start checks every tickInterval whether a periodic sweep is due and runs it.

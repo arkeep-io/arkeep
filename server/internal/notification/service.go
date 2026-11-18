@@ -49,6 +49,7 @@ type NotificationService struct {
 	settingsRepo repositories.SettingsRepository
 	policyRepo   repositories.PolicyRepository
 	jobRepo      repositories.JobRepository
+	providerRepo repositories.NotificationProviderRepository
 	hub          *websocket.Hub
 	email        *emailSender
 	webhook      *webhookSender
@@ -65,8 +66,11 @@ type Config struct {
 	// JobRepo loads the job details shown in HTML job emails. Nil sends job
 	// emails as plain text only.
 	JobRepo repositories.JobRepository
-	Hub     *websocket.Hub
-	Logger  *zap.Logger
+	// ProviderRepo lists the notification providers (Gotify, Telegram...)
+	// events are sent to. Nil sends to none.
+	ProviderRepo repositories.NotificationProviderRepository
+	Hub          *websocket.Hub
+	Logger       *zap.Logger
 	// BaseURL is the external URL of the server (ARKEEP_BASE_URL), used for
 	// the "View job" link in job emails. Empty leaves the link out.
 	BaseURL string
@@ -84,6 +88,7 @@ func NewService(cfg Config) *NotificationService {
 		settingsRepo: cfg.SettingsRepo,
 		policyRepo:   cfg.PolicyRepo,
 		jobRepo:      cfg.JobRepo,
+		providerRepo: cfg.ProviderRepo,
 		hub:          cfg.Hub,
 		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
 		logger:       cfg.Logger.Named("notification"),
@@ -112,10 +117,11 @@ func (s *NotificationService) SMTPConfigured(ctx context.Context) bool {
 
 // SendEmail delivers a one-off email through the configured SMTP server. Unlike
 // the notification fan-out, this is a direct send for transactional flows such
-// as password reset. If SMTP is not configured the send is skipped silently
+// as password reset. html is the optional HTML body; when empty, the email is
+// plain text only. If SMTP is not configured the send is skipped silently
 // (see emailSender.Send) — callers should gate on SMTPConfigured first.
-func (s *NotificationService) SendEmail(ctx context.Context, to []string, subject, body string) error {
-	return s.email.Send(ctx, to, subject, body, "")
+func (s *NotificationService) SendEmail(ctx context.Context, to []string, subject, text, html string) error {
+	return s.email.Send(ctx, to, subject, text, html)
 }
 
 // Start launches the background delivery retrier. It runs until ctx is
@@ -385,7 +391,7 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 		}
 		if len(emailTo) > 0 {
 			textBody, htmlBody := s.emailBodies(ctx, firstNotif)
-			s.enqueueAndSend(ctx, firstNotif, "email", func() error {
+			s.enqueueAndSend(ctx, firstNotif, "email", nil, func() error {
 				return s.email.Send(ctx, emailTo, ev.title, textBody, htmlBody)
 			})
 		}
@@ -393,12 +399,42 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 
 	// Webhook: one delivery per event.
 	if channelEnabled(ctx, s.settingsRepo, "webhook") {
-		s.enqueueAndSend(ctx, firstNotif, "webhook", func() error {
+		s.enqueueAndSend(ctx, firstNotif, "webhook", nil, func() error {
 			return s.webhook.Send(ctx, ev.notifType, ev.title, ev.body, ev.payload)
 		})
 	}
 
+	// Notification providers: one delivery per enabled provider.
+	for _, p := range s.enabledProviders(ctx) {
+		s.enqueueAndSend(ctx, firstNotif, "provider", &p.ID, func() error {
+			return s.sendToProvider(ctx, p, ev.notifType, ev.title, ev.body)
+		})
+	}
+
 	return nil
+}
+
+// enabledProviders returns the enabled notification providers, or none when
+// they cannot be listed (logged): the other channels are still delivered.
+func (s *NotificationService) enabledProviders(ctx context.Context) []*db.NotificationProvider {
+	if s.providerRepo == nil {
+		return nil
+	}
+	providers, err := s.providerRepo.ListEnabled(ctx)
+	if err != nil {
+		s.logger.Error("failed to list notification providers", zap.Error(err))
+		return nil
+	}
+	return providers
+}
+
+// sendToProvider delivers one event to the provider p.
+func (s *NotificationService) sendToProvider(ctx context.Context, p *db.NotificationProvider, eventType, title, body string) error {
+	settings, err := ProviderSettingsFrom(p)
+	if err != nil {
+		return err
+	}
+	return SendProvider(ctx, settings, eventType, title, body)
 }
 
 // enqueueAndSend creates a NotificationDelivery row with status="pending" and
@@ -407,12 +443,14 @@ func (s *NotificationService) notify(ctx context.Context, ev event) error {
 // so the retrier picks it up on the next tick.
 //
 // The attempts counter is NOT incremented here — it counts only retrier
-// attempts, not the initial optimistic attempt.
-func (s *NotificationService) enqueueAndSend(ctx context.Context, n *db.Notification, deliveryType string, send func() error) {
+// attempts, not the initial optimistic attempt. providerID names the provider
+// of a "provider" delivery and is nil otherwise.
+func (s *NotificationService) enqueueAndSend(ctx context.Context, n *db.Notification, deliveryType string, providerID *uuid.UUID, send func() error) {
 	d := &db.NotificationDelivery{
 		NotificationID: n.ID,
 		Type:           deliveryType,
 		Status:         "pending",
+		ProviderID:     providerID,
 	}
 	if err := s.notifRepo.CreateDelivery(ctx, d); err != nil {
 		s.logger.Error("failed to create delivery row",
@@ -530,6 +568,12 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 			payload = map[string]any{}
 		}
 		sendErr = s.webhook.Send(ctx, n.Type, n.Title, n.Body, payload)
+	case "provider":
+		p := s.deliveryProvider(ctx, d)
+		if p == nil {
+			return
+		}
+		sendErr = s.sendToProvider(ctx, p, n.Type, n.Title, n.Body)
 	default:
 		s.logger.Warn("retrier: unknown delivery type, skipping",
 			zap.String("delivery_id", d.ID.String()),
@@ -572,6 +616,34 @@ func (s *NotificationService) retryDelivery(ctx context.Context, d *db.Notificat
 	}
 }
 
+// deliveryProvider returns the enabled provider of the "provider" delivery d.
+// A delivery whose provider was deleted or disabled after the event is given
+// up and nil is returned, as is nil when the provider cannot be loaded now
+// (logged, retried on the next tick).
+func (s *NotificationService) deliveryProvider(ctx context.Context, d *db.NotificationDelivery) *db.NotificationProvider {
+	if d.ProviderID == nil || s.providerRepo == nil {
+		s.giveUp(ctx, d, "notification provider no longer exists")
+		return nil
+	}
+	p, err := s.providerRepo.GetByID(ctx, *d.ProviderID)
+	if errors.Is(err, repositories.ErrNotFound) {
+		s.giveUp(ctx, d, "notification provider no longer exists")
+		return nil
+	}
+	if err != nil {
+		s.logger.Error("retrier: failed to load notification provider",
+			zap.String("delivery_id", d.ID.String()),
+			zap.Error(err),
+		)
+		return nil
+	}
+	if !p.Enabled {
+		s.giveUp(ctx, d, "notification provider is disabled")
+		return nil
+	}
+	return p
+}
+
 // giveUp marks d exhausted without counting an attempt, for a delivery that
 // can no longer be sent at all.
 func (s *NotificationService) giveUp(ctx context.Context, d *db.NotificationDelivery, reason string) {
@@ -600,18 +672,42 @@ func (s *NotificationService) smtpMissing(ctx context.Context) bool {
 // emailBodies returns the plain-text and HTML body of n's email. Job
 // notifications get both, built from the job: its details are loaded here, at
 // send time, rather than stored in the payload, which also goes to webhooks;
-// a retry loads them again. Every other notification, and a job notification
-// whose job can no longer be loaded, is sent as n.Body alone (html is "").
+// a retry loads them again. Agent notifications get both, built from the
+// payload. Any other notification, and one whose email cannot be built (e.g.
+// the job can no longer be loaded), is sent as n.Body alone (html is "").
 // A failure is logged.
 func (s *NotificationService) emailBodies(ctx context.Context, n *db.Notification) (text, html string) {
-	if s.jobRepo == nil || (n.Type != "job_success" && n.Type != "job_failure") {
-		return n.Body, ""
-	}
 	warn := func(msg string, err error) (string, string) {
 		s.logger.Warn(msg+", sending the short plain-text email",
 			zap.String("notification_id", n.ID.String()),
 			zap.Error(err),
 		)
+		return n.Body, ""
+	}
+
+	switch n.Type {
+	case "agent_offline", "agent_online":
+		var agent struct {
+			ID   string `json:"agent_id"`
+			Name string `json:"agent_name"`
+		}
+		if err := json.Unmarshal([]byte(n.Payload), &agent); err != nil {
+			return warn("failed to decode agent notification payload", err)
+		}
+		if agent.Name == "" {
+			return warn("agent notification has no agent name", errors.New("empty agent_name"))
+		}
+		var err error
+		text, html, err = renderEmailBodies(newAgentEmail(n.Type == "agent_online", n.Title, agent.Name, agent.ID, n.CreatedAt, s.baseURL))
+		if err != nil {
+			return warn("failed to render agent email", err)
+		}
+		return text, html
+	case "job_success", "job_failure":
+		if s.jobRepo == nil {
+			return n.Body, ""
+		}
+	default:
 		return n.Body, ""
 	}
 
