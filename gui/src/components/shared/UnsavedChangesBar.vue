@@ -10,7 +10,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { AlertCircle, Loader2 } from '@lucide/vue'
+import { AlertCircle, Loader2, TriangleAlert } from '@lucide/vue'
 
 // UnsavedChangesBar is the save bar of the settings pages: placed last on the
 // page, it sticks to the bottom of the view while the form has changes not
@@ -60,22 +60,29 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload)
     <Transition enter-active-class="transition-all duration-200" enter-from-class="translate-y-2 opacity-0"
         leave-active-class="transition-all duration-150" leave-to-class="translate-y-2 opacity-0">
         <div v-if="dirty || error" class="sticky bottom-4 z-10 mt-6" data-testid="unsaved-changes-bar">
-            <div role="region" aria-label="Unsaved changes"
-                class="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-background px-4 py-3 shadow-lg">
-                <p v-if="error" class="flex items-center gap-2 text-sm text-destructive">
-                    <AlertCircle class="size-4 shrink-0" />
-                    {{ error }}
-                </p>
-                <p v-else class="text-sm">You have unsaved changes.</p>
-                <div class="flex gap-2">
-                    <Button type="button" variant="outline" size="sm" :disabled="saving || !dirty"
-                        @click="emit('discard')">
-                        Discard
-                    </Button>
-                    <Button type="button" size="sm" :disabled="saving" @click="emit('save')">
-                        <Loader2 v-if="saving" class="size-4 animate-spin" />
-                        {{ saving ? 'Saving…' : 'Save' }}
-                    </Button>
+            <!-- Opaque background under a tint: the bar scrolls over the page. -->
+            <div role="region" aria-label="Unsaved changes" class="overflow-hidden rounded-lg border bg-background shadow-lg"
+                :class="error ? 'border-destructive/50' : 'border-primary/50'">
+                <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                    :class="error ? 'bg-destructive/10' : 'bg-primary/10'">
+                    <p v-if="error" class="flex items-center gap-2 text-sm font-medium text-destructive">
+                        <AlertCircle class="size-4 shrink-0" />
+                        {{ error }}
+                    </p>
+                    <p v-else class="flex items-center gap-2 text-sm font-medium">
+                        <TriangleAlert class="size-4 shrink-0 text-primary" />
+                        You have unsaved changes.
+                    </p>
+                    <div class="flex gap-2">
+                        <Button type="button" variant="outline" size="sm" :disabled="saving || !dirty"
+                            @click="emit('discard')">
+                            Discard
+                        </Button>
+                        <Button type="button" size="sm" :disabled="saving" @click="emit('save')">
+                            <Loader2 v-if="saving" class="size-4 animate-spin" />
+                            {{ saving ? 'Saving…' : 'Save' }}
+                        </Button>
+                    </div>
                 </div>
             </div>
         </div>
