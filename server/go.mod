@@ -69,7 +69,7 @@ require (
 	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/tools v0.53.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261116203732-fd2c7689a808 // indirect
 	mellium.im/reader v0.1.0 // indirect
 	mellium.im/sasl v0.3.2 // indirect
 	mellium.im/xmlstream v0.15.4 // indirect

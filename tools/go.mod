@@ -165,5 +165,5 @@ require (
 	google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	mvdan.cc/sh/v3 v3.14.1 // indirect
-	mvdan.cc/sh/x v0.0.0-20261117131131-a6ab14f43c8a // indirect
+	mvdan.cc/sh/x v0.0.0-20261118112250-c546732369da // indirect
 )

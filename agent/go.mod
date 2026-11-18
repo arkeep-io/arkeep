@@ -5,7 +5,7 @@ go 1.27.0
 toolchain go1.27.4
 
 require (
-	github.com/arkeep-io/arkeep/shared v0.0.0-20261105162912-b0eb6e9288da
+	github.com/arkeep-io/arkeep/shared v0.0.0-20261116154803-46e467f7c43b
 	github.com/containerd/errdefs v1.0.0
 	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.3
