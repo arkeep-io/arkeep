@@ -556,7 +556,7 @@ type NotificationDelivery struct {
 func (NotificationDelivery) TableName() string { return "notification_delivery_queue" }
 
 // NotificationProvider is a push or chat service (Gotify, ntfy, Telegram...)
-// that receives notification events, sent through shoutrrr (ADR 0018). The
+// that receives notification events, sent through shoutrrr (ADR 0019). The
 // shoutrrr URL is built from Type, Config and Secrets at send time by the
 // notification package, which also validates them.
 type NotificationProvider struct {
