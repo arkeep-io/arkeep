@@ -1,0 +1,63 @@
+name: Packages
+
+# Builds the release artifacts as a snapshot and installs the agent .deb and
+# .rpm in Debian, Ubuntu and Fedora containers (scripts/test-agent-packages.sh).
+# Runs only when something the packages are made of changes: a full GoReleaser
+# build takes several minutes.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - .goreleaser.yml
+      - deploy/packaging/**
+      - deploy/systemd/arkeep-agent.service
+      - scripts/test-agent-packages.sh
+      - .github/workflows/packages.yml
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - .goreleaser.yml
+      - deploy/packaging/**
+      - deploy/systemd/arkeep-agent.service
+      - scripts/test-agent-packages.sh
+      - .github/workflows/packages.yml
+
+permissions: read-all
+
+jobs:
+  agent-packages:
+    name: Agent packages
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+
+      # The GoReleaser before hooks build the GUI, which the server embeds.
+      # pnpm/action-setup must run before setup-node (see release.yml).
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: gui/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: "pnpm"
+          cache-dependency-path: gui/pnpm-lock.yaml
+
+      - name: Build a snapshot release
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --snapshot --clean --skip=docker
+        env:
+          # restic is downloaded through the GitHub API (agent/scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Install and remove the agent packages
+        run: scripts/test-agent-packages.sh dist
