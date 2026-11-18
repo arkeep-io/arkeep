@@ -153,9 +153,11 @@ upload() {
   "$rclone" copy "$tree" "r2:${bucket}" "${packages[@]}" --checksum \
     --header-upload 'Cache-Control: public, max-age=31536000, immutable'
   # Then the metadata, which now only lists packages already uploaded, then
-  # the deletions (rclone deletes after transferring).
+  # the deletions (rclone deletes after transferring). Clients never keep it;
+  # the Cloudflare edge keeps it five minutes, so that requests to
+  # pkg.arkeep.io do not each become an R2 read.
   "$rclone" sync "$tree" "r2:${bucket}" --checksum \
-    --header-upload 'Cache-Control: no-cache'
+    --header-upload 'Cache-Control: public, max-age=0, s-maxage=300'
   echo "uploaded to ${bucket}"
 }
 

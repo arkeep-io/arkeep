@@ -31,9 +31,22 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   - `apt/`: an APT repository, suite `stable`, component `main`,
     architectures `amd64`, `arm64` and `armhf`;
   - `rpm/`: an RPM repository, and `arkeep.repo` for `dnf`.
-  Metadata is served with `Cache-Control: no-cache`, so that clients never see
-  an index that lists packages they cannot download yet, or no longer can.
+  Metadata is served with `Cache-Control: public, max-age=0, s-maxage=300`:
+  clients never keep it, and the Cloudflare edge keeps it five minutes, so
+  that every request does not become an R2 read. Packages are uploaded before
+  the metadata, so an index never lists a package that is not there yet; for
+  up to five minutes after a publication, the edge can still serve the
+  previous index, which may list a package just removed from the repository.
   Package files have versioned names and are cached for a year.
+- **Edge protection.** Settings of the `arkeep.io` zone, outside the
+  repository: WAF custom rules on `pkg.arkeep.io` block any path outside
+  `gpg.key`, `apt/` and `rpm/`, any method other than `GET` and `HEAD`, any
+  query string, and any client other than APT, DNF/YUM, zypper, curl and wget
+  (by `User-Agent`); a rate limiting rule blocks an IP above 30 requests in
+  10 seconds; a cache rule makes the host eligible for cache with the edge TTL
+  taken from `Cache-Control`. Blocked and cached requests are not R2
+  operations, so traffic from scanners does not reach the bucket. The
+  `r2.dev` URL of the bucket is disabled, so that nothing bypasses them.
 - **Content.** The repository holds the agent packages of the three most
   recent stable releases that have them. Pre-releases are never published to
   it. The server has no package.
