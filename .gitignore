@@ -45,6 +45,8 @@ desktop.ini
 .env
 .env.local
 *.env
+# Template installed by the agent package as /etc/arkeep/agent.env: no secrets.
+!deploy/packaging/agent/agent.env
 
 # ─── AI Assistants ────────────────────────────────────────────────────────────
 
