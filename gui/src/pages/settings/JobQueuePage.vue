@@ -10,8 +10,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertCircle, Loader2, RefreshCw } from '@lucide/vue'
+import { RefreshCw } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
+import UnsavedChangesBar from '@/components/shared/UnsavedChangesBar.vue'
 import type { ApiResponse, JobQueueSettings } from '@/types'
 
 // Mirrors destqueue.MaxTimeoutMinutes on the server (30 days).
@@ -26,7 +27,7 @@ const submitError = ref<string | null>(null)
 const success = ref(false)
 
 // An empty field is an error rather than 0, which lets jobs wait forever.
-const { handleSubmit, resetForm, isSubmitting } = useForm({
+const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
     validationSchema: toTypedSchema(z.object({
         timeout_minutes: integerInRange(0, MAX_TIMEOUT_MINUTES),
     })),
@@ -64,12 +65,20 @@ const submit = handleSubmit(async (values) => {
             method: 'PUT',
             body: { timeout_minutes: values.timeout_minutes },
         })
+        // The saved values become the ones Discard returns to.
+        resetForm({ values })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
         submitError.value = apiErrorMessage(e, 'Failed to save job queue settings')
     }
 })
+
+// discard returns the form to the saved values.
+function discard() {
+    submitError.value = null
+    resetForm()
+}
 </script>
 
 <template>
@@ -97,15 +106,6 @@ const submit = handleSubmit(async (values) => {
     <form v-else novalidate @submit="submit">
         <div class="flex flex-col gap-6">
 
-            <!-- Alerts -->
-            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                <Alert v-if="submitError" variant="destructive">
-                    <AlertCircle class="size-4" />
-                    <AlertDescription>{{ submitError }}</AlertDescription>
-                </Alert>
-            </Transition>
-
             <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
                 leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
                 <Alert v-if="success"
@@ -127,14 +127,9 @@ const submit = handleSubmit(async (values) => {
                 <FieldError v-if="timeoutMinutesError">{{ timeoutMinutesError }}</FieldError>
             </div>
 
-            <!-- ── Submit ──────────────────────────────────────────────────── -->
-            <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="isSubmitting">
-                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
-                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
-                </Button>
-            </div>
-
         </div>
     </form>
+
+    <UnsavedChangesBar v-if="!loading" :dirty="meta.dirty" :saving="isSubmitting" :error="submitError"
+        @save="submit" @discard="discard" />
 </template>

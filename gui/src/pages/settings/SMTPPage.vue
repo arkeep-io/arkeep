@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { AlertCircle, Loader2, RefreshCw, Send, X } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
+import UnsavedChangesBar from '@/components/shared/UnsavedChangesBar.vue'
 import type { ApiResponse, SMTPSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -61,7 +62,7 @@ function defaultValues() {
     }
 }
 
-const { handleSubmit, resetForm, isSubmitting } = useForm({
+const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
     validationSchema: schema,
     initialValues: defaultValues(),
 })
@@ -189,7 +190,9 @@ const submit = handleSubmit(async (values) => {
         })
         smtpExists.value = true
         savedBody = savedBodyOf(values)
-        smtpPassword.value = ''
+        // The saved values, without the password the server keeps, become
+        // the ones Discard returns to.
+        resetForm({ values: { ...values, password: '' } })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
@@ -227,6 +230,12 @@ const sendTest = handleSubmit(async (values) => {
         testing.value = false
     }
 })
+
+// discard returns the form to the saved values.
+function discard() {
+    submitError.value = null
+    resetForm()
+}
 </script>
 
 <template>
@@ -260,15 +269,6 @@ const sendTest = handleSubmit(async (values) => {
     <form v-else novalidate @submit="submit">
         <FieldGroup class="flex flex-col gap-6">
 
-            <!-- Alerts -->
-            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                <Alert v-if="submitError" variant="destructive">
-                    <AlertCircle class="size-4" />
-                    <AlertDescription>{{ submitError }}</AlertDescription>
-                </Alert>
-            </Transition>
-
             <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
                 leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
                 <Alert v-if="success"
@@ -286,7 +286,7 @@ const sendTest = handleSubmit(async (values) => {
                 <AlertCircle class="size-4" />
                 <AlertDescription>
                     These settings are not saved yet: notifications and password reset emails
-                    still use the saved ones. Click Save Settings to apply them.
+                    still use the saved ones. Click Save to apply them.
                 </AlertDescription>
             </Alert>
 
@@ -412,19 +412,18 @@ const sendTest = handleSubmit(async (values) => {
                 </div>
             </div>
 
-            <!-- ── Submit ──────────────────────────────────────────────────── -->
-            <div class="flex justify-end gap-2 pt-2">
+            <!-- ── Test ────────────────────────────────────────────────────── -->
+            <div class="flex justify-end pt-2">
                 <Button type="button" variant="outline" :disabled="isSubmitting || testing" @click="sendTest">
                     <Loader2 v-if="testing" class="size-4 animate-spin" />
                     <Send v-else class="size-4" />
                     {{ testing ? 'Sending…' : 'Send test email' }}
                 </Button>
-                <Button type="submit" :disabled="isSubmitting">
-                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
-                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
-                </Button>
             </div>
 
         </FieldGroup>
     </form>
+
+    <UnsavedChangesBar v-if="!loading" :dirty="meta.dirty" :saving="isSubmitting" :error="submitError"
+        @save="submit" @discard="discard" />
 </template>

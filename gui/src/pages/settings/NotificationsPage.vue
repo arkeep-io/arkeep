@@ -15,9 +15,10 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, Mail, RefreshCw, Send, Webhook } from '@lucide/vue'
+import { Loader2, Mail, RefreshCw, Send, Webhook } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import NotificationProviders from '@/components/notifications/NotificationProviders.vue'
+import UnsavedChangesBar from '@/components/shared/UnsavedChangesBar.vue'
 import type { ApiResponse, NotificationSettings, WebhookSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,7 @@ const schema = toTypedSchema(
     }),
 )
 
-const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
+const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
     validationSchema: schema,
     initialValues: {
         job_success: true,
@@ -146,7 +147,9 @@ const submit = handleSubmit(async (values) => {
             }),
         ])
         webhookExists.value = true
-        setValues({ webhook_secret: '' }, false)
+        // The saved values, without the secret the server keeps, become the
+        // ones Discard returns to.
+        resetForm({ values: { ...values, webhook_secret: '' } })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
@@ -178,6 +181,12 @@ const sendTestWebhook = handleSubmit(async (values) => {
         testingWebhook.value = false
     }
 })
+
+// discard returns the form to the saved values.
+function discard() {
+    submitError.value = null
+    resetForm()
+}
 </script>
 
 <template>
@@ -209,15 +218,6 @@ const sendTestWebhook = handleSubmit(async (values) => {
     <template v-else>
         <form novalidate @submit="submit">
             <div class="flex flex-col gap-6">
-
-                <!-- Alerts -->
-                <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                    leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                    <Alert v-if="submitError" variant="destructive">
-                        <AlertCircle class="size-4" />
-                        <AlertDescription>{{ submitError }}</AlertDescription>
-                    </Alert>
-                </Transition>
 
                 <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
                     leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
@@ -358,20 +358,16 @@ const sendTestWebhook = handleSubmit(async (values) => {
                     </div>
                 </section>
 
-                <!-- ── Submit: events, email and webhook ───────────────────── -->
-                <div class="flex justify-end">
-                    <Button type="submit" :disabled="isSubmitting">
-                        <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
-                        {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
-                    </Button>
-                </div>
-
             </div>
         </form>
 
         <!-- Providers are saved on their own, from their sheet, outside the form above. -->
-        <div class="mt-6">
+        <div class="mt-3">
             <NotificationProviders />
         </div>
+
+        <!-- Saves the events, email and webhook. -->
+        <UnsavedChangesBar :dirty="meta.dirty" :saving="isSubmitting" :error="submitError"
+            @save="submit" @discard="discard" />
     </template>
 </template>
