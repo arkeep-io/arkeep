@@ -27,7 +27,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, ArrowLeft, Loader2, Pencil, Plus, Send, Trash2 } from '@lucide/vue'
+import { AlertCircle, ArrowLeft, BellRing, Loader2, Pencil, Plus, Send, Trash2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import { PROVIDER_TYPES, providerTypeDef, type ProviderTypeDef } from '@/lib/notificationProviders'
 import type { ApiResponse, NotificationProvider, NotificationProviderPriorities } from '@/types'
@@ -52,6 +52,10 @@ async function fetchProviders() {
 }
 
 onMounted(fetchProviders)
+
+// sortedProviders lists the providers alphabetically by name.
+const sortedProviders = computed(() =>
+    [...providers.value].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })))
 
 // summary is the non-secret detail shown under a provider's name.
 function summary(p: NotificationProvider): string {
@@ -262,14 +266,19 @@ async function confirmDelete() {
 </script>
 
 <template>
-    <div class="flex flex-col gap-4">
-        <div class="flex items-start justify-between gap-4">
-            <div>
-                <p class="text-sm font-medium">Notification providers</p>
-                <p class="text-xs text-muted-foreground">
-                    Push and chat services (Gotify, ntfy, Telegram, Discord…) that receive every enabled event
-                    above, each with its own priority per event.
-                </p>
+    <div class="rounded-lg border">
+        <div class="flex items-center justify-between gap-4 px-4 py-3">
+            <div class="flex items-center gap-3 min-w-0">
+                <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
+                    <BellRing class="size-4" />
+                </div>
+                <div class="min-w-0">
+                    <p class="text-sm font-medium">Push and chat providers</p>
+                    <p class="text-xs text-muted-foreground">
+                        Gotify, ntfy, Telegram, Discord and more, each with its own priority per event.
+                        Saved as you add or edit them.
+                    </p>
+                </div>
             </div>
             <Button type="button" size="sm" class="shrink-0" @click="openCreate">
                 <Plus class="size-4" />
@@ -277,17 +286,17 @@ async function confirmDelete() {
             </Button>
         </div>
 
-        <div v-if="loading" class="flex flex-col gap-2">
-            <Skeleton class="h-14 w-full rounded-lg" />
+        <div v-if="loading" class="border-t px-4 py-3">
+            <Skeleton class="h-10 w-full rounded-md" />
         </div>
 
-        <div v-else-if="providers.length === 0" class="rounded-lg border border-dashed p-6 text-center">
-            <p class="text-sm text-muted-foreground">No notification providers configured.</p>
-        </div>
+        <p v-else-if="providers.length === 0" class="border-t px-4 py-4 text-center text-sm text-muted-foreground">
+            No providers configured.
+        </p>
 
-        <div v-else class="flex flex-col gap-2">
-            <div v-for="p in providers" :key="p.id" data-testid="notification-provider"
-                class="flex items-center justify-between gap-3 rounded-lg border px-4 py-3">
+        <div v-else class="divide-y border-t">
+            <div v-for="p in sortedProviders" :key="p.id" data-testid="notification-provider"
+                class="flex items-center justify-between gap-3 px-4 py-3">
                 <div class="flex items-center gap-3 min-w-0">
                     <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
                         <svg v-if="providerTypeDef(p.type)?.iconPath" viewBox="0 0 24 24" class="size-4"
