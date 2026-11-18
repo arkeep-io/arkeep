@@ -1,7 +1,7 @@
 # 0018. Publish the agent as a Home Assistant app from a branch of this repository
 
-- **Status:** Proposed
-- **Date:** 2026-11-14
+- **Status:** Accepted
+- **Date:** 2026-11-18
 - **Deciders:** Arkeep maintainers
 
 ## Context
