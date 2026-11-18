@@ -1,6 +1,6 @@
 # 0017. Keep registry secrets in the release environment and attest every published artifact
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-12
 - **Deciders:** Arkeep maintainers
 

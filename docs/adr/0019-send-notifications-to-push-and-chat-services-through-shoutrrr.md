@@ -1,6 +1,6 @@
 # 0019. Send notifications to push and chat services through shoutrrr
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-16
 - **Deciders:** Arkeep maintainers
 
