@@ -1,4 +1,4 @@
-# 0018. Send notifications to push and chat services through shoutrrr
+# 0019. Send notifications to push and chat services through shoutrrr
 
 - **Status:** Proposed
 - **Date:** 2026-11-16

@@ -21,7 +21,7 @@ import (
 )
 
 // Notification provider types. Each one is a push or chat service whose
-// shoutrrr URL is built from the provider's fields by providerURL (ADR 0018).
+// shoutrrr URL is built from the provider's fields by providerURL (ADR 0019).
 const (
 	ProviderGotify     = "gotify"
 	ProviderNtfy       = "ntfy"
