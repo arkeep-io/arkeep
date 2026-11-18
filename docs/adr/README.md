@@ -59,4 +59,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0015](0015-bundle-postgresql-in-the-helm-chart-with-the-official-image.md) | Bundle PostgreSQL in the Helm chart with the official image | Accepted |
 | [0016](0016-validate-release-tags-and-keep-latest-for-stable-releases.md) | Validate release tags and keep latest for stable releases | Accepted |
 | [0017](0017-keep-registry-secrets-in-the-release-environment-and-attest-every-artifact.md) | Keep registry secrets in the release environment and attest every published artifact | Proposed |
-| [0018](0018-send-notifications-to-push-and-chat-services-through-shoutrrr.md) | Send notifications to push and chat services through shoutrrr | Proposed |
+| [0019](0019-send-notifications-to-push-and-chat-services-through-shoutrrr.md) | Send notifications to push and chat services through shoutrrr | Proposed |

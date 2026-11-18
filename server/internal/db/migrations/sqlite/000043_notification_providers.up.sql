@@ -1,6 +1,6 @@
 -- Notification providers (issue #446): push and chat services such as Gotify,
 -- ntfy, Telegram or Discord, delivered through shoutrrr URLs built by the
--- server from the provider's fields (ADR 0018). This migration is per driver
+-- server from the provider's fields (ADR 0019). This migration is per driver
 -- because SQLite must rebuild notification_delivery_queue to change its CHECK.
 --
 -- config holds the non-secret fields as JSON; secrets holds the secret ones as
