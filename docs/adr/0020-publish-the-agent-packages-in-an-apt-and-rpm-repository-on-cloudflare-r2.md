@@ -40,13 +40,20 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   Package files have versioned names and are cached for a year.
 - **Edge protection.** Settings of the `arkeep.io` zone, outside the
   repository: WAF custom rules on `pkg.arkeep.io` block any path outside
-  `gpg.key`, `apt/` and `rpm/`, any method other than `GET` and `HEAD`, any
-  query string, and any client other than APT, DNF/YUM, zypper, curl and wget
-  (by `User-Agent`); a rate limiting rule blocks an IP above 30 requests in
-  10 seconds; a cache rule makes the host eligible for cache with the edge TTL
-  taken from `Cache-Control`. Blocked and cached requests are not R2
-  operations, so traffic from scanners does not reach the bucket. The
-  `r2.dev` URL of the bucket is disabled, so that nothing bypasses them.
+  `gpg.key`, `apt/` and `rpm/`, any method other than `GET` (`HEAD` is never
+  served from the cache), any query string, any `%` in the path, any
+  `Origin` header (both would give each request its own cache entry), and any
+  client other than APT, DNF/YUM, zypper, curl and wget (by `User-Agent`); a
+  rate limiting rule blocks an IP above 10 requests in 10 seconds, while an
+  update or an install takes fewer than 10; a cache rule makes the host
+  eligible for cache with the edge TTL taken from `Cache-Control`. Blocked and
+  cached requests are not R2 operations, so traffic from scanners does not
+  reach the bucket. What still reaches it is a client that fakes the
+  `User-Agent` of a package manager and asks for paths that do not exist:
+  each is a 404 from R2, at most one per second per IP. Cloudflare caches a
+  404 for about three minutes, so a file requested just before it is
+  published can stay unavailable that long. The `r2.dev` URL of the bucket is
+  disabled, so that nothing bypasses these rules.
 - **Content.** The repository holds the agent packages of the three most
   recent stable releases that have them. Pre-releases are never published to
   it. The server has no package.
