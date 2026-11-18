@@ -391,6 +391,14 @@ func TestTranslateLocalPath(t *testing.T) {
 			hostRoot: "/hostfs",
 			want:     "relative/path",
 		},
+		{
+			// A container that backs up its own filesystem, such as the Home
+			// Assistant app: its paths are the ones entered in the UI.
+			name:     "hostRoot / — path unchanged",
+			path:     "/backup/full.tar",
+			hostRoot: "/",
+			want:     "/backup/full.tar",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -444,6 +452,12 @@ func TestTranslateExcludePatterns(t *testing.T) {
 			patterns: []string{"/dev", "**/tmp"},
 			hostRoot: "",
 			want:     []string{"/dev", "**/tmp"},
+		},
+		{
+			name:     "hostRoot / — unchanged",
+			patterns: []string{"/homeassistant/.storage", "!/backup/keep", "**/tmp"},
+			hostRoot: "/",
+			want:     []string{"/homeassistant/.storage", "!/backup/keep", "**/tmp"},
 		},
 	}
 	for _, tt := range tests {
