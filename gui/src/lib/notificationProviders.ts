@@ -41,7 +41,7 @@ const webhookField = (placeholder: string, help: string): ProviderFieldDef => ({
   key: 'webhook_url', label: 'Webhook URL', secret: true, required: true, placeholder, help,
 })
 
-export const PROVIDER_TYPES: ProviderTypeDef[] = [
+const TYPES: ProviderTypeDef[] = [
   {
     type: 'gotify', label: 'Gotify', icon: Bell,
     fields: [
@@ -122,6 +122,12 @@ export const PROVIDER_TYPES: ProviderTypeDef[] = [
     priorityHelp: 'Only for services that take a priority; the format depends on the service.',
   },
 ]
+
+// The service picker lists the services alphabetically, and the generic
+// shoutrrr URL last.
+export const PROVIDER_TYPES: ProviderTypeDef[] = [...TYPES].sort((a, b) =>
+  Number(a.type === 'custom') - Number(b.type === 'custom')
+  || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
 
 export function providerTypeDef(type: string): ProviderTypeDef | undefined {
   return PROVIDER_TYPES.find((t) => t.type === type)

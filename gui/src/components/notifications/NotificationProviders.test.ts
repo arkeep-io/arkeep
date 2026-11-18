@@ -56,6 +56,22 @@ describe('NotificationProviders', () => {
     expect(rows[0]!.text()).toContain('https://gotify.example.com')
   })
 
+  it('lists the stored providers alphabetically by name', async () => {
+    const named = (id: string, name: string): NotificationProvider => ({ ...gotify, id, name })
+    const wrapper = await open([named('p1', 'ops'), named('p2', 'Backups'), named('p3', 'home')])
+    const names = wrapper.findAll('[data-testid="notification-provider"]').map((r) => r.find('.font-medium').text())
+    expect(names).toEqual(['Backups', 'home', 'ops'])
+  })
+
+  it('lists the services alphabetically, with the shoutrrr URL last', async () => {
+    const wrapper = await open([])
+    await clickButton(wrapper, 'Add provider')
+    const types = wrapper.findAll('[data-testid^="provider-type-"]').map((b) => b.attributes('data-testid')!.slice('provider-type-'.length))
+    expect(types).toEqual([
+      'discord', 'googlechat', 'gotify', 'matrix', 'mattermost', 'teams', 'ntfy', 'pushover', 'slack', 'telegram', 'custom',
+    ])
+  })
+
   it('adds a Gotify provider from the service picker', async () => {
     const wrapper = await open([])
     await clickButton(wrapper, 'Add provider')

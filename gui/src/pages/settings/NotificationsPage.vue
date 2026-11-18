@@ -15,9 +15,10 @@ import {
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, RefreshCw, Send } from '@lucide/vue'
+import { Loader2, Mail, RefreshCw, Send, Webhook } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import NotificationProviders from '@/components/notifications/NotificationProviders.vue'
+import UnsavedChangesBar from '@/components/shared/UnsavedChangesBar.vue'
 import type { ApiResponse, NotificationSettings, WebhookSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,7 @@ const schema = toTypedSchema(
     }),
 )
 
-const { handleSubmit, resetForm, setValues, isSubmitting } = useForm({
+const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
     validationSchema: schema,
     initialValues: {
         job_success: true,
@@ -146,7 +147,9 @@ const submit = handleSubmit(async (values) => {
             }),
         ])
         webhookExists.value = true
-        setValues({ webhook_secret: '' }, false)
+        // The saved values, without the secret the server keeps, become the
+        // ones Discard returns to.
+        resetForm({ values: { ...values, webhook_secret: '' } })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
@@ -178,16 +181,22 @@ const sendTestWebhook = handleSubmit(async (values) => {
         testingWebhook.value = false
     }
 })
+
+// discard returns the form to the saved values.
+function discard() {
+    submitError.value = null
+    resetForm()
+}
 </script>
 
 <template>
     <!-- Section header -->
     <div class="flex items-start justify-between gap-4 mb-6">
         <div>
-            <h2 class="text-base font-semibold">Notification Events</h2>
+            <h2 class="text-base font-semibold">Notifications</h2>
             <p class="mt-1 text-sm text-muted-foreground">
-                Choose which events trigger external notifications (email, webhook and notification providers).
-                In-app notifications are always shown regardless of these settings.
+                Which events Arkeep reports, and the channels it sends them to. In-app notifications are always
+                shown regardless of these settings.
             </p>
         </div>
         <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchAll">
@@ -206,160 +215,159 @@ const sendTestWebhook = handleSubmit(async (values) => {
         </div>
     </template>
 
-    <!-- Form -->
-    <form v-else novalidate @submit="submit">
-        <div class="flex flex-col gap-6">
+    <template v-else>
+        <form novalidate @submit="submit">
+            <div class="flex flex-col gap-6">
 
-            <!-- Alerts -->
-            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                <Alert v-if="submitError" variant="destructive">
-                    <AlertCircle class="size-4" />
-                    <AlertDescription>{{ submitError }}</AlertDescription>
-                </Alert>
-            </Transition>
+                <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
+                    leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
+                    <Alert v-if="success"
+                        class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
+                        <AlertDescription>Notification settings saved.</AlertDescription>
+                    </Alert>
+                </Transition>
 
-            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                <Alert v-if="success"
-                    class="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400">
-                    <AlertDescription>Notification settings saved.</AlertDescription>
-                </Alert>
-            </Transition>
-
-            <!-- ── Backup jobs ──────────────────────────────────────────────── -->
-            <div class="flex flex-col gap-3">
-                <p class="text-sm font-medium">Backup Jobs</p>
-
-                <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+                <!-- ── Events ──────────────────────────────────────────────── -->
+                <section class="flex flex-col gap-3">
                     <div>
-                        <p class="text-sm font-medium">Job failed</p>
-                        <p class="text-xs text-muted-foreground">
-                            Send a notification when a backup job fails.
-                        </p>
+                        <h3 class="text-sm font-medium">Events</h3>
+                        <p class="text-xs text-muted-foreground">Sent to every enabled channel below.</p>
                     </div>
-                    <Switch :model-value="jobFailure" @update:model-value="jobFailure = $event" />
-                </div>
 
-                <div class="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div>
-                        <p class="text-sm font-medium">Job succeeded</p>
-                        <p class="text-xs text-muted-foreground">
-                            Send a notification when a backup job completes successfully.
-                        </p>
-                    </div>
-                    <Switch :model-value="jobSuccess" @update:model-value="jobSuccess = $event" />
-                </div>
-            </div>
-
-            <Separator />
-
-            <!-- ── Agents ──────────────────────────────────────────────────── -->
-            <div class="flex flex-col gap-3">
-                <p class="text-sm font-medium">Agents</p>
-
-                <div class="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div>
-                        <p class="text-sm font-medium">Agent went offline</p>
-                        <p class="text-xs text-muted-foreground">
-                            Send a notification when an agent stops responding.
-                        </p>
-                    </div>
-                    <Switch :model-value="agentOffline"
-                        @update:model-value="agentOffline = $event" />
-                </div>
-
-                <div class="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div>
-                        <p class="text-sm font-medium">Agent came back online</p>
-                        <p class="text-xs text-muted-foreground">
-                            Send a notification when an agent reconnects. Off by default.
-                        </p>
-                    </div>
-                    <Switch :model-value="agentOnline"
-                        @update:model-value="agentOnline = $event" />
-                </div>
-            </div>
-
-            <Separator />
-
-            <!-- ── Email ───────────────────────────────────────────────────── -->
-            <div class="flex items-center justify-between rounded-lg border px-4 py-3">
-                <div>
-                    <p class="text-sm font-medium">Send email notifications</p>
-                    <p class="text-xs text-muted-foreground">
-                        Email every enabled event above to the notification recipients set in SMTP settings.
-                        Password reset emails are sent either way.
-                    </p>
-                </div>
-                <Switch :model-value="emailEnabled" @update:model-value="emailEnabled = $event" />
-            </div>
-
-            <!-- ── Webhook ─────────────────────────────────────────────────── -->
-            <div class="flex flex-col gap-4">
-                <div class="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div>
-                        <p class="text-sm font-medium">Send webhook notifications</p>
-                        <p class="text-xs text-muted-foreground">
-                            HTTP POST a JSON payload to a URL on every enabled event above.
-                        </p>
-                    </div>
-                    <Switch :model-value="webhookEnabled" @update:model-value="webhookEnabled = $event" />
-                </div>
-
-                <Transition enter-active-class="transition-all duration-200"
-                    enter-from-class="opacity-0 -translate-y-1" leave-active-class="transition-all duration-150"
-                    leave-to-class="opacity-0 -translate-y-1">
-                    <div v-if="webhookEnabled" class="flex flex-col gap-4">
-                        <Field>
-                            <FieldLabel for="webhook-url">Webhook URL</FieldLabel>
-                            <Input id="webhook-url" v-model="webhookUrl" placeholder="https://hooks.example.com/arkeep"
-                                autocomplete="off"
-                                :class="webhookUrlError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
-                            <FieldError v-if="webhookUrlError">{{ webhookUrlError }}</FieldError>
-                        </Field>
-                        <Field>
-                            <FieldLabel for="webhook-secret">
-                                Webhook Secret
-                                <span v-if="webhookExists" class="text-muted-foreground font-normal">(optional)</span>
-                            </FieldLabel>
-                            <Input id="webhook-secret" v-model="webhookSecret" type="password"
-                                :placeholder="webhookExists ? '(unchanged)' : ''" autocomplete="new-password" />
+                    <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+                        <div>
+                            <p class="text-sm font-medium">Job failed</p>
                             <p class="text-xs text-muted-foreground">
-                                Used to sign each request with an <code>X-Arkeep-Signature</code> header
-                                (HMAC-SHA256) so the receiving endpoint can verify it came from Arkeep.
-                            </p>
-                        </Field>
-                        <div class="flex flex-col items-start gap-2">
-                            <Button type="button" variant="outline" size="sm" :disabled="testingWebhook"
-                                @click="sendTestWebhook">
-                                <Loader2 v-if="testingWebhook" class="size-4 animate-spin" />
-                                <Send v-else class="size-4" />
-                                {{ testingWebhook ? 'Sending…' : 'Send test webhook' }}
-                            </Button>
-                            <p v-if="webhookTestResult" data-testid="webhook-test-result" class="text-xs"
-                                :class="webhookTestResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'">
-                                {{ webhookTestResult.message }}
+                                Send a notification when a backup job fails.
                             </p>
                         </div>
+                        <Switch :model-value="jobFailure" @update:model-value="jobFailure = $event" />
                     </div>
-                </Transition>
-            </div>
 
-            <!-- ── Submit ──────────────────────────────────────────────────── -->
-            <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="isSubmitting">
-                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
-                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
-                </Button>
-            </div>
+                    <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+                        <div>
+                            <p class="text-sm font-medium">Job succeeded</p>
+                            <p class="text-xs text-muted-foreground">
+                                Send a notification when a backup job completes successfully.
+                            </p>
+                        </div>
+                        <Switch :model-value="jobSuccess" @update:model-value="jobSuccess = $event" />
+                    </div>
 
+                    <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+                        <div>
+                            <p class="text-sm font-medium">Agent went offline</p>
+                            <p class="text-xs text-muted-foreground">
+                                Send a notification when an agent stops responding.
+                            </p>
+                        </div>
+                        <Switch :model-value="agentOffline"
+                            @update:model-value="agentOffline = $event" />
+                    </div>
+
+                    <div class="flex items-center justify-between rounded-lg border px-4 py-3">
+                        <div>
+                            <p class="text-sm font-medium">Agent came back online</p>
+                            <p class="text-xs text-muted-foreground">
+                                Send a notification when an agent reconnects. Off by default.
+                            </p>
+                        </div>
+                        <Switch :model-value="agentOnline"
+                            @update:model-value="agentOnline = $event" />
+                    </div>
+                </section>
+
+                <Separator />
+
+                <!-- ── Channels: email and webhook ─────────────────────────── -->
+                <section class="flex flex-col gap-3">
+                    <div>
+                        <h3 class="text-sm font-medium">Channels</h3>
+                        <p class="text-xs text-muted-foreground">Where Arkeep sends the events above.</p>
+                    </div>
+
+                    <div class="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
+                                <Mail class="size-4" />
+                            </div>
+                            <div class="min-w-0">
+                                <p class="text-sm font-medium">Email</p>
+                                <p class="text-xs text-muted-foreground">
+                                    To the notification recipients set in SMTP settings. Password reset emails are
+                                    sent either way.
+                                </p>
+                            </div>
+                        </div>
+                        <Switch :model-value="emailEnabled" @update:model-value="emailEnabled = $event" />
+                    </div>
+
+                    <div class="rounded-lg border">
+                        <div class="flex items-center justify-between gap-4 px-4 py-3">
+                            <div class="flex items-center gap-3 min-w-0">
+                                <div class="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
+                                    <Webhook class="size-4" />
+                                </div>
+                                <div class="min-w-0">
+                                    <p class="text-sm font-medium">Webhook</p>
+                                    <p class="text-xs text-muted-foreground">
+                                        An HTTP POST with a JSON payload to a URL of yours.
+                                    </p>
+                                </div>
+                            </div>
+                            <Switch :model-value="webhookEnabled" @update:model-value="webhookEnabled = $event" />
+                        </div>
+
+                        <Transition enter-active-class="transition-all duration-200"
+                            enter-from-class="opacity-0 -translate-y-1" leave-active-class="transition-all duration-150"
+                            leave-to-class="opacity-0 -translate-y-1">
+                            <div v-if="webhookEnabled" class="flex flex-col gap-4 border-t px-4 py-4">
+                                <Field>
+                                    <FieldLabel for="webhook-url">Webhook URL</FieldLabel>
+                                    <Input id="webhook-url" v-model="webhookUrl"
+                                        placeholder="https://hooks.example.com/arkeep" autocomplete="off"
+                                        :class="webhookUrlError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                                    <FieldError v-if="webhookUrlError">{{ webhookUrlError }}</FieldError>
+                                </Field>
+                                <Field>
+                                    <FieldLabel for="webhook-secret">
+                                        Webhook Secret
+                                        <span v-if="webhookExists" class="text-muted-foreground font-normal">(optional)</span>
+                                    </FieldLabel>
+                                    <Input id="webhook-secret" v-model="webhookSecret" type="password"
+                                        :placeholder="webhookExists ? '(unchanged)' : ''" autocomplete="new-password" />
+                                    <p class="text-xs text-muted-foreground">
+                                        Used to sign each request with an <code>X-Arkeep-Signature</code> header
+                                        (HMAC-SHA256) so the receiving endpoint can verify it came from Arkeep.
+                                    </p>
+                                </Field>
+                                <div class="flex flex-col items-start gap-2">
+                                    <Button type="button" variant="outline" size="sm" :disabled="testingWebhook"
+                                        @click="sendTestWebhook">
+                                        <Loader2 v-if="testingWebhook" class="size-4 animate-spin" />
+                                        <Send v-else class="size-4" />
+                                        {{ testingWebhook ? 'Sending…' : 'Send test webhook' }}
+                                    </Button>
+                                    <p v-if="webhookTestResult" data-testid="webhook-test-result" class="text-xs"
+                                        :class="webhookTestResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'">
+                                        {{ webhookTestResult.message }}
+                                    </p>
+                                </div>
+                            </div>
+                        </Transition>
+                    </div>
+                </section>
+
+            </div>
+        </form>
+
+        <!-- Providers are saved on their own, from their sheet, outside the form above. -->
+        <div class="mt-3">
+            <NotificationProviders />
         </div>
-    </form>
 
-    <!-- Providers are saved on their own, outside the form above. -->
-    <template v-if="!loading">
-        <Separator class="my-6" />
-        <NotificationProviders />
+        <!-- Saves the events, email and webhook. -->
+        <UnsavedChangesBar :dirty="meta.dirty" :saving="isSubmitting" :error="submitError"
+            @save="submit" @discard="discard" />
     </template>
 </template>

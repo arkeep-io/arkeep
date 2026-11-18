@@ -11,8 +11,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, Loader2, RefreshCw, Trash2 } from '@lucide/vue'
+import { Loader2, RefreshCw, Trash2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
+import UnsavedChangesBar from '@/components/shared/UnsavedChangesBar.vue'
 import type { ApiResponse, LogRetentionSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -29,7 +30,7 @@ const pruneMessage = ref<string | null>(null)
 // error rather than 0, which keeps the lines forever.
 const retentionDays = integerInRange(0, 3650)
 
-const { handleSubmit, resetForm, isSubmitting } = useForm({
+const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
     validationSchema: toTypedSchema(z.object({
         info_days: retentionDays,
         warn_error_days: retentionDays,
@@ -72,6 +73,8 @@ const submit = handleSubmit(async (values) => {
                 warn_error_days: values.warn_error_days,
             },
         })
+        // The saved values become the ones Discard returns to.
+        resetForm({ values })
         success.value = true
         setTimeout(() => { success.value = false }, 3000)
     } catch (e: any) {
@@ -99,6 +102,12 @@ async function pruneNow() {
     } finally {
         pruning.value = false
     }
+}
+
+// discard returns the form to the saved values.
+function discard() {
+    submitError.value = null
+    resetForm()
 }
 </script>
 
@@ -129,15 +138,6 @@ async function pruneNow() {
     <!-- Form -->
     <form v-else novalidate @submit="submit">
         <div class="flex flex-col gap-6">
-
-            <!-- Alerts -->
-            <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
-                leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
-                <Alert v-if="submitError" variant="destructive">
-                    <AlertCircle class="size-4" />
-                    <AlertDescription>{{ submitError }}</AlertDescription>
-                </Alert>
-            </Transition>
 
             <Transition enter-active-class="transition-all duration-200" enter-from-class="-translate-y-1 opacity-0"
                 leave-active-class="transition-all duration-150" leave-to-class="-translate-y-1 opacity-0">
@@ -180,14 +180,6 @@ async function pruneNow() {
                 </div>
             </div>
 
-            <!-- ── Submit ──────────────────────────────────────────────────── -->
-            <div class="flex justify-end pt-2">
-                <Button type="submit" :disabled="isSubmitting">
-                    <Loader2 v-if="isSubmitting" class="size-4 animate-spin" />
-                    {{ isSubmitting ? 'Saving…' : 'Save Settings' }}
-                </Button>
-            </div>
-
             <Separator />
 
             <!-- ── Manual cleanup ──────────────────────────────────────────── -->
@@ -208,4 +200,7 @@ async function pruneNow() {
 
         </div>
     </form>
+
+    <UnsavedChangesBar v-if="!loading" :dirty="meta.dirty" :saving="isSubmitting" :error="submitError"
+        @save="submit" @discard="discard" />
 </template>
