@@ -1,6 +1,6 @@
 # 0024. Publish the Home Assistant app with a deploy key, and images only the release can write
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-19
 - **Deciders:** Arkeep maintainers
 

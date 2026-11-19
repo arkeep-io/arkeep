@@ -316,7 +316,7 @@ release:
     docker pull arkeepio/arkeep-agent:{{ .Tag }}
     ```
 
-    Kubernetes: `helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version {{ .Version }}` (also `oci://registry-1.docker.io/arkeepio/arkeep`).
+    Kubernetes: `helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version {{ .Version }}`.
 
     Images are published on Docker Hub for `linux/amd64` and `linux/arm64`, and also on GitHub Container Registry (`ghcr.io/arkeep-io/arkeep-server`, `ghcr.io/arkeep-io/arkeep-agent`). Standalone binaries — server for Linux and macOS, agent for Linux (amd64, arm64, armv7, mips, mipsle), macOS and Windows — are attached below. See the [installation docs](https://arkeep.io/docs/installation/docker-compose/) for Docker Compose, binary and Helm setups.
 
