@@ -1001,8 +1001,10 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	// Anything that succeeded against the destination — a backup, a command
 	// source, a retention sweep, a check — proves its repository exists, so
 	// later backups must not create it again (db.Destination.RepoInitializedAt).
-	// Non-fatal.
-	if req.Status == "succeeded" && s.destRepo != nil {
+	// So does a snapshot ID on a failed backup: restic exits 3 when it created
+	// the snapshot but could not read some files, and a destination that
+	// always does must not lose this protection (R-16). Non-fatal.
+	if (req.Status == "succeeded" || req.SnapshotId != "") && s.destRepo != nil {
 		if err := s.destRepo.MarkRepoInitialized(ctx, destID, now); err != nil {
 			s.logger.Warn("ReportDestinationStatus: failed to mark destination repository initialized",
 				zap.String("destination_id", req.DestinationId),
@@ -1046,10 +1048,12 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		return nil, status.Error(codes.Internal, "failed to update destination status")
 	}
 
-	// If the backup to this destination succeeded and the agent reported a
-	// restic snapshot ID, persist a Snapshot record. This is the primary way
-	// snapshots are created — there is no separate catalog sync step.
-	if req.Status == "succeeded" && req.SnapshotId != "" {
+	// If the agent reported a restic snapshot ID, persist a Snapshot record.
+	// This is the primary way snapshots are created — there is no separate
+	// catalog sync step. A failed backup can carry one too: restic exits 3
+	// when the snapshot exists but some files could not be read (R-12), and
+	// that snapshot is a restore point like any other.
+	if req.SnapshotId != "" {
 		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, req.GetSummary(), now)
 	}
 

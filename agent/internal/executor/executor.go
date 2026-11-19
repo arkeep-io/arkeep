@@ -698,7 +698,18 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			}
 
 			result, err := e.wrapper.Backup(ctx, d, opts, onProgress)
-			if err != nil {
+			if errors.Is(err, restic.ErrIncompleteSnapshot) {
+				// restic exited 3: the snapshot exists, but some files could not
+				// be read. The destination stays failed so that someone looks at
+				// it, but the snapshot ID and summary are reported, so the server
+				// records the snapshot and knows the repository exists (R-12,
+				// R-16): an unmounted disk later is not taken for a new repository.
+				destSucceeded = true
+				log("error", fmt.Sprintf("backup to destination %s incomplete: %v", dest.DestinationID, err))
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", result.SnapshotID,
+					destStartedAt, &result.Summary, 0, err.Error())
+				backupFailed = true
+			} else if err != nil {
 				errMsg := fmt.Sprintf("backup to destination %s failed: %v", dest.DestinationID, err)
 				log("error", errMsg)
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, err.Error())
@@ -949,7 +960,12 @@ func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink
 	}
 
 	destStatus, destErrMsg := "succeeded", ""
-	if sweepFailed {
+	switch {
+	case ctx.Err() != nil:
+		// Interrupted between two tags: the sweep did not complete, so it
+		// must not read as a successful one (R-12).
+		destStatus, destErrMsg = "cancelled", "retention sweep cancelled: agent shutting down"
+	case sweepFailed:
 		destStatus, destErrMsg = "failed", "one or more retention tags failed"
 	}
 	reporter.ReportDestinationResult(job.JobID, payload.Destination.DestinationID, destStatus, "", time.Now().UTC(), nil, repoSizeBytes, destErrMsg)

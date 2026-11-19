@@ -666,6 +666,93 @@ func TestReconcileRestoreFilters(t *testing.T) {
 // destination on a disk that is no longer mounted at its path: once the
 // repository is known to exist, its missing directory fails the backup instead
 // of being created again, and restic is never run against it.
+// TestExecuteBackup_IncompleteSnapshotIsReported covers restic's exit 3
+// (R-12, R-16): the destination stays failed, but the report carries the
+// snapshot ID, and the repository is treated as reachable afterwards.
+func TestExecuteBackup_IncompleteSnapshotIsReported(t *testing.T) {
+	dir := t.TempDir()
+	callLog := filepath.Join(dir, "calls")
+	script := filepath.Join(dir, "fake-restic.sh")
+	// "backup" creates a snapshot but cannot read one file; everything else
+	// succeeds.
+	body := "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in -*) ;; *) sub=$a; break ;; esac; done\n" +
+		"echo \"$sub\" >> '" + callLog + "'\n" +
+		"if [ \"$sub\" = backup ]; then\n" +
+		"  echo '{\"message_type\":\"summary\",\"snapshot_id\":\"3f2a9c1e5b7d\",\"files_new\":1}'\n" +
+		"  echo 'error: open /tmp/locked: permission denied' >&2\n  exit 3\nfi\nexit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := backupPayload{
+		Sources:      `["/tmp"]`,
+		RepoPassword: "pw",
+		Destinations: []destinationPayload{{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop())
+	e := New(w, nil, nil, zap.NewNop(), "", "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: raw}
+
+	e.executeBackup(context.Background(), job, fakeSink{}, reporter)
+
+	got := reporter.destResults["dest-1"]
+	if got.status != "failed" || !strings.Contains(got.errMsg, "/tmp/locked") {
+		t.Errorf("destination result = %+v, want failed naming the unreadable file", got)
+	}
+	if id := reporter.snapshotIDs["dest-1"]; id != "3f2a9c1e5b7d" {
+		t.Errorf("reported snapshot ID = %q, want the snapshot restic created", id)
+	}
+	if final := reporter.statuses[len(reporter.statuses)-1]; final != "failed" {
+		t.Errorf("final job status = %q, want failed", final)
+	}
+	data, _ := os.ReadFile(callLog)
+	if calls := strings.Fields(string(data)); !slices.Contains(calls, "snapshots") {
+		t.Errorf("restic calls = %q, want the snapshot list reconciled after the incomplete backup", calls)
+	}
+}
+
+// TestExecuteRetention_CancelledSweepIsNotSucceeded covers a retention sweep
+// stopped by the agent shutting down (R-12): its destination result is
+// cancelled, not succeeded.
+func TestExecuteRetention_CancelledSweepIsNotSucceeded(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(retentionSweepPayload{
+		Destination:  destinationPayload{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"},
+		RepoPassword: "pw",
+		Retention:    retentionPayload{Last: 3},
+		Tags:         []string{"policy-a", "policy-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop())
+	e := New(w, nil, nil, zap.NewNop(), "", "")
+	reporter := &fakeReporter{}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_FORGET, Payload: raw}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.executeRetention(ctx, job, fakeSink{}, reporter)
+
+	if got := reporter.destResults["dest-1"].status; got != "cancelled" {
+		t.Errorf("destination status = %q, want cancelled", got)
+	}
+	if final := reporter.statuses[len(reporter.statuses)-1]; final != "cancelled" {
+		t.Errorf("final job status = %q, want cancelled", final)
+	}
+}
+
 func TestExecuteBackup_MissingLocalRepositoryIsNotRecreated(t *testing.T) {
 	dir := t.TempDir()
 	callLog := filepath.Join(dir, "calls")
