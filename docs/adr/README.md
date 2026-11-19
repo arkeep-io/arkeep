@@ -62,3 +62,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0018](0018-publish-the-agent-as-a-home-assistant-app.md) | Publish the agent as a Home Assistant app from a branch of this repository | Accepted |
 | [0019](0019-send-notifications-to-push-and-chat-services-through-shoutrrr.md) | Send notifications to push and chat services through shoutrrr | Accepted |
 | [0020](0020-publish-the-agent-packages-in-an-apt-and-rpm-repository-on-cloudflare-r2.md) | Publish the agent packages in an APT and RPM repository on Cloudflare R2 | Proposed |
+| [0021](0021-build-the-gui-without-secrets-and-keep-the-signing-key-on-disk-only-while-it-signs.md) | Build the GUI without secrets and keep the signing key on disk only while it signs | Proposed |

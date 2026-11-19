@@ -25,9 +25,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cache: this job holds the package signing key and the R2
+      # credentials, and must not restore what another run wrote (P-06).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.work
+          cache: false
 
       # The pinned and verified rclone (and restic) for this platform
       # (ADR 0013): rclone uploads the repository.
@@ -41,6 +44,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq apt-utils createrepo-c
 
+      # The signing key is on disk only while the repository is signed
+      # (ADR 0021).
       - name: Publish the agent package repository
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,8 +56,11 @@ jobs:
           PACKAGES_R2_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          export ARKEEP_PACKAGES_SIGNING_KEY_FILE="${RUNNER_TEMP}/packages-signing-key.asc"
-          (umask 077 && printf '%s\n' "$PACKAGES_SIGNING_KEY" > "$ARKEEP_PACKAGES_SIGNING_KEY_FILE")
           scripts/agent-repository.sh fetch "${RUNNER_TEMP}/releases"
-          scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
+          key_file="${RUNNER_TEMP}/packages-signing-key.asc"
+          trap 'rm -f "$key_file"' EXIT
+          (umask 077 && printf '%s\n' "$PACKAGES_SIGNING_KEY" > "$key_file")
+          ARKEEP_PACKAGES_SIGNING_KEY_FILE=$key_file \
+            scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
+          rm -f "$key_file"
           scripts/agent-repository.sh upload "${RUNNER_TEMP}/repository"
