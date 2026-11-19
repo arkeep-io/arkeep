@@ -10,14 +10,16 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/arkeep-io/arkeep/shared/enrollproof"
 )
 
 // testCA signs client certificates the way the server's auto-PKI does.
@@ -60,44 +62,73 @@ func (ca *testCA) sign(t *testing.T, pub any) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
+// testSecret is the agent secret of the fake servers below.
+const testSecret = "secret"
+
+// readCSR decodes an enrollment request, failing the request unless it
+// carries a valid proof of testSecret and no secret.
+func readCSR(t *testing.T, w http.ResponseWriter, r *http.Request) (*x509.CertificateRequest, string, bool) {
+	t.Helper()
+	var body struct {
+		AgentSecret string `json:"agent_secret"`
+		CSR         string `json:"csr"`
+		Proof       string `json:"proof"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return nil, "", false
+	}
+	if body.AgentSecret != "" {
+		t.Errorf("the agent sent the secret itself: %q", body.AgentSecret)
+	}
+	if !enrollproof.Equal(enrollproof.Request(testSecret, body.CSR), body.Proof) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return nil, "", false
+	}
+	block, _ := pem.Decode([]byte(body.CSR))
+	if block == nil {
+		http.Error(w, "no csr", http.StatusBadRequest)
+		return nil, "", false
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil || csr.CheckSignature() != nil {
+		http.Error(w, "invalid csr", http.StatusBadRequest)
+		return nil, "", false
+	}
+	return csr, body.CSR, true
+}
+
+// provenResponse is a successful answer signed with secret.
+func provenResponse(secret, csrPEM, caPEM, certPEM string) map[string]string {
+	return map[string]string{
+		"ca_cert":     caPEM,
+		"client_cert": certPEM,
+		"proof":       enrollproof.Response(secret, csrPEM, caPEM, certPEM),
+	}
+}
+
 func enrollAgainst(t *testing.T, handler http.HandlerFunc) (*Manager, error) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	m := &Manager{
-		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: "secret", StateDir: t.TempDir()},
+		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: testSecret, StateDir: t.TempDir()},
 		logger: zap.NewNop(),
 	}
 	return m, m.Enroll(context.Background())
 }
 
-// TestEnroll_SendsCSRAndKeepsKey: the agent sends a CSR, the server returns
-// only the certificate, and the key the agent stores is the one it generated.
+// TestEnroll_SendsCSRAndKeepsKey: the agent sends a CSR with a proof of the
+// secret and not the secret, the server returns only the certificate, and the
+// key the agent stores is the one it generated.
 func TestEnroll_SendsCSRAndKeepsKey(t *testing.T) {
 	ca := newTestCA(t)
 	m, err := enrollAgainst(t, func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			AgentSecret string `json:"agent_secret"`
-			CSR         string `json:"csr"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.AgentSecret != "secret" {
-			http.Error(w, "bad request", http.StatusBadRequest)
+		csr, csrPEM, ok := readCSR(t, w, r)
+		if !ok {
 			return
 		}
-		block, _ := pem.Decode([]byte(body.CSR))
-		if block == nil {
-			http.Error(w, "no csr", http.StatusBadRequest)
-			return
-		}
-		csr, err := x509.ParseCertificateRequest(block.Bytes)
-		if err != nil || csr.CheckSignature() != nil {
-			http.Error(w, "invalid csr", http.StatusBadRequest)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"ca_cert":     string(ca.pem),
-			"client_cert": string(ca.sign(t, csr.PublicKey)),
-		})
+		_ = json.NewEncoder(w).Encode(provenResponse(testSecret, csrPEM, string(ca.pem), string(ca.sign(t, csr.PublicKey))))
 	})
 	if err != nil {
 		t.Fatalf("Enroll: %v", err)
@@ -107,33 +138,51 @@ func TestEnroll_SendsCSRAndKeepsKey(t *testing.T) {
 	}
 }
 
-// TestEnroll_OldServerGeneratedKey keeps agents working with a server that
-// ignores the CSR and returns a key of its own.
-func TestEnroll_OldServerGeneratedKey(t *testing.T) {
+// TestEnroll_RefusesUnprovenAnswers covers S-04: an answer without the
+// server's proof of the secret is never trusted, whether it hands over a CA
+// (someone on the path, or a server older than the agent) or claims the server
+// has no auto-PKI.
+func TestEnroll_RefusesUnprovenAnswers(t *testing.T) {
 	ca := newTestCA(t)
-	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
+	tests := []struct {
+		name   string
+		answer func(w http.ResponseWriter, csr *x509.CertificateRequest, csrPEM string)
+	}{
+		{"certificate without proof", func(w http.ResponseWriter, csr *x509.CertificateRequest, _ string) {
+			_ = json.NewEncoder(w).Encode(map[string]string{"ca_cert": string(ca.pem), "client_cert": string(ca.sign(t, csr.PublicKey))})
+		}},
+		{"certificate proven with another secret", func(w http.ResponseWriter, csr *x509.CertificateRequest, csrPEM string) {
+			_ = json.NewEncoder(w).Encode(provenResponse("other", csrPEM, string(ca.pem), string(ca.sign(t, csr.PublicKey))))
+		}},
+		{"proof for another CA", func(w http.ResponseWriter, csr *x509.CertificateRequest, csrPEM string) {
+			cert := string(ca.sign(t, csr.PublicKey))
+			resp := provenResponse(testSecret, csrPEM, "another CA", cert)
+			resp["ca_cert"] = string(ca.pem)
+			_ = json.NewEncoder(w).Encode(resp)
+		}},
+		{"405 without proof", func(w http.ResponseWriter, _ *x509.CertificateRequest, _ string) {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}},
+		{"405 with a success proof", func(w http.ResponseWriter, _ *x509.CertificateRequest, csrPEM string) {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"proof": enrollproof.Request(testSecret, csrPEM)})
+		}},
 	}
-	keyDER, _ := x509.MarshalECPrivateKey(serverKey)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-
-	m, err := enrollAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"ca_cert":     string(ca.pem),
-			"client_cert": string(ca.sign(t, &serverKey.PublicKey)),
-			"client_key":  string(keyPEM),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := enrollAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+				csr, csrPEM, ok := readCSR(t, w, r)
+				if ok {
+					tt.answer(w, csr, csrPEM)
+				}
+			})
+			if !errors.Is(err, errUnprovenAnswer) {
+				t.Fatalf("Enroll = %v, want errUnprovenAnswer", err)
+			}
+			if m.cfg.ClientCertFile != "" || m.cfg.TLSCAFile != "" {
+				t.Error("an unproven answer was configured")
+			}
 		})
-	})
-	if err != nil {
-		t.Fatalf("Enroll: %v", err)
-	}
-	stored, err := os.ReadFile(m.cfg.ClientKeyFile)
-	if err != nil {
-		t.Fatalf("read key: %v", err)
-	}
-	if string(stored) != string(keyPEM) {
-		t.Error("the stored key is not the one the old server sent")
 	}
 }
 
@@ -145,32 +194,18 @@ func TestEnroll_RejectsMismatchedCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	m, err := enrollAgainst(t, func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"ca_cert":     string(ca.pem),
-			"client_cert": string(ca.sign(t, &other.PublicKey)),
-		})
+	m, err := enrollAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		_, csrPEM, ok := readCSR(t, w, r)
+		if !ok {
+			return
+		}
+		_ = json.NewEncoder(w).Encode(provenResponse(testSecret, csrPEM, string(ca.pem), string(ca.sign(t, &other.PublicKey))))
 	})
 	if err == nil {
 		t.Fatal("Enroll accepted a certificate for another key")
 	}
 	if m.cfg.ClientCertFile != "" {
 		t.Error("the mismatched certificate was configured")
-	}
-}
-
-func TestIsPlainHTTPRemote(t *testing.T) {
-	for url, want := range map[string]bool{
-		"http://arkeep.example.com:8080": true,
-		"http://192.168.1.10:8080":       true,
-		"https://arkeep.example.com":     false,
-		"http://localhost:8080":          false,
-		"http://127.0.0.1:8080":          false,
-		"http://[::1]:8080":              false,
-	} {
-		if got := isPlainHTTPRemote(url); got != want {
-			t.Errorf("isPlainHTTPRemote(%q) = %v, want %v", url, got, want)
-		}
 	}
 }
 
@@ -185,20 +220,15 @@ func TestEnsureEnrolled_RetriesUntilEnrolled(t *testing.T) {
 			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
 		}
-		var body struct {
-			CSR string `json:"csr"`
+		csr, csrPEM, ok := readCSR(t, w, r)
+		if !ok {
+			return
 		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		block, _ := pem.Decode([]byte(body.CSR))
-		csr, _ := x509.ParseCertificateRequest(block.Bytes)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"ca_cert":     string(ca.pem),
-			"client_cert": string(ca.sign(t, csr.PublicKey)),
-		})
+		_ = json.NewEncoder(w).Encode(provenResponse(testSecret, csrPEM, string(ca.pem), string(ca.sign(t, csr.PublicKey))))
 	}))
 	t.Cleanup(srv.Close)
 	m := &Manager{
-		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: "secret", StateDir: t.TempDir()},
+		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: testSecret, StateDir: t.TempDir()},
 		logger: zap.NewNop(),
 	}
 
@@ -217,16 +247,19 @@ func TestEnsureEnrolled_RetriesUntilEnrolled(t *testing.T) {
 }
 
 // TestEnsureEnrolled_StopsWhenUnsupported: a server without auto-PKI answers
-// 405, and the agent stops asking.
+// 405 with its proof, and the agent stops asking.
 func TestEnsureEnrolled_StopsWhenUnsupported(t *testing.T) {
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		if _, csrPEM, ok := readCSR(t, w, r); ok {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_ = json.NewEncoder(w).Encode(map[string]string{"proof": enrollproof.Unsupported(testSecret, csrPEM)})
+		}
 	}))
 	t.Cleanup(srv.Close)
 	m := &Manager{
-		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: "secret", StateDir: t.TempDir()},
+		cfg:    Config{ServerHTTPAddr: srv.URL, SharedSecret: testSecret, StateDir: t.TempDir()},
 		logger: zap.NewNop(),
 	}
 	m.ensureEnrolled(context.Background())

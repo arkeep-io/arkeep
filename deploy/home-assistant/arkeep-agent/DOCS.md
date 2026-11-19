@@ -38,8 +38,9 @@ on Home Assistant.
 | CA certificate | no | Path of a CA certificate, under `/ssl`, when the server uses a gRPC certificate from a private CA. Not needed with the certificate Arkeep generates itself. |
 | Log level | yes | `debug`, `info`, `warn` or `error`. |
 
-Enrolling over plain HTTP sends the agent secret in clear text. Outside a
-trusted local network, give an `https://` **Server HTTP URL**.
+Enrolling over plain HTTP does not expose the agent secret: the agent proves
+it knows the secret without sending it, and accepts the server's answer only
+with the server's proof. The server must be at least as recent as the app.
 
 Restart the app after changing an option.
 

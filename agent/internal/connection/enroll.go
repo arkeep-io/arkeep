@@ -7,8 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"net"
-	"net/url"
 )
 
 // newEnrollmentKey generates the agent's mTLS private key and a certificate
@@ -31,20 +29,4 @@ func newEnrollmentKey() (keyPEM, csrPEM []byte, err error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}),
 		nil
-}
-
-// isPlainHTTPRemote reports whether rawURL is plain http to a host other than
-// the loopback interface. Enrolling that way sends the agent secret in clear
-// and lets anyone on the path hand the agent a CA of their own.
-func isPlainHTTPRemote(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "http" {
-		return false
-	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip == nil || !ip.IsLoopback()
 }
