@@ -32,6 +32,10 @@ jobs:
   update:
     name: Update dependency pins
     runs-on: ubuntu-26.04
+    # DEPS_PR_TOKEN lives in this environment, which only main and v* tags can
+    # deploy to: a workflow pushed on any other branch cannot read it (P-11).
+    # The release trigger runs on the tag, hence v*. Run it by hand from main.
+    environment: automation
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
