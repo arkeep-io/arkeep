@@ -39,7 +39,7 @@ jobs:
       - name: Install the repository tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq apt-utils createrepo-c
+          sudo apt-get install -y -qq apt-utils createrepo-c rpm
 
       - name: Publish the agent package repository
         env:

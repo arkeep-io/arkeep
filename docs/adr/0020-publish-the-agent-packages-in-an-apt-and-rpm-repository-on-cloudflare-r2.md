@@ -59,11 +59,14 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   it. The server has no package.
 - **Built from the releases, from scratch.** `scripts/agent-repository.sh`
   rebuilds the whole repository on every publication: it downloads the
-  packages of those releases from GitHub, checks the attestation of their
-  `checksums.txt` against the release workflow (ADR 0017) and their checksums
-  against it, generates and signs the metadata, then uploads the packages
-  before the metadata and deletes what no longer belongs. The bucket holds no
-  state of its own: rebuilding it gives the same content.
+  packages of those releases from GitHub, considering only `vX.Y.Z` tags,
+  checks the attestation of their `checksums.txt` against the run of the
+  release workflow (ADR 0017) started by that tag (`--source-ref
+  refs/tags/<tag>`, GitHub-hosted runners only), their checksums against it,
+  and that each package is `arkeep-agent` at the version of the tag, then
+  generates and signs the metadata, and uploads the packages before the
+  metadata and deletes what no longer belongs. The bucket holds no state of
+  its own: rebuilding it gives the same content.
 - **Signing.** A dedicated GPG key, RSA 4096, which RHEL 8 and 9 accept on
   packages, signs every `.rpm` at build time (GoReleaser, nfpm), the APT
   `InRelease` and `Release.gpg`, and the RPM `repomd.xml`. It is used for
@@ -85,8 +88,9 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   with the automatic updates of their distribution if they use them.
   Self-update of standalone binaries is left to a separate decision (#450).
 - The release workflow signs only what the release workflow built and
-  attested: a package replaced on a release page fails the attestation check
-  and is not published.
+  attested in the run of a `vX.Y.Z` tag, which only administrators can create
+  (ADR 0017): a package replaced on a release page, or a release made by the
+  workflow from another branch or tag, fails the checks and is not published.
 - Whoever holds the private key can publish an agent that every configured
   machine installs as root. It lives only in the `release` environment, which
   only `v*` tags and `main` can deploy to.

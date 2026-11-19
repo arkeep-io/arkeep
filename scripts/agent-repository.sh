@@ -8,9 +8,11 @@
 #   scripts/agent-repository.sh upload <repository dir>
 #
 # fetch   Downloads the agent packages and checksums.txt of the three most
-#         recent stable releases that have packages, one directory per tag,
-#         after checking the attestation of checksums.txt against the release
-#         workflow and the packages against it. Needs gh and GH_TOKEN.
+#         recent stable vX.Y.Z releases that have packages, one directory per
+#         tag, after checking the attestation of checksums.txt against the run
+#         of the release workflow for that tag, the packages against it, and
+#         their name and version against the tag. Needs gh, GH_TOKEN, dpkg-deb,
+#         rpm.
 # build   Generates the repository tree from those directories, and signs it
 #         with the key in ARKEEP_PACKAGES_SIGNING_KEY_FILE (an ASCII-armored
 #         private key). Needs gpg, dpkg-deb, apt-ftparchive, createrepo_c.
@@ -42,6 +44,13 @@ fetch() {
   # (up to v0.11.0) have none and are skipped.
   while read -r tag; do
     [ "$found" -lt "$keep" ] || break
+    # Only vX.Y.Z tags, which only administrators can create and the release
+    # workflow builds from main (ADR 0016, ADR 0017). Any other tag name could
+    # sort above them and come from a release made on another branch.
+    if ! [[ $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+      echo "${tag}: not a vX.Y.Z tag, skipped"
+      continue
+    fi
     dir="${out}/${tag}"
     mkdir -p "$dir"
     if ! gh release download "$tag" --repo "$repo" --dir "$dir" --clobber \
@@ -51,14 +60,26 @@ fetch() {
       rm -rf "$dir"
       continue
     fi
-    # Only what the release workflow of this repository built gets signed.
+    # Only what the release workflow of this repository built, in the run
+    # started by this tag on a GitHub-hosted runner, gets signed. Without
+    # --source-ref, a run of the workflow from any branch would pass.
     gh attestation verify "${dir}/checksums.txt" --repo "$repo" \
-      --signer-workflow "$workflow" >/dev/null
+      --signer-workflow "$workflow" --source-ref "refs/tags/${tag}" \
+      --deny-self-hosted-runners >/dev/null
     (
       cd "$dir"
       for f in arkeep-agent_linux_*.deb arkeep-agent_linux_*.rpm; do
         grep -E "^[0-9a-f]{64}  ${f}\$" checksums.txt | sha256sum --check --quiet - ||
           { echo "${tag}: ${f} does not match checksums.txt" >&2; exit 1; }
+      done
+      # Each package is the agent at the version of its tag.
+      for f in arkeep-agent_linux_*.deb; do
+        [ "$(dpkg-deb --field "$f" Package) $(dpkg-deb --field "$f" Version)" = "arkeep-agent ${tag#v}" ] ||
+          { echo "${tag}: ${f} is not arkeep-agent ${tag#v}" >&2; exit 1; }
+      done
+      for f in arkeep-agent_linux_*.rpm; do
+        [ "$(rpm --query --package --nosignature --queryformat '%{NAME} %{VERSION}' "$f")" = "arkeep-agent ${tag#v}" ] ||
+          { echo "${tag}: ${f} is not arkeep-agent ${tag#v}" >&2; exit 1; }
       done
     )
     echo "${tag}: packages verified"
