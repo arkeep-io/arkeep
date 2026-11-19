@@ -1,6 +1,6 @@
 # 0022. Rate limit IPv6 clients per /64 and count second-factor codes per account
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-19
 - **Deciders:** Arkeep maintainers
 

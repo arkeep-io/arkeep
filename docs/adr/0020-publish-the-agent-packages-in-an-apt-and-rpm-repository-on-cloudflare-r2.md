@@ -1,6 +1,6 @@
 # 0020. Publish the agent packages in an APT and RPM repository on Cloudflare R2
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-18
 - **Deciders:** Arkeep maintainers
 
