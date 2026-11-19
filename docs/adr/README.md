@@ -55,14 +55,15 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0011](0011-go-monorepo-conventional-commits-goreleaser.md) | Go monorepo, Conventional Commits and GoReleaser releases | Accepted |
 | [0012](0012-oidc-group-based-access-and-absolute-session-lifetime.md) | Restrict OIDC sign-in by group and cap OIDC session lifetime | Accepted |
 | [0013](0013-pin-and-verify-every-dependency.md) | Pin and verify every dependency | Accepted |
-| [0014](0014-publish-the-helm-chart-as-an-oci-artifact.md) | Publish the Helm chart as an OCI artifact on GHCR and Docker Hub | Accepted |
+| [0014](0014-publish-the-helm-chart-as-an-oci-artifact.md) | Publish the Helm chart as an OCI artifact on GHCR and Docker Hub | Superseded by [0025](0025-publish-the-helm-chart-only-on-ghcr.md) |
 | [0015](0015-bundle-postgresql-in-the-helm-chart-with-the-official-image.md) | Bundle PostgreSQL in the Helm chart with the official image | Accepted |
 | [0016](0016-validate-release-tags-and-keep-latest-for-stable-releases.md) | Validate release tags and keep latest for stable releases | Accepted |
 | [0017](0017-keep-registry-secrets-in-the-release-environment-and-attest-every-artifact.md) | Keep registry secrets in the release environment and attest every published artifact | Accepted |
 | [0018](0018-publish-the-agent-as-a-home-assistant-app.md) | Publish the agent as a Home Assistant app from a branch of this repository | Superseded by [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md) |
 | [0019](0019-send-notifications-to-push-and-chat-services-through-shoutrrr.md) | Send notifications to push and chat services through shoutrrr | Accepted |
-| [0020](0020-publish-the-agent-packages-in-an-apt-and-rpm-repository-on-cloudflare-r2.md) | Publish the agent packages in an APT and RPM repository on Cloudflare R2 | Proposed |
-| [0021](0021-build-the-gui-without-secrets-and-keep-the-signing-key-on-disk-only-while-it-signs.md) | Build the GUI without secrets and keep the signing key on disk only while it signs | Proposed |
-| [0022](0022-rate-limit-ipv6-clients-per-64-and-count-second-factor-codes-per-account.md) | Rate limit IPv6 clients per /64 and count second-factor codes per account | Proposed |
-| [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) | Auto-PKI, per-agent mTLS, and enrollment authenticated with the agent secret | Proposed |
-| [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md) | Publish the Home Assistant app with a deploy key, and images only the release can write | Proposed |
+| [0020](0020-publish-the-agent-packages-in-an-apt-and-rpm-repository-on-cloudflare-r2.md) | Publish the agent packages in an APT and RPM repository on Cloudflare R2 | Accepted |
+| [0021](0021-build-the-gui-without-secrets-and-keep-the-signing-key-on-disk-only-while-it-signs.md) | Build the GUI without secrets and keep the signing key on disk only while it signs | Accepted |
+| [0022](0022-rate-limit-ipv6-clients-per-64-and-count-second-factor-codes-per-account.md) | Rate limit IPv6 clients per /64 and count second-factor codes per account | Accepted |
+| [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) | Auto-PKI, per-agent mTLS, and enrollment authenticated with the agent secret | Accepted |
+| [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md) | Publish the Home Assistant app with a deploy key, and images only the release can write | Accepted |
+| [0025](0025-publish-the-helm-chart-only-on-ghcr.md) | Publish the Helm chart only on GHCR | Accepted |

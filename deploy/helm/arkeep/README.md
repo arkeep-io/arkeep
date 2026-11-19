@@ -5,12 +5,11 @@ agents connect to. Agents run on the machines you back up, inside or outside the
 
 ## Install
 
-The chart is published as an OCI artifact on GitHub Container Registry and Docker Hub, with the same
-version as the Arkeep release it deploys:
+The chart is published as an OCI artifact on GitHub Container Registry, with the same version as the
+Arkeep release it deploys:
 
 ```bash
 helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version X.Y.Z -f my-values.yaml
-# or: oci://registry-1.docker.io/arkeepio/arkeep
 ```
 
 A minimal `my-values.yaml`:
