@@ -4,7 +4,7 @@ name: Arkeep Agent
 # The release tag of the agent image. The release workflow sets it when it
 # publishes the app; the dependency pins workflow keeps this copy on the latest
 # release, like the compose examples.
-version: "v0.12.0"
+version: "v0.12.1"
 slug: arkeep_agent
 description: Back up Home Assistant with Restic and Rclone, managed from an Arkeep server
 url: https://github.com/arkeep-io/arkeep/tree/home-assistant
