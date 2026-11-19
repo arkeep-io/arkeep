@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -49,6 +50,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/executor"
 	"github.com/arkeep-io/arkeep/agent/internal/metrics"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
+	"github.com/arkeep-io/arkeep/shared/enrollproof"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -70,6 +72,17 @@ const (
 // serves gRPC with its own certificate (--grpc-tls-cert) or without TLS
 // (--grpc-insecure), and has no client certificates to issue.
 var ErrEnrollmentNotSupported = errors.New("enrollment not supported by server")
+
+// errUnprovenAnswer is returned by Enroll when the server's answer does not
+// carry a valid proof of the agent secret (ADR 0023): it comes from someone
+// on the network path, from a server with another secret, or from a server
+// older than the agent.
+var errUnprovenAnswer = errors.New("enroll: the answer does not prove that the server knows the agent secret " +
+	"(another secret, someone between the agent and the server, or a server older than the agent: upgrade the server first)")
+
+// maxEnrollResponseBytes caps the enrollment answer: two certificates fit in
+// a few KiB.
+const maxEnrollResponseBytes = 64 << 10
 
 // agentState is persisted to disk after the first successful registration.
 // It allows the agent to present its stable ID on reconnect so the server
@@ -214,23 +227,23 @@ func New(cfg Config, exec *executor.Executor, dockerClient *docker.Client, wrapp
 // On success it updates m.cfg so subsequent calls to buildTransportCredentials
 // use the new mTLS credentials.
 //
+// The agent secret never travels: the request carries a proof of it, and the
+// answer, a certificate or a 405, is accepted only with the server's proof
+// (ADR 0023). Plain HTTP is therefore safe for enrollment, and a server older
+// than the agent is refused: upgrade the server first.
+//
 // Run calls Enroll (through ensureEnrolled) while ClientCertFile does not exist yet.
 func (m *Manager) Enroll(ctx context.Context) error {
 	if m.cfg.ServerHTTPAddr == "" {
 		return fmt.Errorf("enrollment required but --server-http-addr is not set")
 	}
 
-	if isPlainHTTPRemote(m.cfg.ServerHTTPAddr) {
-		m.logger.Warn("enrolling over plain HTTP: the agent secret travels in clear and the server's CA certificate cannot be authenticated — use an https:// --server-http-addr",
-			zap.String("http_addr", m.cfg.ServerHTTPAddr),
-		)
-	}
-
 	keyPEM, csrPEM, err := newEnrollmentKey()
 	if err != nil {
 		return fmt.Errorf("enroll: %w", err)
 	}
-	body, err := json.Marshal(map[string]string{"agent_secret": m.cfg.SharedSecret, "csr": string(csrPEM)})
+	csr := string(csrPEM)
+	body, err := json.Marshal(map[string]string{"csr": csr, "proof": enrollproof.Request(m.cfg.SharedSecret, csr)})
 	if err != nil {
 		return fmt.Errorf("enroll: failed to marshal request: %w", err)
 	}
@@ -248,24 +261,30 @@ func (m *Manager) Enroll(ctx context.Context) error {
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if resp.StatusCode == http.StatusMethodNotAllowed {
-		return ErrEnrollmentNotSupported
-	}
-	if resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusMethodNotAllowed:
+	case http.StatusForbidden:
+		return errors.New("enroll: the server refused the agent secret")
+	default:
 		return fmt.Errorf("enroll: server returned %s", resp.Status)
 	}
 
 	var result struct {
 		CACert     string `json:"ca_cert"`
 		ClientCert string `json:"client_cert"`
-		ClientKey  string `json:"client_key"`
+		Proof      string `json:"proof"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("enroll: failed to decode response: %w", err)
+	// A body that does not decode leaves the proof empty, which is refused.
+	_ = json.NewDecoder(io.LimitReader(resp.Body, maxEnrollResponseBytes)).Decode(&result)
+
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		if !enrollproof.Equal(enrollproof.Unsupported(m.cfg.SharedSecret, csr), result.Proof) {
+			return errUnprovenAnswer
+		}
+		return ErrEnrollmentNotSupported
 	}
-	// A server older than 0.9 ignores the CSR and generates the key itself.
-	if result.ClientKey != "" {
-		keyPEM = []byte(result.ClientKey)
+	if !enrollproof.Equal(enrollproof.Response(m.cfg.SharedSecret, csr, result.CACert, result.ClientCert), result.Proof) {
+		return errUnprovenAnswer
 	}
 	if _, err := tls.X509KeyPair([]byte(result.ClientCert), keyPEM); err != nil {
 		return fmt.Errorf("enroll: the issued certificate does not match the key: %w", err)

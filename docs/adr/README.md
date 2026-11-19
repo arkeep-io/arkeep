@@ -47,7 +47,7 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0003](0003-restic-and-rclone-embedded-in-the-agent.md) | Use restic and rclone, embedded in the agent | Accepted |
 | [0004](0004-single-server-binary-with-embedded-gui-and-migrations.md) | Ship a single server binary with the GUI and migrations embedded | Accepted |
 | [0005](0005-sqlite-by-default-postgresql-supported.md) | SQLite by default, PostgreSQL supported, explicit data access | Accepted |
-| [0006](0006-auto-pki-and-per-agent-mtls.md) | Auto-PKI and per-agent mTLS identity | Accepted |
+| [0006](0006-auto-pki-and-per-agent-mtls.md) | Auto-PKI and per-agent mTLS identity | Superseded by [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) |
 | [0007](0007-encrypt-credentials-at-rest.md) | Encrypt credentials at rest, never return them | Accepted |
 | [0008](0008-short-lived-jwt-and-refresh-cookie-sessions.md) | Short-lived JWT access tokens with refresh cookies | Accepted |
 | [0009](0009-hooks-and-command-sources-run-on-the-agent-admin-only.md) | Hooks and command sources run as shell commands on the agent, admin only | Accepted |
@@ -64,3 +64,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0020](0020-publish-the-agent-packages-in-an-apt-and-rpm-repository-on-cloudflare-r2.md) | Publish the agent packages in an APT and RPM repository on Cloudflare R2 | Proposed |
 | [0021](0021-build-the-gui-without-secrets-and-keep-the-signing-key-on-disk-only-while-it-signs.md) | Build the GUI without secrets and keep the signing key on disk only while it signs | Proposed |
 | [0022](0022-rate-limit-ipv6-clients-per-64-and-count-second-factor-codes-per-account.md) | Rate limit IPv6 clients per /64 and count second-factor codes per account | Proposed |
+| [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) | Auto-PKI, per-agent mTLS, and enrollment authenticated with the agent secret | Proposed |

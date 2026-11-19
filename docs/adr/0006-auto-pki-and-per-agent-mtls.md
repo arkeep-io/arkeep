@@ -1,6 +1,6 @@
 # 0006. Auto-PKI and per-agent mTLS identity
 
-- **Status:** Accepted
+- **Status:** Superseded by [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md)
 - **Date:** 2026-10-12 (retro-documented; the decision predates this record)
 - **Deciders:** Arkeep maintainers
 

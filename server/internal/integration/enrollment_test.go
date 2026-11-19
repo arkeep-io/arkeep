@@ -26,6 +26,7 @@ import (
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
+	"github.com/arkeep-io/arkeep/shared/enrollproof"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
 
@@ -318,4 +319,85 @@ func TestEnrollmentRejectsBadRequests(t *testing.T) {
 			t.Errorf("%s: status = %d, want 400", name, resp.StatusCode)
 		}
 	}
+}
+
+// TestEnrollment_Proof covers ADR 0023 (S-04): an agent proves the secret
+// without sending it, and every answer carries the server's proof, the 405 of
+// a server without auto-PKI included.
+func TestEnrollment_Proof(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, key)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest: %v", err)
+	}
+	csr := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+
+	type answer struct {
+		CACert     string `json:"ca_cert"`
+		ClientCert string `json:"client_cert"`
+		Proof      string `json:"proof"`
+	}
+	enroll := func(t *testing.T, autoCerts *grpcserver.AutoCerts, body map[string]string) (int, answer) {
+		t.Helper()
+		h := api.NewEnrollHandler(autoCerts, testAgentSecret, zap.NewNop())
+		srv := httptest.NewServer(http.HandlerFunc(h.Enroll))
+		defer srv.Close()
+		data, _ := json.Marshal(body)
+		resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(data)) //nolint:noctx
+		if err != nil {
+			t.Fatalf("POST enroll: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var a answer
+		_ = json.NewDecoder(resp.Body).Decode(&a)
+		return resp.StatusCode, a
+	}
+	autoCerts, err := grpcserver.EnsureCerts(t.TempDir(), zap.NewNop())
+	if err != nil {
+		t.Fatalf("EnsureCerts: %v", err)
+	}
+
+	t.Run("a proven request gets a proven certificate", func(t *testing.T) {
+		status, a := enroll(t, autoCerts, map[string]string{"csr": csr, "proof": enrollproof.Request(testAgentSecret, csr)})
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, want 200", status)
+		}
+		if !enrollproof.Equal(enrollproof.Response(testAgentSecret, csr, a.CACert, a.ClientCert), a.Proof) {
+			t.Error("the answer does not carry the server's proof")
+		}
+	})
+
+	t.Run("a proof of another secret is refused", func(t *testing.T) {
+		status, a := enroll(t, autoCerts, map[string]string{"csr": csr, "proof": enrollproof.Request("wrong", csr)})
+		if status != http.StatusForbidden || a.ClientCert != "" {
+			t.Errorf("status = %d, client_cert set = %v; want 403 and no certificate", status, a.ClientCert != "")
+		}
+	})
+
+	t.Run("a proof for another CSR is refused", func(t *testing.T) {
+		status, _ := enroll(t, autoCerts, map[string]string{"csr": csr, "proof": enrollproof.Request(testAgentSecret, "another csr")})
+		if status != http.StatusForbidden {
+			t.Errorf("status = %d, want 403", status)
+		}
+	})
+
+	t.Run("without auto-PKI the 405 is proven", func(t *testing.T) {
+		status, a := enroll(t, nil, map[string]string{"csr": csr, "proof": enrollproof.Request(testAgentSecret, csr)})
+		if status != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, want 405", status)
+		}
+		if !enrollproof.Equal(enrollproof.Unsupported(testAgentSecret, csr), a.Proof) {
+			t.Error("the 405 does not carry the server's proof")
+		}
+	})
+
+	t.Run("without auto-PKI an unproven request gets no proof", func(t *testing.T) {
+		status, a := enroll(t, nil, map[string]string{"csr": csr, "proof": enrollproof.Request("wrong", csr)})
+		if status != http.StatusMethodNotAllowed || a.Proof != "" {
+			t.Errorf("status = %d, proof = %q; want 405 without a proof", status, a.Proof)
+		}
+	})
 }

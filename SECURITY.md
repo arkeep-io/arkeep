@@ -208,6 +208,15 @@ Agents authenticate to the server via mutual TLS (mTLS) using certificates issue
 an auto-generated private CA on first startup. The CA and server certificates are
 stored in the server's data directory. Keep this directory secure.
 
+An agent obtains its certificate by enrolling once over the server's HTTP API, which
+may be plain HTTP. The agent secret never travels: the agent sends an HMAC of it over
+its certificate request, and accepts the CA and certificate it gets back, or the
+server's answer that it has no auto-PKI, only with the server's own HMAC of the
+secret over them. Someone on the network path therefore learns no secret, cannot
+hand the agent a CA of their own and cannot make it give up its client certificate.
+An agent refuses a server older than itself: upgrade the server first. Older agents,
+which send the secret itself, can still enroll, and the server logs a warning.
+
 ## Supported Versions
 
 Security fixes are applied to the latest released version only.
