@@ -29,7 +29,7 @@ func secureRestoreTarget(dir string) error {
 		return fmt.Errorf("restore target %q must be an absolute path", dir)
 	}
 	dir = filepath.Clean(dir)
-	uid := uint32(os.Geteuid())
+	uid := os.Geteuid()
 
 	// Before creating anything: refuse a path another user already controls.
 	if err := checkRestorePath(dir, uid, false); err != nil {
@@ -56,7 +56,7 @@ func secureRestoreTarget(dir string) error {
 // checkRestorePath checks every existing component of dir, from the root
 // down. With mustExist false, it stops at the first missing component, which
 // secureRestoreTarget then creates.
-func checkRestorePath(dir string, uid uint32, mustExist bool) error {
+func checkRestorePath(dir string, uid int, mustExist bool) error {
 	p := string(filepath.Separator)
 	parts := strings.Split(strings.TrimPrefix(dir, p), p)
 	for i := -1; i < len(parts); i++ {
@@ -79,12 +79,14 @@ func checkRestorePath(dir string, uid uint32, mustExist bool) error {
 
 // checkRestoreComponent applies the rules of secureRestoreTarget to one
 // component of the path. target is true for the restore folder itself.
-func checkRestoreComponent(p string, fi fs.FileInfo, uid uint32, target bool) error {
+func checkRestoreComponent(p string, fi fs.FileInfo, uid int, target bool) error {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("cannot read the owner of %s", p)
 	}
-	if owner := uint32(st.Uid); owner != 0 && owner != uid {
+	// Compared as int64, which holds both the uid_t of Stat_t and the int of
+	// Geteuid without overflow.
+	if owner := int64(st.Uid); owner != 0 && owner != int64(uid) {
 		return fmt.Errorf("%s belongs to another user (uid %d)", p, owner)
 	}
 	if fi.Mode()&fs.ModeSymlink != 0 {
