@@ -216,8 +216,8 @@ jobs:
         if: ${{ always() }}
         run: rm -f "${RUNNER_TEMP}/packages-signing-key.asc"
 
-      # The Helm chart is published as an OCI artifact on GHCR and Docker Hub,
-      # versioned like the release (ADR 0014). It runs after GoReleaser so the
+      # The Helm chart is published as an OCI artifact on GHCR only, versioned
+      # like the release (ADRs 0014, 0025). It runs after GoReleaser so the
       # images it points to already exist. helm is a Go tool: go install pins
       # it and checks it against the Go checksum database (ADR 0013).
       - name: Install Helm
@@ -227,16 +227,13 @@ jobs:
         env:
           GHCR_USER: ${{ vars.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          DOCKERHUB_ORG_TOKEN: ${{ secrets.DOCKERHUB_ORG_TOKEN }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           chart_dir="${RUNNER_TEMP}/chart"
           helm package deploy/helm/arkeep --version "$version" --app-version "$GITHUB_REF_NAME" --destination "$chart_dir"
           echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin
-          echo "$DOCKERHUB_ORG_TOKEN" | helm registry login registry-1.docker.io --username arkeepio --password-stdin
           helm push "${chart_dir}/arkeep-${version}.tgz" oci://ghcr.io/arkeep-io/charts 2>&1 | tee "${RUNNER_TEMP}/helm-push.log"
-          helm push "${chart_dir}/arkeep-${version}.tgz" oci://registry-1.docker.io/arkeepio
 
       # Build provenance (P-02): one attestation, signed with Sigstore and kept
       # by GitHub, covering every published artifact: the archives and

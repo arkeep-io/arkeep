@@ -1,6 +1,6 @@
 # 0021. Build the GUI without secrets and keep the signing key on disk only while it signs
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-19
 - **Deciders:** Arkeep maintainers
 

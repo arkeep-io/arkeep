@@ -304,7 +304,10 @@ release:
     > This is a pre-release. It may contain bugs or incomplete features — avoid running it in production.
     {{ end }}
     > [!IMPORTANT]
-    > Database migrations run automatically when the server starts. Back up your database (or the `data/` volume) before upgrading — see [Upgrading](https://arkeep.io/docs/installation/upgrading/).
+    > Upgrade in this order — see [Upgrading](https://arkeep.io/docs/installation/upgrading/):
+    > 1. Back up the database (or the `data/` volume): migrations run automatically when the server starts.
+    > 2. Upgrade the server and check that `/health/ready` reports `healthy`.
+    > 3. Then upgrade the agents. An agent refuses to enroll with a server older than itself.
 
     ## 📦 Install
 
@@ -313,7 +316,7 @@ release:
     docker pull arkeepio/arkeep-agent:{{ .Tag }}
     ```
 
-    Kubernetes: `helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version {{ .Version }}` (also `oci://registry-1.docker.io/arkeepio/arkeep`).
+    Kubernetes: `helm install arkeep oci://ghcr.io/arkeep-io/charts/arkeep --version {{ .Version }}`.
 
     Images are published on Docker Hub for `linux/amd64` and `linux/arm64`, and also on GitHub Container Registry (`ghcr.io/arkeep-io/arkeep-server`, `ghcr.io/arkeep-io/arkeep-agent`). Standalone binaries — server for Linux and macOS, agent for Linux (amd64, arm64, armv7, mips, mipsle), macOS and Windows — are attached below. See the [installation docs](https://arkeep.io/docs/installation/docker-compose/) for Docker Compose, binary and Helm setups.
 

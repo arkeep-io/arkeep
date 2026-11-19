@@ -1,6 +1,6 @@
 # 0023. Auto-PKI, per-agent mTLS, and enrollment authenticated with the agent secret
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-19
 - **Deciders:** Arkeep maintainers
 
