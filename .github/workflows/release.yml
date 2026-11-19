@@ -245,7 +245,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq apt-utils createrepo-c
+          sudo apt-get install -y -qq apt-utils createrepo-c rpm
           scripts/agent-repository.sh fetch "${RUNNER_TEMP}/releases"
           scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
           scripts/agent-repository.sh upload "${RUNNER_TEMP}/repository"
