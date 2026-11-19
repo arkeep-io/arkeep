@@ -1,0 +1,7 @@
+# Home Assistant app repository (apps were called add-ons before Home
+# Assistant 2026.2). The release workflow publishes this file and the app
+# folders next to it at the root of the home-assistant branch, the branch users
+# add to Home Assistant. See README.md.
+name: Arkeep
+url: https://github.com/arkeep-io/arkeep
+maintainer: Arkeep maintainers
