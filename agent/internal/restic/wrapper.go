@@ -105,6 +105,22 @@ func (w *Wrapper) prepareRepository(ctx context.Context, dest Destination) error
 	return nil
 }
 
+// incompleteSnapshotExitCode is restic's exit status when the backup created a
+// snapshot but could not read some source files (restic 0.10+).
+const incompleteSnapshotExitCode = 3
+
+// ErrIncompleteSnapshot is returned, together with a BackupResult, when restic
+// created the snapshot but skipped files it could not read. The snapshot
+// exists in the repository: callers keep its ID (R-12, R-16).
+var ErrIncompleteSnapshot = errors.New("restic: snapshot created, but some files could not be read")
+
+// incompleteBackup reports whether err is restic's "snapshot created, some
+// files unreadable" exit and the run produced a snapshot.
+func incompleteBackup(err error, result *BackupResult) bool {
+	var exitErr *exec.ExitError
+	return result.SnapshotID != "" && errors.As(err, &exitErr) && exitErr.ExitCode() == incompleteSnapshotExitCode
+}
+
 // backupError turns restic's "repository does not exist" exit status into a
 // RepositoryNotFoundError when the repository must exist; other errors are
 // returned unchanged.
@@ -366,7 +382,9 @@ func buildBackupArgs(opts BackupOptions, goos string) []string {
 //
 // Returns a BackupResult with snapshot metadata extracted from the restic
 // summary event, and an error if the backup fails. A non-zero restic exit
-// code is always wrapped in the returned error with stderr included.
+// code is always wrapped in the returned error with stderr included. When
+// restic created the snapshot but could not read some files (exit 3), both
+// the result and an error wrapping ErrIncompleteSnapshot are returned.
 func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptions, onProgress ProgressFunc) (*BackupResult, error) {
 	if err := w.prepareRepository(ctx, dest); err != nil {
 		return nil, err
@@ -376,6 +394,9 @@ func (w *Wrapper) Backup(ctx context.Context, dest Destination, opts BackupOptio
 
 	var result BackupResult
 	if err := w.runWithProgress(ctx, dest, args, summaryInterceptor(&result, onProgress)); err != nil {
+		if incompleteBackup(err, &result) {
+			return &result, fmt.Errorf("%w (snapshot %s): %w", ErrIncompleteSnapshot, result.SnapshotID, err)
+		}
 		return nil, backupError(dest, err)
 	}
 	return &result, nil
@@ -843,7 +864,7 @@ func (w *Wrapper) Ls(ctx context.Context, dest Destination, snapshotID, dir stri
 		})
 	}
 	if err := scanner.Err(); err != nil {
-		_ = cmd.Process.Kill()
+		killAndWait(cmd)
 		return nil, fmt.Errorf("restic: error reading ls output: %w", err)
 	}
 
@@ -931,7 +952,7 @@ func (w *Wrapper) Stats(ctx context.Context, dest Destination) (StatsResult, err
 
 	res, found, parseErr := parseResticStats(stdout)
 	if parseErr != nil {
-		_ = cmd.Process.Kill()
+		killAndWait(cmd)
 		return StatsResult{}, fmt.Errorf("restic: error reading stats output: %w", parseErr)
 	}
 
@@ -1006,6 +1027,7 @@ func (w *Wrapper) runRestoreJSON(ctx context.Context, dest Destination, args []s
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			killAndWait(cmd)
 			return fmt.Errorf("restic: failed to read stdout: %w", err)
 		}
 
@@ -1349,13 +1371,13 @@ func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []
 			if onProgress != nil {
 				if err := onProgress(event); err != nil {
 					// Caller signalled cancellation — kill the process.
-					// Ignore the kill error: the process may have already exited.
-					_ = cmd.Process.Kill()
+					killAndWait(cmd)
 					return fmt.Errorf("restic: progress callback cancelled: %w", err)
 				}
 			}
 		}
 		if err := scanner.Err(); err != nil {
+			killAndWait(cmd)
 			return fmt.Errorf("restic: failed to read stdout: %w", err)
 		}
 
@@ -1364,6 +1386,15 @@ func (w *Wrapper) runWithProgress(ctx context.Context, dest Destination, args []
 		}
 		return nil
 	})
+}
+
+// killAndWait stops a restic process the caller gave up on and waits for it,
+// so that it does not linger as a zombie holding its pipes (R-12). Errors are
+// ignored: the process may already have exited, and the caller is returning
+// its own error.
+func killAndWait(cmd *exec.Cmd) {
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }
 
 // buildCmd constructs the exec.Cmd for a restic invocation.

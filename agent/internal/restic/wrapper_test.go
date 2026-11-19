@@ -908,6 +908,61 @@ exit 10
 	return script, calls
 }
 
+// TestBackup_IncompleteSnapshot covers restic's exit 3 (R-12): the snapshot is
+// created but some files could not be read. The result is kept with an error
+// wrapping ErrIncompleteSnapshot; any other failure, or an exit 3 without a
+// snapshot, is a plain error without a result.
+func TestBackup_IncompleteSnapshot(t *testing.T) {
+	const summary = `{"message_type":"summary","snapshot_id":"3f2a9c1e5b7d","files_new":2,"total_files_processed":2}`
+	tests := []struct {
+		name           string
+		stdout         string
+		exit           int
+		wantIncomplete bool
+	}{
+		{"exit 3 with a snapshot", summary, 3, true},
+		{"exit 3 without a snapshot", "", 3, false},
+		{"exit 1 with a summary", summary, 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "fake-restic.sh")
+			body := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = \"init\" ] && exit 0\necho '%s'\n"+
+				"echo 'error: open /data/locked: permission denied' >&2\nexit %d\n", tt.stdout, tt.exit)
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+			dest := Destination{Type: DestLocal, RepoURL: filepath.Join(dir, "repo"), Password: "pw", MustExist: true}
+
+			result, err := w.Backup(context.Background(), dest, BackupOptions{Sources: []string{"/data"}}, nil)
+			if err == nil {
+				t.Fatal("Backup succeeded, want an error")
+			}
+			if got := errors.Is(err, ErrIncompleteSnapshot); got != tt.wantIncomplete {
+				t.Fatalf("errors.Is(err, ErrIncompleteSnapshot) = %v, want %v; err = %v", got, tt.wantIncomplete, err)
+			}
+			if !tt.wantIncomplete {
+				if result != nil {
+					t.Errorf("result = %+v, want nil", result)
+				}
+				return
+			}
+			if result == nil || result.SnapshotID != "3f2a9c1e5b7d" {
+				t.Fatalf("result = %+v, want the snapshot of the incomplete backup", result)
+			}
+			if result.Summary.FilesNew != 2 {
+				t.Errorf("summary files_new = %d, want 2", result.Summary.FilesNew)
+			}
+			// The unreadable file stays in the message shown to the admin.
+			if !strings.Contains(err.Error(), "/data/locked") {
+				t.Errorf("error %q does not name the unreadable file", err)
+			}
+		})
+	}
+}
+
 // TestBackup_RepositoryThatMustExist covers a repository that has gone missing
 // (an unmounted disk): when it is known to exist the backup must neither run
 // `restic init` nor report a plain restic failure, but ErrRepositoryNotFound.
