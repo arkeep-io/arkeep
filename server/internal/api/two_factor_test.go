@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -307,6 +309,75 @@ func TestTwoFactorLogin_Concurrent(t *testing.T) {
 			t.Errorf("%d sessions issued for one challenge, want 1", ok)
 		}
 	})
+}
+
+// postFrom posts body to path through the router as if it came from remote,
+// so that requests count against different address rate limits.
+func postFrom(t *testing.T, e *testEnv, remote, path string, body any) *http.Response {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = remote
+	w := httptest.NewRecorder()
+	e.Config.Handler.ServeHTTP(w, req)
+	return w.Result()
+}
+
+// TestTwoFactorLogin_AccountLimit covers the per-account count of codes
+// (S-28, ADR 0022): neither a new challenge nor a new address buys guesses.
+func TestTwoFactorLogin_AccountLimit(t *testing.T) {
+	e := newTestEnv(t)
+	secret := enable2FA(t, e.deps, createDBUser(t, e.deps, "tfa@test.local", "user"))
+	otherSecret := enable2FA(t, e.deps, createDBUser(t, e.deps, "other@test.local", "user"))
+
+	// Every request comes from a new address, so no address limit applies.
+	n := 0
+	nextAddr := func() string {
+		n++
+		return fmt.Sprintf("198.51.100.%d:1234", n)
+	}
+	challenge := func(email string) string {
+		t.Helper()
+		resp := postFrom(t, e, nextAddr(), "/api/v1/auth/login", map[string]string{
+			"email":    email,
+			"password": "test-password-123",
+		})
+		assertStatus(t, resp, http.StatusOK)
+		var out loginStepOneResult
+		decodeData(t, resp, &out)
+		return out.ChallengeToken
+	}
+	submit := func(challenge, code string) *http.Response {
+		t.Helper()
+		return postFrom(t, e, nextAddr(), "/api/v1/auth/login/2fa", map[string]string{
+			"challenge_token": challenge,
+			"code":            code,
+		})
+	}
+
+	// Wrong codes up to the account limit, signing in again whenever a
+	// challenge is burned.
+	for sent := 0; sent < maxTwoFactorAccountAttempts; {
+		c := challenge("tfa@test.local")
+		for i := 0; i < maxTwoFactorAttempts && sent < maxTwoFactorAccountAttempts; i++ {
+			assertStatus(t, submit(c, "000000"), http.StatusBadRequest)
+			sent++
+		}
+	}
+
+	// Now even the right code on a fresh challenge is refused.
+	resp := submit(challenge("tfa@test.local"), currentCode(t, secret))
+	assertStatus(t, resp, http.StatusTooManyRequests)
+	if got, want := resp.Header.Get("Retry-After"), "900"; got != want {
+		t.Errorf("Retry-After = %q, want %q", got, want)
+	}
+
+	// Another account is not affected.
+	assertStatus(t, submit(challenge("other@test.local"), currentCode(t, otherSecret)), http.StatusOK)
 }
 
 type twoFactorStatus struct {
