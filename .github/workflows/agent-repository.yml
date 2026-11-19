@@ -2,10 +2,15 @@ name: Agent repository
 
 # Rebuilds the APT and RPM repository at pkg.arkeep.io from the agent packages
 # of the last stable releases (ADR 0020), as the release workflow does after
-# each stable release. Started by hand: after a failed publication, a key
-# rotation, or to repair the bucket. The release environment only deploys
-# from main and v* tags (ADR 0017), so run it from main.
+# each stable release. Runs every week, so that the APT Release, valid for 30
+# days, never expires (P-14); scheduled runs use the default branch, main. Also
+# started by hand: after a failed publication, a key rotation, or to repair
+# the bucket. The release environment only deploys from main and v* tags
+# (ADR 0017), so run it from main.
 on:
+  schedule:
+    # Mondays at 05:17 UTC, off the hour when scheduled runs are delayed most.
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 permissions:

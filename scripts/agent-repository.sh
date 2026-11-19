@@ -128,7 +128,12 @@ build() {
       apt-ftparchive --arch "$a" packages pool/main >"dists/stable/main/binary-${a}/Packages"
       gzip -9 --no-name --keep "dists/stable/main/binary-${a}/Packages"
     done
+    # Valid-Until 30 days after Date (ValidTime, in seconds): apt refuses an
+    # older index, so whoever can serve the bucket cannot replay signed
+    # metadata for longer than that. The Agent repository workflow rebuilds
+    # the repository every week, well within it.
     apt-ftparchive \
+      -o APT::FTPArchive::Release::ValidTime=2592000 \
       -o APT::FTPArchive::Release::Origin=Arkeep \
       -o APT::FTPArchive::Release::Label=Arkeep \
       -o APT::FTPArchive::Release::Suite=stable \

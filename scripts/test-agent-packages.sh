@@ -136,6 +136,8 @@ echo 'deb [signed-by=/etc/apt/keyrings/arkeep.asc] file:/repo/apt stable main' >
 # An unsigned or wrongly signed index is an error here, not a warning.
 apt-get update 2>&1 | tee /tmp/update.log >/dev/null
 ! grep -qE '^(W|E):' /tmp/update.log || { cat /tmp/update.log; fail 'apt update reported a problem'; }
+# An index without an expiry could be replayed forever (ADR 0020).
+grep -q '^Valid-Until: ' /repo/apt/dists/stable/InRelease || fail 'InRelease has no Valid-Until'
 apt-get install -y -qq arkeep-agent >/dev/null
 check_installed
 echo ok

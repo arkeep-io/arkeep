@@ -78,9 +78,16 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   Write on `arkeep-packages`, are secrets of the `release` environment
   (ADR 0017), with the R2 endpoint as a variable of the same environment.
 - **Publication.** The release workflow publishes the repository after the
-  attestation, on stable releases only. The `Agent repository` workflow,
-  started by hand from `main`, rebuilds it with the same script: after a
-  failed publication, a key rotation, or to repair the bucket.
+  attestation, on stable releases only. The `Agent repository` workflow
+  rebuilds it with the same script every week, scheduled on `main`, and when
+  started by hand from `main`: after a failed publication, a key rotation, or
+  to repair the bucket.
+- **Expiry.** The APT `Release` carries a `Valid-Until` 30 days after its
+  date, and apt refuses an index past it. Whoever can serve the bucket (a
+  leaked R2 token, a compromised Cloudflare account) can therefore replay
+  old signed metadata, and keep machines on an older agent, for at most 30
+  days. The weekly rebuild keeps the index fresh. The RPM metadata has no
+  equivalent field.
 - **Attestations are checked against the tag.** `--signer-workflow` alone
   matches the path of the release workflow on any ref, so a copy of it
   modified and run on another branch passes. Every check of a release
@@ -108,6 +115,11 @@ Pages was set aside: the project does not want its distribution tied to Pages.
 - The key expires: before it does, extend its expiry or replace it, publish
   the new public key at `gpg.key`, and announce it. Machines that imported the
   old key must import the new one.
+- If the weekly rebuild keeps failing (an expired R2 token or signing key, a
+  broken workflow), `apt update` fails on every machine once the index is
+  30 days old, until the repository is published again. GitHub reports a
+  failed scheduled run to whoever last changed the schedule; GitHub also
+  disables schedules after 60 days without activity in a public repository.
 - Packages of releases older than the last three are only on their release
   pages. The repository can be rebuilt at any time from the releases.
 - R2, its custom domain and the API token are Cloudflare settings outside the
