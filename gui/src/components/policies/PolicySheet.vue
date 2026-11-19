@@ -1480,8 +1480,8 @@ function onOpenChange(value: boolean) {
             <div>
               <p class="text-sm font-medium">Notifications</p>
               <p class="text-muted-foreground text-xs">
-                Overrides the email and webhook toggles in Settings → Notifications for this
-                policy's jobs.
+                Overrides the event toggles in Settings → Notifications (email, webhook and
+                notification providers) for this policy's jobs.
               </p>
             </div>
             <div class="flex items-center justify-between gap-4">

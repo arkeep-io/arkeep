@@ -39,6 +39,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
+	"github.com/arkeep-io/arkeep/server/internal/snapshotsync"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 	"github.com/google/uuid"
@@ -1000,8 +1001,10 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 	// Anything that succeeded against the destination — a backup, a command
 	// source, a retention sweep, a check — proves its repository exists, so
 	// later backups must not create it again (db.Destination.RepoInitializedAt).
-	// Non-fatal.
-	if req.Status == "succeeded" && s.destRepo != nil {
+	// So does a snapshot ID on a failed backup: restic exits 3 when it created
+	// the snapshot but could not read some files, and a destination that
+	// always does must not lose this protection (R-16). Non-fatal.
+	if (req.Status == "succeeded" || req.SnapshotId != "") && s.destRepo != nil {
 		if err := s.destRepo.MarkRepoInitialized(ctx, destID, now); err != nil {
 			s.logger.Warn("ReportDestinationStatus: failed to mark destination repository initialized",
 				zap.String("destination_id", req.DestinationId),
@@ -1045,11 +1048,13 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 		return nil, status.Error(codes.Internal, "failed to update destination status")
 	}
 
-	// If the backup to this destination succeeded and the agent reported a
-	// restic snapshot ID, persist a Snapshot record. This is the primary way
-	// snapshots are created — there is no separate catalog sync step.
-	if req.Status == "succeeded" && req.SnapshotId != "" {
-		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
+	// If the agent reported a restic snapshot ID, persist a Snapshot record.
+	// This is the primary way snapshots are created — there is no separate
+	// catalog sync step. A failed backup can carry one too: restic exits 3
+	// when the snapshot exists but some files could not be read (R-12), and
+	// that snapshot is a restore point like any other.
+	if req.SnapshotId != "" {
+		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, req.GetSummary(), now)
 	}
 
 	// Release the busy gate (issue #130): this destination's terminal result
@@ -1098,7 +1103,7 @@ func (s *Server) ReportDestinationStatus(ctx context.Context, req *proto.Destina
 //
 // The job record is fetched to resolve PolicyID, which is not carried in the
 // DestinationStatusReport proto message.
-func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UUID, snapshotID string, sizeBytes int64, at time.Time) {
+func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UUID, snapshotID string, sizeBytes int64, summary *proto.SnapshotSummary, at time.Time) {
 	job, err := s.jobRepo.GetByID(ctx, jobID)
 	if err != nil {
 		s.logger.Warn("createSnapshotRecord: could not fetch job for snapshot creation",
@@ -1124,9 +1129,13 @@ func (s *Server) createSnapshotRecord(ctx context.Context, jobID, destID uuid.UU
 		JobID:         &jobID,
 		SnapshotID:    snapshotID,
 		SizeBytes:     sizeBytes,
-		Tags:          "[]",
-		Sources:       snapshotSources,
-		SnapshotAt:    at,
+		// Zero, like the summary, when the agent predates summaries; the
+		// next snapshot sync fills both in.
+		FileCount:       summary.GetTotalFilesProcessed(),
+		Tags:            "[]",
+		Sources:         snapshotSources,
+		SnapshotAt:      at,
+		SnapshotSummary: snapshotsync.SummaryFromProto(summary),
 	}
 	if err := s.snapshotRepo.Create(ctx, snap); err != nil {
 		s.logger.Error("createSnapshotRecord: failed to create snapshot record",
@@ -1162,7 +1171,7 @@ func (s *Server) reportCommandSourceStatus(ctx context.Context, req *proto.Desti
 	}
 
 	if req.Status == "succeeded" && req.SnapshotId != "" {
-		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, now)
+		s.createSnapshotRecord(ctx, jobID, destID, req.SnapshotId, req.SizeBytes, req.GetSummary(), now)
 	}
 
 	s.logger.Info("destination command source status recorded",

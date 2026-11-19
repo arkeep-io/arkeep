@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
@@ -102,5 +103,37 @@ func TestSnapshotImportPayloadDestination(t *testing.T) {
 	}
 	if d.RepoURL != "s3:host/bucket" || d.Type != restic.DestS3 || d.Env["AWS_ACCESS_KEY_ID"] != "key" {
 		t.Errorf("destination = %+v, want the payload's type, repo URL and env", d)
+	}
+}
+
+// TestSummaryProto checks the conversion of a restic snapshot summary for the
+// server: every figure is kept, and no summary is sent when there is none.
+func TestSummaryProto(t *testing.T) {
+	start := time.Date(2026, 11, 17, 8, 46, 7, 0, time.UTC)
+	end := start.Add(90 * time.Second)
+	s := &restic.SnapshotSummary{
+		BackupStart: start, BackupEnd: end,
+		FilesNew: 1, FilesChanged: 2, FilesUnmodified: 3,
+		TotalFilesProcessed: 6, TotalBytesProcessed: 4096,
+		DataAdded: 3066, DataAddedPacked: 2500,
+	}
+	got := summaryProto(s)
+	if !got.GetBackupStart().AsTime().Equal(start) || !got.GetBackupEnd().AsTime().Equal(end) {
+		t.Errorf("times = %v - %v, want %v - %v", got.GetBackupStart().AsTime(), got.GetBackupEnd().AsTime(), start, end)
+	}
+	if got.GetFilesNew() != 1 || got.GetFilesChanged() != 2 || got.GetFilesUnmodified() != 3 ||
+		got.GetTotalFilesProcessed() != 6 || got.GetTotalBytesProcessed() != 4096 ||
+		got.GetDataAdded() != 3066 || got.GetDataAddedPacked() != 2500 {
+		t.Errorf("figures = %+v", got)
+	}
+
+	if summaryProto(nil) != nil {
+		t.Error("summaryProto(nil) is not nil")
+	}
+	if summaryProto(&restic.SnapshotSummary{DataAddedPacked: 10}) != nil {
+		t.Error("a summary without backup_end (restic < 0.17) is sent")
+	}
+	if addedBytes(nil) != 0 || addedBytes(s) != 2500 {
+		t.Errorf("addedBytes = %d, %d; want 0, 2500", addedBytes(nil), addedBytes(s))
 	}
 }

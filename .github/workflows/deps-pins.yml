@@ -4,8 +4,9 @@ name: Dependency pins
 # request against develop when something changed:
 #   - restic and rclone versions and SHA-256 digests (agent/scripts/deps.json),
 #     from GPG-verified upstream SHA256SUMS, with a 7-day release cooldown;
-#   - the Arkeep release used by the Helm chart (appVersion) and the compose
-#     examples (image tags), set to the latest Arkeep release;
+#   - the Arkeep release used by the Helm chart (appVersion), the compose
+#     examples (image tags) and the Home Assistant app (version), set to the
+#     latest Arkeep release;
 #   - the PostgreSQL image of the Helm chart and of the commented example in
 #     docker-compose.yml, aligned with docker-compose.postgres.yml.
 on:
@@ -31,6 +32,10 @@ jobs:
   update:
     name: Update dependency pins
     runs-on: ubuntu-26.04
+    # DEPS_PR_TOKEN lives in this environment, which only main and v* tags can
+    # deploy to: a workflow pushed on any other branch cannot read it (P-11).
+    # The release trigger runs on the tag, hence v*. Run it by hand from main.
+    environment: automation
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,7 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: agent/scripts/update-deps-pins.sh
 
-      - name: Update Helm appVersion and compose image tags to the latest release
+      - name: Update Helm appVersion, compose image tags and the Home Assistant app to the latest release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -52,8 +57,9 @@ jobs:
             exit 1
           fi
           sed -i -E "s/^appVersion: .*/appVersion: \"${tag}\"/" deploy/helm/arkeep/Chart.yaml
-          sed -i -E "s#(ghcr\.io/arkeep-io/arkeep-(server|agent)):v[0-9]+\.[0-9]+\.[0-9]+#\1:${tag}#" \
+          sed -i -E "s#(arkeepio/arkeep-(server|agent)):v[0-9]+\.[0-9]+\.[0-9]+#\1:${tag}#" \
             deploy/docker/docker-compose*.yml
+          sed -i -E "s/^version: .*/version: \"${tag}\"/" deploy/home-assistant/arkeep-agent/config.yaml
 
       # Dependabot updates the digest-pinned postgres image of the compose files,
       # but its helm updater skips image strings pinned by digest, and it does
@@ -84,6 +90,7 @@ jobs:
             deploy/helm/arkeep/Chart.yaml
             deploy/helm/arkeep/values.yaml
             deploy/docker/docker-compose*.yml
+            deploy/home-assistant/arkeep-agent/config.yaml
           commit-message: "chore(deps): update restic, rclone and Arkeep release pins"
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
@@ -96,9 +103,10 @@ jobs:
               SHA-256 digests, taken from the upstream `SHA256SUMS` after
               verifying their GPG signature against the maintainers' pinned key
               fingerprints. Releases younger than 7 days are not proposed yet.
-            - `deploy/helm/arkeep/Chart.yaml` (`appVersion`) and the Arkeep
-              image tags in `deploy/docker/docker-compose*.yml`: set to the
-              latest Arkeep release.
+            - `deploy/helm/arkeep/Chart.yaml` (`appVersion`), the Arkeep
+              image tags in `deploy/docker/docker-compose*.yml` and the
+              `version` of `deploy/home-assistant/arkeep-agent/config.yaml`:
+              set to the latest Arkeep release.
             - `deploy/helm/arkeep/values.yaml` (`postgresql.image`) and the
               commented example in `deploy/docker/docker-compose.yml`: the
               PostgreSQL image of `docker-compose.postgres.yml`, which Dependabot

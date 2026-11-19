@@ -24,7 +24,9 @@ import (
 // recreating a missing repository (an unmounted disk): the first backup to a
 // destination may create its repository, but once a result for it has
 // succeeded, every later backup tells the agent the repository must already
-// exist. A failed result does not count.
+// exist. A failed result does not count, unless it carries a snapshot ID:
+// restic exits 3 when it created the snapshot but could not read some files,
+// and that proves the repository exists too (R-16).
 func TestRepoMustExist_AfterFirstSuccess(t *testing.T) {
 	ctx := context.Background()
 
@@ -33,6 +35,7 @@ func TestRepoMustExist_AfterFirstSuccess(t *testing.T) {
 	jobRepo := repositories.NewJobRepository(gdb)
 	policyRepo := repositories.NewPolicyRepository(gdb)
 	destRepo := repositories.NewDestinationRepository(gdb)
+	snapshotRepo := repositories.NewSnapshotRepository(gdb)
 	agentMgr := agentmanager.New(zap.NewNop())
 
 	queue := destqueue.New(jobRepo, destRepo, repositories.NewSettingsRepository(gdb), agentMgr, zap.NewNop())
@@ -45,7 +48,7 @@ func TestRepoMustExist_AfterFirstSuccess(t *testing.T) {
 
 	srv := grpcserver.New(
 		grpcserver.Config{SharedSecret: testAgentSecret, PendingDispatch: sched, Queue: queue},
-		agentMgr, agentRepo, jobRepo, repositories.NewSnapshotRepository(gdb), policyRepo, destRepo,
+		agentMgr, agentRepo, jobRepo, snapshotRepo, policyRepo, destRepo,
 		websocket.NewHub(), zap.NewNop(),
 	)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -109,13 +112,14 @@ func TestRepoMustExist_AfterFirstSuccess(t *testing.T) {
 		}
 		return "", false
 	}
-	report := func(jobID, status string) {
+	report := func(jobID, status, snapshotID string) {
 		t.Helper()
 		if _, err := agent.client.ReportDestinationStatus(ctx, &proto.DestinationStatusReport{
 			JobId:         jobID,
 			AgentId:       agentID.String(),
 			DestinationId: dest.ID.String(),
 			Status:        status,
+			SnapshotId:    snapshotID,
 		}); err != nil {
 			t.Fatalf("ReportDestinationStatus(%s): %v", status, err)
 		}
@@ -125,15 +129,35 @@ func TestRepoMustExist_AfterFirstSuccess(t *testing.T) {
 	if mustExist {
 		t.Fatal("first backup: repo_must_exist = true, want the agent free to create the repository")
 	}
-	report(job, "failed")
+	report(job, "failed", "")
 
 	job, mustExist = backup("after a failure")
 	if mustExist {
 		t.Fatal("backup after a failed one: repo_must_exist = true, want false")
 	}
-	report(job, "succeeded")
+	report(job, "succeeded", "")
 
-	if _, mustExist = backup("after a success"); !mustExist {
+	job, mustExist = backup("after a success")
+	if !mustExist {
 		t.Fatal("backup after a successful one: repo_must_exist = false, want true")
+	}
+
+	// Start over (New Repository on the destination page), then fail with the
+	// snapshot restic created before exiting 3.
+	if err := destRepo.ResetRepoInitialized(ctx, dest.ID); err != nil {
+		t.Fatalf("ResetRepoInitialized: %v", err)
+	}
+	const snapshotID = "3f2a9c1e5b7d4f6a8c0e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a"
+	report(job, "failed", snapshotID)
+
+	if _, mustExist = backup("after an incomplete one"); !mustExist {
+		t.Fatal("backup after a failed one with a snapshot: repo_must_exist = false, want true")
+	}
+	snaps, _, err := snapshotRepo.ListByDestination(ctx, dest.ID, repositories.ListOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListByDestination: %v", err)
+	}
+	if len(snaps) != 1 || snaps[0].SnapshotID != snapshotID {
+		t.Fatalf("snapshots of the destination = %+v, want the one of the incomplete backup", snaps)
 	}
 }

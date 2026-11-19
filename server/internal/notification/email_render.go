@@ -13,10 +13,11 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
 
-// Email for job notifications, as HTML and as plain text with the same
-// content. templates/job.html is one html/template for every job type and
-// outcome: each section is optional, and what goes into it (wording, colors,
-// which figures) is decided here in Go.
+// Emails as HTML and as plain text with the same content.
+// templates/email.html is one html/template for every email (job
+// notifications here, the others in email_messages.go): each section is
+// optional, and what goes into it (wording, colors, which figures) is decided
+// in Go.
 //
 // The design is fixed dark, with the colors of the .dark block in
 // gui/src/style.css written inline. There is deliberately no light variant:
@@ -25,8 +26,8 @@ import (
 // colors inline with !important and strips background images, so neither
 // [data-ogsb] rules nor gradient backgrounds can undo it.
 
-//go:embed templates/job.html
-var jobTemplateSrc string
+//go:embed templates/email.html
+var emailTemplateSrc string
 
 // logoPNG is attached to every HTML email and referenced as cid:arkeep-logo.
 //
@@ -43,9 +44,10 @@ type destinationRow struct {
 	Name, Status, StatusFG, Meta, Error string
 }
 
-// jobEmail is everything job.html needs. Colors and wording are decided in Go,
-// the template only prints them.
-type jobEmail struct {
+// emailContent is everything email.html needs. Colors and wording are decided
+// in Go, the template only prints them. Summary may hold several lines,
+// separated by "\n".
+type emailContent struct {
 	Title, Preheader                             string
 	StatusLabel, StatusColor, StatusBG, StatusFG string
 	Headline, Summary                            string
@@ -55,6 +57,12 @@ type jobEmail struct {
 	Details                                      []emailItem
 	ActionURL, ActionLabel                       string
 	Footer                                       string
+	// ActionHint, when set, is shown below the button in the HTML email,
+	// followed by ActionURL written out, for clients in which the button does
+	// not work.
+	ActionHint string
+	// Note is a closing paragraph below the action.
+	Note string
 	// LogoSrc is template.URL because html/template rejects cid: URLs in a
 	// plain string. Empty hides the image.
 	LogoSrc template.URL
@@ -67,9 +75,16 @@ const (
 	red         = "#df202e"
 	redFG       = "#ff8a90"
 	redBG       = "#3a1417"
+	amber       = "#d97706"
+	amberFG     = "#fbbf24"
+	amberBG     = "#33260d"
+	orange      = "#f66921"
+	orangeFG    = "#ffab7a"
+	orangeBG    = "#3a2012"
 	mutedFG     = "#a39b96"
 	// emailFooter names the zone of the times in the email; emailFooterPlain
-	// is used when they span two zones (see newJobEmail).
+	// is used when they span two zones (see newJobEmail) or when the email
+	// shows no time.
 	emailFooter      = "Sent by your Arkeep server. Times are in %s."
 	emailFooterPlain = "Sent by your Arkeep server."
 )
@@ -85,6 +100,8 @@ const maxEmailError = 4000
 // html/template strips HTML comments, so the Outlook conditionals must come
 // from functions that return template.HTML. Only constants go in here.
 var emailFuncs = template.FuncMap{
+	// lines splits a text at its line breaks; each line is escaped as usual.
+	"lines": func(s string) []string { return strings.Split(s, "\n") },
 	"msoHead": func() template.HTML {
 		return `<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><style>table,td,div,h1,p{font-family:Arial,sans-serif !important;}</style><![endif]-->`
 	},
@@ -97,7 +114,7 @@ var emailFuncs = template.FuncMap{
 }
 
 // Never text/template: html/template is what escapes names and error messages.
-var jobTemplate = template.Must(template.New("job.html").Funcs(emailFuncs).Parse(jobTemplateSrc))
+var emailTemplate = template.Must(template.New("email.html").Funcs(emailFuncs).Parse(emailTemplateSrc))
 
 // jobEmailData is what the email shows about a job. It is loaded from the
 // database when the email is sent (see NotificationService.emailBodies), not
@@ -174,16 +191,22 @@ func jobEmailDataFrom(job *repositories.JobWithNames, dests []repositories.JobDe
 // job, both with the same content. at is when the notification was created,
 // the end time when the job has none.
 func jobEmailBodies(failed bool, title string, data jobEmailData, at time.Time, baseURL string) (text, html string, err error) {
-	e := newJobEmail(title, failed, data, at, baseURL)
-	text = renderJobEmailText(e)
+	return renderEmailBodies(newJobEmail(title, failed, data, at, baseURL))
+}
+
+// renderEmailBodies renders e as plain text and as HTML with the attached
+// logo. text is always set: when err is not nil, html is empty and the caller
+// can still send text as a plain-text email.
+func renderEmailBodies(e emailContent) (text, html string, err error) {
+	text = renderEmailText(e)
 	e.LogoSrc = template.URL("cid:" + logoCID)
-	html, err = renderJobEmail(e)
+	html, err = renderEmailHTML(e)
 	return text, html, err
 }
 
-// renderJobEmailText writes e as plain text, for mail clients that do not
-// show HTML. Sections follow the order of templates/job.html.
-func renderJobEmailText(e jobEmail) string {
+// renderEmailText writes e as plain text, for mail clients that do not
+// show HTML. Sections follow the order of templates/email.html.
+func renderEmailText(e emailContent) string {
 	var b strings.Builder
 	line := func(s string) { b.WriteString(s + "\n") }
 	section := func() {
@@ -240,23 +263,27 @@ func renderJobEmailText(e jobEmail) string {
 		section()
 		line(e.ActionLabel + ": " + e.ActionURL)
 	}
+	if e.Note != "" {
+		section()
+		line(e.Note)
+	}
 	section()
 	line("-- ")
 	line(e.Footer)
 	return b.String()
 }
 
-func renderJobEmail(e jobEmail) (string, error) {
+func renderEmailHTML(e emailContent) (string, error) {
 	var buf bytes.Buffer
-	if err := jobTemplate.Execute(&buf, e); err != nil {
-		return "", fmt.Errorf("render job email: %w", err)
+	if err := emailTemplate.Execute(&buf, e); err != nil {
+		return "", fmt.Errorf("render email: %w", err)
 	}
 	return buf.String(), nil
 }
 
 // newJobEmail decides what the email shows for the job. LogoSrc is left
 // empty: the caller sets it, since it depends on how the email is sent.
-func newJobEmail(title string, failed bool, p jobEmailData, at time.Time, baseURL string) jobEmail {
+func newJobEmail(title string, failed bool, p jobEmailData, at time.Time, baseURL string) emailContent {
 	operation, name, _ := JobSubject{Type: p.JobType, PolicyName: p.PolicyName, DestinationName: p.DestinationName}.describe()
 	if name == "" {
 		name = operation
@@ -282,7 +309,7 @@ func newJobEmail(title string, failed bool, p jobEmailData, at time.Time, baseUR
 		return formatEmailTime(t)
 	}
 
-	e := jobEmail{Title: title, Footer: fmt.Sprintf(emailFooter, endZone)}
+	e := emailContent{Title: title, Footer: fmt.Sprintf(emailFooter, endZone)}
 	if mixedZones {
 		e.Footer = emailFooterPlain
 	}

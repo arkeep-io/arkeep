@@ -1,0 +1,71 @@
+name: Agent repository
+
+# Rebuilds the APT and RPM repository at pkg.arkeep.io from the agent packages
+# of the last stable releases (ADR 0020), as the release workflow does after
+# each stable release. Runs every week, so that the APT Release, valid for 30
+# days, never expires (P-14); scheduled runs use the default branch, main. Also
+# started by hand: after a failed publication, a key rotation, or to repair
+# the bucket. The release environment only deploys from main and v* tags
+# (ADR 0017), so run it from main.
+on:
+  schedule:
+    # Mondays at 05:17 UTC, off the hour when scheduled runs are delayed most.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-repository
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish the agent repository
+    runs-on: ubuntu-26.04
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No cache: this job holds the package signing key and the R2
+      # credentials, and must not restore what another run wrote (P-06).
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache: false
+
+      # The pinned and verified rclone (and restic) for this platform
+      # (ADR 0013): rclone uploads the repository.
+      - name: Download rclone
+        run: cd agent && go run ./scripts/download_deps.go
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Install the repository tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c rpm
+
+      # The signing key is on disk only while the repository is signed
+      # (ADR 0021).
+      - name: Publish the agent package repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGES_SIGNING_KEY: ${{ secrets.PACKAGES_SIGNING_KEY }}
+          RCLONE: agent/internal/restic/bin/rclone_linux_amd64
+          PACKAGES_R2_ENDPOINT: ${{ vars.PACKAGES_R2_ENDPOINT }}
+          PACKAGES_R2_ACCESS_KEY_ID: ${{ secrets.PACKAGES_R2_ACCESS_KEY_ID }}
+          PACKAGES_R2_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          scripts/agent-repository.sh fetch "${RUNNER_TEMP}/releases"
+          key_file="${RUNNER_TEMP}/packages-signing-key.asc"
+          trap 'rm -f "$key_file"' EXIT
+          (umask 077 && printf '%s\n' "$PACKAGES_SIGNING_KEY" > "$key_file")
+          ARKEEP_PACKAGES_SIGNING_KEY_FILE=$key_file \
+            scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
+          rm -f "$key_file"
+          scripts/agent-repository.sh upload "${RUNNER_TEMP}/repository"

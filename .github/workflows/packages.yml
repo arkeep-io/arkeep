@@ -1,0 +1,93 @@
+name: Packages
+
+# Builds the release artifacts as a snapshot, signed with a throwaway key,
+# installs the agent .deb and .rpm in Debian, Ubuntu and Fedora containers, and
+# installs it again from a repository built like pkg.arkeep.io (ADR 0020) with
+# apt and dnf (scripts/test-agent-packages.sh, scripts/agent-repository.sh).
+# Runs only when something the packages are made of changes: a full GoReleaser
+# build takes several minutes.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - .goreleaser.yml
+      - deploy/packaging/**
+      - deploy/systemd/arkeep-agent.service
+      - scripts/test-agent-packages.sh
+      - scripts/agent-repository.sh
+      - .github/workflows/packages.yml
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - .goreleaser.yml
+      - deploy/packaging/**
+      - deploy/systemd/arkeep-agent.service
+      - scripts/test-agent-packages.sh
+      - scripts/agent-repository.sh
+      - .github/workflows/packages.yml
+
+permissions: read-all
+
+jobs:
+  agent-packages:
+    name: Agent packages
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+
+      # The server embeds the GUI, which GoReleaser expects already built
+      # (ADR 0021). pnpm/action-setup must run before setup-node so its pnpm
+      # cache lookup can find the binary.
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: gui/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: "pnpm"
+          cache-dependency-path: gui/pnpm-lock.yaml
+
+      - name: Build the GUI
+        run: cd gui && pnpm install --frozen-lockfile && pnpm build
+
+      # A key that lives only for this run stands in for the repository key
+      # of the release environment (ADR 0020).
+      - name: Generate a throwaway signing key
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          install -d -m 0700 "$GNUPGHOME"
+          gpg --batch --passphrase '' --quick-gen-key 'Arkeep CI packages <ci@example.invalid>' rsa4096 sign 1d
+          (umask 077 && gpg --batch --armor --export-secret-keys > "${RUNNER_TEMP}/packages-signing-key.asc")
+          echo "ARKEEP_PACKAGES_SIGNING_KEY_FILE=${RUNNER_TEMP}/packages-signing-key.asc" >> "$GITHUB_ENV"
+
+      - name: Build a snapshot release
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --snapshot --clean --skip=docker
+        env:
+          # restic is downloaded through the GitHub API (agent/scripts/download_deps.go).
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # The same build step as the release workflow, on the snapshot packages
+      # laid out like one downloaded release.
+      - name: Build a package repository
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c
+          mkdir -p "${RUNNER_TEMP}/releases/snapshot"
+          cp dist/arkeep-agent_linux_*.deb dist/arkeep-agent_linux_*.rpm dist/checksums.txt "${RUNNER_TEMP}/releases/snapshot/"
+          scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
+
+      - name: Install and remove the agent packages, and install from the repository
+        run: scripts/test-agent-packages.sh dist "${RUNNER_TEMP}/repository"

@@ -126,6 +126,9 @@ func TestPasswordReset_Request(t *testing.T) {
 		if len(e.mailer.sent) != 1 {
 			t.Fatalf("sent %d emails, want 1", len(e.mailer.sent))
 		}
+		if html := e.mailer.sent[0].html; !strings.Contains(html, "/auth/reset-password?token=") {
+			t.Errorf("email has no HTML body with the reset link:\n%s", html)
+		}
 		if got := e.mailer.sent[0].to; len(got) != 1 || got[0] != "local@example.com" {
 			t.Errorf("recipient = %v, want [local@example.com]", got)
 		}

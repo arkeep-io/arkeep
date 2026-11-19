@@ -147,6 +147,56 @@ func TestSnapshotHandler_GetByID(t *testing.T) {
 		}
 	})
 
+	t.Run("returns the restic summary, or null when unknown", func(t *testing.T) {
+		e := newTestEnv(t)
+		withSummary := createDBSnapshot(t, e.deps)
+		without := createDBSnapshot(t, e.deps)
+		start := time.Date(2026, 11, 17, 8, 46, 7, 0, time.UTC)
+		end := start.Add(90 * time.Second)
+		withSummary.FileCount = 6
+		withSummary.SnapshotSummary = db.SnapshotSummary{
+			BackupStart: &start, BackupEnd: &end,
+			FilesNew: 1, FilesChanged: 2, FilesUnmodified: 3,
+			TotalBytesProcessed: 4096, DataAdded: 3066,
+		}
+		if err := e.deps.gdb.Save(withSummary).Error; err != nil {
+			t.Fatalf("save summary: %v", err)
+		}
+
+		type summary struct {
+			BackupStart         string `json:"backup_start"`
+			BackupEnd           string `json:"backup_end"`
+			FilesNew            int64  `json:"files_new"`
+			FilesChanged        int64  `json:"files_changed"`
+			FilesUnmodified     int64  `json:"files_unmodified"`
+			TotalFilesProcessed int64  `json:"total_files_processed"`
+			TotalBytesProcessed int64  `json:"total_bytes_processed"`
+			DataAdded           int64  `json:"data_added"`
+		}
+		var data struct {
+			Summary *summary `json:"summary"`
+		}
+		resp := e.get(t, "/api/v1/snapshots/"+withSummary.ID.String(), e.userToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		decodeData(t, resp, &data)
+		want := summary{
+			BackupStart: "2026-11-17T08:46:07Z", BackupEnd: "2026-11-17T08:47:37Z",
+			FilesNew: 1, FilesChanged: 2, FilesUnmodified: 3,
+			TotalFilesProcessed: 6, TotalBytesProcessed: 4096, DataAdded: 3066,
+		}
+		if data.Summary == nil || *data.Summary != want {
+			t.Errorf("summary = %+v, want %+v", data.Summary, want)
+		}
+
+		data.Summary = nil
+		resp = e.get(t, "/api/v1/snapshots/"+without.ID.String(), e.userToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		decodeData(t, resp, &data)
+		if data.Summary != nil {
+			t.Errorf("summary = %+v, want null", data.Summary)
+		}
+	})
+
 	t.Run("returns 404 for non-existent snapshot", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.get(t, "/api/v1/snapshots/00000000-0000-0000-0000-000000000001", e.adminToken(t))

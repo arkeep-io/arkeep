@@ -349,6 +349,26 @@ export interface Snapshot {
   hostname: string
   is_imported: boolean
   created_at: string
+  // summary is null when the restic summary of the snapshot is unknown: the
+  // record predates it and no snapshot sync has filled it in yet, or the
+  // snapshot was made by restic < 0.17.
+  summary: SnapshotSummary | null
+}
+
+// SnapshotSummary is the statistics restic records about a snapshot. What it
+// added after compression is Snapshot.size_bytes.
+export interface SnapshotSummary {
+  backup_start: string
+  backup_end: string
+  // Files compared with the parent snapshot.
+  files_new: number
+  files_changed: number
+  files_unmodified: number
+  // Number and logical size of the files the backup read.
+  total_files_processed: number
+  total_bytes_processed: number
+  // Added to the repository after deduplication, before compression.
+  data_added: number
 }
 
 // ─── Notification ─────────────────────────────────────────────────────────────
@@ -384,6 +404,29 @@ export interface WebhookSettings {
   url: string
   secret: string // HMAC signing secret — write-only, returned masked
   enabled: boolean
+}
+
+// NotificationProviderPriorities is the priority sent with each event type;
+// empty leaves the service default.
+export interface NotificationProviderPriorities {
+  job_success: string
+  job_failure: string
+  agent_offline: string
+  agent_online: string
+}
+
+// NotificationProvider is a push or chat service (Gotify, Telegram...) events
+// are sent to. Secret fields are write-only: secrets_set lists those stored.
+export interface NotificationProvider {
+  id: string
+  name: string
+  type: string
+  enabled: boolean
+  config: Record<string, string>
+  secrets_set: string[]
+  priorities: NotificationProviderPriorities
+  created_at: string
+  updated_at: string
 }
 
 // NotificationSettings controls which event types trigger external delivery

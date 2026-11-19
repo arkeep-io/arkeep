@@ -695,13 +695,18 @@ func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
 	rows := []any{
 		&JobDestination{JobID: job.ID, DestinationID: dests["backed-up"].ID, Status: "succeeded"},
 		&JobDestinationCommand{JobID: job.ID, DestinationID: dests["command"].ID, SourceName: "db", Status: "succeeded"},
-		&Snapshot{DestinationID: dests["snapshot"].ID, SnapshotID: "abc", SnapshotAt: now},
 		&JobDestination{JobID: job.ID, DestinationID: dests["failed"].ID, Status: "failed"},
 	}
 	for _, row := range rows {
 		if err := gdb.Create(row).Error; err != nil {
 			t.Fatalf("create %T: %v", row, err)
 		}
+	}
+	// The summary columns of snapshots only exist from 000044 on.
+	snap := &Snapshot{DestinationID: dests["snapshot"].ID, SnapshotID: "abc", SnapshotAt: now}
+	if err := gdb.Omit("backup_start", "backup_end", "files_new", "files_changed", "files_unmodified",
+		"total_bytes_processed", "data_added").Create(snap).Error; err != nil {
+		t.Fatalf("create snapshot: %v", err)
 	}
 	if err := gdb.Model(dests["sized"]).Update("repo_size_updated_at", now).Error; err != nil {
 		t.Fatalf("set repo size: %v", err)
@@ -729,5 +734,142 @@ func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
 	}
 	if err := m.Up(); err != nil {
 		t.Fatalf("Up again: %v", err)
+	}
+}
+
+// TestSQLiteMigration_NotificationProviders checks that 000043 rebuilds the
+// delivery queue keeping its rows, that a provider delivery is deleted with
+// its provider, and that the down migration drops provider deliveries only.
+func TestSQLiteMigration_NotificationProviders(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/providers.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(42); err != nil {
+		t.Fatalf("Migrate(42): %v", err)
+	}
+
+	user := &User{Email: "a@test.local", DisplayName: "A", Role: "admin", IsActive: true}
+	if err := gdb.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	n := &Notification{UserID: user.ID, Type: "job_failure", Title: "t", Body: "b", Payload: "{}"}
+	if err := gdb.Create(n).Error; err != nil {
+		t.Fatalf("create notification: %v", err)
+	}
+	if err := gdb.Exec(`INSERT INTO notification_delivery_queue (id, notification_id, type, status) VALUES (?, ?, 'webhook', 'pending')`,
+		uuid.Must(uuid.NewV7()).String(), n.ID.String()).Error; err != nil {
+		t.Fatalf("insert webhook delivery: %v", err)
+	}
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	count := func(where string) int64 {
+		var c int64
+		if err := gdb.Model(&NotificationDelivery{}).Where(where).Count(&c).Error; err != nil {
+			t.Fatalf("count deliveries: %v", err)
+		}
+		return c
+	}
+	if c := count("type = 'webhook'"); c != 1 {
+		t.Fatalf("webhook deliveries after Up = %d, want 1", c)
+	}
+
+	p := &NotificationProvider{Name: "gotify", Type: "gotify", Config: "{}", Secrets: EncryptedString(`{"token":"x"}`), Enabled: true}
+	if err := gdb.Create(p).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	if err := gdb.Create(&NotificationDelivery{NotificationID: n.ID, Type: "provider", Status: "pending", ProviderID: &p.ID}).Error; err != nil {
+		t.Fatalf("create provider delivery: %v", err)
+	}
+	if err := gdb.Delete(&NotificationProvider{}, "id = ?", p.ID).Error; err != nil {
+		t.Fatalf("delete provider: %v", err)
+	}
+	if c := count("type = 'provider'"); c != 0 {
+		t.Errorf("provider deliveries after deleting the provider = %d, want 0", c)
+	}
+
+	p2 := &NotificationProvider{Name: "ntfy", Type: "ntfy", Config: "{}", Enabled: true}
+	if err := gdb.Create(p2).Error; err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	if err := gdb.Create(&NotificationDelivery{NotificationID: n.ID, Type: "provider", Status: "pending", ProviderID: &p2.ID}).Error; err != nil {
+		t.Fatalf("create provider delivery: %v", err)
+	}
+	if err := m.Migrate(42); err != nil {
+		t.Fatalf("down 000043: %v", err)
+	}
+	if c := count("type = 'webhook'"); c != 1 {
+		t.Errorf("webhook deliveries after down = %d, want 1", c)
+	}
+	if gdb.Migrator().HasTable("notification_providers") {
+		t.Error("notification_providers still exists after down")
+	}
+}
+
+// TestSQLiteMigration_SnapshotSummary checks that 000044 adds the summary
+// columns to snapshots, leaving an existing record with an unknown summary
+// (backup_end NULL, figures zero), and that its down migration drops them.
+func TestSQLiteMigration_SnapshotSummary(t *testing.T) {
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	gdb, err := New(Config{
+		Driver:   "sqlite",
+		DSN:      "file:" + t.TempDir() + "/summary.db",
+		Logger:   zap.NewNop(),
+		LogLevel: gormlogger.Silent,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(43); err != nil {
+		t.Fatalf("down 000044: %v", err)
+	}
+	columns := []string{"backup_start", "backup_end", "files_new", "files_changed", "files_unmodified",
+		"total_bytes_processed", "data_added"}
+	for _, c := range columns {
+		if gdb.Migrator().HasColumn(&Snapshot{}, c) {
+			t.Errorf("down migration kept snapshots.%s", c)
+		}
+	}
+
+	dest := &Destination{Name: "dest", Type: "local", Config: `{"path":"/r"}`, Enabled: true}
+	if err := gdb.Create(dest).Error; err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	snap := &Snapshot{DestinationID: dest.ID, SnapshotID: "abc", SizeBytes: 10, SnapshotAt: time.Now().UTC()}
+	if err := gdb.Omit(columns...).Create(snap).Error; err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+
+	if err := m.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	var got Snapshot
+	if err := gdb.First(&got, "id = ?", snap.ID).Error; err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if got.SnapshotSummary != (SnapshotSummary{}) || got.SizeBytes != 10 {
+		t.Errorf("existing snapshot after Up: summary %+v, size %d; want an unknown summary and the size kept", got.SnapshotSummary, got.SizeBytes)
 	}
 }

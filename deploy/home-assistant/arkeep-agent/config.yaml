@@ -1,0 +1,65 @@
+# Home Assistant app running the Arkeep agent. See ../README.md for how it is
+# published and DOCS.md for what users see.
+name: Arkeep Agent
+# The release tag of the agent image. The release workflow sets it when it
+# publishes the app; the dependency pins workflow keeps this copy on the latest
+# release, like the compose examples.
+version: "v0.11.0"
+slug: arkeep_agent
+description: Back up Home Assistant with Restic and Rclone, managed from an Arkeep server
+url: https://github.com/arkeep-io/arkeep/tree/home-assistant
+arch:
+  - aarch64
+  - amd64
+# The official agent image, pulled at the tag given by version. It carries no
+# Home Assistant labels: legacy mode runs it as it is and passes each option
+# below to the agent as an environment variable of the same name. Docker Hub,
+# not GHCR: only the release environment can push it (ADR 0024).
+image: arkeepio/arkeep-agent
+legacy: true
+# New on Home Assistant: shown with an "experimental" label in the app store.
+stage: experimental
+# On stop, the agent lets a running restic finish cleanly for up to 30 seconds,
+# so that it removes its repository lock. The default is 10 seconds.
+timeout: 40
+# The agent only makes outbound connections to the server: no port, no host
+# network, no Docker socket.
+environment:
+  # /data is the app's persistent storage: enrollment certificates, agent
+  # state, and the restic and rclone binaries extracted at startup.
+  ARKEEP_STATE_DIR: /data
+  # Paths entered in the Arkeep UI are the app's own paths (/backup, /share,
+  # ...). The agent detects Docker and would prefix them with /hostfs, the
+  # host filesystem mount of a plain Docker install: "/" keeps them unchanged.
+  ARKEEP_DOCKER_HOST_ROOT: /
+  # Keeps the restic cache across restarts instead of rebuilding it.
+  XDG_CACHE_HOME: /data/cache
+# Home Assistant backups of the app keep its identity and state, not what is
+# rebuilt at startup.
+backup_exclude:
+  - cache
+  - restic
+  - rclone
+map:
+  - type: backup
+    read_only: false
+  - type: share
+    read_only: false
+  - type: media
+    read_only: false
+  - type: homeassistant_config
+  - type: all_app_configs
+  - type: ssl
+options:
+  ARKEEP_SERVER_ADDR: null
+  ARKEEP_AGENT_SECRET: null
+  ARKEEP_AGENT_HOSTNAME: homeassistant
+  ARKEEP_LOG_LEVEL: info
+schema:
+  # host:port, without a scheme: gRPC resolves the host directly.
+  ARKEEP_SERVER_ADDR: 'match(^[^\s/]+:[0-9]+$)'
+  ARKEEP_AGENT_SECRET: password
+  ARKEEP_SERVER_HTTP_ADDR: url?
+  ARKEEP_AGENT_HOSTNAME: str
+  ARKEEP_GRPC_TLS_CA: str?
+  ARKEEP_LOG_LEVEL: list(debug|info|warn|error)

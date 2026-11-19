@@ -54,6 +54,10 @@ type RouterConfig struct {
 	Challenges    repositories.TwoFactorChallengeRepository
 	RecoveryCodes repositories.RecoveryCodeRepository
 
+	// NotificationProviders manages the push and chat services events are
+	// sent to (Settings → Notifications).
+	NotificationProviders repositories.NotificationProviderRepository
+
 	// PasswordChanges holds the login step of an account that must set a new
 	// password before a session is issued.
 	PasswordChanges repositories.PasswordChangeChallengeRepository
@@ -139,10 +143,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.PasswordChanges, cfg.Audit, cfg.Logger, cfg.Secure)
 	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
-	var enrollHandler *EnrollHandler
-	if cfg.AutoCerts != nil {
-		enrollHandler = NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
-	}
+	// Registered without auto-PKI too: it then answers 405 with a proof that
+	// the agent can check (ADR 0023), instead of an unauthenticated 405.
+	enrollHandler := NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
 	agentHandler := NewAgentHandler(cfg.Agents, cfg.Policies, cfg.Destinations, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	destinationHandler := NewDestinationHandler(cfg.Destinations, cfg.Policies, cfg.Agents, cfg.AgentManager, cfg.RetentionScheduler, cfg.CheckScheduler, cfg.SnapshotSync, cfg.Audit, cfg.Logger)
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Jobs, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
@@ -151,6 +154,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
+	notificationProviderHandler := NewNotificationProviderHandler(cfg.NotificationProviders, cfg.Audit, cfg.Logger)
 	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler := newVersionHandler(cfg.ServerVersion, cfg.UpdateCheck)
@@ -213,9 +217,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/setup/status", setupHandler.GetStatus)
 			r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/setup/complete", setupHandler.Complete)
 
-			if enrollHandler != nil {
-				r.Post("/agents/enroll", enrollHandler.Enroll)
-			}
+			r.Post("/agents/enroll", enrollHandler.Enroll)
 
 			r.Get("/ws", wsHandler.ServeWS)
 
@@ -333,6 +335,13 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				r.Get("/settings/webhook", settingsHandler.GetWebhook)
 				r.Put("/settings/webhook", settingsHandler.UpsertWebhook)
 				r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/settings/webhook/test", settingsHandler.TestWebhook)
+
+				// Notification providers (Gotify, ntfy, Telegram...)
+				r.Get("/settings/notification-providers", notificationProviderHandler.List)
+				r.Post("/settings/notification-providers", notificationProviderHandler.Create)
+				r.Put("/settings/notification-providers/{id}", notificationProviderHandler.Update)
+				r.Delete("/settings/notification-providers/{id}", notificationProviderHandler.Delete)
+				r.With(RateLimit(NewRateLimiter(5, time.Minute))).Post("/settings/notification-providers/test", notificationProviderHandler.Test)
 
 				// Notification event toggles
 				r.Get("/settings/notifications", settingsHandler.GetNotificationSettings)

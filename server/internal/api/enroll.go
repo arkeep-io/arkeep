@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
+	"github.com/arkeep-io/arkeep/shared/enrollproof"
 )
 
 // maxEnrollBodyBytes caps the enrollment request: a secret and a CSR fit in
@@ -42,17 +43,22 @@ func NewEnrollHandler(autoCerts *grpccerts.AutoCerts, agentSecret string, logger
 func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	// Rate limiting
 	ip := clientIP(r)
-	if !h.rateLimiter.Allow(ip) {
+	if !h.rateLimiter.Allow(rateLimitKey(ip)) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "rate limit exceeded — max 10 enrollment requests per minute per IP", http.StatusTooManyRequests)
 		return
 	}
 
 	var body struct {
+		// AgentSecret is the secret itself, sent by agents older than ADR
+		// 0023. Still accepted, so that they can enroll again.
 		AgentSecret string `json:"agent_secret"`
 		// CSR is the agent's PEM certificate signing request. Agents older
 		// than 0.9 send none and get a server-generated key instead.
 		CSR string `json:"csr"`
+		// Proof is enrollproof.Request: the agent proves it knows the secret
+		// without sending it (ADR 0023).
+		Proof string `json:"proof"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxEnrollBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -61,11 +67,34 @@ func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// An empty configured secret fails closed (the server refuses to start
-	// without one), and the comparison is constant-time.
-	if h.agentSecret == "" || subtle.ConstantTimeCompare([]byte(body.AgentSecret), []byte(h.agentSecret)) != 1 {
-		h.logger.Warn("enrollment rejected: wrong agent_secret", zap.String("ip", ip))
+	// without one), and the comparisons are constant-time.
+	proven := h.agentSecret != "" && body.Proof != "" && body.CSR != "" &&
+		enrollproof.Equal(enrollproof.Request(h.agentSecret, body.CSR), body.Proof)
+	legacy := h.agentSecret != "" && body.Proof == "" &&
+		subtle.ConstantTimeCompare([]byte(body.AgentSecret), []byte(h.agentSecret)) == 1
+
+	// Without auto-PKI there is no certificate to issue. The 405 tells the
+	// agent to connect without one; an agent that proved the secret gets a
+	// proof back, so that someone on the path cannot fake this answer.
+	if h.autoCerts == nil {
+		if proven {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+				"proof": enrollproof.Unsupported(h.agentSecret, body.CSR),
+			})
+			return
+		}
+		http.Error(w, "enrollment not supported: the server does not use auto-PKI", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !proven && !legacy {
+		h.logger.Warn("enrollment rejected: wrong agent secret", zap.String("ip", ip))
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
+	}
+	if legacy {
+		h.logger.Warn("agent enrolled by sending the agent secret itself, which travels in clear over HTTP: upgrade the agent",
+			zap.String("ip", ip))
 	}
 
 	// Issue a per-agent client certificate. The CN embeds a UUID so each
@@ -96,10 +125,22 @@ func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 		resp["client_key"] = string(keyPEM)
 	}
 
-	h.logger.Info("agent enrolled", zap.String("cn", cn), zap.String("ip", ip), zap.Bool("csr", body.CSR != ""))
+	if proven {
+		// The agent accepts the CA and certificate only with this proof, so
+		// that someone on the path cannot substitute their own.
+		resp["proof"] = enrollproof.Response(h.agentSecret, body.CSR, resp["ca_cert"], resp["client_cert"])
+	}
 
+	h.logger.Info("agent enrolled", zap.String("cn", cn), zap.String("ip", ip), zap.Bool("csr", body.CSR != ""), zap.Bool("proof", proven))
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// writeJSON writes v as the JSON body of a response with status.
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // clientIP returns the host part of r.RemoteAddr, which RealIP has already

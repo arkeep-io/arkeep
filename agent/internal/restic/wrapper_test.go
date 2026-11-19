@@ -2,6 +2,7 @@ package restic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -907,6 +908,61 @@ exit 10
 	return script, calls
 }
 
+// TestBackup_IncompleteSnapshot covers restic's exit 3 (R-12): the snapshot is
+// created but some files could not be read. The result is kept with an error
+// wrapping ErrIncompleteSnapshot; any other failure, or an exit 3 without a
+// snapshot, is a plain error without a result.
+func TestBackup_IncompleteSnapshot(t *testing.T) {
+	const summary = `{"message_type":"summary","snapshot_id":"3f2a9c1e5b7d","files_new":2,"total_files_processed":2}`
+	tests := []struct {
+		name           string
+		stdout         string
+		exit           int
+		wantIncomplete bool
+	}{
+		{"exit 3 with a snapshot", summary, 3, true},
+		{"exit 3 without a snapshot", "", 3, false},
+		{"exit 1 with a summary", summary, 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "fake-restic.sh")
+			body := fmt.Sprintf("#!/bin/sh\n[ \"$1\" = \"init\" ] && exit 0\necho '%s'\n"+
+				"echo 'error: open /data/locked: permission denied' >&2\nexit %d\n", tt.stdout, tt.exit)
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			w := &Wrapper{resticBin: script, rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+			dest := Destination{Type: DestLocal, RepoURL: filepath.Join(dir, "repo"), Password: "pw", MustExist: true}
+
+			result, err := w.Backup(context.Background(), dest, BackupOptions{Sources: []string{"/data"}}, nil)
+			if err == nil {
+				t.Fatal("Backup succeeded, want an error")
+			}
+			if got := errors.Is(err, ErrIncompleteSnapshot); got != tt.wantIncomplete {
+				t.Fatalf("errors.Is(err, ErrIncompleteSnapshot) = %v, want %v; err = %v", got, tt.wantIncomplete, err)
+			}
+			if !tt.wantIncomplete {
+				if result != nil {
+					t.Errorf("result = %+v, want nil", result)
+				}
+				return
+			}
+			if result == nil || result.SnapshotID != "3f2a9c1e5b7d" {
+				t.Fatalf("result = %+v, want the snapshot of the incomplete backup", result)
+			}
+			if result.Summary.FilesNew != 2 {
+				t.Errorf("summary files_new = %d, want 2", result.Summary.FilesNew)
+			}
+			// The unreadable file stays in the message shown to the admin.
+			if !strings.Contains(err.Error(), "/data/locked") {
+				t.Errorf("error %q does not name the unreadable file", err)
+			}
+		})
+	}
+}
+
 // TestBackup_RepositoryThatMustExist covers a repository that has gone missing
 // (an unmounted disk): when it is known to exist the backup must neither run
 // `restic init` nor report a plain restic failure, but ErrRepositoryNotFound.
@@ -1272,4 +1328,100 @@ exit 10
 			t.Errorf("error = %v\nwant    %q", err, want)
 		}
 	})
+}
+
+// resticSummaryLine is the summary event of `restic backup --json`, as
+// restic 0.19 prints it.
+const resticSummaryLine = `{"message_type":"summary","files_new":1,"files_changed":2,"files_unmodified":3,"dirs_new":7,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":1,"tree_blobs":8,"data_added":3066,"data_added_packed":2500,"total_files_processed":6,"total_bytes_processed":4096,"total_duration":0.76,"backup_start":"2026-11-17T09:46:07.33213638+01:00","backup_end":"2026-11-17T09:46:08.093417686+01:00","snapshot_id":"8725bff10a20eaaba50b64cad3d0048e1a0c8343f186b62467aa27c29e199153"}`
+
+// wantResticSummary is resticSummaryLine decoded.
+var wantResticSummary = SnapshotSummary{
+	BackupStart:         time.Date(2026, 11, 17, 8, 46, 7, 332136380, time.UTC),
+	BackupEnd:           time.Date(2026, 11, 17, 8, 46, 8, 93417686, time.UTC),
+	FilesNew:            1,
+	FilesChanged:        2,
+	FilesUnmodified:     3,
+	TotalFilesProcessed: 6,
+	TotalBytesProcessed: 4096,
+	DataAdded:           3066,
+	DataAddedPacked:     2500,
+}
+
+// equalSummary compares summaries with time.Equal, which ignores the zone.
+func equalSummary(a, b SnapshotSummary) bool {
+	if !a.BackupStart.Equal(b.BackupStart) || !a.BackupEnd.Equal(b.BackupEnd) {
+		return false
+	}
+	a.BackupStart, a.BackupEnd, b.BackupStart, b.BackupEnd = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	return a == b
+}
+
+// TestSummaryInterceptor checks that the summary event of a backup fills the
+// result with the snapshot ID and every figure, and that the events still
+// reach the caller.
+func TestSummaryInterceptor(t *testing.T) {
+	var result BackupResult
+	var forwarded []string
+	intercept := summaryInterceptor(&result, func(ev ProgressEvent) error {
+		forwarded = append(forwarded, ev.MessageType)
+		return nil
+	})
+
+	for _, line := range []string{`{"message_type":"status","percent_done":0.5}`, resticSummaryLine} {
+		var ev ProgressEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatal(err)
+		}
+		ev.Raw = line
+		if err := intercept(ev); err != nil {
+			t.Fatalf("intercept: %v", err)
+		}
+	}
+
+	if result.SnapshotID != "8725bff10a20eaaba50b64cad3d0048e1a0c8343f186b62467aa27c29e199153" {
+		t.Errorf("SnapshotID = %q", result.SnapshotID)
+	}
+	if !equalSummary(result.Summary, wantResticSummary) {
+		t.Errorf("Summary = %+v, want %+v", result.Summary, wantResticSummary)
+	}
+	if !slices.Equal(forwarded, []string{"status", "summary"}) {
+		t.Errorf("forwarded %v, want both events", forwarded)
+	}
+}
+
+// TestSnapshotInfo_Summary checks that `restic snapshots --json` decodes with
+// the summary stored in each snapshot, and with none for a snapshot made by
+// restic < 0.17.
+func TestSnapshotInfo_Summary(t *testing.T) {
+	listing := `[
+	{"time":"2026-11-17T09:46:07.33213638+01:00","id":"aaa","summary":{"backup_start":"2026-11-17T09:46:07.33213638+01:00","backup_end":"2026-11-17T09:46:08.093417686+01:00","files_new":1,"files_changed":2,"files_unmodified":3,"dirs_new":7,"data_blobs":1,"tree_blobs":8,"data_added":3066,"data_added_packed":2500,"total_files_processed":6,"total_bytes_processed":4096}},
+	{"time":"2023-01-02T03:04:05Z","id":"bbb"}
+]`
+	var snaps []SnapshotInfo
+	if err := json.Unmarshal([]byte(listing), &snaps); err != nil {
+		t.Fatal(err)
+	}
+	if !equalSummary(snaps[0].Summary, wantResticSummary) {
+		t.Errorf("summary = %+v, want %+v", snaps[0].Summary, wantResticSummary)
+	}
+	if snaps[1].Summary != (SnapshotSummary{}) {
+		t.Errorf("summary of an old snapshot = %+v, want zero", snaps[1].Summary)
+	}
+}
+
+func TestSnapshotSummary_AddedBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		s    SnapshotSummary
+		want int64
+	}{
+		{"packed size", SnapshotSummary{DataAdded: 3066, DataAddedPacked: 2500}, 2500},
+		{"no packed size", SnapshotSummary{DataAdded: 3066}, 3066},
+		{"nothing added", SnapshotSummary{}, 0},
+	}
+	for _, tt := range tests {
+		if got := tt.s.AddedBytes(); got != tt.want {
+			t.Errorf("%s: AddedBytes() = %d, want %d", tt.name, got, tt.want)
+		}
+	}
 }

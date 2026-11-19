@@ -47,7 +47,7 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0003](0003-restic-and-rclone-embedded-in-the-agent.md) | Use restic and rclone, embedded in the agent | Accepted |
 | [0004](0004-single-server-binary-with-embedded-gui-and-migrations.md) | Ship a single server binary with the GUI and migrations embedded | Accepted |
 | [0005](0005-sqlite-by-default-postgresql-supported.md) | SQLite by default, PostgreSQL supported, explicit data access | Accepted |
-| [0006](0006-auto-pki-and-per-agent-mtls.md) | Auto-PKI and per-agent mTLS identity | Accepted |
+| [0006](0006-auto-pki-and-per-agent-mtls.md) | Auto-PKI and per-agent mTLS identity | Superseded by [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) |
 | [0007](0007-encrypt-credentials-at-rest.md) | Encrypt credentials at rest, never return them | Accepted |
 | [0008](0008-short-lived-jwt-and-refresh-cookie-sessions.md) | Short-lived JWT access tokens with refresh cookies | Accepted |
 | [0009](0009-hooks-and-command-sources-run-on-the-agent-admin-only.md) | Hooks and command sources run as shell commands on the agent, admin only | Accepted |
@@ -58,4 +58,11 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0014](0014-publish-the-helm-chart-as-an-oci-artifact.md) | Publish the Helm chart as an OCI artifact on GHCR and Docker Hub | Accepted |
 | [0015](0015-bundle-postgresql-in-the-helm-chart-with-the-official-image.md) | Bundle PostgreSQL in the Helm chart with the official image | Accepted |
 | [0016](0016-validate-release-tags-and-keep-latest-for-stable-releases.md) | Validate release tags and keep latest for stable releases | Accepted |
-| [0017](0017-keep-registry-secrets-in-the-release-environment-and-attest-every-artifact.md) | Keep registry secrets in the release environment and attest every published artifact | Proposed |
+| [0017](0017-keep-registry-secrets-in-the-release-environment-and-attest-every-artifact.md) | Keep registry secrets in the release environment and attest every published artifact | Accepted |
+| [0018](0018-publish-the-agent-as-a-home-assistant-app.md) | Publish the agent as a Home Assistant app from a branch of this repository | Superseded by [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md) |
+| [0019](0019-send-notifications-to-push-and-chat-services-through-shoutrrr.md) | Send notifications to push and chat services through shoutrrr | Accepted |
+| [0020](0020-publish-the-agent-packages-in-an-apt-and-rpm-repository-on-cloudflare-r2.md) | Publish the agent packages in an APT and RPM repository on Cloudflare R2 | Proposed |
+| [0021](0021-build-the-gui-without-secrets-and-keep-the-signing-key-on-disk-only-while-it-signs.md) | Build the GUI without secrets and keep the signing key on disk only while it signs | Proposed |
+| [0022](0022-rate-limit-ipv6-clients-per-64-and-count-second-factor-codes-per-account.md) | Rate limit IPv6 clients per /64 and count second-factor codes per account | Proposed |
+| [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) | Auto-PKI, per-agent mTLS, and enrollment authenticated with the agent secret | Proposed |
+| [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md) | Publish the Home Assistant app with a deploy key, and images only the release can write | Proposed |

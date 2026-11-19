@@ -6,8 +6,45 @@ on:
       - "v*"
 
 jobs:
+  # The GUI, which the server embeds, is built here and handed to the release
+  # job as an artifact. Installing and building it runs code from the npm
+  # dependencies (Vite and its plugins), so this job has no environment, no
+  # secret and a read-only token: that code never runs next to the registry
+  # credentials or the package signing key (P-04, ADR 0021). No cache is
+  # restored: the output ends up in the released server binary (P-06).
+  gui:
+    name: GUI
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Node >= 25 no longer bundles corepack. pnpm/action-setup installs the
+      # version pinned by packageManager in gui/package.json.
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: gui/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Build the GUI
+        run: cd gui && pnpm install --frozen-lockfile && pnpm build
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gui-dist
+          path: gui/dist
+          if-no-files-found: error
+          retention-days: 1
+
   release:
     name: Release
+    needs: gui
     runs-on: ubuntu-26.04
     # The Docker Hub organization access token lives in this environment,
     # which only v* tags and main can deploy to: a workflow pushed on any
@@ -15,7 +52,6 @@ jobs:
     environment: release
     permissions:
       contents: write
-      packages: write
       # Signing and storing the build provenance (P-02).
       id-token: write
       attestations: write
@@ -26,10 +62,10 @@ jobs:
           fetch-depth: 0
 
       # Refuses to release from a tag that is malformed or points to a commit
-      # outside the allowed branches, before anything is built or any
-      # registry credential is used. Stable tags (vX.Y.Z) must be in the
-      # history of main; beta and rc tags (vX.Y.Z-beta.N, vX.Y.Z-rc.N) in the
-      # history of main or develop. The tag is peeled to its commit, so
+      # outside the allowed branches, before anything is built in this job or
+      # any registry credential is used (the gui job holds neither). Stable
+      # tags (vX.Y.Z) must be in the history of main; beta and rc tags
+      # (vX.Y.Z-beta.N, vX.Y.Z-rc.N) in the history of main or develop. The tag is peeled to its commit, so
       # lightweight and annotated tags are handled alike.
       - name: Validate release tag and source commit
         shell: bash
@@ -82,22 +118,19 @@ jobs:
           echo "::error::Tag '${tag}' points to ${tag_commit}, which is not in the history of ${branches% or }. Stable tags must be on main; beta and rc tags on main or develop."
           exit 1
 
+      # No cache: this job holds the registry credentials and the package
+      # signing key, and must not restore what another run wrote (P-06).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.work
+          cache: false
 
-      # Node >= 25 no longer bundles corepack. pnpm/action-setup installs the
-      # version pinned by packageManager in gui/package.json, and must run
-      # before setup-node so its pnpm cache lookup can find the binary.
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      # The GUI built by the gui job, embedded by the GoReleaser hooks. No npm
+      # code runs in this job (P-04, ADR 0021).
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          package_json_file: gui/package.json
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: "pnpm"
-          cache-dependency-path: gui/pnpm-lock.yaml
+          name: gui-dist
+          path: gui/dist
 
       # QEMU and Buildx are required for cross-platform Docker image builds.
       # Without them, building linux/arm64 images on the amd64 runner fails
@@ -108,12 +141,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # A token of an organization owner with write:packages, kept in this
+      # environment: the repository's own GITHUB_TOKEN can only read the GHCR
+      # packages, so a workflow on another branch cannot overwrite an image or
+      # the chart (P-13, ADR 0024).
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -149,6 +186,22 @@ jobs:
           echo "First-time contributors since ${prev}: ${contributors}"
           echo "CONTRIBUTORS=${contributors}" >> "$GITHUB_ENV"
 
+      # GoReleaser signs the agent .rpm packages with the package repository
+      # key (ADR 0020), read from this file. A missing secret stops the
+      # release rather than publish unsigned packages. The key stays on disk
+      # only while GoReleaser runs, and only GoReleaser gets its path
+      # (ADR 0021).
+      - name: Prepare the package signing key
+        env:
+          PACKAGES_SIGNING_KEY: ${{ secrets.PACKAGES_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PACKAGES_SIGNING_KEY" ]; then
+            echo "::error::The PACKAGES_SIGNING_KEY secret of the release environment is empty."
+            exit 1
+          fi
+          (umask 077 && printf '%s\n' "$PACKAGES_SIGNING_KEY" > "${RUNNER_TEMP}/packages-signing-key.asc")
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -157,6 +210,11 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARKEEP_PACKAGES_SIGNING_KEY_FILE: ${{ runner.temp }}/packages-signing-key.asc
+
+      - name: Remove the package signing key
+        if: ${{ always() }}
+        run: rm -f "${RUNNER_TEMP}/packages-signing-key.asc"
 
       # The Helm chart is published as an OCI artifact on GHCR and Docker Hub,
       # versioned like the release (ADR 0014). It runs after GoReleaser so the
@@ -167,8 +225,8 @@ jobs:
 
       - name: Publish the Helm chart
         env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ vars.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           DOCKERHUB_ORG_TOKEN: ${{ secrets.DOCKERHUB_ORG_TOKEN }}
         run: |
           set -euo pipefail
@@ -210,3 +268,66 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: ${{ runner.temp }}/subjects.txt
+
+      # The APT and RPM repository at pkg.arkeep.io (ADR 0020), rebuilt from
+      # the agent packages of the last stable releases, this one included,
+      # once their attestation exists: the script checks it before signing.
+      # Stable releases only. The rclone binary is the pinned and verified
+      # one the GoReleaser hooks downloaded for the agent (ADR 0013). The
+      # signing key is written after the tools are installed and the releases
+      # downloaded, and removed as soon as the repository is signed
+      # (ADR 0021). If this step fails, the release is otherwise complete: run
+      # the Agent repository workflow from main.
+      - name: Publish the agent package repository
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGES_SIGNING_KEY: ${{ secrets.PACKAGES_SIGNING_KEY }}
+          RCLONE: agent/internal/restic/bin/rclone_linux_amd64
+          PACKAGES_R2_ENDPOINT: ${{ vars.PACKAGES_R2_ENDPOINT }}
+          PACKAGES_R2_ACCESS_KEY_ID: ${{ secrets.PACKAGES_R2_ACCESS_KEY_ID }}
+          PACKAGES_R2_SECRET_ACCESS_KEY: ${{ secrets.PACKAGES_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c rpm
+          scripts/agent-repository.sh fetch "${RUNNER_TEMP}/releases"
+          key_file="${RUNNER_TEMP}/packages-signing-key.asc"
+          trap 'rm -f "$key_file"' EXIT
+          (umask 077 && printf '%s\n' "$PACKAGES_SIGNING_KEY" > "$key_file")
+          ARKEEP_PACKAGES_SIGNING_KEY_FILE=$key_file \
+            scripts/agent-repository.sh build "${RUNNER_TEMP}/releases" "${RUNNER_TEMP}/repository"
+          rm -f "$key_file"
+          scripts/agent-repository.sh upload "${RUNNER_TEMP}/repository"
+
+      # The Home Assistant app describes the agent image of this release
+      # (ADR 0024). Moving the home-assistant branch is what offers the new
+      # version to Home Assistant users, so it comes last, once the image is
+      # published and attested, and only for stable releases. The branch is
+      # pushed over SSH with a deploy key kept in this environment, the only
+      # actor the protect-home-assistant ruleset lets create or update it: a
+      # workflow on another branch cannot move it with GITHUB_TOKEN (P-13). The
+      # key and GitHub's published host key live in a temporary directory,
+      # removed when the step ends.
+      - name: Publish the Home Assistant app
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          HOME_ASSISTANT_DEPLOY_KEY: ${{ secrets.HOME_ASSISTANT_DEPLOY_KEY }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          if [ -z "$HOME_ASSISTANT_DEPLOY_KEY" ]; then
+            echo "::error::The HOME_ASSISTANT_DEPLOY_KEY secret of the release environment is empty."
+            exit 1
+          fi
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          (umask 077 && printf '%s\n' "$HOME_ASSISTANT_DEPLOY_KEY" > "${ssh_dir}/key")
+          # github.com's ed25519 host key, as published at
+          # https://api.github.com/meta (SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU).
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "${ssh_dir}/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i ${ssh_dir}/key -o IdentitiesOnly=yes -o UserKnownHostsFile=${ssh_dir}/known_hosts -o StrictHostKeyChecking=yes"
+          scripts/publish-home-assistant-app.sh "$GITHUB_REF_NAME" "git@github.com:${GITHUB_REPOSITORY}.git"

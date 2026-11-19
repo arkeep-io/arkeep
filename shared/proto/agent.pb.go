@@ -899,7 +899,11 @@ type DestinationStatusReport struct {
 	// job_retention_tags instead of job_destinations/job_destination_commands.
 	// A forget never creates a snapshot, so snapshot_id/size_bytes are unused
 	// on these reports.
-	RetentionTag  string `protobuf:"bytes,11,opt,name=retention_tag,json=retentionTag,proto3" json:"retention_tag,omitempty"`
+	RetentionTag string `protobuf:"bytes,11,opt,name=retention_tag,json=retentionTag,proto3" json:"retention_tag,omitempty"`
+	// summary is the restic summary of the snapshot this backup created. Unset
+	// when no snapshot was created, and on reports from agents built before it
+	// existed.
+	Summary       *SnapshotSummary `protobuf:"bytes,12,opt,name=summary,proto3" json:"summary,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1011,6 +1015,134 @@ func (x *DestinationStatusReport) GetRetentionTag() string {
 	return ""
 }
 
+func (x *DestinationStatusReport) GetSummary() *SnapshotSummary {
+	if x != nil {
+		return x.Summary
+	}
+	return nil
+}
+
+// SnapshotSummary holds the statistics restic records about a snapshot: the
+// summary event of `restic backup --json`, or the summary stored in the
+// snapshot itself and listed by `restic snapshots --json` (restic >= 0.17).
+// The data_added_packed and total_files_processed figures are also sent as
+// size_bytes and file_count, which predate this message.
+type SnapshotSummary struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// backup_start and backup_end bound the restic run that created the
+	// snapshot.
+	BackupStart *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=backup_start,json=backupStart,proto3" json:"backup_start,omitempty"`
+	BackupEnd   *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=backup_end,json=backupEnd,proto3" json:"backup_end,omitempty"`
+	// files_new, files_changed and files_unmodified count the files of the
+	// snapshot by how they compare with the parent snapshot.
+	FilesNew        int64 `protobuf:"varint,3,opt,name=files_new,json=filesNew,proto3" json:"files_new,omitempty"`
+	FilesChanged    int64 `protobuf:"varint,4,opt,name=files_changed,json=filesChanged,proto3" json:"files_changed,omitempty"`
+	FilesUnmodified int64 `protobuf:"varint,5,opt,name=files_unmodified,json=filesUnmodified,proto3" json:"files_unmodified,omitempty"`
+	// total_files_processed and total_bytes_processed are the number and the
+	// logical size of the files the backup read.
+	TotalFilesProcessed int64 `protobuf:"varint,6,opt,name=total_files_processed,json=totalFilesProcessed,proto3" json:"total_files_processed,omitempty"`
+	TotalBytesProcessed int64 `protobuf:"varint,7,opt,name=total_bytes_processed,json=totalBytesProcessed,proto3" json:"total_bytes_processed,omitempty"`
+	// data_added is what the snapshot added to the repository after
+	// deduplication; data_added_packed is the same after compression.
+	DataAdded       int64 `protobuf:"varint,8,opt,name=data_added,json=dataAdded,proto3" json:"data_added,omitempty"`
+	DataAddedPacked int64 `protobuf:"varint,9,opt,name=data_added_packed,json=dataAddedPacked,proto3" json:"data_added_packed,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SnapshotSummary) Reset() {
+	*x = SnapshotSummary{}
+	mi := &file_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotSummary) ProtoMessage() {}
+
+func (x *SnapshotSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotSummary.ProtoReflect.Descriptor instead.
+func (*SnapshotSummary) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SnapshotSummary) GetBackupStart() *timestamppb.Timestamp {
+	if x != nil {
+		return x.BackupStart
+	}
+	return nil
+}
+
+func (x *SnapshotSummary) GetBackupEnd() *timestamppb.Timestamp {
+	if x != nil {
+		return x.BackupEnd
+	}
+	return nil
+}
+
+func (x *SnapshotSummary) GetFilesNew() int64 {
+	if x != nil {
+		return x.FilesNew
+	}
+	return 0
+}
+
+func (x *SnapshotSummary) GetFilesChanged() int64 {
+	if x != nil {
+		return x.FilesChanged
+	}
+	return 0
+}
+
+func (x *SnapshotSummary) GetFilesUnmodified() int64 {
+	if x != nil {
+		return x.FilesUnmodified
+	}
+	return 0
+}
+
+func (x *SnapshotSummary) GetTotalFilesProcessed() int64 {
+	if x != nil {
+		return x.TotalFilesProcessed
+	}
+	return 0
+}
+
+func (x *SnapshotSummary) GetTotalBytesProcessed() int64 {
+	if x != nil {
+		return x.TotalBytesProcessed
+	}
+	return 0
+}
+
+func (x *SnapshotSummary) GetDataAdded() int64 {
+	if x != nil {
+		return x.DataAdded
+	}
+	return 0
+}
+
+func (x *SnapshotSummary) GetDataAddedPacked() int64 {
+	if x != nil {
+		return x.DataAddedPacked
+	}
+	return 0
+}
+
 // DestinationStatusResponse acknowledges receipt of the destination report.
 type DestinationStatusResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1021,7 +1153,7 @@ type DestinationStatusResponse struct {
 
 func (x *DestinationStatusResponse) Reset() {
 	*x = DestinationStatusResponse{}
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1033,7 +1165,7 @@ func (x *DestinationStatusResponse) String() string {
 func (*DestinationStatusResponse) ProtoMessage() {}
 
 func (x *DestinationStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[11]
+	mi := &file_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1046,7 +1178,7 @@ func (x *DestinationStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestinationStatusResponse.ProtoReflect.Descriptor instead.
 func (*DestinationStatusResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{11}
+	return file_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DestinationStatusResponse) GetOk() bool {
@@ -1078,7 +1210,7 @@ type LogEntry struct {
 
 func (x *LogEntry) Reset() {
 	*x = LogEntry{}
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1090,7 +1222,7 @@ func (x *LogEntry) String() string {
 func (*LogEntry) ProtoMessage() {}
 
 func (x *LogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[12]
+	mi := &file_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1103,7 +1235,7 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *LogEntry) GetJobId() string {
@@ -1153,7 +1285,7 @@ type LogStreamResponse struct {
 
 func (x *LogStreamResponse) Reset() {
 	*x = LogStreamResponse{}
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1165,7 +1297,7 @@ func (x *LogStreamResponse) String() string {
 func (*LogStreamResponse) ProtoMessage() {}
 
 func (x *LogStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[13]
+	mi := &file_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1178,7 +1310,7 @@ func (x *LogStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStreamResponse.ProtoReflect.Descriptor instead.
 func (*LogStreamResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *LogStreamResponse) GetEntriesReceived() uint32 {
@@ -1204,7 +1336,7 @@ type VolumeInfo struct {
 
 func (x *VolumeInfo) Reset() {
 	*x = VolumeInfo{}
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1216,7 +1348,7 @@ func (x *VolumeInfo) String() string {
 func (*VolumeInfo) ProtoMessage() {}
 
 func (x *VolumeInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[14]
+	mi := &file_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1229,7 +1361,7 @@ func (x *VolumeInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeInfo.ProtoReflect.Descriptor instead.
 func (*VolumeInfo) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *VolumeInfo) GetName() string {
@@ -1274,7 +1406,7 @@ type VolumeListReport struct {
 
 func (x *VolumeListReport) Reset() {
 	*x = VolumeListReport{}
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1286,7 +1418,7 @@ func (x *VolumeListReport) String() string {
 func (*VolumeListReport) ProtoMessage() {}
 
 func (x *VolumeListReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[15]
+	mi := &file_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1299,7 +1431,7 @@ func (x *VolumeListReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeListReport.ProtoReflect.Descriptor instead.
 func (*VolumeListReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *VolumeListReport) GetAgentId() string {
@@ -1340,7 +1472,7 @@ type VolumeListResponse struct {
 
 func (x *VolumeListResponse) Reset() {
 	*x = VolumeListResponse{}
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1352,7 +1484,7 @@ func (x *VolumeListResponse) String() string {
 func (*VolumeListResponse) ProtoMessage() {}
 
 func (x *VolumeListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[16]
+	mi := &file_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1365,7 +1497,7 @@ func (x *VolumeListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VolumeListResponse.ProtoReflect.Descriptor instead.
 func (*VolumeListResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *VolumeListResponse) GetOk() bool {
@@ -1393,7 +1525,7 @@ type SnapshotFileEntry struct {
 
 func (x *SnapshotFileEntry) Reset() {
 	*x = SnapshotFileEntry{}
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1537,7 @@ func (x *SnapshotFileEntry) String() string {
 func (*SnapshotFileEntry) ProtoMessage() {}
 
 func (x *SnapshotFileEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[17]
+	mi := &file_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1550,7 @@ func (x *SnapshotFileEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotFileEntry.ProtoReflect.Descriptor instead.
 func (*SnapshotFileEntry) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SnapshotFileEntry) GetPath() string {
@@ -1467,7 +1599,7 @@ type SnapshotBrowseReport struct {
 
 func (x *SnapshotBrowseReport) Reset() {
 	*x = SnapshotBrowseReport{}
-	mi := &file_agent_proto_msgTypes[18]
+	mi := &file_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1479,7 +1611,7 @@ func (x *SnapshotBrowseReport) String() string {
 func (*SnapshotBrowseReport) ProtoMessage() {}
 
 func (x *SnapshotBrowseReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[18]
+	mi := &file_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1492,7 +1624,7 @@ func (x *SnapshotBrowseReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotBrowseReport.ProtoReflect.Descriptor instead.
 func (*SnapshotBrowseReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{18}
+	return file_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SnapshotBrowseReport) GetAgentId() string {
@@ -1533,7 +1665,7 @@ type SnapshotBrowseResponse struct {
 
 func (x *SnapshotBrowseResponse) Reset() {
 	*x = SnapshotBrowseResponse{}
-	mi := &file_agent_proto_msgTypes[19]
+	mi := &file_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1545,7 +1677,7 @@ func (x *SnapshotBrowseResponse) String() string {
 func (*SnapshotBrowseResponse) ProtoMessage() {}
 
 func (x *SnapshotBrowseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[19]
+	mi := &file_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1558,7 +1690,7 @@ func (x *SnapshotBrowseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotBrowseResponse.ProtoReflect.Descriptor instead.
 func (*SnapshotBrowseResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{19}
+	return file_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SnapshotBrowseResponse) GetOk() bool {
@@ -1585,7 +1717,7 @@ type SnapshotDownloadChunk struct {
 
 func (x *SnapshotDownloadChunk) Reset() {
 	*x = SnapshotDownloadChunk{}
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1597,7 +1729,7 @@ func (x *SnapshotDownloadChunk) String() string {
 func (*SnapshotDownloadChunk) ProtoMessage() {}
 
 func (x *SnapshotDownloadChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[20]
+	mi := &file_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1610,7 +1742,7 @@ func (x *SnapshotDownloadChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotDownloadChunk.ProtoReflect.Descriptor instead.
 func (*SnapshotDownloadChunk) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{20}
+	return file_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SnapshotDownloadChunk) GetAgentId() string {
@@ -1650,7 +1782,7 @@ type SnapshotDownloadAck struct {
 
 func (x *SnapshotDownloadAck) Reset() {
 	*x = SnapshotDownloadAck{}
-	mi := &file_agent_proto_msgTypes[21]
+	mi := &file_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1662,7 +1794,7 @@ func (x *SnapshotDownloadAck) String() string {
 func (*SnapshotDownloadAck) ProtoMessage() {}
 
 func (x *SnapshotDownloadAck) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[21]
+	mi := &file_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1675,7 +1807,7 @@ func (x *SnapshotDownloadAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotDownloadAck.ProtoReflect.Descriptor instead.
 func (*SnapshotDownloadAck) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{21}
+	return file_agent_proto_rawDescGZIP(), []int{22}
 }
 
 // ImportedSnapshotInfo holds the metadata of a single snapshot found in an
@@ -1699,14 +1831,17 @@ type ImportedSnapshotInfo struct {
 	SizeBytes int64 `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	// file_count is the number of files the snapshot processed
 	// (total_files_processed from the summary). Zero when unavailable.
-	FileCount     int64 `protobuf:"varint,7,opt,name=file_count,json=fileCount,proto3" json:"file_count,omitempty"`
+	FileCount int64 `protobuf:"varint,7,opt,name=file_count,json=fileCount,proto3" json:"file_count,omitempty"`
+	// summary is the summary stored in the snapshot. Unset for snapshots
+	// created by restic < 0.17, and from agents built before it existed.
+	Summary       *SnapshotSummary `protobuf:"bytes,8,opt,name=summary,proto3" json:"summary,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ImportedSnapshotInfo) Reset() {
 	*x = ImportedSnapshotInfo{}
-	mi := &file_agent_proto_msgTypes[22]
+	mi := &file_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1718,7 +1853,7 @@ func (x *ImportedSnapshotInfo) String() string {
 func (*ImportedSnapshotInfo) ProtoMessage() {}
 
 func (x *ImportedSnapshotInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[22]
+	mi := &file_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1731,7 +1866,7 @@ func (x *ImportedSnapshotInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportedSnapshotInfo.ProtoReflect.Descriptor instead.
 func (*ImportedSnapshotInfo) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{22}
+	return file_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ImportedSnapshotInfo) GetResticSnapshotId() string {
@@ -1783,6 +1918,13 @@ func (x *ImportedSnapshotInfo) GetFileCount() int64 {
 	return 0
 }
 
+func (x *ImportedSnapshotInfo) GetSummary() *SnapshotSummary {
+	if x != nil {
+		return x.Summary
+	}
+	return nil
+}
+
 // SnapshotImportReport is sent by the agent in response to a
 // JOB_TYPE_IMPORT_SNAPSHOTS assignment. The correlation_id echoes the job_id
 // so the server can match this response to the waiting REST request.
@@ -1808,7 +1950,7 @@ type SnapshotImportReport struct {
 
 func (x *SnapshotImportReport) Reset() {
 	*x = SnapshotImportReport{}
-	mi := &file_agent_proto_msgTypes[23]
+	mi := &file_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1820,7 +1962,7 @@ func (x *SnapshotImportReport) String() string {
 func (*SnapshotImportReport) ProtoMessage() {}
 
 func (x *SnapshotImportReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[23]
+	mi := &file_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1833,7 +1975,7 @@ func (x *SnapshotImportReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotImportReport.ProtoReflect.Descriptor instead.
 func (*SnapshotImportReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{23}
+	return file_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SnapshotImportReport) GetAgentId() string {
@@ -1881,7 +2023,7 @@ type SnapshotImportResponse struct {
 
 func (x *SnapshotImportResponse) Reset() {
 	*x = SnapshotImportResponse{}
-	mi := &file_agent_proto_msgTypes[24]
+	mi := &file_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1893,7 +2035,7 @@ func (x *SnapshotImportResponse) String() string {
 func (*SnapshotImportResponse) ProtoMessage() {}
 
 func (x *SnapshotImportResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[24]
+	mi := &file_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1906,7 +2048,7 @@ func (x *SnapshotImportResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotImportResponse.ProtoReflect.Descriptor instead.
 func (*SnapshotImportResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{24}
+	return file_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SnapshotImportResponse) GetOk() bool {
@@ -1953,7 +2095,7 @@ type SnapshotReconcileReport struct {
 
 func (x *SnapshotReconcileReport) Reset() {
 	*x = SnapshotReconcileReport{}
-	mi := &file_agent_proto_msgTypes[25]
+	mi := &file_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1965,7 +2107,7 @@ func (x *SnapshotReconcileReport) String() string {
 func (*SnapshotReconcileReport) ProtoMessage() {}
 
 func (x *SnapshotReconcileReport) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[25]
+	mi := &file_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1978,7 +2120,7 @@ func (x *SnapshotReconcileReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotReconcileReport.ProtoReflect.Descriptor instead.
 func (*SnapshotReconcileReport) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{25}
+	return file_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SnapshotReconcileReport) GetAgentId() string {
@@ -2034,7 +2176,7 @@ type SnapshotReconcileResponse struct {
 
 func (x *SnapshotReconcileResponse) Reset() {
 	*x = SnapshotReconcileResponse{}
-	mi := &file_agent_proto_msgTypes[26]
+	mi := &file_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2046,7 +2188,7 @@ func (x *SnapshotReconcileResponse) String() string {
 func (*SnapshotReconcileResponse) ProtoMessage() {}
 
 func (x *SnapshotReconcileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_proto_msgTypes[26]
+	mi := &file_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2059,7 +2201,7 @@ func (x *SnapshotReconcileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotReconcileResponse.ProtoReflect.Descriptor instead.
 func (*SnapshotReconcileResponse) Descriptor() ([]byte, []int) {
-	return file_agent_proto_rawDescGZIP(), []int{26}
+	return file_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SnapshotReconcileResponse) GetDeleted() int64 {
@@ -2111,7 +2253,7 @@ const file_agent_proto_rawDesc = "" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x128\n" +
 	"\ttimestamp\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"#\n" +
 	"\x11JobStatusResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x98\x03\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xca\x03\n" +
 	"\x17DestinationStatusReport\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12%\n" +
@@ -2127,7 +2269,20 @@ const file_agent_proto_rawDesc = "" +
 	"\x0frepo_size_bytes\x18\t \x01(\x03R\rrepoSizeBytes\x12.\n" +
 	"\x13command_source_name\x18\n" +
 	" \x01(\tR\x11commandSourceName\x12#\n" +
-	"\rretention_tag\x18\v \x01(\tR\fretentionTag\"+\n" +
+	"\rretention_tag\x18\v \x01(\tR\fretentionTag\x120\n" +
+	"\asummary\x18\f \x01(\v2\x16.agent.SnapshotSummaryR\asummary\"\xab\x03\n" +
+	"\x0fSnapshotSummary\x12=\n" +
+	"\fbackup_start\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\vbackupStart\x129\n" +
+	"\n" +
+	"backup_end\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tbackupEnd\x12\x1b\n" +
+	"\tfiles_new\x18\x03 \x01(\x03R\bfilesNew\x12#\n" +
+	"\rfiles_changed\x18\x04 \x01(\x03R\ffilesChanged\x12)\n" +
+	"\x10files_unmodified\x18\x05 \x01(\x03R\x0ffilesUnmodified\x122\n" +
+	"\x15total_files_processed\x18\x06 \x01(\x03R\x13totalFilesProcessed\x122\n" +
+	"\x15total_bytes_processed\x18\a \x01(\x03R\x13totalBytesProcessed\x12\x1d\n" +
+	"\n" +
+	"data_added\x18\b \x01(\x03R\tdataAdded\x12*\n" +
+	"\x11data_added_packed\x18\t \x01(\x03R\x0fdataAddedPacked\"+\n" +
 	"\x19DestinationStatusResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xb7\x01\n" +
 	"\bLogEntry\x12\x15\n" +
@@ -2169,7 +2324,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x0ecorrelation_id\x18\x02 \x01(\tR\rcorrelationId\x12\x12\n" +
 	"\x04data\x18\x03 \x01(\fR\x04data\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\"\x15\n" +
-	"\x13SnapshotDownloadAck\"\xed\x01\n" +
+	"\x13SnapshotDownloadAck\"\x9f\x02\n" +
 	"\x14ImportedSnapshotInfo\x12,\n" +
 	"\x12restic_snapshot_id\x18\x01 \x01(\tR\x10resticSnapshotId\x12#\n" +
 	"\rsnapshot_time\x18\x02 \x01(\tR\fsnapshotTime\x12\x14\n" +
@@ -2179,7 +2334,8 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x06 \x01(\x03R\tsizeBytes\x12\x1d\n" +
 	"\n" +
-	"file_count\x18\a \x01(\x03R\tfileCount\"\xd1\x01\n" +
+	"file_count\x18\a \x01(\x03R\tfileCount\x120\n" +
+	"\asummary\x18\b \x01(\v2\x16.agent.SnapshotSummaryR\asummary\"\xd1\x01\n" +
 	"\x14SnapshotImportReport\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12%\n" +
 	"\x0ecorrelation_id\x18\x02 \x01(\tR\rcorrelationId\x129\n" +
@@ -2248,7 +2404,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_agent_proto_goTypes = []any{
 	(JobType)(0),                      // 0: agent.JobType
 	(JobStatus)(0),                    // 1: agent.JobStatus
@@ -2264,64 +2420,69 @@ var file_agent_proto_goTypes = []any{
 	(*JobStatusReport)(nil),           // 11: agent.JobStatusReport
 	(*JobStatusResponse)(nil),         // 12: agent.JobStatusResponse
 	(*DestinationStatusReport)(nil),   // 13: agent.DestinationStatusReport
-	(*DestinationStatusResponse)(nil), // 14: agent.DestinationStatusResponse
-	(*LogEntry)(nil),                  // 15: agent.LogEntry
-	(*LogStreamResponse)(nil),         // 16: agent.LogStreamResponse
-	(*VolumeInfo)(nil),                // 17: agent.VolumeInfo
-	(*VolumeListReport)(nil),          // 18: agent.VolumeListReport
-	(*VolumeListResponse)(nil),        // 19: agent.VolumeListResponse
-	(*SnapshotFileEntry)(nil),         // 20: agent.SnapshotFileEntry
-	(*SnapshotBrowseReport)(nil),      // 21: agent.SnapshotBrowseReport
-	(*SnapshotBrowseResponse)(nil),    // 22: agent.SnapshotBrowseResponse
-	(*SnapshotDownloadChunk)(nil),     // 23: agent.SnapshotDownloadChunk
-	(*SnapshotDownloadAck)(nil),       // 24: agent.SnapshotDownloadAck
-	(*ImportedSnapshotInfo)(nil),      // 25: agent.ImportedSnapshotInfo
-	(*SnapshotImportReport)(nil),      // 26: agent.SnapshotImportReport
-	(*SnapshotImportResponse)(nil),    // 27: agent.SnapshotImportResponse
-	(*SnapshotReconcileReport)(nil),   // 28: agent.SnapshotReconcileReport
-	(*SnapshotReconcileResponse)(nil), // 29: agent.SnapshotReconcileResponse
-	(*timestamppb.Timestamp)(nil),     // 30: google.protobuf.Timestamp
+	(*SnapshotSummary)(nil),           // 14: agent.SnapshotSummary
+	(*DestinationStatusResponse)(nil), // 15: agent.DestinationStatusResponse
+	(*LogEntry)(nil),                  // 16: agent.LogEntry
+	(*LogStreamResponse)(nil),         // 17: agent.LogStreamResponse
+	(*VolumeInfo)(nil),                // 18: agent.VolumeInfo
+	(*VolumeListReport)(nil),          // 19: agent.VolumeListReport
+	(*VolumeListResponse)(nil),        // 20: agent.VolumeListResponse
+	(*SnapshotFileEntry)(nil),         // 21: agent.SnapshotFileEntry
+	(*SnapshotBrowseReport)(nil),      // 22: agent.SnapshotBrowseReport
+	(*SnapshotBrowseResponse)(nil),    // 23: agent.SnapshotBrowseResponse
+	(*SnapshotDownloadChunk)(nil),     // 24: agent.SnapshotDownloadChunk
+	(*SnapshotDownloadAck)(nil),       // 25: agent.SnapshotDownloadAck
+	(*ImportedSnapshotInfo)(nil),      // 26: agent.ImportedSnapshotInfo
+	(*SnapshotImportReport)(nil),      // 27: agent.SnapshotImportReport
+	(*SnapshotImportResponse)(nil),    // 28: agent.SnapshotImportResponse
+	(*SnapshotReconcileReport)(nil),   // 29: agent.SnapshotReconcileReport
+	(*SnapshotReconcileResponse)(nil), // 30: agent.SnapshotReconcileResponse
+	(*timestamppb.Timestamp)(nil),     // 31: google.protobuf.Timestamp
 }
 var file_agent_proto_depIdxs = []int32{
 	4,  // 0: agent.RegisterRequest.capabilities:type_name -> agent.AgentCapabilities
 	7,  // 1: agent.HeartbeatRequest.metrics:type_name -> agent.SystemMetrics
 	0,  // 2: agent.JobAssignment.type:type_name -> agent.JobType
 	1,  // 3: agent.JobStatusReport.status:type_name -> agent.JobStatus
-	30, // 4: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
-	30, // 5: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
-	2,  // 6: agent.LogEntry.level:type_name -> agent.LogLevel
-	30, // 7: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
-	17, // 8: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
-	20, // 9: agent.SnapshotBrowseReport.entries:type_name -> agent.SnapshotFileEntry
-	25, // 10: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
-	30, // 11: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
-	3,  // 12: agent.AgentService.Register:input_type -> agent.RegisterRequest
-	6,  // 13: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
-	9,  // 14: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
-	11, // 15: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
-	13, // 16: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
-	15, // 17: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
-	18, // 18: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
-	21, // 19: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
-	26, // 20: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
-	23, // 21: agent.AgentService.UploadSnapshotDownload:input_type -> agent.SnapshotDownloadChunk
-	28, // 22: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
-	5,  // 23: agent.AgentService.Register:output_type -> agent.RegisterResponse
-	8,  // 24: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
-	10, // 25: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
-	12, // 26: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
-	14, // 27: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
-	16, // 28: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
-	19, // 29: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
-	22, // 30: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
-	27, // 31: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
-	24, // 32: agent.AgentService.UploadSnapshotDownload:output_type -> agent.SnapshotDownloadAck
-	29, // 33: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
-	23, // [23:34] is the sub-list for method output_type
-	12, // [12:23] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	31, // 4: agent.JobStatusReport.timestamp:type_name -> google.protobuf.Timestamp
+	31, // 5: agent.DestinationStatusReport.started_at:type_name -> google.protobuf.Timestamp
+	14, // 6: agent.DestinationStatusReport.summary:type_name -> agent.SnapshotSummary
+	31, // 7: agent.SnapshotSummary.backup_start:type_name -> google.protobuf.Timestamp
+	31, // 8: agent.SnapshotSummary.backup_end:type_name -> google.protobuf.Timestamp
+	2,  // 9: agent.LogEntry.level:type_name -> agent.LogLevel
+	31, // 10: agent.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	18, // 11: agent.VolumeListReport.volumes:type_name -> agent.VolumeInfo
+	21, // 12: agent.SnapshotBrowseReport.entries:type_name -> agent.SnapshotFileEntry
+	14, // 13: agent.ImportedSnapshotInfo.summary:type_name -> agent.SnapshotSummary
+	26, // 14: agent.SnapshotImportReport.snapshots:type_name -> agent.ImportedSnapshotInfo
+	31, // 15: agent.SnapshotReconcileReport.listed_at:type_name -> google.protobuf.Timestamp
+	3,  // 16: agent.AgentService.Register:input_type -> agent.RegisterRequest
+	6,  // 17: agent.AgentService.Heartbeat:input_type -> agent.HeartbeatRequest
+	9,  // 18: agent.AgentService.StreamJobs:input_type -> agent.StreamJobsRequest
+	11, // 19: agent.AgentService.ReportJobStatus:input_type -> agent.JobStatusReport
+	13, // 20: agent.AgentService.ReportDestinationStatus:input_type -> agent.DestinationStatusReport
+	16, // 21: agent.AgentService.StreamLogs:input_type -> agent.LogEntry
+	19, // 22: agent.AgentService.ReportVolumeList:input_type -> agent.VolumeListReport
+	22, // 23: agent.AgentService.ReportSnapshotBrowse:input_type -> agent.SnapshotBrowseReport
+	27, // 24: agent.AgentService.ReportSnapshotImport:input_type -> agent.SnapshotImportReport
+	24, // 25: agent.AgentService.UploadSnapshotDownload:input_type -> agent.SnapshotDownloadChunk
+	29, // 26: agent.AgentService.ReportSnapshotReconcile:input_type -> agent.SnapshotReconcileReport
+	5,  // 27: agent.AgentService.Register:output_type -> agent.RegisterResponse
+	8,  // 28: agent.AgentService.Heartbeat:output_type -> agent.HeartbeatResponse
+	10, // 29: agent.AgentService.StreamJobs:output_type -> agent.JobAssignment
+	12, // 30: agent.AgentService.ReportJobStatus:output_type -> agent.JobStatusResponse
+	15, // 31: agent.AgentService.ReportDestinationStatus:output_type -> agent.DestinationStatusResponse
+	17, // 32: agent.AgentService.StreamLogs:output_type -> agent.LogStreamResponse
+	20, // 33: agent.AgentService.ReportVolumeList:output_type -> agent.VolumeListResponse
+	23, // 34: agent.AgentService.ReportSnapshotBrowse:output_type -> agent.SnapshotBrowseResponse
+	28, // 35: agent.AgentService.ReportSnapshotImport:output_type -> agent.SnapshotImportResponse
+	25, // 36: agent.AgentService.UploadSnapshotDownload:output_type -> agent.SnapshotDownloadAck
+	30, // 37: agent.AgentService.ReportSnapshotReconcile:output_type -> agent.SnapshotReconcileResponse
+	27, // [27:38] is the sub-list for method output_type
+	16, // [16:27] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -2335,7 +2496,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   27,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
