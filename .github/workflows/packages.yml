@@ -41,8 +41,9 @@ jobs:
         with:
           go-version-file: go.work
 
-      # The GoReleaser before hooks build the GUI, which the server embeds.
-      # pnpm/action-setup must run before setup-node (see release.yml).
+      # The server embeds the GUI, which GoReleaser expects already built
+      # (ADR 0021). pnpm/action-setup must run before setup-node so its pnpm
+      # cache lookup can find the binary.
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           package_json_file: gui/package.json
@@ -52,6 +53,9 @@ jobs:
           node-version-file: .nvmrc
           cache: "pnpm"
           cache-dependency-path: gui/pnpm-lock.yaml
+
+      - name: Build the GUI
+        run: cd gui && pnpm install --frozen-lockfile && pnpm build
 
       # A key that lives only for this run stands in for the repository key
       # of the release environment (ADR 0020).

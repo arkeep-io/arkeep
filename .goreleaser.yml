@@ -4,7 +4,10 @@ project_name: arkeep
 
 before:
   hooks:
-    - sh -c "cd gui && pnpm install --frozen-lockfile && pnpm build"
+    # The GUI is built before GoReleaser runs, never by it: in the release
+    # workflow by a job without secrets (ADR 0021), elsewhere with
+    # `task build:gui`.
+    - "sh -c 'test -f gui/dist/index.html || { echo \"gui/dist/index.html is missing, run task build:gui first\" >&2; exit 1; }'"
     - sh -c "mkdir -p server/cmd/server/dist && cp -r gui/dist/. server/cmd/server/dist"
     - sh -c "cd agent && go run ./scripts/download_deps.go --all-platforms"
 

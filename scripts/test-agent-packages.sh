@@ -7,7 +7,8 @@
 # Usage: scripts/test-agent-packages.sh [<dist dir> [<repository dir>]]
 #
 # Needs Docker, and the linux_amd64 packages in <dist dir> (default: dist),
-# for instance from `goreleaser release --snapshot --clean --skip=docker`.
+# for instance from `goreleaser release --snapshot --clean --skip=docker`
+# after `task build:gui`.
 # systemd does not run in the containers: the checks cover the files and the
 # enabled state, which systemctl manages offline, not a running service.
 #
