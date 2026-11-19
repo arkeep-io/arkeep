@@ -731,7 +731,7 @@ function onOpenChange(value: boolean) {
                         <Separator />
                         <p class="text-sm font-medium">Credentials</p>
                         <p v-if="isEdit" class="text-muted-foreground text-xs -mt-2">
-                            Leave blank to keep the current credentials.
+                            Leave blank to keep the current credentials on the same server; a new server needs them again.
                         </p>
 
                         <Field>
@@ -787,7 +787,7 @@ function onOpenChange(value: boolean) {
                             <span class="text-muted-foreground font-normal"> (password or private key)</span>
                         </p>
                         <p v-if="isEdit" class="text-muted-foreground text-xs -mt-2">
-                            Leave blank to keep the current credentials.
+                            Leave blank to keep the current credentials on the same server; a new server needs them again.
                         </p>
 
                         <Field>
@@ -844,7 +844,7 @@ function onOpenChange(value: boolean) {
                             <span class="text-muted-foreground font-normal"> (optional)</span>
                         </p>
                         <p v-if="isEdit" class="text-muted-foreground text-xs -mt-2">
-                            Leave blank to keep the current credentials.
+                            Leave blank to keep the current credentials on the same server; a new server needs them again.
                         </p>
 
                         <Field>

@@ -175,6 +175,30 @@ func TestSettingsHandler_TestSMTP(t *testing.T) {
 		}
 	})
 
+	// S-17: saving the other server first used to get around the check above.
+	t.Run("saving another server without the password is refused", func(t *testing.T) {
+		e := newTestEnv(t)
+		smtpSrv := newFakeSMTP(t)
+		host, port := smtpSrv.hostPort()
+		saveSMTP(t, e, "mail.example.com", 587, "mailer", "stored-secret")
+
+		resp := e.doJSON(t, http.MethodPut, "/api/v1/settings/smtp", e.adminToken(t), map[string]any{
+			"host": host, "port": port, "username": "mailer", "password": "", "from": "arkeep@test.local",
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+
+		resp = e.post(t, "/api/v1/settings/smtp/test", e.adminToken(t), map[string]any{
+			"host": host, "port": port, "username": "mailer", "password": "", "from": "arkeep@test.local",
+		})
+		assertStatus(t, resp, http.StatusBadRequest)
+		if auth, rcpt := smtpSrv.seen(); len(auth)+len(rcpt) != 0 {
+			t.Errorf("the stored password went to another server: auth %q", auth)
+		}
+
+		// The same server, another port or letter case, keeps the password.
+		saveSMTP(t, e, "MAIL.example.com", 465, "mailer", "")
+	})
+
 	t.Run("reports the delivery error", func(t *testing.T) {
 		e := newTestEnv(t)
 		ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -7,6 +7,7 @@ package destutil
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -114,6 +115,41 @@ func BuildRepoURL(dest *db.Destination) string {
 			}
 			return fmt.Sprintf("rclone:%s", cfg.Remote)
 		}
+	}
+	return ""
+}
+
+// CredentialHost returns the server a destination's credentials are sent to:
+// the endpoint of an S3 destination, host and port of an SFTP one, scheme, host
+// and port of a REST one. It is empty for types whose credentials never leave
+// the agent for a configured host (local, rclone). Updating a destination must
+// not send the stored credentials to another host (S-17): when this changes,
+// the credentials have to be entered again.
+func CredentialHost(dest *db.Destination) string {
+	var cfg map[string]string
+	if err := json.Unmarshal([]byte(dest.Config), &cfg); err != nil {
+		return ""
+	}
+	switch dest.Type {
+	case "s3":
+		endpoint := strings.ToLower(strings.TrimSpace(cfg["endpoint"]))
+		endpoint = strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+		if endpoint, _, _ = strings.Cut(endpoint, "/"); endpoint == "" {
+			endpoint = "s3.amazonaws.com" // the BuildRepoURL fallback
+		}
+		return endpoint
+	case "sftp":
+		port := strings.TrimSpace(cfg["port"])
+		if port == "" {
+			port = "22"
+		}
+		return strings.ToLower(strings.TrimSpace(cfg["host"])) + ":" + port
+	case "rest":
+		u, err := url.Parse(strings.TrimSpace(cfg["url"]))
+		if err != nil {
+			return strings.TrimSpace(cfg["url"])
+		}
+		return strings.ToLower(u.Scheme + "://" + u.Host)
 	}
 	return ""
 }

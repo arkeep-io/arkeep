@@ -148,7 +148,7 @@ func (h *NotificationProviderHandler) Update(w http.ResponseWriter, r *http.Requ
 		ErrBadRequest(w, "type cannot be changed")
 		return
 	}
-	if err := applyProviderRequest(p, &req, stored.Secrets); err != nil {
+	if err := applyProviderRequest(p, &req, &stored); err != nil {
 		ErrBadRequest(w, err.Error())
 		return
 	}
@@ -198,7 +198,7 @@ func (h *NotificationProviderHandler) Test(w http.ResponseWriter, r *http.Reques
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	var stored map[string]string
+	var stored *notification.ProviderSettings
 	if req.ID != "" {
 		id, err := uuid.Parse(req.ID)
 		if err != nil {
@@ -219,7 +219,7 @@ func (h *NotificationProviderHandler) Test(w http.ResponseWriter, r *http.Reques
 			ErrInternal(w)
 			return
 		}
-		stored = s.Secrets
+		stored = &s
 	}
 	req.Name = "test" // a test needs no name
 	p := &db.NotificationProvider{}
@@ -234,7 +234,7 @@ func (h *NotificationProviderHandler) Test(w http.ResponseWriter, r *http.Reques
 	}
 	err = notification.SendTestProvider(r.Context(), settings)
 	logAudit(r, h.auditRepo, h.logger, "settings.notification_provider.test", "settings", req.ID,
-		map[string]any{"type": req.Type, "ok": err == nil})
+		map[string]any{"type": req.Type, "host": notification.ProviderTargetHost(req.Type, settings.Config), "ok": err == nil})
 	if err != nil {
 		ErrUnprocessable(w, err.Error())
 		return
@@ -264,8 +264,14 @@ func (h *NotificationProviderHandler) respond(w http.ResponseWriter, r *http.Req
 		ErrInternal(w)
 		return
 	}
-	logAudit(r, h.auditRepo, h.logger, action, "settings", p.ID.String(),
-		map[string]any{"name": p.Name, "type": p.Type, "enabled": p.Enabled})
+	details := map[string]any{"name": p.Name, "type": p.Type, "enabled": p.Enabled}
+	// The server the secrets go to, so that moving them leaves a trace (S-17).
+	if s, err := notification.ProviderSettingsFrom(p); err == nil {
+		if host := notification.ProviderTargetHost(p.Type, s.Config); host != "" {
+			details["host"] = host
+		}
+	}
+	logAudit(r, h.auditRepo, h.logger, action, "settings", p.ID.String(), details)
 	if status == http.StatusCreated {
 		Created(w, resp)
 		return
@@ -273,11 +279,13 @@ func (h *NotificationProviderHandler) respond(w http.ResponseWriter, r *http.Req
 	Ok(w, resp)
 }
 
-// applyProviderRequest validates req and writes it into p. storedSecrets, the
-// secrets of the provider being updated or tested, fill the secret fields left
-// blank. The provider is validated as a whole (notification.ValidateProvider),
-// so a saved provider always yields a URL its service accepts.
-func applyProviderRequest(p *db.NotificationProvider, req *notificationProviderRequest, storedSecrets map[string]string) error {
+// applyProviderRequest validates req and writes it into p. stored, the
+// provider being updated or tested (nil for a new one), fills the secret
+// fields left blank, but only while the server the secrets go to is the same:
+// otherwise they must be entered again (S-17). The provider is validated as a
+// whole (notification.ValidateProvider), so a saved provider always yields a
+// URL its service accepts.
+func applyProviderRequest(p *db.NotificationProvider, req *notificationProviderRequest, stored *notification.ProviderSettings) error {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return errors.New("name is required")
@@ -309,12 +317,20 @@ func applyProviderRequest(p *db.NotificationProvider, req *notificationProviderR
 	if err != nil {
 		return err
 	}
-	for _, k := range notification.ProviderSecretKeys(req.Type) {
-		if slices.Contains(req.ClearSecrets, k) {
-			continue
-		}
-		if _, set := secrets[k]; !set && storedSecrets[k] != "" {
-			secrets[k] = storedSecrets[k]
+	if stored != nil {
+		host := notification.ProviderTargetHost(req.Type, config)
+		hostChanged := host != notification.ProviderTargetHost(req.Type, stored.Config)
+		for _, k := range notification.ProviderSecretKeys(req.Type) {
+			if slices.Contains(req.ClearSecrets, k) {
+				continue
+			}
+			if _, set := secrets[k]; set || stored.Secrets[k] == "" {
+				continue
+			}
+			if hostChanged {
+				return fmt.Errorf("the server changed: enter %s again for %s", k, host)
+			}
+			secrets[k] = stored.Secrets[k]
 		}
 	}
 	if err := notification.ValidateProvider(notification.ProviderSettings{

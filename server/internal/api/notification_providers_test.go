@@ -48,22 +48,44 @@ func TestNotificationProviders_CRUD(t *testing.T) {
 		t.Fatal("list returns the token")
 	}
 
-	// A blank token keeps the stored one.
-	upd := gotifyRequest("https://push2.example.com", "")
+	storedSettings := func() (notification.ProviderSettings, bool) {
+		t.Helper()
+		stored, err := e.deps.notifProviders.List(context.Background())
+		if err != nil || len(stored) != 1 {
+			t.Fatalf("list stored: %v (%d)", err, len(stored))
+		}
+		s, err := notification.ProviderSettingsFrom(stored[0])
+		if err != nil {
+			t.Fatalf("decode stored: %v", err)
+		}
+		return s, stored[0].Enabled
+	}
+
+	// A blank token keeps the stored one on the same server, even under
+	// another path.
+	upd := gotifyRequest("https://PUSH.example.com/gotify", "")
 	upd["enabled"] = false
 	resp = e.doJSON(t, http.MethodPut, providersPath+"/"+created.ID, token, upd)
 	assertStatus(t, resp, http.StatusOK)
 	_ = resp.Body.Close()
-	stored, err := e.deps.notifProviders.List(context.Background())
-	if err != nil || len(stored) != 1 {
-		t.Fatalf("list stored: %v (%d)", err, len(stored))
+	if s, enabled := storedSettings(); s.Secrets["token"] != "AbCdEfGhIjKlMnO" || s.Config["url"] != "https://PUSH.example.com/gotify" || enabled {
+		t.Errorf("after update: %+v enabled=%v", s, enabled)
 	}
-	s, err := notification.ProviderSettingsFrom(stored[0])
-	if err != nil {
-		t.Fatalf("decode stored: %v", err)
+
+	// S-17: on another server it is not reused, and nothing is saved.
+	resp = e.doJSON(t, http.MethodPut, providersPath+"/"+created.ID, token, gotifyRequest("https://attacker.example.net", ""))
+	assertStatus(t, resp, http.StatusBadRequest)
+	_ = resp.Body.Close()
+	if s, _ := storedSettings(); s.Config["url"] != "https://PUSH.example.com/gotify" {
+		t.Errorf("rejected update changed the provider: %+v", s)
 	}
-	if s.Secrets["token"] != "AbCdEfGhIjKlMnO" || s.Config["url"] != "https://push2.example.com" || stored[0].Enabled {
-		t.Errorf("after update: %+v enabled=%v", s, stored[0].Enabled)
+
+	// With the token entered again, the server can change.
+	resp = e.doJSON(t, http.MethodPut, providersPath+"/"+created.ID, token, gotifyRequest("https://push2.example.com", "AzYxWvUtSrQpOnM"))
+	assertStatus(t, resp, http.StatusOK)
+	_ = resp.Body.Close()
+	if s, _ := storedSettings(); s.Secrets["token"] != "AzYxWvUtSrQpOnM" || s.Config["url"] != "https://push2.example.com" {
+		t.Errorf("after moving with a new token: %+v", s)
 	}
 
 	resp = e.del(t, providersPath+"/"+created.ID, token)
@@ -136,6 +158,17 @@ func TestNotificationProviders_TestUsesStoredSecret(t *testing.T) {
 	if gotToken != "AbCdEfGhIjKlMnO" {
 		t.Errorf("test sent token %q, want the stored one", gotToken)
 	}
+
+	// S-17: a test against another server does not get the stored token.
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the stored token went to another server: %q", r.Header.Get("X-Gotify-Key"))
+	}))
+	t.Cleanup(other.Close)
+	req = gotifyRequest(other.URL, "")
+	req["id"] = created.ID
+	resp = e.post(t, providersPath+"/test", token, req)
+	assertStatus(t, resp, http.StatusBadRequest)
+	_ = resp.Body.Close()
 }
 
 // TestNotificationProviders_ClearOptionalSecret checks that clear_secrets
