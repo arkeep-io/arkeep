@@ -1190,6 +1190,16 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 		Env:      payload.Destination.Env,
 	}
 
+	// A restore to a chosen folder writes there as the agent, often root: the
+	// folder must be one no other local user controls (P-03). Restoring in
+	// place ("/") writes to the original locations instead.
+	if payload.TargetPath != "/" {
+		if err := secureRestoreTarget(targetPath); err != nil {
+			fail(err.Error())
+			return
+		}
+	}
+
 	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, includePaths, excludePaths, e.dockerHostRoot); err != nil {
 		if ctx.Err() != nil {
 			log("warn", "restore cancelled: agent shutting down")
