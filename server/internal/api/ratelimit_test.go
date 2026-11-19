@@ -182,4 +182,49 @@ func TestRateLimit_Middleware(t *testing.T) {
 			t.Errorf("unrelated IP: status = %d, want %d", w.Code, http.StatusOK)
 		}
 	})
+
+	// S-28: a client with an IPv6 /64 must not get a new budget per address.
+	t.Run("addresses of one IPv6 /64 share a budget", func(t *testing.T) {
+		handler := RateLimit(newTestLimiter(t, 3, time.Minute))(next)
+		serve := func(remote string) int {
+			req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+			req.RemoteAddr = remote
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			return w.Code
+		}
+
+		for _, remote := range []string{"[2001:db8::1]:1", "[2001:db8::2]:1", "[2001:db8::ffff:1]:1"} {
+			if got := serve(remote); got != http.StatusOK {
+				t.Fatalf("%s: status = %d, want %d", remote, got, http.StatusOK)
+			}
+		}
+		if got := serve("[2001:db8::abcd:1234:5678:9abc]:1"); got != http.StatusTooManyRequests {
+			t.Errorf("fourth address of the /64: status = %d, want %d", got, http.StatusTooManyRequests)
+		}
+		if got := serve("[2001:db8:0:1::1]:1"); got != http.StatusOK {
+			t.Errorf("another /64: status = %d, want %d", got, http.StatusOK)
+		}
+	})
+}
+
+func TestRateLimitKey(t *testing.T) {
+	tests := []struct {
+		name, ip, want string
+	}{
+		{"IPv4 is its own bucket", "203.0.113.7", "203.0.113.7"},
+		{"IPv4-mapped IPv6 is the IPv4 bucket", "::ffff:203.0.113.7", "203.0.113.7"},
+		{"IPv6 is its /64", "2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"},
+		{"same /64, same bucket", "2001:db8:1:2:ffff:ffff:ffff:ffff", "2001:db8:1:2::/64"},
+		{"IPv6 zone is dropped", "fe80::1%eth0", "fe80::/64"},
+		{"loopback IPv6", "::1", "::/64"},
+		{"not an address is kept", "not-an-ip", "not-an-ip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := rateLimitKey(tt.ip); got != tt.want {
+				t.Errorf("rateLimitKey(%q) = %q, want %q", tt.ip, got, tt.want)
+			}
+		})
+	}
 }

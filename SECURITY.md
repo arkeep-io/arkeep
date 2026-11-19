@@ -150,7 +150,18 @@ each code carries 80 bits of entropy, unlike a user-chosen password.
 
 A login challenge (the interim state between a correct password and a valid second
 factor) expires after 5 minutes and tolerates at most 5 wrong codes before it is
-burned, forcing the password step to be repeated. Enabling two-factor authentication
+burned, forcing the password step to be repeated. Codes are also counted per account,
+from any address and across challenges: after 10 codes within 15 minutes, the second
+factor of that account is refused (HTTP 429) until the 15 minutes are over. Only
+someone who knows the password reaches that step, so the limit cannot be used to lock
+a stranger out; failed passwords are limited per address only. The count is kept in
+memory and cleared by a restart.
+
+The sign-in, two-factor, password reset, setup and agent enrollment endpoints are
+rate limited per client address. An IPv6 client is counted per /64, the block a
+single client usually holds, and an IPv4 client per address.
+
+Enabling two-factor authentication
 revokes every other active session for the account except the one used to enroll;
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.

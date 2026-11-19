@@ -10,6 +10,7 @@ import { computed, nextTick, ref, useTemplateRef } from 'vue'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
+import { FetchError } from 'ofetch'
 import { useAuthStore } from '@/stores/auth'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -98,8 +99,14 @@ const onSubmit = handleSubmit(async (values) => {
             return
         }
         emit('verified')
-    } catch {
+    } catch (e) {
         verifying.value = false
+        // 429: the address or the account sent too many codes. It says nothing
+        // about this code, so it must not read as a wrong one.
+        if (e instanceof FetchError && e.status === 429) {
+            serverError.value = 'Too many attempts. Wait a few minutes, then try again.'
+            return
+        }
         if (values.useRecoveryCode) {
             serverError.value = 'Invalid or already-used recovery code'
             return

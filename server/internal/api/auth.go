@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,9 +38,16 @@ const (
 	twoFactorChallengeTTL = 5 * time.Minute
 
 	// maxTwoFactorAttempts is how many wrong codes a single challenge tolerates
-	// before it is burned. This is the per-account lockout: the per-IP rate
-	// limiter alone is weak against a six-digit code.
+	// before it is burned: the per-IP rate limiter alone is weak against a
+	// six-digit code.
 	maxTwoFactorAttempts = 5
+
+	// maxTwoFactorAccountAttempts codes, right or wrong, per account within
+	// twoFactorAccountWindow, from any address and across challenges (S-28,
+	// ADR 0022). Signing in again gives a fresh challenge, so the per-challenge
+	// limit alone does not cap the guesses.
+	maxTwoFactorAccountAttempts = 10
+	twoFactorAccountWindow      = 15 * time.Minute
 
 	// invalidTwoFactorMessage is deliberately identical for an unknown,
 	// expired, consumed or burned challenge and for a wrong code.
@@ -66,8 +74,10 @@ type AuthHandler struct {
 	// passwordChanges holds the step of a login that must set a new password.
 	passwordChanges repositories.PasswordChangeChallengeRepository
 	auditRepo       repositories.AuditRepository
-	logger          *zap.Logger
-	secure          bool // true in production (HTTPS), false in development
+	// twoFactorAccounts counts second-factor codes per account (ADR 0022).
+	twoFactorAccounts *RateLimiter
+	logger            *zap.Logger
+	secure            bool // true in production (HTTPS), false in development
 }
 
 // NewAuthHandler creates a new AuthHandler.
@@ -88,8 +98,11 @@ func NewAuthHandler(
 		recoveryCodes:   recoveryCodes,
 		passwordChanges: passwordChanges,
 		auditRepo:       auditRepo,
-		logger:          logger.Named("auth_handler"),
-		secure:          secure,
+		// In memory, like the address rate limits: one server replica
+		// (ADR 0005), cleared by a restart.
+		twoFactorAccounts: NewRateLimiter(maxTwoFactorAccountAttempts, twoFactorAccountWindow),
+		logger:            logger.Named("auth_handler"),
+		secure:            secure,
 	}
 }
 
@@ -497,6 +510,18 @@ func (h *AuthHandler) LoginTwoFactor(w http.ResponseWriter, r *http.Request) {
 
 	if !user.IsActive {
 		ErrUnauthorized(w)
+		return
+	}
+
+	// Codes are also counted per account, from any address and across
+	// challenges (S-28, ADR 0022). Only someone who knows the password gets a
+	// challenge, so this limit cannot be used to keep a stranger's account
+	// locked, unlike a lock on failed passwords.
+	if !h.twoFactorAccounts.Allow(user.ID.String()) {
+		h.logger.Warn("2fa login: too many codes for this account, refused until the window ends",
+			zap.String("user_id", user.ID.String()))
+		w.Header().Set("Retry-After", strconv.Itoa(int(twoFactorAccountWindow.Seconds())))
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
 	}
 

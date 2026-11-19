@@ -42,7 +42,7 @@ func NewEnrollHandler(autoCerts *grpccerts.AutoCerts, agentSecret string, logger
 func (h *EnrollHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	// Rate limiting
 	ip := clientIP(r)
-	if !h.rateLimiter.Allow(ip) {
+	if !h.rateLimiter.Allow(rateLimitKey(ip)) {
 		w.Header().Set("Retry-After", "60")
 		http.Error(w, "rate limit exceeded — max 10 enrollment requests per minute per IP", http.StatusTooManyRequests)
 		return
