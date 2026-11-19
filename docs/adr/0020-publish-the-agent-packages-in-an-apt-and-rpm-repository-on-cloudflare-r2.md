@@ -81,6 +81,12 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   attestation, on stable releases only. The `Agent repository` workflow,
   started by hand from `main`, rebuilds it with the same script: after a
   failed publication, a key rotation, or to repair the bucket.
+- **Attestations are checked against the tag.** `--signer-workflow` alone
+  matches the path of the release workflow on any ref, so a copy of it
+  modified and run on another branch passes. Every check of a release
+  attestation, in `scripts/agent-repository.sh` and in the verification the
+  release notes give users (ADR 0017), also passes `--source-ref
+  refs/tags/<tag>` for the tag being verified. Removing it reopens the gap.
 
 ## Consequences
 
@@ -91,6 +97,11 @@ Pages was set aside: the project does not want its distribution tied to Pages.
   attested in the run of a `vX.Y.Z` tag, which only administrators can create
   (ADR 0017): a package replaced on a release page, or a release made by the
   workflow from another branch or tag, fails the checks and is not published.
+- ADR 0017 states that the documented verification rejects an image pushed
+  to GHCR by a workflow on another branch. That holds only with
+  `--source-ref`: with `--signer-workflow` alone, such a workflow could
+  attest its own image as the release workflow. This decision is what makes
+  that consequence of ADR 0017 true.
 - Whoever holds the private key can publish an agent that every configured
   machine installs as root. It lives only in the `release` environment, which
   only `v*` tags and `main` can deploy to.
