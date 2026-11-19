@@ -52,7 +52,6 @@ jobs:
     environment: release
     permissions:
       contents: write
-      packages: write
       # Signing and storing the build provenance (P-02).
       id-token: write
       attestations: write
@@ -142,12 +141,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
+      # A token of an organization owner with write:packages, kept in this
+      # environment: the repository's own GITHUB_TOKEN can only read the GHCR
+      # packages, so a workflow on another branch cannot overwrite an image or
+      # the chart (P-13, ADR 0024).
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.GHCR_USERNAME }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -222,8 +225,8 @@ jobs:
 
       - name: Publish the Helm chart
         env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ vars.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
           DOCKERHUB_ORG_TOKEN: ${{ secrets.DOCKERHUB_ORG_TOKEN }}
         run: |
           set -euo pipefail
@@ -298,23 +301,33 @@ jobs:
           scripts/agent-repository.sh upload "${RUNNER_TEMP}/repository"
 
       # The Home Assistant app describes the agent image of this release
-      # (ADR 0018). Moving the home-assistant branch is what offers the new
+      # (ADR 0024). Moving the home-assistant branch is what offers the new
       # version to Home Assistant users, so it comes last, once the image is
-      # published and attested, and only for stable releases. The checkout
-      # keeps no credentials: the token is passed to git for this push only.
+      # published and attested, and only for stable releases. The branch is
+      # pushed over SSH with a deploy key kept in this environment, the only
+      # actor the protect-home-assistant ruleset lets create or update it: a
+      # workflow on another branch cannot move it with GITHUB_TOKEN (P-13). The
+      # key and GitHub's published host key live in a temporary directory,
+      # removed when the step ends.
       - name: Publish the Home Assistant app
         if: ${{ !contains(github.ref_name, '-') }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOME_ASSISTANT_DEPLOY_KEY: ${{ secrets.HOME_ASSISTANT_DEPLOY_KEY }}
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           set -euo pipefail
-          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
-          echo "::add-mask::${auth}"
-          export GIT_CONFIG_COUNT=1
-          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
-          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}"
-          scripts/publish-home-assistant-app.sh "$GITHUB_REF_NAME" origin
+          if [ -z "$HOME_ASSISTANT_DEPLOY_KEY" ]; then
+            echo "::error::The HOME_ASSISTANT_DEPLOY_KEY secret of the release environment is empty."
+            exit 1
+          fi
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          (umask 077 && printf '%s\n' "$HOME_ASSISTANT_DEPLOY_KEY" > "${ssh_dir}/key")
+          # github.com's ed25519 host key, as published at
+          # https://api.github.com/meta (SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU).
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "${ssh_dir}/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i ${ssh_dir}/key -o IdentitiesOnly=yes -o UserKnownHostsFile=${ssh_dir}/known_hosts -o StrictHostKeyChecking=yes"
+          scripts/publish-home-assistant-app.sh "$GITHUB_REF_NAME" "git@github.com:${GITHUB_REPOSITORY}.git"
