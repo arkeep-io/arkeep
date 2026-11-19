@@ -471,8 +471,22 @@ func (h *SettingsHandler) UpsertSMTP(w http.ResponseWriter, r *http.Request) {
 	} else if req.Password != "" {
 		// Auth enabled with a new password provided.
 		pairs = append(pairs, struct{ key, value string }{notification.KeySMTPPassword, req.Password})
+	} else {
+		// Auth enabled but password field left blank → keep the stored value,
+		// but only for the stored server: saving another host first would
+		// otherwise get around the same check in TestSMTP (S-17).
+		stored, err := h.settingsRepo.GetMany(ctx, "smtp.")
+		if err != nil {
+			h.logger.Error("failed to load smtp settings", zap.Error(err))
+			ErrInternal(w)
+			return
+		}
+		idx := settingsToMap(stored)
+		if idx[notification.KeySMTPPassword] != "" && !sameSMTPHost(idx[notification.KeySMTPHost], req.Host) {
+			ErrBadRequest(w, "the server changed: enter the password again for "+req.Host)
+			return
+		}
 	}
-	// else: auth enabled but password field left blank → keep existing value.
 
 	for _, p := range pairs {
 		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
@@ -528,7 +542,7 @@ func (h *SettingsHandler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		idx := settingsToMap(stored)
-		if idx[notification.KeySMTPHost] != req.Host {
+		if !sameSMTPHost(idx[notification.KeySMTPHost], req.Host) {
 			ErrBadRequest(w, "enter the password to test a server other than the saved one")
 			return
 		}
@@ -551,6 +565,12 @@ func (h *SettingsHandler) TestSMTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Ok(w, map[string]string{"sent_to": claims.Email})
+}
+
+// sameSMTPHost reports whether two SMTP host names are the same server, the
+// condition for reusing the stored password (host names are case-insensitive).
+func sameSMTPHost(a, b string) bool {
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 }
 
 func validateUpsertSMTP(req *upsertSMTPRequest) error {

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -580,6 +581,49 @@ func TestDestinationHandler_Update(t *testing.T) {
 
 		if got := storedCredentials(t, e, dest.ID.String()); got != orig {
 			t.Errorf("credentials = %q, want preserved %q", got, orig)
+		}
+	})
+
+	// S-17: stored credentials follow the server they were entered for.
+	t.Run("asks for the credentials again when the server changes", func(t *testing.T) {
+		e := newTestEnv(t)
+		dest := &db.Destination{
+			Name:        "s3",
+			Type:        "s3",
+			Credentials: db.EncryptedString(`{"access_key":"AKIAEXAMPLE","secret_key":"stored-secret"}`),
+			Config:      `{"endpoint":"https://s3.example.com","bucket":"backups"}`,
+			Enabled:     true,
+		}
+		if err := e.deps.dests.Create(context.Background(), dest); err != nil {
+			t.Fatal(err)
+		}
+		path := "/api/v1/destinations/" + dest.ID.String()
+		orig := storedCredentials(t, e, dest.ID.String())
+
+		// Another bucket on the same endpoint keeps the credentials.
+		cfg := `{"endpoint":"S3.example.com/","bucket":"other"}`
+		assertStatus(t, e.patch(t, path, e.adminToken(t), map[string]any{"config": &cfg}), http.StatusOK)
+
+		// Another endpoint without credentials is refused, and nothing changes.
+		cfg = `{"endpoint":"https://attacker.example.net","bucket":"other"}`
+		resp := e.patch(t, path, e.adminToken(t), map[string]any{"config": &cfg})
+		assertStatus(t, resp, http.StatusBadRequest)
+		got, err := e.deps.dests.GetByID(context.Background(), dest.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got.Config, "attacker") {
+			t.Errorf("refused update was saved: config = %s", got.Config)
+		}
+		if creds := storedCredentials(t, e, dest.ID.String()); creds != orig {
+			t.Errorf("credentials = %q, want preserved %q", creds, orig)
+		}
+
+		// With the credentials entered again, the endpoint can change.
+		creds := `{"access_key":"AKIANEW","secret_key":"new-secret"}`
+		assertStatus(t, e.patch(t, path, e.adminToken(t), map[string]any{"config": &cfg, "credentials": &creds}), http.StatusOK)
+		if got := storedCredentials(t, e, dest.ID.String()); got != creds {
+			t.Errorf("credentials = %q, want %q", got, creds)
 		}
 	})
 

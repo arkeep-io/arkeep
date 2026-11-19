@@ -43,17 +43,20 @@ type providerField struct {
 	key      string
 	secret   bool // stored encrypted in Secrets, never returned by the API
 	required bool
+	// target marks the field naming the server the secrets are sent to. When
+	// its host changes, the stored secrets are not reused (S-17).
+	target bool
 }
 
 // providerTypes lists the fields of every provider type. The GUI form of each
 // type must offer the same fields.
 var providerTypes = map[string][]providerField{
 	ProviderGotify: {
-		{key: "url", required: true},
+		{key: "url", required: true, target: true},
 		{key: "token", secret: true, required: true},
 	},
 	ProviderNtfy: {
-		{key: "url", required: true},
+		{key: "url", required: true, target: true},
 		// On a public server the topic is the only thing protecting it.
 		{key: "topic", secret: true, required: true},
 		{key: "token", secret: true},
@@ -68,7 +71,7 @@ var providerTypes = map[string][]providerField{
 		{key: "bot_token", secret: true, required: true},
 	},
 	ProviderMatrix: {
-		{key: "url", required: true},
+		{key: "url", required: true, target: true},
 		{key: "user", required: true},
 		{key: "rooms"},
 		{key: "password", secret: true, required: true},
@@ -109,6 +112,25 @@ func SplitProviderFields(t string, fields map[string]string) (config, secrets ma
 		}
 	}
 	return config, secrets, nil
+}
+
+// ProviderTargetHost returns the server a provider of type t sends its secrets
+// to, as scheme://host[:port] of its target field, or "" when the type has no
+// such field: its server is fixed (Telegram, Pushover) or is itself a secret
+// (webhook URLs, custom).
+func ProviderTargetHost(t string, config map[string]string) string {
+	for _, f := range providerTypes[t] {
+		if !f.target {
+			continue
+		}
+		raw := strings.TrimSpace(config[f.key])
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return raw
+		}
+		return strings.ToLower(u.Scheme + "://" + u.Host)
+	}
+	return ""
 }
 
 // ProviderSecretKeys returns the secret field keys of provider type t.

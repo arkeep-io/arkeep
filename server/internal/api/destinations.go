@@ -613,12 +613,22 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.Credentials != nil && hasNonEmptyCredential(*req.Credentials) {
+	newCredentials := req.Credentials != nil && hasNonEmptyCredential(*req.Credentials)
+	if newCredentials {
 		dest.Credentials = db.EncryptedString(*req.Credentials)
 	}
 	oldRepoURL := destutil.BuildRepoURL(dest)
+	oldHost := destutil.CredentialHost(dest)
 	if req.Config != nil {
 		dest.Config = *req.Config
+	}
+	// Blank credentials keep the stored ones, but only for the server they
+	// were entered for: the next backup would otherwise send them to whatever
+	// host the update names (S-17).
+	newHost := destutil.CredentialHost(dest)
+	if newHost != oldHost && !newCredentials && hasNonEmptyCredential(string(dest.Credentials)) {
+		ErrBadRequest(w, "the server changed: enter the credentials again for "+newHost)
+		return
 	}
 	// A new location holds a new repository, which the next backup creates.
 	repoMoved := destutil.BuildRepoURL(dest) != oldRepoURL
@@ -753,7 +763,7 @@ func (h *DestinationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched, "location_changed": repoMoved})
+	logAudit(r, h.auditRepo, h.logger, "destination.update", "destination", id.String(), map[string]any{"name": dest.Name, "retention_updated": retentionTouched, "location_changed": repoMoved, "host": newHost})
 	Ok(w, h.singleDestinationResponse(r.Context(), dest))
 }
 
