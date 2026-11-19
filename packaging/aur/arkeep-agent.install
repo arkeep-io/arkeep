@@ -1,4 +1,15 @@
 post_install() {
+  # Replacing a self-built arkeep-agent package removes it first, and pacman
+  # saves its modified configuration as .pacsave instead of handing it over.
+  if [ -f /etc/arkeep/agent.env.pacsave ]; then
+    cat <<'MSG'
+==> /etc/arkeep/agent.env.pacsave holds the configuration of a removed package.
+==> Restore it, readable by root only, then restart the agent:
+==>   install -m600 /etc/arkeep/agent.env.pacsave /etc/arkeep/agent.env
+==>   systemctl restart arkeep-agent
+MSG
+    return
+  fi
   cat <<'MSG'
 ==> Set ARKEEP_SERVER_ADDR and ARKEEP_AGENT_SECRET in /etc/arkeep/agent.env,
 ==> then start the agent: systemctl enable --now arkeep-agent
