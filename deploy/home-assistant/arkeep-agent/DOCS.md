@@ -110,6 +110,25 @@ programs are left out of them: the agent rebuilds them.
 Without this data, for instance after uninstalling the app, the agent enrolls
 again as a new agent.
 
+## Troubleshooting
+
+The **Log** tab shows why the agent cannot reach the server. To test from Home
+Assistant, the **Terminal & SSH** app has `nc` and `curl`:
+`nc -zv <host> 9090` must report the port open, and
+`curl <server HTTP URL>/health/live` must print `ok`.
+
+- `lookup ... no such host`: Home Assistant cannot resolve the server name.
+  Names only a VPN knows, such as Tailscale MagicDNS (`*.ts.net`), do not
+  resolve in apps by default: use the server's IP address.
+- `enroll: ... connection refused`: the server's HTTP API does not answer at
+  the default `http://<gRPC host>:8080`. Set **Server HTTP URL**.
+- A certificate error such as `doesn't contain any IP SANs` before enrollment:
+  another service answers on the gRPC port (Cockpit uses 9090, for example).
+  Check the address and port of the Arkeep server.
+- Server reachable only through Tailscale: install the Tailscale app with
+  userspace networking turned off, and use the server's Tailscale IP
+  (`100.x.y.z`) in both **Server gRPC address** and **Server HTTP URL**.
+
 ## Support
 
 - Documentation: <https://arkeep.io/docs/>
