@@ -1032,3 +1032,68 @@ func TestIsFilesystemRoot(t *testing.T) {
 		}
 	}
 }
+
+// TestCancelReason: a job cancelled from the server must not read as
+// interrupted by the agent shutting down, in the job log or the status
+// message, and a job stopped by the agent shutting down still says so.
+func TestCancelReason(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(retentionSweepPayload{
+		Destination:  destinationPayload{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"},
+		RepoPassword: "pw",
+		Retention:    retentionPayload{Last: 3},
+		Tags:         []string{"policy-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_FORGET, Payload: raw}
+
+	t.Run("cancel from the server", func(t *testing.T) {
+		e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
+		reporter := &fakeReporter{}
+		done := make(chan struct{})
+		go func() {
+			e.execute(context.Background(), job, fakeSink{}, reporter)
+			close(done)
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			e.runningMu.Lock()
+			_, running := e.runningCancel[job.JobID]
+			e.runningMu.Unlock()
+			if running {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the job never started")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		e.Cancel(job.JobID)
+		<-done
+
+		if reporter.lastMsg != "cancel requested by the server" {
+			t.Errorf("status message = %q, want %q", reporter.lastMsg, "cancel requested by the server")
+		}
+		if got := reporter.destResults["dest-1"].errMsg; got != "retention sweep cancelled: cancel requested by the server" {
+			t.Errorf("destination error = %q, want the server cancel", got)
+		}
+	})
+
+	t.Run("agent shutting down", func(t *testing.T) {
+		e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
+		reporter := &fakeReporter{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		e.execute(ctx, job, fakeSink{}, reporter)
+
+		if reporter.lastMsg != "agent shutting down" {
+			t.Errorf("status message = %q, want %q", reporter.lastMsg, "agent shutting down")
+		}
+	})
+}
