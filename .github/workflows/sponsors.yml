@@ -19,6 +19,10 @@ jobs:
   update:
     name: Update README sponsors
     runs-on: ubuntu-26.04
+    # SPONSORS_PAT and SPONSORS_PR_PAT live in this environment, which only
+    # main and v* tags can deploy to: a workflow pushed on any other branch
+    # cannot read them (P-11). Run it by hand from main.
+    environment: automation
     steps:
       # Always start from main: a manual run dispatched from develop would
       # otherwise carry unreleased develop changes into the PR against main.
