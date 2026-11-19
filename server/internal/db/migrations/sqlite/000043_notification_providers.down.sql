@@ -1,3 +1,6 @@
+PRAGMA foreign_keys = OFF;
+BEGIN;
+
 CREATE TABLE notification_delivery_queue_old (
     id              TEXT      NOT NULL PRIMARY KEY,
     notification_id TEXT      NOT NULL,
@@ -21,3 +24,6 @@ ALTER TABLE notification_delivery_queue_old RENAME TO notification_delivery_queu
 CREATE INDEX IF NOT EXISTS idx_ndq_notification_id ON notification_delivery_queue (notification_id);
 CREATE INDEX IF NOT EXISTS idx_ndq_status_retry    ON notification_delivery_queue (status, next_retry_at);
 DROP TABLE IF EXISTS notification_providers;
+
+COMMIT;
+PRAGMA foreign_keys = ON;
