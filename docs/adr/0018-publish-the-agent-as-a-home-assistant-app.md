@@ -1,6 +1,6 @@
 # 0018. Publish the agent as a Home Assistant app from a branch of this repository
 
-- **Status:** Accepted
+- **Status:** Superseded by [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md)
 - **Date:** 2026-11-18
 - **Deciders:** Arkeep maintainers
 

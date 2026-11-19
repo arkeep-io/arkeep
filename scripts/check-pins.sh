@@ -68,7 +68,7 @@ while IFS= read -r hit; do
   file=${hit%%:*}; rest=${hit#*:}; line=${rest%%:*}; text=${rest#*:}
   ref=$(sed -E 's/^[[:space:]#]*image:[[:space:]]*//; s/[[:space:]]+#.*$//; s/"//g' <<<"$text")
   [[ -z "$ref" ]] && continue
-  if [[ "$ref" == ghcr.io/arkeep-io/* ]]; then
+  if [[ "$ref" == arkeepio/arkeep-* || "$ref" == ghcr.io/arkeep-io/* ]]; then
     [[ "$ref" =~ :v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$file,line=$line" "Arkeep image must use a release tag (:vX.Y.Z): $ref"
   else
     [[ "$ref" == *"@sha256:"* ]] || fail "$file,line=$line" "image without @sha256 digest: $ref"

@@ -13,8 +13,9 @@ arch:
   - amd64
 # The official agent image, pulled at the tag given by version. It carries no
 # Home Assistant labels: legacy mode runs it as it is and passes each option
-# below to the agent as an environment variable of the same name.
-image: ghcr.io/arkeep-io/arkeep-agent
+# below to the agent as an environment variable of the same name. Docker Hub,
+# not GHCR: only the release environment can push it (ADR 0024).
+image: arkeepio/arkeep-agent
 legacy: true
 # New on Home Assistant: shown with an "experimental" label in the app store.
 stage: experimental

@@ -69,9 +69,12 @@ jobs:
   artifacthub:
     name: Artifact Hub repository metadata
     runs-on: ubuntu-26.04
+    # GHCR is written with the GHCR_TOKEN of the release environment, which
+    # only main and v* tags can deploy to: the repository's own GITHUB_TOKEN
+    # can only read the packages (P-13, ADR 0024).
+    environment: release
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,8 +96,8 @@ jobs:
       - name: Push artifacthub-repo.yml
         working-directory: deploy/helm
         env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ vars.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         run: |
           echo "$GHCR_TOKEN" | oras login ghcr.io --username "$GHCR_USER" --password-stdin
           oras push ghcr.io/arkeep-io/charts/arkeep:artifacthub.io \

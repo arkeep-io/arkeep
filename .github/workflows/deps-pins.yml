@@ -57,7 +57,7 @@ jobs:
             exit 1
           fi
           sed -i -E "s/^appVersion: .*/appVersion: \"${tag}\"/" deploy/helm/arkeep/Chart.yaml
-          sed -i -E "s#(ghcr\.io/arkeep-io/arkeep-(server|agent)):v[0-9]+\.[0-9]+\.[0-9]+#\1:${tag}#" \
+          sed -i -E "s#(arkeepio/arkeep-(server|agent)):v[0-9]+\.[0-9]+\.[0-9]+#\1:${tag}#" \
             deploy/docker/docker-compose*.yml
           sed -i -E "s/^version: .*/version: \"${tag}\"/" deploy/home-assistant/arkeep-agent/config.yaml
 
