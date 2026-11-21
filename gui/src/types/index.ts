@@ -46,6 +46,9 @@ export const JobType = {
   Restore: 'restore',
   Retention: 'retention',
   Check: 'check',
+  // Repair: one restic repair command run under the destination's
+  // maintenance mode (ADR 0026).
+  Repair: 'repair',
 } as const
 export type JobType = (typeof JobType)[keyof typeof JobType]
 
@@ -181,6 +184,22 @@ export interface Destination {
   // empty when free (issue #319). Backups share it; a retention sweep or
   // integrity check holds it alone. Explains why a job here is waiting.
   locks: DestinationLock[]
+  // maintenance: the destination's maintenance mode (ADR 0026), null when it
+  // is not in maintenance. No job can claim it meanwhile: backups, retention
+  // sweeps and checks wait and start once it ends.
+  maintenance: DestinationMaintenance | null
+  // repair_available: the maintenance agent reported that it can run repairs.
+  repair_available: boolean
+}
+
+export interface DestinationMaintenance {
+  since: string // RFC3339
+  by: string // email of the admin who started it
+  // repair_job_id: set when a repair put the destination in maintenance for
+  // its own duration; '' when an admin did.
+  repair_job_id: string
+  // effective: no job holds the destination any more, so a repair can start.
+  effective: boolean
 }
 
 // One job's hold on a destination's repository.
@@ -309,6 +328,45 @@ export interface Job {
   destinations?: JobDestination[]
   command_sources?: JobDestinationCommand[]
   retention_tags?: JobRetentionTag[]
+  // params: the parameters of a job started from the GUI with options (a
+  // repair's RepairParams), null otherwise. requested_by: the email of the
+  // admin who started it, '' for scheduled jobs.
+  params?: RepairParams | null
+  requested_by?: string
+}
+
+// ─── Repository repair (ADR 0026) ─────────────────────────────────────────────
+
+export type RepairAction =
+  | 'unlock'
+  | 'repair-index'
+  | 'repair-snapshots'
+  | 'repair-packs'
+  | 'find-packs'
+  | 'check'
+
+// Mirrors shared/repair.Params. repair-snapshots is a dry run unless apply
+// is set.
+export interface RepairParams {
+  action: RepairAction
+  read_all_packs?: boolean
+  apply?: boolean
+  forget?: boolean
+  hosts?: string[]
+  tags?: string[]
+  snapshot_ids?: string[]
+  pack_ids?: string[]
+  read_data?: boolean
+}
+
+export interface RepairRequest extends RepairParams {
+  // confirm: the destination's name, required for destructive actions.
+  confirm?: string
+}
+
+export interface RepairResponse {
+  job_id: string
+  maintenance_started: boolean
 }
 
 // ─── Snapshot Browse ──────────────────────────────────────────────────────────

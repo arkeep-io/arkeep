@@ -174,6 +174,7 @@ onMounted(fetchJobs)
                     <SelectItem value="restore">Restore</SelectItem>
                     <SelectItem value="retention">Retention</SelectItem>
                     <SelectItem value="check">Integrity check</SelectItem>
+                    <SelectItem value="repair">Repair</SelectItem>
                 </SelectContent>
             </Select>
 
