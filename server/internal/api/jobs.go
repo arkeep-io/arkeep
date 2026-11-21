@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -110,6 +111,11 @@ type jobResponse struct {
 	CommandSources []jobDestinationCommandResponse `json:"command_sources,omitempty"`
 	RetentionTags  []jobRetentionTagResponse       `json:"retention_tags,omitempty"`
 	CreatedAt      string                          `json:"created_at"`
+	// Params are the parameters of a job started from the GUI with options
+	// (a repair's action and filters), null otherwise. RequestedBy is the
+	// email of the admin who started it, "" for scheduled jobs.
+	Params      json.RawMessage `json:"params"`
+	RequestedBy string          `json:"requested_by"`
 }
 
 // jobLogResponse represents a single log line from a job execution.
@@ -139,6 +145,10 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 		CommandSources: make([]jobDestinationCommandResponse, len(commandSources)),
 		RetentionTags:  make([]jobRetentionTagResponse, len(retentionTags)),
 		CreatedAt:      j.CreatedAt.UTC().Format(time.RFC3339),
+		RequestedBy:    j.RequestedBy,
+	}
+	if j.Params != "" && json.Valid([]byte(j.Params)) {
+		resp.Params = json.RawMessage(j.Params)
 	}
 
 	if j.StartedAt != nil {
