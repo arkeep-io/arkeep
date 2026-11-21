@@ -278,10 +278,10 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if jobType := r.URL.Query().Get("type"); jobType != "" {
 		switch jobType {
-		case "backup", "restore", "retention", "check":
+		case "backup", "restore", "retention", "check", "repair":
 			filter.Type = jobType
 		default:
-			ErrBadRequest(w, "invalid type: must be one of backup, restore, retention, check")
+			ErrBadRequest(w, "invalid type: must be one of backup, restore, retention, check, repair")
 			return
 		}
 	}
