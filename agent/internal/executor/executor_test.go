@@ -524,6 +524,10 @@ func TestEnsureWritableDir(t *testing.T) {
 	})
 
 	t.Run("read-only leaf returns error", func(t *testing.T) {
+		// root bypasses directory permission bits, so the write probe succeeds.
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: read-only permissions are not enforced")
+		}
 		leaf := t.TempDir()
 		if err := os.Chmod(leaf, 0555); err != nil {
 			t.Fatal(err)
