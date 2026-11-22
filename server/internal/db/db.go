@@ -7,6 +7,7 @@ package db
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -106,7 +107,7 @@ func New(cfg Config) (*gorm.DB, error) {
 		// Open the connection manually via database/sql using the modernc driver
 		// (registered as "sqlite"), then hand the existing *sql.DB to GORM so it
 		// does not try to open a second connection with go-sqlite3.
-		sqlDB, err = sql.Open("sqlite", cfg.DSN)
+		sqlDB, err = sql.Open("sqlite", withSQLitePragmas(cfg.DSN))
 		if err != nil {
 			return nil, fmt.Errorf("db: failed to open sqlite: %w", err)
 		}
@@ -116,18 +117,6 @@ func New(cfg Config) (*gorm.DB, error) {
 		database, err = gorm.Open(gormsqlite.Dialector{Conn: sqlDB}, gormCfg)
 		if err != nil {
 			return nil, fmt.Errorf("db: failed to initialize gorm with sqlite: %w", err)
-		}
-		// Enable foreign key enforcement. SQLite disables FK constraints by default;
-		// without this, ON DELETE RESTRICT/CASCADE constraints are silently ignored.
-		if err := database.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
-			return nil, fmt.Errorf("db: failed to enable foreign keys: %w", err)
-		}
-		// Overwrite freed content with zeros. Without it, a value removed by an
-		// UPDATE or DELETE — e.g. the credentials wiped when a destination is
-		// deleted (issue #289) — stays readable in the database file until
-		// SQLite happens to reuse that space.
-		if err := database.Exec("PRAGMA secure_delete = ON").Error; err != nil {
-			return nil, fmt.Errorf("db: failed to enable secure delete: %w", err)
 		}
 		drvName = "sqlite"
 
@@ -158,6 +147,24 @@ func New(cfg Config) (*gorm.DB, error) {
 	database.Statement.ConnPool = database.ConnPool
 
 	return database, nil
+}
+
+// withSQLitePragmas adds to dsn the pragmas the modernc driver runs on every
+// connection it opens. Running them once after sql.Open is not enough:
+// database/sql replaces a connection whose query was interrupted by its
+// context, and the new connection would start with the SQLite defaults.
+//
+//   - foreign_keys: SQLite does not enforce foreign keys by default; without
+//     it ON DELETE CASCADE is ignored and deletes leave orphan rows.
+//   - secure_delete: overwrite freed content with zeros, so a value removed by
+//     an UPDATE or DELETE, such as the credentials wiped when a destination is
+//     deleted (issue #289), does not stay readable in the database file.
+func withSQLitePragmas(dsn string) string {
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "_pragma=foreign_keys(1)&_pragma=secure_delete(1)"
 }
 
 // runMigrations applies all pending up-migrations from the embedded SQL files.
@@ -195,10 +202,60 @@ func runMigrations(sqlDB *sql.DB, driver string, log *zap.Logger) error {
 		}
 	}
 
+	if driver == "sqlite" {
+		if err := repairSQLiteMigration43(m, sqlDB, log); err != nil {
+			return fmt.Errorf("failed to repair migration 43: %w", err)
+		}
+	}
+
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return fmt.Errorf("failed to apply migrations: %w", err)
 	}
 
 	log.Info("database migrations applied successfully")
+	return nil
+}
+
+// repairSQLiteMigration43 undoes what the SQLite migration 000043 of v0.12.0
+// left behind when it stopped at the copy of notification_delivery_queue,
+// which fails on a queue holding deliveries of deleted notifications: version
+// 43 marked dirty, notification_providers and notification_delivery_queue_new
+// created, the original queue untouched. It drops the two new tables and sets
+// the version back to 42, so m.Up applies the corrected 000043. Both tables
+// are empty: the server never started on that schema.
+//
+// It does nothing on any other state, which m.Up then reports as dirty.
+func repairSQLiteMigration43(m *migrate.Migrate, sqlDB *sql.DB, log *zap.Logger) error {
+	version, dirty, err := m.Version()
+	if errors.Is(err, migrate.ErrNilVersion) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if version != 43 || !dirty {
+		return nil
+	}
+
+	// The queue must still be the original one, without the provider_id
+	// column the migration adds: then the rename never happened.
+	var queues, providerColumns int
+	if err := sqlDB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'notification_delivery_queue'`).Scan(&queues); err != nil {
+		return err
+	}
+	if err := sqlDB.QueryRow(`SELECT count(*) FROM pragma_table_info('notification_delivery_queue') WHERE name = 'provider_id'`).Scan(&providerColumns); err != nil {
+		return err
+	}
+	if queues != 1 || providerColumns != 0 {
+		return nil
+	}
+
+	if _, err := sqlDB.Exec(`DROP TABLE IF EXISTS notification_delivery_queue_new; DROP TABLE IF EXISTS notification_providers`); err != nil {
+		return err
+	}
+	if err := m.Force(42); err != nil {
+		return err
+	}
+	log.Warn("repaired the database left dirty by migration 43 of v0.12.0; applying it again")
 	return nil
 }
