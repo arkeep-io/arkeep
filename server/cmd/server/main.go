@@ -30,6 +30,7 @@ import (
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/housekeeping"
+	"github.com/arkeep-io/arkeep/server/internal/jobreport"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -431,6 +432,22 @@ func run(ctx context.Context, cfg *config) error {
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	background.Go(func() { logRetentionSvc.Start(ctx) })
 
+	// --- Job report ---
+	// Emails one report of all jobs that finished since the previous one,
+	// hourly or daily (see Settings → Notifications). Off by default.
+	jobReportSvc, err := jobreport.New(settingsRepo, notifService, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create job report service: %w", err)
+	}
+	if err := jobReportSvc.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start job report service: %w", err)
+	}
+	defer func() {
+		if err := jobReportSvc.Stop(); err != nil {
+			logger.Warn("job report shutdown error", zap.Error(err))
+		}
+	}()
+
 	// --- Housekeeping ---
 	// Deletes expired refresh tokens and notifications read more than 30 days
 	// ago, once a day.
@@ -513,6 +530,7 @@ func run(ctx context.Context, cfg *config) error {
 		OIDCProviders:      oidcProviderRepo,
 		Settings:           settingsRepo,
 		LogRetention:       logRetentionSvc,
+		JobReport:          jobReportSvc,
 		SnapshotSync:       snapshotSyncSvc,
 		Secure:             cfg.secureCookies,
 		Dashboard:          dashboardRepo,

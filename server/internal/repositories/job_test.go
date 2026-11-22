@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -873,5 +874,70 @@ func TestListRecentBackupsByPolicies(t *testing.T) {
 	empty, err := repo.ListRecentBackupsByPolicies(ctx, nil, 5)
 	if err != nil || len(empty) != 0 {
 		t.Errorf("no policies: got %v, %v; want empty map, nil", empty, err)
+	}
+}
+
+func TestListEndedBetween(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+	from := time.Date(2026, 11, 12, 7, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+
+	// newJob creates a job that started an hour before end (nil: not ended).
+	newJob := func(jobType, status string, end *time.Time) *db.Job {
+		t.Helper()
+		j := &db.Job{AgentID: f.agentID, Type: jobType, Status: status, EndedAt: end}
+		if jobType == "backup" {
+			j.PolicyID = &f.policyID
+		}
+		if end != nil {
+			start := end.Add(-time.Hour)
+			j.StartedAt = &start
+		}
+		if err := repo.Create(ctx, j); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		return j
+	}
+	ptr := func(d time.Duration) *time.Time { v := from.Add(d); return &v }
+
+	backup := newJob("backup", "succeeded", ptr(3*time.Hour))
+	if err := repo.CreateDestination(ctx, &db.JobDestination{JobID: backup.ID, DestinationID: f.destID, Status: "succeeded", SizeBytes: 1000}); err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+	if err := repo.UpsertDestinationCommandResult(ctx, backup.ID, f.destID, "db", "succeeded", nil, nil, "", 500, ""); err != nil {
+		t.Fatalf("UpsertDestinationCommandResult: %v", err)
+	}
+	check := newJob("check", "failed", ptr(time.Hour))
+	if err := repo.CreateDestination(ctx, &db.JobDestination{JobID: check.ID, DestinationID: f.destID, Status: "failed"}); err != nil {
+		t.Fatalf("CreateDestination: %v", err)
+	}
+	atEnd := newJob("backup", "cancelled", ptr(24*time.Hour)) // ends exactly at to: included
+	newJob("backup", "succeeded", ptr(0))                     // ends exactly at from: previous report
+	newJob("backup", "succeeded", ptr(25*time.Hour))          // after to: next report
+	newJob("backup", "running", nil)                          // still running
+
+	rows, err := repo.ListEndedBetween(ctx, from, to)
+	if err != nil {
+		t.Fatalf("ListEndedBetween: %v", err)
+	}
+	var ids []uuid.UUID
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	if want := []uuid.UUID{check.ID, backup.ID, atEnd.ID}; !slices.Equal(ids, want) {
+		t.Fatalf("got jobs %v, want %v (ordered by start)", ids, want)
+	}
+
+	if r := rows[1]; r.PolicyName != "p" || r.AgentName != "test-agent" || r.AddedBytes != 1500 || r.Status != "succeeded" || r.SucceededDestinations != 1 {
+		t.Errorf("backup row = %+v, want policy p, agent test-agent, 1500 bytes added on 1 destination", r)
+	}
+	if r := rows[0]; r.DestinationName != "dest" || r.PolicyName != "" || r.Type != "check" || r.SucceededDestinations != 0 {
+		t.Errorf("check row = %+v, want destination dest, no policy and no succeeded destination", r)
+	}
+	if r := rows[2]; r.AddedBytes != 0 || r.DestinationName != "" {
+		t.Errorf("job without destinations = %+v, want no bytes and no destination", r)
 	}
 }
