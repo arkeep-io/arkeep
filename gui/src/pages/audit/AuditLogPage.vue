@@ -20,7 +20,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ChevronLeft, ChevronRight, RefreshCw, ScrollText } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, ScrollText } from '@lucide/vue'
+import RefreshControl from '@/components/shared/RefreshControl.vue'
+import type { FetchOptions } from '@/composables/useAutoRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, AuditLog } from '@/types'
 
@@ -107,9 +109,11 @@ function hasDetails(entry: AuditLog): boolean {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchEntries() {
-    loading.value = true
-    error.value = null
+async function fetchEntries({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const params = new URLSearchParams({
             limit: String(pageSize),
@@ -128,10 +132,11 @@ async function fetchEntries() {
         )
         entries.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load audit log.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -148,7 +153,7 @@ watch(emailFilter, () => {
     if (emailDebounceTimer) clearTimeout(emailDebounceTimer)
     emailDebounceTimer = setTimeout(() => { page.value = 1; fetchEntries() }, 400)
 })
-watch(page, fetchEntries)
+watch(page, () => fetchEntries())
 
 onMounted(fetchEntries)
 </script>
@@ -164,9 +169,7 @@ onMounted(fetchEntries)
                     Record of all significant admin actions.
                 </p>
             </div>
-            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchEntries">
-                <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-            </Button>
+            <RefreshControl page="audit" :loading="loading" :refresh="fetchEntries" />
         </div>
 
         <!-- Error banner -->

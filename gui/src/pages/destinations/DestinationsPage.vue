@@ -32,7 +32,6 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Plus,
-  RefreshCw,
   MoreHorizontal,
   PencilLine,
   Copy,
@@ -48,6 +47,8 @@ import { formatDate } from '@/lib/jobUtils'
 import { lockExplanation, lockLabel } from '@/lib/destinationLocks'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
+import RefreshControl from '@/components/shared/RefreshControl.vue'
+import type { FetchOptions } from '@/composables/useAutoRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Destination, ApiResponse } from '@/types'
@@ -145,17 +146,20 @@ watch(sortParams, () => {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchDestinations() {
-  loading.value = true
-  error.value = null
+async function fetchDestinations({ quiet = false }: FetchOptions = {}) {
+  if (!quiet) {
+    loading.value = true
+    error.value = null
+  }
   try {
     const res = await api<ApiResponse<DestinationListResponse>>(`/api/v1/destinations?limit=${pageSize}&offset=${offset.value}${sortParams.value}`)
     destinations.value = res.data.items
     total.value = res.data.total
+    error.value = null
   } catch (e: any) {
     error.value = apiErrorMessage(e, 'Failed to load destinations')
   } finally {
-    loading.value = false
+    if (!quiet) loading.value = false
   }
 }
 
@@ -242,9 +246,7 @@ onMounted(fetchDestinations)
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchDestinations">
-          <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-        </Button>
+        <RefreshControl page="destinations" :loading="loading" :refresh="fetchDestinations" />
         <Button v-if="authStore.isAdmin" @click="openCreate">
           <Plus class="w-4 h-4" />
           New Destination

@@ -31,7 +31,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
+import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RotateCcw, Trash2 } from '@lucide/vue'
+import RefreshControl from '@/components/shared/RefreshControl.vue'
+import type { FetchOptions } from '@/composables/useAutoRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Destination, PaginatedResponse, Snapshot, SyncDestinationResponse } from '@/types'
 import { summariseSync } from '@/lib/syncSummary'
@@ -114,9 +116,11 @@ function abbreviate(id: string | undefined): string {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchSnapshots() {
-    loading.value = true
-    error.value = null
+async function fetchSnapshots({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset.value) })
         if (policyFilter.value) params.set('policy_id', policyFilter.value)
@@ -125,10 +129,11 @@ async function fetchSnapshots() {
         const res = await api<ApiResponse<SnapshotListResponse>>(`/api/v1/snapshots?${params}`)
         snapshots.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load snapshots.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -267,9 +272,7 @@ onMounted(fetchSnapshots)
                     <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
                     {{ destinationFilter ? 'Sync Destination' : 'Sync All' }}
                 </Button>
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchSnapshots">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshControl page="snapshots" :loading="loading" :refresh="fetchSnapshots" />
             </div>
         </div>
 

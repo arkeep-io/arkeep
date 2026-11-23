@@ -12,10 +12,11 @@ import {
     TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
+import { Server, ShieldCheck, BriefcaseBusiness, Camera, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
+import RefreshControl from '@/components/shared/RefreshControl.vue'
+import type { FetchOptions } from '@/composables/useAutoRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {
@@ -160,9 +161,11 @@ function formatBytes(bytes: number): string {
 // Data fetching — dashboard aggregates + last 5 jobs in parallel
 // ---------------------------------------------------------------------------
 
-async function fetchAll() {
-    loading.value = true
-    error.value = null
+async function fetchAll({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const [dashRes, jobsRes] = await Promise.all([
             api<ApiResponse<DashboardData>>('/api/v1/dashboard'),
@@ -170,10 +173,11 @@ async function fetchAll() {
         ])
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load dashboard data.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -191,9 +195,7 @@ onMounted(fetchAll)
                     Overview of your backup infrastructure.
                 </p>
             </div>
-            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchAll">
-                <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-            </Button>
+            <RefreshControl page="dashboard" :loading="loading" :refresh="fetchAll" />
         </div>
 
         <!-- Error banner -->

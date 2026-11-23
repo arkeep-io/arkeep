@@ -37,6 +37,8 @@ import {
     CalendarClock,
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import RefreshControl from '@/components/shared/RefreshControl.vue'
+import type { FetchOptions } from '@/composables/useAutoRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
@@ -83,21 +85,24 @@ const triggerLoading = ref(false)
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchPolicy() {
-    loading.value = true
-    error.value = null
+async function fetchPolicy({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<Policy>>(`/api/v1/policies/${policyId}`)
         policy.value = res.data
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load policy')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
-async function fetchJobs() {
-    jobsLoading.value = true
+async function fetchJobs({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) jobsLoading.value = true
     try {
         const res = await api<ApiResponse<JobListResponse>>(
             `/api/v1/policies/${policyId}/jobs?limit=10&offset=0`
@@ -106,8 +111,13 @@ async function fetchJobs() {
     } catch {
         // Non-fatal — jobs section stays empty
     } finally {
-        jobsLoading.value = false
+        if (!quiet) jobsLoading.value = false
     }
+}
+
+// refreshAll reloads the policy and its latest jobs.
+function refreshAll(options: FetchOptions = {}) {
+    return Promise.all([fetchPolicy(options), fetchJobs(options)])
 }
 
 // ---------------------------------------------------------------------------
@@ -216,9 +226,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && policy" class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchPolicy(); fetchJobs()">
-                    <RefreshCw class="w-4 h-4" />
-                </Button>
+                <RefreshControl page="policy-detail" :loading="loading" :refresh="refreshAll" />
                 <!-- The span receives hover while the disabled button has pointer-events: none -->
                 <Tooltip v-if="authStore.isAdmin" :disabled="policy.enabled">
                     <TooltipTrigger as-child>
