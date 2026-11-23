@@ -53,14 +53,16 @@ describe('AgentDetailPage', () => {
     vi.mocked(api).mockReset()
   })
 
-  it('shows the versions of the embedded restic and rclone', async () => {
+  it('shows the versions of the embedded restic and rclone next to the agent version', async () => {
     const wrapper = await mountWith(agent)
-    expect(wrapper.text()).toContain('restic 0.19.1 · rclone 1.76.0')
+    const indicator = wrapper.find('[data-testid="agent-tools-indicator"]')
+    expect(indicator.exists()).toBe(true)
+    expect(indicator.attributes('aria-label')).toBe('Embedded restic 0.19.1, rclone 1.76.0')
   })
 
-  it('leaves them out for an agent that does not report them', async () => {
+  it('shows no indicator for an agent that does not report them', async () => {
     const wrapper = await mountWith({ ...agent, restic_version: '', rclone_version: '' })
     expect(wrapper.text()).toContain('0.13.0')
-    expect(wrapper.text()).not.toContain('restic')
+    expect(wrapper.find('[data-testid="agent-tools-indicator"]').exists()).toBe(false)
   })
 })
