@@ -622,6 +622,7 @@ func parseCheckOutput(stdout, stderr string) CheckResult {
 			_ = json.Unmarshal([]byte(line), &result)
 		}
 	}
+	var checkErrors, exitErrors int
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -635,9 +636,23 @@ func parseCheckOutput(stdout, stderr string) CheckResult {
 			result.Messages = append(result.Messages, line)
 			continue
 		}
+		switch msg.MessageType {
+		case "error":
+			checkErrors++
+		case "exit_error":
+			exitErrors++
+		}
 		if text := strings.TrimSpace(msg.Message); text != "" {
 			result.Messages = append(result.Messages, text)
 		}
+	}
+	// restic's summary reports one error for any fatal error, including the
+	// ones that stop it before checking anything: a wrong password, a missing
+	// repository, a lock held by another operation. Only a check that found
+	// problems reports them as "error" lines first: without any, the
+	// repository was not checked, and nothing is known to be wrong with it.
+	if exitErrors > 0 && checkErrors == 0 {
+		result.NumErrors = 0
 	}
 	return result
 }
