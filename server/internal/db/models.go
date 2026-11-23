@@ -186,6 +186,11 @@ type Agent struct {
 	// Advertised by the agent in the Register RPC via AgentCapabilities.docker.
 	// Used by the GUI to show or hide the Docker volume source option in the policy form.
 	DockerAvailable bool `gorm:"not null;default:false"`
+	// ResticVersion and RcloneVersion are the versions of the binaries
+	// embedded in the agent, reported on every registration; empty for
+	// agents that predate the report.
+	ResticVersion string `gorm:"not null;default:''"`
+	RcloneVersion string `gorm:"not null;default:''"`
 	// CertFingerprint is the hex SHA-256 of the mTLS client certificate the
 	// agent is bound to; nil until its first registration with one. Read-only
 	// for GORM so that Save on a stale copy can never undo a binding: it is

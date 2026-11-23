@@ -36,6 +36,9 @@ func TestAgentRegistration(t *testing.T) {
 	if record.Hostname != "integration-test-host" {
 		t.Errorf("hostname = %q, want integration-test-host", record.Hostname)
 	}
+	if record.ResticVersion != "0.19.1" || record.RcloneVersion != "1.76.0" {
+		t.Errorf("restic/rclone version = %q/%q, want 0.19.1/1.76.0", record.ResticVersion, record.RcloneVersion)
+	}
 	// Status is "offline" until StreamJobs is opened.
 	if record.Status != "offline" {
 		t.Errorf("status after Register = %q, want offline", record.Status)
@@ -80,11 +83,13 @@ func TestReconnect(t *testing.T) {
 	resp, err := agent.client.Register(
 		context.Background(),
 		&proto.RegisterRequest{ //nolint:composites — proto fields use generated names
-			AgentId:  agentID,
-			Hostname: "integration-test-host",
-			Version:  "0.0.0-test",
-			Os:       "linux",
-			Arch:     "amd64",
+			AgentId:       agentID,
+			Hostname:      "integration-test-host",
+			Version:       "0.0.0-test",
+			Os:            "linux",
+			Arch:          "amd64",
+			ResticVersion: "0.20.0",
+			RcloneVersion: "1.77.0",
 		},
 	)
 	if err != nil {
@@ -108,6 +113,15 @@ func TestReconnect(t *testing.T) {
 		t.Errorf("agent count = %d, want 1 (no duplicates on reconnect)", total)
 	}
 	_ = agents
+
+	// The versions follow the agent's binaries, which change on upgrade.
+	record, err := ts.agentRepo.GetByID(context.Background(), mustParseUUID(t, agentID))
+	if err != nil {
+		t.Fatalf("GetByID after reconnect: %v", err)
+	}
+	if record.ResticVersion != "0.20.0" || record.RcloneVersion != "1.77.0" {
+		t.Errorf("restic/rclone version after reconnect = %q/%q, want 0.20.0/1.77.0", record.ResticVersion, record.RcloneVersion)
+	}
 }
 
 // TestReconnect_NameFollowsHostname verifies issue #284's migration path: an

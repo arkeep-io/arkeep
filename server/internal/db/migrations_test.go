@@ -456,8 +456,9 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 		t.Fatalf("Migrate(35): %v", err)
 	}
 
+	// The restic and rclone version columns of agents only exist from 000046 on.
 	agent := &Agent{Name: "agent", Status: "online"}
-	if err := gdb.Create(agent).Error; err != nil {
+	if err := gdb.Omit("restic_version", "rclone_version").Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	holders := map[string]struct{ jobType, status, wantMode string }{
@@ -677,8 +678,9 @@ func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
 		t.Fatalf("Migrate(40): %v", err)
 	}
 
+	// The restic and rclone version columns of agents only exist from 000046 on.
 	agent := &Agent{Name: "agent", Status: "online"}
-	if err := gdb.Create(agent).Error; err != nil {
+	if err := gdb.Omit("restic_version", "rclone_version").Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	job := &Job{AgentID: agent.ID, Type: "backup", Status: "succeeded"}

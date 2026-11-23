@@ -50,6 +50,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/executor"
 	"github.com/arkeep-io/arkeep/agent/internal/metrics"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
+	"github.com/arkeep-io/arkeep/agent/scripts"
 	"github.com/arkeep-io/arkeep/shared/enrollproof"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -545,12 +546,14 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 	}
 
 	resp, err := client.Register(ctx, &proto.RegisterRequest{
-		Hostname:     hostname,
-		Version:      m.cfg.Version,
-		Os:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		Capabilities: caps,
-		AgentId:      state.AgentID, // empty on first run; server uses it as primary dedup key
+		Hostname:      hostname,
+		Version:       m.cfg.Version,
+		Os:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		Capabilities:  caps,
+		AgentId:       state.AgentID, // empty on first run; server uses it as primary dedup key
+		ResticVersion: scripts.ResticVersion,
+		RcloneVersion: scripts.RcloneVersion,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("register RPC failed: %w", err)

@@ -98,6 +98,10 @@ export interface Agent {
   arch: string
   status: AgentStatus
   version: string
+  // Versions of the restic and rclone binaries embedded in the agent;
+  // empty for agents that do not report them.
+  restic_version: string
+  rclone_version: string
   docker_available: boolean
   // identity_bound is true once the agent registered with its mTLS client
   // certificate; RPCs from any other certificate are refused.
