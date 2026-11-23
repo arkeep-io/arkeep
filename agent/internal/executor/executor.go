@@ -421,6 +421,11 @@ func (e *Executor) run(ctx context.Context, job JobAssignment, sink LogSink, rep
 		e.jobsMu.Lock()
 		delete(e.jobs, job.JobID)
 		e.jobsMu.Unlock()
+		// A cancel that arrived after the check below, but before the job
+		// registered its context, would otherwise stay marked forever.
+		e.cancelledMu.Lock()
+		delete(e.cancelled, job.JobID)
+		e.cancelledMu.Unlock()
 	}()
 	// If Cancel() was called while this job was still queued, skip execution
 	// and immediately report cancelled.
@@ -506,7 +511,16 @@ func (e *Executor) Cancel(jobID string) {
 	}
 	e.runningMu.Unlock()
 
-	// Otherwise mark it for pre-execution cancellation.
+	// Otherwise mark it for pre-execution cancellation, if it is queued here.
+	// The server also cancels pending jobs it may not have sent yet: marking
+	// those would keep their IDs forever, since no run would clear them.
+	e.jobsMu.Lock()
+	queued := e.jobs[jobID]
+	e.jobsMu.Unlock()
+	if !queued {
+		e.logger.Info("cancel for a job not queued here, ignoring it", zap.String("job_id", jobID))
+		return
+	}
 	e.cancelledMu.Lock()
 	e.cancelled[jobID] = true
 	e.cancelledMu.Unlock()

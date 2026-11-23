@@ -664,6 +664,19 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 			zap.String("job_id", req.JobId),
 			zap.String("reported_status", dbStatus),
 		)
+		// A job that starts only now was closed while it sat in the agent's
+		// queue, and the cancel did not reach the agent (it was offline, or
+		// the cancel raced the assignment). The job no longer holds its
+		// destinations, so tell the agent to abort it.
+		if dbStatus == "running" {
+			if err := s.agentManager.SendCancel(req.AgentId, req.JobId); err != nil {
+				s.logger.Warn("could not cancel a job started after it was closed",
+					zap.String("job_id", req.JobId),
+					zap.String("agent_id", req.AgentId),
+					zap.Error(err),
+				)
+			}
+		}
 		return &proto.JobStatusResponse{Ok: true}, nil
 	}
 	if err != nil {
