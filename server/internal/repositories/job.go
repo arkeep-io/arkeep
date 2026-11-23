@@ -249,13 +249,17 @@ func (r *gormJobRepository) MarkRunningJobsInterruptedForAgent(ctx context.Conte
 // of on every reconnection until the next scheduled run. The status = "interrupted"
 // filter makes it idempotent. Returns ErrNotFound if the job is not (or no longer)
 // interrupted.
+//
+// ended_at moves to now: the job report selects jobs by their end time, so a
+// job already reported as interrupted is reported again, as failed.
 func (r *gormJobRepository) MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.Job{}).
 		Where("id = ? AND status = ?", id, "interrupted").
 		Updates(map[string]interface{}{
-			"status": "failed",
-			"error":  errMsg,
+			"status":   "failed",
+			"error":    errMsg,
+			"ended_at": time.Now().UTC(),
 		})
 	if result.Error != nil {
 		return fmt.Errorf("jobs: mark resume exhausted: %w", result.Error)

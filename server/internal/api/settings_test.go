@@ -588,6 +588,24 @@ func TestSettingsHandler_JobReport(t *testing.T) {
 		}
 	})
 
+	t.Run("an unchanged schedule is not rescheduled", func(t *testing.T) {
+		e := newTestEnv(t)
+		// The defaults as the GUI sends them with every save.
+		body := map[string]any{"report_frequency": "off", "report_time": "07:00", "report_minute": 0}
+		maps.Copy(body, events)
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		body["report_frequency"] = "daily"
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		body["job_success"] = false
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		if n := e.jobReport.reloads.Load(); n != 1 {
+			t.Errorf("job report rescheduled %d times, want only for the request that changed it", n)
+		}
+	})
+
 	t.Run("a failed reschedule still answers with the saved settings", func(t *testing.T) {
 		e := newTestEnv(t)
 		e.jobReport.err = errors.New("scheduler unavailable")

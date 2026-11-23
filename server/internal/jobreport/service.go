@@ -386,6 +386,8 @@ func (s *Service) scheduleRetry(frequency string) {
 	}
 	delay := delays[s.retries]
 	s.retries++
+	// time.Now, not s.now: gocron runs on the real clock, while s.now only
+	// places the report's periods (tests stop it at a fixed time).
 	if _, err := s.cron.NewJob(
 		gocron.OneTimeJob(gocron.OneTimeJobStartDateTime(time.Now().Add(delay))),
 		gocron.NewTask(s.retry),
