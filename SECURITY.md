@@ -50,6 +50,10 @@ execute arbitrary code on any machine running a connected agent.
   path traversal (`..`), and references to internal credential environment variables
   (`$RESTIC_*`, `$RCLONE_*`, `$ARKEEP_*`).
 - Hook commands are limited to 1024 characters.
+- Hooks and command sources inherit the agent's environment without the agent's own
+  `ARKEEP_*` variables, so `ARKEEP_AGENT_SECRET` never reaches them, nor the job log
+  through their output. Command sources, which restic runs, also do not receive the
+  repository password and backend credentials that restic itself is given.
 
 **Deployment recommendation:** Run the agent as a dedicated low-privilege user with
 access only to the directories it needs to back up. Avoid running the agent as root

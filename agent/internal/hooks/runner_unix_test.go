@@ -102,3 +102,27 @@ func TestRun_ExitCodeAndOutput(t *testing.T) {
 		t.Errorf("Run = %+v, %v; want exit 3 with output %q", res, err, "hello\n")
 	}
 }
+
+// TestRun_HookDoesNotSeeAgentVariables: a hook that prints its environment
+// must not leak the agent secret into the job log, and keeps the rest of the
+// environment (PATH and the operator's own variables).
+func TestRun_HookDoesNotSeeAgentVariables(t *testing.T) {
+	t.Setenv("ARKEEP_AGENT_SECRET", "agent-secret-value")
+	t.Setenv("ARKEEP_SERVER_ADDR", "arkeep.example.com:9090")
+	t.Setenv("HOOK_TEST_OPERATOR_VAR", "kept")
+
+	res, err := NewRunner(0).Run(context.Background(), "env", nil, 10*time.Second)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, leaked := range []string{"ARKEEP_AGENT_SECRET", "agent-secret-value", "ARKEEP_SERVER_ADDR"} {
+		if strings.Contains(res.Output, leaked) {
+			t.Errorf("hook output contains %q:\n%s", leaked, res.Output)
+		}
+	}
+	for _, kept := range []string{"HOOK_TEST_OPERATOR_VAR=kept", "PATH="} {
+		if !strings.Contains(res.Output, kept) {
+			t.Errorf("hook output lacks %q:\n%s", kept, res.Output)
+		}
+	}
+}
