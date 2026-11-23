@@ -374,6 +374,11 @@ type JobRepository interface {
 	// ID, PolicyID, Status, CreatedAt, StartedAt and EndedAt are filled.
 	ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
+	// ListEndedBetween returns the jobs that reached a terminal status with
+	// an end time in (from, to], ordered by start time, for the job report
+	// email. A job still running at to is not included: it ends after to and
+	// is listed by the next call.
+	ListEndedBetween(ctx context.Context, from, to time.Time) ([]JobReportRow, error)
 
 	// Destination queue (issue #285). A job whose destinations are held by
 	// another operation waits in status "waiting" until all of them are free.

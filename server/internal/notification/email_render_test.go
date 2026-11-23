@@ -80,10 +80,10 @@ var (
 		StatusLabel: "Succeeded", StatusColor: greenStripe, StatusBG: greenBG, StatusFG: green,
 		Headline: "Backup completed",
 		Summary:  "Daily server backup on web-01",
-		Metrics: []emailItem{
-			{"Duration", "12m 4s"},
-			{"Added", "2.4 GB"},
-			{"Destinations", "2 of 2"},
+		Metrics: []emailMetric{
+			{Label: "Duration", Value: "12m 4s"},
+			{Label: "Added", Value: "2.4 GB"},
+			{Label: "Destinations", Value: "2 of 2"},
 		},
 		Destinations: []destinationRow{
 			{Name: "offsite-s3", Status: "Succeeded", StatusFG: green, Meta: "Snapshot 8f3a1c7e · 1.2 GB added · 8m 41s"},
@@ -103,10 +103,10 @@ var (
 		StatusLabel: "Failed", StatusColor: red, StatusBG: redBG, StatusFG: redFG,
 		Headline: "Backup failed",
 		Summary:  "Daily server backup on web-01",
-		Metrics: []emailItem{
-			{"Duration", "4m 37s"},
-			{"Added", "1.2 GB"},
-			{"Destinations", "1 of 2"},
+		Metrics: []emailMetric{
+			{Label: "Duration", Value: "4m 37s"},
+			{Label: "Added", Value: "1.2 GB"},
+			{Label: "Destinations", Value: "1 of 2"},
 		},
 		ErrorTitle: "Error",
 		Error:      failureError,

@@ -8,13 +8,19 @@ vi.mock('@/services/api', async (importActual) => ({
   api: vi.fn(),
 }))
 
-const events = { job_success: false, job_failure: true, agent_offline: true, agent_online: false, email_enabled: true }
+// The stored settings as the page saves them; GET adds server_timezone.
+const events = {
+  job_success: false, job_failure: true, agent_offline: true, agent_online: false, email_enabled: true,
+  report_frequency: 'off', report_time: '07:00', report_minute: 0,
+}
 
-// openPage mounts the page with the stored events and webhook (null = none).
-async function openPage(webhook: { url: string; enabled: boolean } | null) {
+// openPage mounts the page with the stored settings and webhook (null = none).
+async function openPage(webhook: { url: string; enabled: boolean } | null, stored: Partial<typeof events> = {}) {
   vi.mocked(api).mockImplementation((url: string, opts?: { method?: string }) => {
     if (opts?.method === 'PUT') return Promise.resolve({ data: {} })
-    if (url === '/api/v1/settings/notifications') return Promise.resolve({ data: events })
+    if (url === '/api/v1/settings/notifications') {
+      return Promise.resolve({ data: { ...events, ...stored, server_timezone: 'CET' } })
+    }
     if (url === '/api/v1/settings/notification-providers') return Promise.resolve({ data: [] })
     return webhook ? Promise.resolve({ data: { ...webhook, secret: '***' } }) : Promise.reject({ status: 404 })
   })
@@ -81,6 +87,60 @@ describe('NotificationsPage', () => {
 
     expect(putBody('/api/v1/settings/webhook')).toEqual({
       url: 'https://hooks.example.com/arkeep', secret: 's3cret', enabled: true,
+    })
+  })
+
+  describe('job report', () => {
+    it('shows the time with the server time zone only for the daily report', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'hourly' })
+      expect(wrapper.find('#report-time').exists()).toBe(false)
+
+      const select = wrapper.findAllComponents({ name: 'Select' }).at(0)!
+      select.vm.$emit('update:modelValue', 'daily')
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.find('#report-time').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Server time (CET).')
+    })
+
+    it('saves the minute of the hourly report', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'hourly' })
+      expect(wrapper.find('#report-time').exists()).toBe(false)
+      await wrapper.find('#report-minute').setValue('30')
+      await submitForm(wrapper)
+
+      expect(putBody('/api/v1/settings/notifications')).toEqual({
+        ...events, report_frequency: 'hourly', report_minute: 30,
+      })
+    })
+
+    it('rejects a minute out of range', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'hourly' })
+      await wrapper.find('#report-minute').setValue('60')
+      await submitForm(wrapper)
+
+      expect(wrapper.text()).toContain('Must be a whole number between 0 and 59')
+      expect(putBody('/api/v1/settings/notifications')).toBeUndefined()
+    })
+
+    it('saves the frequency and the time', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'daily' })
+      await wrapper.find('#report-time').setValue('18:30')
+      await submitForm(wrapper)
+
+      expect(putBody('/api/v1/settings/notifications')).toEqual({
+        ...events, report_frequency: 'daily', report_time: '18:30',
+      })
+    })
+
+    it('drops an unsaved minute when the daily report is chosen', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'hourly' })
+      await wrapper.find('#report-minute').setValue('60')
+      wrapper.findAllComponents({ name: 'Select' }).at(0)!.vm.$emit('update:modelValue', 'daily')
+      await settle()
+      await submitForm(wrapper)
+
+      expect(putBody('/api/v1/settings/notifications')).toEqual({ ...events, report_frequency: 'daily' })
     })
   })
 
