@@ -877,6 +877,50 @@ func TestListRecentBackupsByPolicies(t *testing.T) {
 	}
 }
 
+// TestMarkResumeExhausted covers the give-up of the automatic resume: the job
+// becomes failed and ends again now, so the job report, which selects jobs by
+// their end time, lists it as failed even after a report listed it as
+// interrupted.
+func TestMarkResumeExhausted(t *testing.T) {
+	gormDB := newTestDB(t)
+	repo := NewJobRepository(gormDB)
+	f := newJobFixture(t, gormDB)
+	ctx := context.Background()
+
+	interruptedAt := time.Now().UTC().Add(-2 * time.Hour)
+	job := &db.Job{PolicyID: &f.policyID, AgentID: f.agentID, Status: "interrupted", EndedAt: &interruptedAt}
+	if err := repo.Create(ctx, job); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	reportedUntil := interruptedAt.Add(time.Hour)
+
+	if err := repo.MarkResumeExhausted(ctx, job.ID, "gave up"); err != nil {
+		t.Fatalf("MarkResumeExhausted: %v", err)
+	}
+	stored, err := repo.GetByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.Status != "failed" || stored.Error != "gave up" {
+		t.Errorf("status %q, error %q, want failed with the give-up message", stored.Status, stored.Error)
+	}
+	if stored.EndedAt == nil || !stored.EndedAt.After(reportedUntil) {
+		t.Errorf("ended_at = %v, want it moved to the give-up time", stored.EndedAt)
+	}
+
+	rows, err := repo.ListEndedBetween(ctx, reportedUntil, time.Now().UTC().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ListEndedBetween: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != job.ID || rows[0].Status != "failed" {
+		t.Errorf("next report = %+v, want the job again, as failed", rows)
+	}
+
+	if err := repo.MarkResumeExhausted(ctx, job.ID, "gave up"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second MarkResumeExhausted returned %v, want ErrNotFound", err)
+	}
+}
+
 func TestListEndedBetween(t *testing.T) {
 	gormDB := newTestDB(t)
 	repo := NewJobRepository(gormDB)
