@@ -133,6 +133,9 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		// Restrict browser features not needed by this app.
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// Keep search engines from indexing any response, the API and the
+		// GUI's assets included: the meta tag in index.html covers only HTML.
+		h.Set("X-Robots-Tag", "noindex, nofollow")
 		next.ServeHTTP(w, r)
 	})
 }
