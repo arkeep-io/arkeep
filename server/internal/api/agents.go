@@ -47,6 +47,8 @@ type agentResponse struct {
 	OS              string  `json:"os"`
 	Arch            string  `json:"arch"`
 	Version         string  `json:"version"`
+	ResticVersion   string  `json:"restic_version"` // "" until the agent reports it
+	RcloneVersion   string  `json:"rclone_version"`
 	Status          string  `json:"status"`
 	DockerAvailable bool    `json:"docker_available"`
 	IdentityBound   bool    `json:"identity_bound"` // bound to its mTLS client certificate (never without auto-PKI)
@@ -64,6 +66,8 @@ func agentToResponse(a *db.Agent) agentResponse {
 		OS:              a.OS,
 		Arch:            a.Arch,
 		Version:         a.Version,
+		ResticVersion:   a.ResticVersion,
+		RcloneVersion:   a.RcloneVersion,
 		Status:          a.Status,
 		DockerAvailable: a.DockerAvailable,
 		IdentityBound:   a.CertFingerprint != nil,

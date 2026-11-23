@@ -361,6 +361,8 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 			}
 			existing.Hostname = req.Hostname
 			existing.Version = req.Version
+			existing.ResticVersion = req.ResticVersion
+			existing.RcloneVersion = req.RcloneVersion
 			existing.OS = req.Os
 			existing.Arch = req.Arch
 			existing.DockerAvailable = req.Capabilities != nil && req.Capabilities.Docker
@@ -399,6 +401,8 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 		Name:            req.Hostname,
 		Hostname:        req.Hostname,
 		Version:         req.Version,
+		ResticVersion:   req.ResticVersion,
+		RcloneVersion:   req.RcloneVersion,
 		OS:              req.Os,
 		Arch:            req.Arch,
 		Status:          "offline", // transitions to "online" when StreamJobs opens

@@ -396,6 +396,10 @@ onUnmounted(() => {
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Version</p>
                 <p class="text-sm font-mono font-medium">{{ mergedAgent.version || '—' }}</p>
+                <!-- Versions of the embedded binaries; not reported by older agents. -->
+                <p v-if="mergedAgent.restic_version" class="text-xs font-mono text-muted-foreground mt-1">
+                    restic {{ mergedAgent.restic_version }} · rclone {{ mergedAgent.rclone_version }}
+                </p>
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Last Seen</p>
