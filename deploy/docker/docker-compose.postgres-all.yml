@@ -12,7 +12,7 @@
 
 services:
   server:
-    image: arkeepio/arkeep-server:v0.11.1
+    image: arkeepio/arkeep-server:v0.12.1
     container_name: arkeep-server
     restart: unless-stopped
     depends_on:
@@ -61,7 +61,7 @@ services:
       start_period: 10s
 
   agent:
-    image: arkeepio/arkeep-agent:v0.11.1
+    image: arkeepio/arkeep-agent:v0.12.1
     container_name: arkeep-agent
     restart: unless-stopped
     depends_on:
