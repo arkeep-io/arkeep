@@ -13,6 +13,7 @@ import {
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import CronHint from '@/components/shared/CronHint.vue'
 import { AsyncCombobox } from '@/components/ui/async-combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1146,6 +1147,7 @@ function onOpenChange(value: boolean) {
             <Input id="schedule" v-model="scheduleValue" class="font-mono" placeholder="0 2 * * *"
               :class="scheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
             <FieldError v-if="scheduleError">{{ scheduleError }}</FieldError>
+            <CronHint v-else :expression="scheduleValue" />
           </Field>
 
           <Separator />

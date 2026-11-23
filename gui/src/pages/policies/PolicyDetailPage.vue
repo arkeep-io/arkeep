@@ -40,6 +40,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
+import { scheduleLabel } from '@/lib/cron'
 
 defineOptions({ inheritAttrs: false })
 
@@ -164,22 +165,6 @@ const parsedSources = computed(() => {
     }
 })
 
-function scheduleLabel(cron: string): string {
-    const presets: Record<string, string> = {
-        '0 * * * *': 'Hourly',
-        '0 2 * * *': 'Daily at 02:00',
-        '0 0 * * *': 'Daily at midnight',
-        '0 2 * * 0': 'Weekly (Sun)',
-        '0 2 * * 1': 'Weekly (Mon)',
-        '0 2 1 * *': 'Monthly',
-        '@daily': 'Daily',
-        '@weekly': 'Weekly',
-        '@monthly': 'Monthly',
-        '@hourly': 'Hourly',
-    }
-    return presets[cron] ?? cron
-}
-
 function formatDate(date: string | null | undefined): string {
     if (!date) return '—'
     return new Date(date).toLocaleString()
@@ -276,7 +261,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
         <div v-else-if="policy" class="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Schedule</p>
-                <p class="text-sm font-mono font-medium">{{ scheduleLabel(policy.schedule) }}</p>
+                <p class="text-sm font-mono font-medium" :title="policy.schedule">{{ scheduleLabel(policy.schedule) }}</p>
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Last Run</p>
