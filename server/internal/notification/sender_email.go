@@ -231,10 +231,10 @@ func buildEmail(from, fromName string, to []string, subject, body, htmlBody stri
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString("From: " + fromHeader + "\r\n")
-	buf.WriteString("To: " + strings.Join(recipients, ", ") + "\r\n")
-	buf.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
-	buf.WriteString("Date: " + time.Now().UTC().Format(time.RFC1123Z) + "\r\n")
+	buf.WriteString("From: ");buf.WriteString(fromHeader);buf.WriteString("\r\n")
+	buf.WriteString("To: ");buf.WriteString(strings.Join(recipients, ", "));buf.WriteString("\r\n")
+	buf.WriteString("Subject: ");buf.WriteString(sanitizeHeader(subject));buf.WriteString("\r\n")
+	buf.WriteString("Date: ");buf.WriteString(time.Now().UTC().Format(time.RFC1123Z));buf.WriteString("\r\n")
 	buf.WriteString("MIME-Version: 1.0\r\n")
 
 	if htmlBody == "" {
@@ -274,7 +274,7 @@ func buildEmail(from, fromName string, to []string, subject, body, htmlBody stri
 
 	var alt bytes.Buffer
 	aw := multipart.NewWriter(&alt)
-	buf.WriteString("Content-Type: multipart/alternative; boundary=\"" + aw.Boundary() + "\"\r\n")
+	buf.WriteString("Content-Type: multipart/alternative; boundary=\"");buf.WriteString(aw.Boundary());buf.WriteString("\"\r\n")
 	buf.WriteString("\r\n")
 	if err := writeTextPart(aw, "text/plain; charset=UTF-8", body); err != nil {
 		return nil, err

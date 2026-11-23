@@ -1,0 +1,27 @@
+{
+  "destination": {
+    "destination_id": "dest-1",
+    "type": "s3",
+    "repo_url": "s3:https://s3.example.com/bucket/repo",
+    "credentials": "{\"access_key_id\":\"key\"}",
+    "config": "{\"endpoint\":\"s3.example.com\"}",
+    "env": {
+      "AWS_ACCESS_KEY_ID": "key"
+    }
+  },
+  "repo_password": "repo-secret",
+  "repair": {
+    "action": "repair-snapshots",
+    "apply": true,
+    "forget": true,
+    "hosts": [
+      "helios"
+    ],
+    "tags": [
+      "policy:019f8ab0-ff71-7dc8-a8a9-4ec2237387e8"
+    ],
+    "snapshot_ids": [
+      "fea2c19e"
+    ]
+  }
+}

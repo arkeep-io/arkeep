@@ -15,6 +15,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/websocket"
+	"github.com/arkeep-io/arkeep/shared/repair"
 )
 
 // Service is the single entry point for creating and delivering notifications.
@@ -150,14 +151,18 @@ func (s *NotificationService) Start(ctx context.Context) {
 // -----------------------------------------------------------------------------
 
 // JobSubject identifies the job a notification is about. Backups and
-// restores are named after their policy; retention sweeps and integrity
-// checks have no policy and are named after their destination.
+// restores are named after their policy; retention sweeps, integrity checks
+// and repairs have no policy and are named after their destination.
 type JobSubject struct {
 	JobID           uuid.UUID
-	Type            string    // db.Job.Type: "backup", "restore", "retention", "check"
+	Type            string    // db.Job.Type: "backup", "restore", "retention", "check", "repair"
 	PolicyID        uuid.UUID // uuid.Nil when the job has no policy
 	PolicyName      string
 	DestinationName string
+	// RepairPreview is true for the read-only preview of a destructive repair
+	// (ADR 0026): the admin follows it on the job page, so its success is not
+	// notified.
+	RepairPreview bool
 }
 
 // JobSubjectFrom builds the JobSubject of a job loaded with
@@ -167,9 +172,15 @@ func JobSubjectFrom(job *repositories.JobWithNames, dests []repositories.JobDest
 	if job.PolicyID != nil {
 		subject.PolicyID = *job.PolicyID
 	}
-	// Retention and check jobs run against exactly one destination.
+	// Retention, check and repair jobs run against exactly one destination.
 	if len(dests) == 1 {
 		subject.DestinationName = dests[0].DestinationName
+	}
+	if job.Type == "repair" {
+		var p repair.Params
+		if err := json.Unmarshal([]byte(job.Params), &p); err == nil {
+			subject.RepairPreview = p.Preview()
+		}
 	}
 	return subject
 }
@@ -185,6 +196,9 @@ func (j JobSubject) describe() (operation, name, subject string) {
 	case "check":
 		name = sanitizeHeader(j.DestinationName)
 		return "Integrity check", name, fmt.Sprintf("Integrity check of destination \"%s\"", name)
+	case "repair":
+		name = sanitizeHeader(j.DestinationName)
+		return "Repair", name, fmt.Sprintf("Repair of destination \"%s\"", name)
 	case "restore":
 		name = sanitizeHeader(j.PolicyName)
 		return "Restore", name, fmt.Sprintf("Restore of policy \"%s\"", name)
@@ -205,6 +219,9 @@ func (j JobSubject) payload() map[string]any {
 }
 
 func (s *NotificationService) NotifyJobSucceeded(ctx context.Context, job JobSubject) error {
+	if job.RepairPreview {
+		return nil
+	}
 	operation, name, subject := job.describe()
 	var override string
 	if p := s.loadPolicy(ctx, job.PolicyID); p != nil {

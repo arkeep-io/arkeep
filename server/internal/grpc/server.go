@@ -366,6 +366,7 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 			existing.OS = req.Os
 			existing.Arch = req.Arch
 			existing.DockerAvailable = req.Capabilities != nil && req.Capabilities.Docker
+			existing.RepairAvailable = req.Capabilities != nil && req.Capabilities.Repair
 
 			if err := s.agentRepo.Update(ctx, existing); err != nil {
 				logger.Error("register: failed to update agent record", zap.Error(err))
@@ -407,6 +408,7 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 		Arch:            req.Arch,
 		Status:          "offline", // transitions to "online" when StreamJobs opens
 		DockerAvailable: req.Capabilities != nil && req.Capabilities.Docker,
+		RepairAvailable: req.Capabilities != nil && req.Capabilities.Repair,
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {

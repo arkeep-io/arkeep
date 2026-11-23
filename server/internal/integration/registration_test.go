@@ -187,3 +187,46 @@ func TestReconnect_NameFollowsHostname(t *testing.T) {
 		}
 	})
 }
+
+// TestRegistration_RecordsRepairCapability: the server records whether the
+// agent can run repairs (ADR 0026) at every registration, so an agent
+// downgraded to a version without them stops being offered repairs.
+func TestRegistration_RecordsRepairCapability(t *testing.T) {
+	ts := newTestServer(t)
+	agent := newFakeAgent(t, ts.addr)
+
+	register := func(repair bool, agentID string) string {
+		t.Helper()
+		resp, err := agent.client.Register(context.Background(), &proto.RegisterRequest{
+			Hostname:     "integration-test-host",
+			Version:      "0.0.0-test",
+			Os:           "linux",
+			Arch:         "amd64",
+			AgentId:      agentID,
+			Capabilities: &proto.AgentCapabilities{Repair: repair},
+		})
+		if err != nil {
+			t.Fatalf("Register: %v", err)
+		}
+		return resp.AgentId
+	}
+	repairAvailable := func(agentID string) bool {
+		t.Helper()
+		record, err := ts.agentRepo.GetByID(context.Background(), mustParseUUID(t, agentID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record.RepairAvailable
+	}
+
+	id := register(true, "")
+	if !repairAvailable(id) {
+		t.Error("the repair capability of a new agent was not recorded")
+	}
+	if register(false, id) != id {
+		t.Fatal("re-registration returned another agent")
+	}
+	if repairAvailable(id) {
+		t.Error("the repair capability was kept after the agent stopped reporting it")
+	}
+}
