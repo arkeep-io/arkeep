@@ -292,7 +292,7 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		ErrInternal(w)
 		return
 	}
-	h.writeJobList(w, jobs, total)
+	h.writeJobList(w, r, jobs, total)
 }
 
 // GetByID handles GET /api/v1/jobs/{id}.
@@ -316,7 +316,9 @@ func (h *JobHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, jobToResponse(job, destinations, commandSources, retentionTags, logs))
+	resp := jobToResponse(job, destinations, commandSources, retentionTags, logs)
+	resp.RequestedBy = requesterFor(r, resp.RequestedBy)
+	Ok(w, resp)
 }
 
 // GetLogs handles GET /api/v1/jobs/{id}/logs.
@@ -367,7 +369,7 @@ func (h *JobHandler) ListByPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeJobList(w, jobs, total)
+	h.writeJobList(w, r, jobs, total)
 }
 
 // -----------------------------------------------------------------------------
@@ -376,10 +378,11 @@ func (h *JobHandler) ListByPolicy(w http.ResponseWriter, r *http.Request) {
 
 // writeJobList converts a slice of JobWithNames to a listJobsResponse and writes it.
 // Destinations are not included in list responses — only in single-job detail.
-func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.JobWithNames, total int64) {
+func (h *JobHandler) writeJobList(w http.ResponseWriter, r *http.Request, jobs []repositories.JobWithNames, total int64) {
 	items := make([]jobResponse, len(jobs))
 	for i := range jobs {
 		items[i] = jobToResponse(&jobs[i], nil, nil, nil, nil)
+		items[i].RequestedBy = requesterFor(r, items[i].RequestedBy)
 	}
 	Ok(w, listJobsResponse{Items: items, Total: total})
 }

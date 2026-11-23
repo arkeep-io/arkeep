@@ -114,8 +114,36 @@ func TestRepair_RecordedOnTheJob(t *testing.T) {
 	if !d.RepairAvailable {
 		t.Error("repair_available = false for an agent that reported the capability")
 	}
-	if d.Maintenance == nil || d.Maintenance.RepairJobID != out.JobID || !d.Maintenance.Effective {
-		t.Errorf("maintenance = %+v, want the repair's effective maintenance", d.Maintenance)
+	if d.Maintenance == nil || d.Maintenance.RepairJobID != out.JobID || !d.Maintenance.Effective || d.Maintenance.By == "" {
+		t.Errorf("maintenance = %+v, want the repair's effective maintenance and its requester", d.Maintenance)
+	}
+
+	// Read-only users see the repair and the maintenance, not the admin's email.
+	resp = e.get(t, "/api/v1/jobs/"+out.JobID, e.userToken(t))
+	assertStatus(t, resp, http.StatusOK)
+	decodeData(t, resp, &job)
+	if job.RequestedBy != "" {
+		t.Errorf("a user sees requested_by %q on the job", job.RequestedBy)
+	}
+	resp = e.get(t, "/api/v1/jobs?type=repair", e.userToken(t))
+	assertStatus(t, resp, http.StatusOK)
+	var list listJobsResponse
+	decodeData(t, resp, &list)
+	if len(list.Items) != 1 || list.Items[0].RequestedBy != "" {
+		t.Errorf("a user sees the job list %+v, want one repair without requested_by", list.Items)
+	}
+	resp = e.get(t, "/api/v1/destinations/"+dest.ID.String(), e.userToken(t))
+	assertStatus(t, resp, http.StatusOK)
+	decodeData(t, resp, &d)
+	if d.Maintenance == nil || d.Maintenance.By != "" {
+		t.Errorf("a user sees maintenance %+v, want it without its requester", d.Maintenance)
+	}
+	resp = e.get(t, "/api/v1/destinations", e.userToken(t))
+	assertStatus(t, resp, http.StatusOK)
+	var dests listDestinationsResponse
+	decodeData(t, resp, &dests)
+	if len(dests.Items) != 1 || dests.Items[0].Maintenance == nil || dests.Items[0].Maintenance.By != "" {
+		t.Errorf("a user sees destinations %+v, want the maintenance without its requester", dests.Items)
 	}
 }
 

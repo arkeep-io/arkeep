@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
-	"github.com/arkeep-io/arkeep/agent/internal/restic/restictest"
 	"github.com/arkeep-io/arkeep/shared/repair"
 )
 
@@ -148,16 +147,5 @@ func TestRepair_LockedRepository(t *testing.T) {
 	}
 	if err := <-backupDone; err != nil {
 		t.Fatalf("backup: %v", err)
-	}
-}
-
-func TestVersion_EmbeddedResticSupportsRepair(t *testing.T) {
-	w := restictest.Wrapper(t)
-	v, err := w.Version(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !restic.SupportsRepair(v) {
-		t.Errorf("embedded restic %s does not support repair", v)
 	}
 }

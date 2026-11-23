@@ -158,22 +158,6 @@ func run(ctx context.Context, cfg *config) error {
 	}
 	logger.Info("restic and rclone binaries ready")
 
-	// --- Repair support ---
-	// Repository repairs (ADR 0026) need the restic repair subcommands. The
-	// embedded restic always has them; reading the version keeps the
-	// capability honest should that ever change. A failure only disables
-	// repairs, which the server then refuses for this agent.
-	repairAvailable := false
-	if v, err := wrapper.Version(ctx); err != nil {
-		logger.Warn("cannot read the restic version, repository repairs unavailable", zap.Error(err))
-	} else if !restic.SupportsRepair(v) {
-		logger.Warn("restic is too old for repository repairs (0.16 or later needed), repairs unavailable",
-			zap.String("restic_version", v))
-	} else {
-		repairAvailable = true
-		logger.Info("restic version supports repository repairs", zap.String("restic_version", v))
-	}
-
 	// --- Docker client (optional) ---
 	// Docker is best-effort: if the socket is unavailable or the daemon is
 	// not running, the agent starts normally but rejects jobs that require
@@ -245,7 +229,6 @@ func run(ctx context.Context, cfg *config) error {
 		Version:         version,
 		Hostname:        hostname,
 		DockerAvailable: dockerAvailable,
-		RepairAvailable: repairAvailable,
 		TLSCAFile:       cfg.grpcTLSCA,
 		ClientCertFile:  clientCertFile,
 		ClientKeyFile:   clientKeyFile,

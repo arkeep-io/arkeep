@@ -5,10 +5,12 @@
 // command on the destination's maintenance agent; its output streams live on
 // the job page. Changes that cannot be undone need a successful preview of
 // the same request first, then the destination's name typed to confirm.
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { useField, useForm } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
 import {
     AlertDialog,
-    AlertDialogAction,
     AlertDialogCancel,
     AlertDialogContent,
     AlertDialogDescription,
@@ -19,7 +21,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Field, FieldLabel } from '@/components/ui/field'
+import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -41,6 +43,7 @@ import {
     isDestructive,
     previewKey,
     repairActions,
+    repairFormSchema,
     type RepairForm,
 } from '@/lib/repair'
 
@@ -49,8 +52,36 @@ const emit = defineEmits<{ changed: [] }>()
 
 const error = ref<string | null>(null)
 const maintenanceLoading = ref(false)
-const form = ref<RepairForm>(emptyRepairForm())
 const submitting = ref(false)
+
+// The section holds two forms (the repair request and the name that confirms
+// a destructive one): each field names the form it belongs to, since
+// useField would otherwise attach to the last form created in the component.
+const repairForm = useForm({
+    validationSchema: toTypedSchema(repairFormSchema),
+    initialValues: emptyRepairForm(),
+})
+const { value: action } = useField<RepairAction>('action', undefined, { form: repairForm })
+const { value: readAllPacks } = useField<boolean>('readAllPacks', undefined, { form: repairForm })
+const { value: readData } = useField<boolean>('readData', undefined, { form: repairForm })
+const { value: forget } = useField<boolean>('forget', undefined, { form: repairForm })
+const { value: hosts, errorMessage: hostsError } = useField<string>('hosts', undefined, { form: repairForm })
+const { value: tags, errorMessage: tagsError } = useField<string>('tags', undefined, { form: repairForm })
+const { value: snapshotIds, errorMessage: snapshotIdsError } = useField<string>('snapshotIds', undefined, { form: repairForm })
+const { value: packIds, errorMessage: packIdsError } = useField<string>('packIds', undefined, { form: repairForm })
+
+// form is the current request as the helpers of lib/repair read it.
+const form = computed(() => repairForm.values as RepairForm)
+
+// The confirmation of a destructive request: the destination's name, which
+// the server checks again.
+const confirmForm = useForm({
+    validationSchema: computed(() => toTypedSchema(z.object({
+        name: z.string().refine((v) => v === props.destination.name, 'Type the destination name exactly'),
+    }))),
+    initialValues: { name: '' },
+})
+const { value: confirmName, errorMessage: confirmNameError } = useField<string>('name', undefined, { form: confirmForm })
 
 // The repair job this section started last, followed until it ends. preview
 // is set for a read-only preview, with the request it previewed.
@@ -63,9 +94,8 @@ const lastJob = ref<TrackedJob | null>(null)
 let pollTimer: ReturnType<typeof setInterval> | undefined
 
 const confirmOpen = ref(false)
-const confirmName = ref('')
 
-const info = computed(() => actionInfo(form.value.action))
+const info = computed(() => actionInfo(action.value))
 const maintenance = computed(() => props.destination.maintenance)
 const jobRunning = computed(() => !!lastJob.value && !isTerminal(lastJob.value.status))
 
@@ -90,8 +120,10 @@ const previewed = computed(() =>
 const applyRequest = computed<RepairParams>(() => buildRequest(form.value, true))
 const needsName = computed(() => isDestructive(applyRequest.value))
 
-// A new request needs its own preview.
-watch(form, () => { confirmName.value = '' }, { deep: true })
+// manualMaintenance: an admin put the destination in maintenance, which only
+// an admin ends. The maintenance a repair starts ends with its job, also when
+// the job is marked interrupted while restic still runs on the agent.
+const manualMaintenance = computed(() => !!maintenance.value && !maintenance.value.repair_job_id)
 
 function isTerminal(status: string): boolean {
     return ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(status)
@@ -158,28 +190,38 @@ function stopFollowing() {
 
 onBeforeUnmount(stopFollowing)
 
-function run() {
+const run = repairForm.handleSubmit(async (values) => {
+    const f = values as RepairForm
     if (info.value?.previewFirst) {
-        startRepair(buildRequest(form.value, false), previewKey(form.value))
+        await startRepair(buildRequest(f, false), previewKey(f))
     } else {
-        startRepair(buildRequest(form.value, true), null)
+        await startRepair(buildRequest(f, true), null)
     }
-}
+})
 
-function openConfirm() {
-    confirmName.value = ''
+// openConfirm checks the request again (the preview ran on the same one)
+// before asking for the confirmation.
+const openConfirm = repairForm.handleSubmit(() => {
+    confirmForm.resetForm()
     confirmOpen.value = true
-}
+})
 
-async function confirmApply() {
+async function applyConfirmed(name: string | null) {
     const request: RepairRequest = { ...applyRequest.value }
-    if (needsName.value) request.confirm = confirmName.value
+    if (name !== null) request.confirm = name
     confirmOpen.value = false
     await startRepair(request, null)
 }
 
+const confirmDestructive = confirmForm.handleSubmit((values) => applyConfirmed(values.name))
+
+function confirmApply() {
+    if (needsName.value) return confirmDestructive()
+    return applyConfirmed(null)
+}
+
 function selectAction(value: unknown) {
-    form.value = emptyRepairForm(value as RepairAction)
+    repairForm.resetForm({ values: emptyRepairForm(value as RepairAction) })
 }
 </script>
 
@@ -246,7 +288,7 @@ function selectAction(value: unknown) {
 
             <Field>
                 <FieldLabel for="repair-action">Repair action</FieldLabel>
-                <Select :model-value="form.action" @update:model-value="selectAction">
+                <Select :model-value="action" @update:model-value="selectAction">
                     <SelectTrigger id="repair-action" class="w-64" data-testid="repair-action">
                         <SelectValue />
                     </SelectTrigger>
@@ -257,51 +299,59 @@ function selectAction(value: unknown) {
             </Field>
             <p v-if="info" class="text-sm text-muted-foreground">{{ info.description }}</p>
 
-            <div v-if="form.action === 'check'" class="flex items-center gap-2">
-                <Switch :model-value="form.readData" @update:model-value="form.readData = $event" />
+            <div v-if="action === 'check'" class="flex items-center gap-2">
+                <Switch :model-value="readData" @update:model-value="readData = $event" />
                 <span class="text-sm">Read all data</span>
             </div>
-            <div v-if="form.action === 'repair-index'" class="flex items-center gap-2">
-                <Switch :model-value="form.readAllPacks" @update:model-value="form.readAllPacks = $event" />
+            <div v-if="action === 'repair-index'" class="flex items-center gap-2">
+                <Switch :model-value="readAllPacks" @update:model-value="readAllPacks = $event" />
                 <span class="text-sm">Read all packs</span>
             </div>
-            <template v-if="form.action === 'repair-snapshots'">
+            <template v-if="action === 'repair-snapshots'">
                 <div class="grid gap-3 sm:grid-cols-3">
                     <Field>
                         <FieldLabel for="repair-hosts">Hosts <span class="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                        <Input id="repair-hosts" v-model="form.hosts" placeholder="helios selene" />
+                        <Input id="repair-hosts" v-model="hosts" placeholder="helios selene"
+                            :class="hostsError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="hostsError">{{ hostsError }}</FieldError>
                     </Field>
                     <Field>
                         <FieldLabel for="repair-tags">Tags <span class="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                        <Input id="repair-tags" v-model="form.tags" placeholder="policy:…" />
+                        <Input id="repair-tags" v-model="tags" placeholder="policy:…"
+                            :class="tagsError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="tagsError">{{ tagsError }}</FieldError>
                     </Field>
                     <Field>
                         <FieldLabel for="repair-snapshot-ids">Snapshot IDs <span class="text-muted-foreground font-normal">(optional)</span></FieldLabel>
-                        <Input id="repair-snapshot-ids" v-model="form.snapshotIds" placeholder="fea2c19e" />
+                        <Input id="repair-snapshot-ids" v-model="snapshotIds" placeholder="fea2c19e"
+                            :class="snapshotIdsError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                        <FieldError v-if="snapshotIdsError">{{ snapshotIdsError }}</FieldError>
                     </Field>
                 </div>
                 <p class="text-xs text-muted-foreground">Without a filter, every snapshot is examined.</p>
                 <div class="flex items-center gap-2">
-                    <Switch :model-value="form.forget" @update:model-value="form.forget = $event" />
+                    <Switch :model-value="forget" @update:model-value="forget = $event" />
                     <span class="text-sm">Remove the original snapshots once repaired (--forget)</span>
                 </div>
             </template>
-            <Field v-if="form.action === 'repair-packs'">
+            <Field v-if="action === 'repair-packs'">
                 <FieldLabel for="repair-pack-ids">Pack IDs</FieldLabel>
-                <textarea id="repair-pack-ids" v-model="form.packIds" rows="3" data-testid="repair-pack-ids"
+                <textarea id="repair-pack-ids" v-model="packIds" rows="3" data-testid="repair-pack-ids"
                     placeholder="The full IDs of the damaged packs, as a check reports them"
-                    class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] focus-visible:ring-[3px] resize-none font-mono" />
+                    class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border px-3 py-2 text-sm shadow-xs transition-[color,box-shadow] focus-visible:ring-[3px] resize-none font-mono"
+                    :class="packIdsError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                <FieldError v-if="packIdsError">{{ packIdsError }}</FieldError>
             </Field>
 
             <div class="flex items-center gap-2 flex-wrap">
-                <Button size="sm" variant="outline" data-testid="repair-run" :disabled="!!blocked || submitting" @click="run">
+                <Button size="sm" variant="outline" data-testid="repair-run" :disabled="!!blocked || submitting" @click="run()">
                     <Loader2 v-if="submitting" class="w-4 h-4 mr-1.5 animate-spin" />
                     <Play v-else class="w-4 h-4 mr-1.5" />
                     {{ info?.previewFirst ? 'Run preview' : 'Run' }}
                 </Button>
                 <Button v-if="info?.previewFirst" size="sm" data-testid="repair-apply"
                     :class="needsName ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : ''"
-                    :disabled="!!blocked || submitting || !previewed" @click="openConfirm">
+                    :disabled="!!blocked || submitting || !previewed" @click="openConfirm()">
                     <Wrench class="w-4 h-4 mr-1.5" />
                     Apply…
                 </Button>
@@ -336,19 +386,28 @@ function selectAction(value: unknown) {
                     <template v-if="needsName"> This cannot be undone.</template>
                 </AlertDialogDescription>
             </AlertDialogHeader>
+            <Alert v-if="needsName && !manualMaintenance" data-testid="repair-maintenance-advice">
+                <AlertDescription class="text-sm">
+                    This repair puts the destination in maintenance only while its job runs. If the server restarts
+                    or the agent disconnects meanwhile, the job is marked interrupted and scheduled jobs may start
+                    while restic is still repairing. Start a maintenance first to keep them waiting until you end it.
+                </AlertDescription>
+            </Alert>
             <Field v-if="needsName">
                 <FieldLabel for="repair-confirm-name">
                     Type <strong>{{ destination.name }}</strong> to confirm
                 </FieldLabel>
-                <Input id="repair-confirm-name" v-model="confirmName" data-testid="repair-confirm-name" autocomplete="off" />
+                <Input id="repair-confirm-name" v-model="confirmName" data-testid="repair-confirm-name" autocomplete="off"
+                    :class="confirmNameError ? 'border-destructive focus-visible:ring-destructive/30' : ''" @keydown.enter.prevent="confirmApply()" />
+                <FieldError v-if="confirmNameError">{{ confirmNameError }}</FieldError>
             </Field>
             <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction data-testid="repair-confirm"
+                <Button data-testid="repair-confirm"
                     :class="needsName ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : ''"
-                    :disabled="needsName && confirmName !== destination.name" @click="confirmApply">
+                    :disabled="submitting" @click="confirmApply()">
                     Apply
-                </AlertDialogAction>
+                </Button>
             </AlertDialogFooter>
         </AlertDialogContent>
     </AlertDialog>

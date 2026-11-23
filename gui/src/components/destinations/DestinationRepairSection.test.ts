@@ -121,16 +121,65 @@ describe('DestinationRepairSection', () => {
 
     await apply().trigger('click')
     await settle()
+    // Not in a maintenance an admin started: the dialog advises one.
+    expect(wrapper.find('[data-testid="repair-maintenance-advice"]').exists()).toBe(true)
     const confirm = () => wrapper.find('[data-testid="repair-confirm"]')
-    expect(confirm().attributes('disabled')).toBeDefined()
     await wrapper.find('[data-testid="repair-confirm-name"]').setValue('Garage')
-    expect(confirm().attributes('disabled')).toBeDefined()
-    await wrapper.find('[data-testid="repair-confirm-name"]').setValue('garage')
-    expect(confirm().attributes('disabled')).toBeUndefined()
+    await confirm().trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Type the destination name exactly')
+    expect(postedRepairs()).toHaveLength(1)
 
+    await wrapper.find('[data-testid="repair-confirm-name"]').setValue('garage')
     await confirm().trigger('click')
     await settle()
     expect(postedRepairs()[1]).toEqual({ action: 'repair-packs', pack_ids: [pack], confirm: 'garage' })
+  })
+
+  it('does not advise a maintenance an admin already started', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const wrapper = await mount({
+      ...destination,
+      maintenance: { since: '2026-11-21T10:00:00Z', by: 'jane@example.com', repair_job_id: '', effective: true },
+    })
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'repair-packs')
+    await settle()
+    await wrapper.find('[data-testid="repair-pack-ids"]').setValue(pack)
+    await wrapper.find('[data-testid="repair-run"]').trigger('click')
+    await settle()
+    jobStatus = 'succeeded'
+    await vi.advanceTimersByTimeAsync(2100)
+    await settle()
+    await wrapper.find('[data-testid="repair-apply"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-testid="repair-confirm-name"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="repair-maintenance-advice"]').exists()).toBe(false)
+  })
+
+  it('refuses pack IDs that are not full lowercase hexadecimal IDs', async () => {
+    const wrapper = await mount()
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'repair-packs')
+    await settle()
+    await wrapper.find('[data-testid="repair-run"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Enter at least one pack ID')
+
+    await wrapper.find('[data-testid="repair-pack-ids"]').setValue('0606CC8C')
+    await wrapper.find('[data-testid="repair-run"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Invalid pack ID "0606CC8C"')
+    expect(postedRepairs()).toEqual([])
+  })
+
+  it('refuses a host restic would read differently', async () => {
+    const wrapper = await mount()
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'repair-snapshots')
+    await settle()
+    await wrapper.find('#repair-hosts').setValue('-x')
+    await wrapper.find('[data-testid="repair-run"]').trigger('click')
+    await settle()
+    expect(wrapper.text()).toContain('Invalid host "-x"')
+    expect(postedRepairs()).toEqual([])
   })
 
   it('asks for a new preview when the request changes', async () => {
@@ -140,6 +189,7 @@ describe('DestinationRepairSection', () => {
     await settle()
     await wrapper.find('#repair-hosts').setValue('helios')
     await wrapper.find('[data-testid="repair-run"]').trigger('click')
+    await settle()
     jobStatus = 'succeeded'
     await vi.advanceTimersByTimeAsync(2100)
     await settle()

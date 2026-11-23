@@ -62,11 +62,12 @@ the files whose data is lost, and `repair packs` replaces damaged pack files.
   the request is refused, rather than run later unattended. A repair started
   on a destination that is not in maintenance and holds no lock puts it in
   maintenance for the duration of the job.
-- An agent reports, through a new `AgentCapabilities.repair` field, that its
-  restic supports the repair commands (0.16 or later). The server refuses a
-  repair on a maintenance agent that does not report it, and the GUI disables
-  the repair actions. An agent that does not know the new job type rejects
-  it, as it does for any unknown type.
+- An agent reports, through a new `AgentCapabilities.repair` field, that it
+  runs repair jobs; its embedded restic, pinned at build time, has the repair
+  commands (0.16 or later). The server refuses a repair on a maintenance
+  agent that does not report it, and the GUI disables the repair actions. An
+  agent that does not know the new job type rejects it, as it does for any
+  unknown type.
 
 ## Consequences
 

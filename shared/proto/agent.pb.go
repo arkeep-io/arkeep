@@ -2260,7 +2260,7 @@ const file_agent_proto_rawDesc = "" +
 	"\fcapabilities\x18\x05 \x01(\v2\x18.agent.AgentCapabilitiesR\fcapabilities\x12\x19\n" +
 	"\bagent_id\x18\x06 \x01(\tR\aagentId\x12%\n" +
 	"\x0erestic_version\x18\a \x01(\tR\rresticVersion\x12%\n" +
-	"\x0erclone_version\x18\b \x01(\tR\rrcloneVersion\"G\n" +
+	"\x0erclone_version\x18\b \x01(\tR\rrcloneVersion\"_\n" +
 	"\x11AgentCapabilities\x12\x16\n" +
 	"\x06docker\x18\x01 \x01(\bR\x06docker\x12\x16\n" +
 	"\x06repair\x18\x04 \x01(\bR\x06repairJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06resticR\x06rclone\"L\n" +

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRequest, changeSummary, emptyRepairForm, formatParams, isDestructive, parseList, previewKey } from './repair'
+import { buildRequest, changeSummary, emptyRepairForm, formatParams, isDestructive, parseList, previewKey, repairFormSchema } from './repair'
 
 const pack = '0606cc8ce3912abf19fecc7546fb74a5ce00651b833fb00a35a8db471aad1bc0'
 
@@ -60,5 +60,21 @@ describe('changeSummary and formatParams', () => {
 
   it('lists the parameters of a repair job', () => {
     expect(formatParams({ action: 'repair-snapshots', hosts: ['helios'] })).toEqual(['Action: repair-snapshots', 'Dry run', 'Hosts: helios'])
+  })
+})
+
+describe('repairFormSchema', () => {
+  const valid = (form: object) => repairFormSchema.safeParse(form).success
+
+  it('mirrors the server rules on IDs, hosts and tags', () => {
+    expect(valid({ ...emptyRepairForm('repair-packs'), packIds: pack })).toBe(true)
+    expect(valid({ ...emptyRepairForm('repair-packs'), packIds: '' })).toBe(false)
+    expect(valid({ ...emptyRepairForm('repair-packs'), packIds: pack.toUpperCase() })).toBe(false)
+    expect(valid({ ...emptyRepairForm('repair-snapshots'), snapshotIds: 'fea2c19e', hosts: 'helios', tags: 'policy:1' })).toBe(true)
+    expect(valid({ ...emptyRepairForm('repair-snapshots'), snapshotIds: 'fea2c19' })).toBe(false)
+    expect(valid({ ...emptyRepairForm('repair-snapshots'), hosts: '-x' })).toBe(false)
+    expect(valid({ ...emptyRepairForm('repair-snapshots'), tags: 'a,b' })).toBe(true) // two tags once split
+    expect(valid({ ...emptyRepairForm('repair-snapshots'), tags: 'a;b' })).toBe(false)
+    expect(valid({ ...emptyRepairForm('repair-snapshots'), hosts: Array(21).fill('h').join(' ') })).toBe(false)
   })
 })

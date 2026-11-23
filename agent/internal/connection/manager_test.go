@@ -87,15 +87,11 @@ func TestProtoToJob(t *testing.T) {
 	}
 }
 
-// TestProtoToJob_Repair: a repair reaches the executor only on an agent that
-// reported the repair capability, as the server expects.
+// TestProtoToJob_Repair: a repair job reaches the executor.
 func TestProtoToJob_Repair(t *testing.T) {
 	assignment := &proto.JobAssignment{JobId: "job-1", Type: proto.JobType_JOB_TYPE_REPAIR}
 
-	if _, err := (&Manager{}).protoToJob(assignment); err == nil {
-		t.Error("an agent without repair support accepted a repair job")
-	}
-	job, err := (&Manager{cfg: Config{RepairAvailable: true}}).protoToJob(assignment)
+	job, err := (&Manager{}).protoToJob(assignment)
 	if err != nil {
 		t.Fatalf("protoToJob() error = %v", err)
 	}

@@ -191,9 +191,9 @@ type Agent struct {
 	// agents that predate the report.
 	ResticVersion string `gorm:"not null;default:''"`
 	RcloneVersion string `gorm:"not null;default:''"`
-  // RepairAvailable is true when the agent reported AgentCapabilities.repair:
-	// its restic has the repair commands (ADR 0026). The server refuses a
-	// repair on a maintenance agent without it.
+	// RepairAvailable is true when the agent reported AgentCapabilities.repair:
+	// it handles repair jobs (ADR 0026). The server refuses a repair on a
+	// maintenance agent without it, such as an agent older than repairs.
 	RepairAvailable bool `gorm:"not null;default:false"`
 	// CertFingerprint is the hex SHA-256 of the mTLS client certificate the
 	// agent is bound to; nil until its first registration with one. Read-only

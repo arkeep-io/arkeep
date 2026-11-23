@@ -91,3 +91,24 @@ func TestDestructive(t *testing.T) {
 		}
 	}
 }
+
+func TestPreview(t *testing.T) {
+	tests := []struct {
+		params Params
+		want   bool
+	}{
+		{Params{Action: Unlock}, false},
+		{Params{Action: Index}, false},
+		{Params{Action: Snapshots}, true},
+		{Params{Action: Snapshots, Apply: true}, false},
+		{Params{Action: Snapshots, Apply: true, Forget: true}, false},
+		{Params{Action: Packs, PackIDs: []string{packA}}, false},
+		{Params{Action: FindPacks, PackIDs: []string{packA}}, true},
+		{Params{Action: Check}, false},
+	}
+	for _, tt := range tests {
+		if got := tt.params.Preview(); got != tt.want {
+			t.Errorf("%+v.Preview() = %v, want %v", tt.params, got, tt.want)
+		}
+	}
+}

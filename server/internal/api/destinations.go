@@ -332,6 +332,9 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 			agentInfo = agentByID[*destinations[i].RetentionAgentID]
 		}
 		items[i] = destinationToResponse(&destinations[i], policyCounts[destinations[i].ID], agentInfo, locksByDest[destinations[i].ID])
+		if items[i].Maintenance != nil {
+			items[i].Maintenance.By = requesterFor(r, items[i].Maintenance.By)
+		}
 	}
 
 	Ok(w, listDestinationsResponse{Items: items, Total: total})
@@ -573,7 +576,11 @@ func (h *DestinationHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, h.singleDestinationResponse(r.Context(), dest))
+	resp := h.singleDestinationResponse(r.Context(), dest)
+	if resp.Maintenance != nil {
+		resp.Maintenance.By = requesterFor(r, resp.Maintenance.By)
+	}
+	Ok(w, resp)
 }
 
 // updateDestinationRequest is the JSON body for PATCH /api/v1/destinations/{id}.

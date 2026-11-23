@@ -162,6 +162,16 @@ func (h *RepairHandler) Repair(w http.ResponseWriter, r *http.Request) {
 	Ok(w, repairResponse{JobID: started.Job.ID.String(), MaintenanceStarted: started.Maintenance})
 }
 
+// requesterFor returns email, the admin who started a repair or a
+// maintenance, to admins only: read-only users do not see admins' emails,
+// as they do not see the user list or the audit log.
+func requesterFor(r *http.Request, email string) string {
+	if isAdmin(r) {
+		return email
+	}
+	return ""
+}
+
 // requesterEmail is the email of the authenticated admin, recorded on the
 // jobs and maintenance they start.
 func requesterEmail(r *http.Request) string {

@@ -1,7 +1,16 @@
 // Repository repairs (ADR 0026): what each action does, how its form maps to
 // the request, and which requests change the repository for good. The server
 // validates every request again (shared/repair).
+import { z } from 'zod'
 import type { RepairAction, RepairParams } from '@/types'
+import {
+  REPAIR_HOST_RE,
+  REPAIR_MAX_FILTERS,
+  REPAIR_MAX_IDS,
+  REPAIR_PACK_ID_RE,
+  REPAIR_SNAPSHOT_ID_RE,
+  REPAIR_TAG_RE,
+} from '@/lib/validation'
 
 export interface RepairActionInfo {
   action: RepairAction
@@ -78,6 +87,40 @@ export interface RepairForm {
 export function emptyRepairForm(action: RepairAction = 'check'): RepairForm {
   return { action, readAllPacks: false, readData: false, forget: false, hosts: '', tags: '', snapshotIds: '', packIds: '' }
 }
+
+// listField validates a list field as shared/repair does: at most limit
+// values, each matching re.
+function listField(what: string, limit: number, re: RegExp, rule: string) {
+  return z.string().superRefine((text, ctx) => {
+    const values = parseList(text)
+    if (values.length > limit) {
+      ctx.addIssue({ code: 'custom', message: `At most ${limit} ${what}s per request` })
+      return
+    }
+    const bad = values.find((v) => !re.test(v))
+    if (bad !== undefined) ctx.addIssue({ code: 'custom', message: `Invalid ${what} "${bad}": ${rule}` })
+  })
+}
+
+// repairFormSchema validates the repair form before any request is sent. The
+// form only holds the fields of the chosen action: changing the action resets
+// it.
+export const repairFormSchema = z
+  .object({
+    action: z.enum(['unlock', 'repair-index', 'repair-snapshots', 'repair-packs', 'find-packs', 'check']),
+    readAllPacks: z.boolean(),
+    readData: z.boolean(),
+    forget: z.boolean(),
+    hosts: listField('host', REPAIR_MAX_FILTERS, REPAIR_HOST_RE, "letters, digits, '.', '_' and '-', starting with a letter or digit"),
+    tags: listField('tag', REPAIR_MAX_FILTERS, REPAIR_TAG_RE, "letters, digits and '.', '_', ':', '@', '+', '=', '-', starting with a letter or digit"),
+    snapshotIds: listField('snapshot ID', REPAIR_MAX_IDS, REPAIR_SNAPSHOT_ID_RE, '8 to 64 lowercase hexadecimal characters'),
+    packIds: listField('pack ID', REPAIR_MAX_IDS, REPAIR_PACK_ID_RE, '64 lowercase hexadecimal characters'),
+  })
+  .superRefine((form, ctx) => {
+    if ((form.action === 'repair-packs' || form.action === 'find-packs') && parseList(form.packIds).length === 0) {
+      ctx.addIssue({ code: 'custom', path: ['packIds'], message: 'Enter at least one pack ID' })
+    }
+  })
 
 // buildRequest turns the form into the request for the action itself (apply
 // true) or for its read-only preview (apply false): repair-snapshots as a

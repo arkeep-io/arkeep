@@ -7,15 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"regexp"
-	"strconv"
 
 	"github.com/arkeep-io/arkeep/shared/repair"
 )
-
-// minRepairVersion is the first restic release with the repair subcommands
-// (repair index, repair snapshots, repair packs).
-var minRepairVersion = [3]int{0, 16, 0}
 
 // maxRepairLine caps one line of restic output handed to the job log: restic
 // prints short lines, and a runaway one must not become a huge log entry.
@@ -137,39 +131,4 @@ func ExitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
-}
-
-var versionRe = regexp.MustCompile(`^restic (\d+)\.(\d+)\.(\d+)`)
-
-// Version returns the version of the restic binary, as printed by
-// `restic version` (for example "0.19.1").
-func (w *Wrapper) Version(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, w.resticBin, "version").Output()
-	if err != nil {
-		return "", fmt.Errorf("restic: version: %w", err)
-	}
-	m := versionRe.FindSubmatch(out)
-	if m == nil {
-		return "", fmt.Errorf("restic: unexpected version output %q", out)
-	}
-	return fmt.Sprintf("%s.%s.%s", m[1], m[2], m[3]), nil
-}
-
-// SupportsRepair reports whether restic version v ("0.19.1") has the repair
-// subcommands. An unparsable version does not.
-func SupportsRepair(v string) bool {
-	m := versionRe.FindStringSubmatch("restic " + v)
-	if m == nil {
-		return false
-	}
-	for i := 0; i < 3; i++ {
-		n, err := strconv.Atoi(m[i+1])
-		if err != nil {
-			return false
-		}
-		if n != minRepairVersion[i] {
-			return n > minRepairVersion[i]
-		}
-	}
-	return true
 }

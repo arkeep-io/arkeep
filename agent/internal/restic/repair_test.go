@@ -2,7 +2,6 @@ package restic
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/arkeep-io/arkeep/shared/repair"
@@ -57,32 +56,5 @@ func TestBuildRepairArgs_RefusesInvalidParams(t *testing.T) {
 		if args, err := BuildRepairArgs(p); err == nil {
 			t.Errorf("BuildRepairArgs(%+v) = %q, want an error", p, args)
 		}
-	}
-}
-
-func TestSupportsRepair(t *testing.T) {
-	for v, want := range map[string]bool{
-		"0.19.1":  true,
-		"0.16.0":  true,
-		"0.16.4":  true,
-		"1.0.0":   true,
-		"0.15.2":  false,
-		"0.9.6":   false,
-		"":        false,
-		"garbage": false,
-	} {
-		if got := SupportsRepair(v); got != want {
-			t.Errorf("SupportsRepair(%q) = %v, want %v", v, got, want)
-		}
-	}
-}
-
-func TestVersionRe(t *testing.T) {
-	m := versionRe.FindStringSubmatch("restic 0.19.1 compiled with go1.26.4 on linux/amd64")
-	if m == nil || strings.Join(m[1:], ".") != "0.19.1" {
-		t.Errorf("versionRe match = %q, want 0.19.1", m)
-	}
-	if versionRe.MatchString("rclone v1.76.0") {
-		t.Error("versionRe matched rclone's version line")
 	}
 }

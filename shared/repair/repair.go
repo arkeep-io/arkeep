@@ -93,6 +93,12 @@ func (p Params) Destructive() bool {
 	return false
 }
 
+// Preview reports whether the request is the read-only preview of a
+// destructive one: find-packs, or repair-snapshots as a dry run.
+func (p Params) Preview() bool {
+	return p.Action == FindPacks || (p.Action == Snapshots && !p.Apply)
+}
+
 // Validate checks the action and every parameter that comes from the user,
 // and rejects parameters that do not apply to the action, so that a request
 // never means something other than what it says.
