@@ -375,9 +375,10 @@ func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.Job
 }
 
 // Cancel handles POST /api/v1/jobs/{id}/cancel.
-// Marks the job as cancelled in the database and, if the job is running,
-// sends a cancel signal to the agent. Pending jobs, and jobs waiting for a busy
-// destination, are cancelled immediately without agent involvement.
+// Marks the job as cancelled in the database and sends a cancel signal to the
+// agent of a running job, or of a pending job when the agent is connected.
+// Jobs waiting for a busy destination were never sent to an agent and are
+// cancelled immediately without agent involvement.
 func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -412,13 +413,28 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For running jobs, notify the agent to abort. The agent reports
+	// Notify the agent to abort a running job, or to drop a pending one: a
+	// pending job may already sit in the agent's local queue, behind the job it
+	// is running, and would start there once its turn came, after the cancel
+	// released its destinations to other jobs. The agent reports
 	// JOB_STATUS_CANCELLED, which the already-cancelled DB row now refuses.
-	if job.Status == "running" {
+	// A waiting job was never sent to an agent.
+	switch {
+	case job.Status == "running":
 		if err := h.agents.SendCancel(job.AgentID.String(), id.String()); err != nil {
 			// Non-fatal: the DB is already updated; the agent will detect shutdown
 			// or orphan recovery will handle it.
 			h.logger.Warn("could not send cancel signal to agent",
+				zap.String("job_id", id.String()),
+				zap.String("agent_id", job.AgentID.String()),
+				zap.Error(err),
+			)
+		}
+	case job.Status == "pending" && h.agents.IsConnected(job.AgentID.String()):
+		// An offline agent gets its pending jobs again when it reconnects,
+		// and a cancelled job is no longer among them.
+		if err := h.agents.SendCancel(job.AgentID.String(), id.String()); err != nil {
+			h.logger.Warn("could not send cancel signal for a pending job to agent",
 				zap.String("job_id", id.String()),
 				zap.String("agent_id", job.AgentID.String()),
 				zap.Error(err),
