@@ -3,7 +3,7 @@
 #   docker build -f server/Dockerfile -t arkeep-server .
 
 # ─── Stage 1: build GUI ───────────────────────────────────────────────────────
-FROM node:26.13.0-alpine3.24@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS gui-builder
+FROM node:26.13.1-alpine3.24@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS gui-builder
 
 # Node >= 25 no longer bundles corepack; install it to get the pnpm version
 # pinned by the packageManager field in gui/package.json. Corepack checks
