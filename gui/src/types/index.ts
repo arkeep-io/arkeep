@@ -93,6 +93,24 @@ export interface TwoFactorRecoveryCodesResponse {
   recovery_codes: string[]
 }
 
+/** A read-only API token (ADR 0027). The token itself is only returned once, by its creation. */
+export interface ApiToken {
+  id: string
+  name: string
+  hint: string // the first characters of the token, e.g. "ark_Ab3x"
+  scope: string // "read"
+  expires_at: string | null
+  last_used_at: string | null
+  created_at: string
+  // Set in the admin listing only.
+  user_id?: string
+  user_email?: string
+}
+
+export interface CreatedApiToken extends ApiToken {
+  token: string
+}
+
 export interface Agent {
   id: string
   name: string

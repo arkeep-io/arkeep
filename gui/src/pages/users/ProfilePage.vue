@@ -14,6 +14,7 @@ import { AlertCircle, Loader2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import TwoFactorSection from '@/components/users/TwoFactorSection.vue'
+import ApiTokensSection from '@/components/users/ApiTokensSection.vue'
 import type { ApiResponse, User } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -265,6 +266,8 @@ const submitPassword = passwordForm.handleSubmit(async (values) => {
         </div>
 
         <TwoFactorSection />
+
+        <ApiTokensSection />
 
     </div>
 </template>

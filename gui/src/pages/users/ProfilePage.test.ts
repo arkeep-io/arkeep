@@ -17,7 +17,7 @@ async function openProfile() {
   const pinia = createPinia()
   setActivePinia(pinia)
   useAuthStore().user = { id: 'u1', email: 'jane@example.com', display_name: 'Jane', role: 'user', is_oidc: false } as User
-  const { wrapper } = await mountPage(ProfilePage, { pinia, stubs: { TwoFactorSection: true } })
+  const { wrapper } = await mountPage(ProfilePage, { pinia, stubs: { TwoFactorSection: true, ApiTokensSection: true } })
   return wrapper
 }
 

@@ -55,6 +55,12 @@ type RouterConfig struct {
 	Challenges    repositories.TwoFactorChallengeRepository
 	RecoveryCodes repositories.RecoveryCodeRepository
 
+	// APITokens holds the read-only API tokens (ADR 0027), and
+	// APITokenValidator authenticates requests made with one. When
+	// APITokenValidator is nil, API tokens are refused.
+	APITokens         repositories.APITokenRepository
+	APITokenValidator APITokenAuthenticator
+
 	// NotificationProviders manages the push and chat services events are
 	// sent to (Settings → Notifications).
 	NotificationProviders repositories.NotificationProviderRepository
@@ -147,6 +153,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// --- Initialize handlers ---
 	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.PasswordChanges, cfg.Audit, cfg.Logger, cfg.Secure)
+	apiTokenHandler := NewAPITokenHandler(cfg.APITokens, cfg.Users, cfg.Audit, cfg.Logger)
 	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
 	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	// Registered without auto-PKI too: it then answers 405 with a proof that
@@ -246,13 +253,19 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// the agents and where their data goes. Objects have no owner, so a
 		// write open to "user" would be a write on every agent.
 		r.Group(func(r chi.Router) {
-			r.Use(Authenticate(cfg.AuthService))
+			r.Use(Authenticate(cfg.AuthService, cfg.APITokenValidator))
 
 			r.Get("/dashboard", dashboardHandler.Get)
 			r.Get("/version", versionHandler.Get)
 
 			r.Get("/users/me", userHandler.GetMe)
 			r.Patch("/users/me", userHandler.UpdateMe)
+
+			// API tokens (ADR 0027): each user manages their own, from a
+			// session only.
+			r.With(RequireSession).Get("/users/me/api-tokens", apiTokenHandler.ListMine)
+			r.With(RequireSession).Post("/users/me/api-tokens", apiTokenHandler.CreateMine)
+			r.With(RequireSession).Delete("/users/me/api-tokens/{id}", apiTokenHandler.RevokeMine)
 
 			// Two-factor self-service enrollment. These live under /api/v1/auth
 			// so the refresh cookie (scoped to /api/v1/auth) reaches Verify.
@@ -321,6 +334,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// --- Admin-only routes ---
 			r.Group(func(r chi.Router) {
 				r.Use(RequireRole("admin"))
+
+				// Every user's API tokens, from a session only.
+				r.With(RequireSession).Get("/api-tokens", apiTokenHandler.ListAll)
+				r.With(RequireSession).Delete("/api-tokens/{id}", apiTokenHandler.Revoke)
 
 				// User management
 				r.Get("/users", userHandler.List)
