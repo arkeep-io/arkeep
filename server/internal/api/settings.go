@@ -850,6 +850,16 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 	}
 
 	ctx := r.Context()
+	// The schedule before the change: the GUI sends it with every save, and
+	// the report is rescheduled only when it changed.
+	prev, err := h.settingsRepo.GetMany(ctx, "notification.")
+	if err != nil {
+		h.logger.Error("failed to load notification settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	before := notificationSettingsFrom(settingsToMap(prev))
+
 	pairs := []struct {
 		key   string
 		value string
@@ -894,15 +904,6 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 		}
 	}
 
-	// The settings are saved at this point. A failed reschedule is logged but
-	// not answered as an error: the new schedule then applies at the next
-	// server start.
-	if (req.ReportFrequency != nil || req.ReportTime != nil || req.ReportMinute != nil) && h.jobReport != nil {
-		if err := h.jobReport.Reload(ctx); err != nil {
-			h.logger.Error("failed to reschedule job report, the saved schedule applies at the next server start", zap.Error(err))
-		}
-	}
-
 	// Answer with the stored settings: the request may have left some out.
 	stored, err := h.settingsRepo.GetMany(ctx, "notification.")
 	if err != nil {
@@ -911,6 +912,18 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 		return
 	}
 	resp := notificationSettingsFrom(settingsToMap(stored))
+
+	// The settings are saved at this point. A failed reschedule is logged but
+	// not answered as an error: the new schedule then applies at the next
+	// server start.
+	scheduleChanged := resp.ReportFrequency != before.ReportFrequency ||
+		resp.ReportTime != before.ReportTime ||
+		resp.ReportMinute != before.ReportMinute
+	if scheduleChanged && h.jobReport != nil {
+		if err := h.jobReport.Reload(ctx); err != nil {
+			h.logger.Error("failed to reschedule job report, the saved schedule applies at the next server start", zap.Error(err))
+		}
+	}
 
 	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "",
 		map[string]any{"email_enabled": resp.EmailEnabled, "report_frequency": resp.ReportFrequency, "report_time": resp.ReportTime, "report_minute": resp.ReportMinute})
