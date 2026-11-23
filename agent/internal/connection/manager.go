@@ -164,6 +164,9 @@ type Config struct {
 	// host's name rather than its container ID.
 	Hostname        string
 	DockerAvailable bool
+	// RepairAvailable is reported as AgentCapabilities.repair: the embedded
+	// restic runs the repair subcommands (checked at startup).
+	RepairAvailable bool
 	// TLSCAFile is the path to a PEM-encoded CA certificate used to verify the
 	// server's TLS certificate. Required when the server uses a self-signed cert.
 	// Leave empty to use the system certificate pool (e.g. Let's Encrypt certs).
@@ -540,9 +543,11 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 	}
 
 	// AgentCapabilities reflect what is available on this host. restic and
-	// rclone are embedded in the agent, so only Docker varies.
+	// rclone are embedded in the agent: Docker varies with the host, and
+	// repairs with the embedded restic's version.
 	caps := &proto.AgentCapabilities{
 		Docker: m.cfg.DockerAvailable,
+		Repair: m.cfg.RepairAvailable,
 	}
 
 	resp, err := client.Register(ctx, &proto.RegisterRequest{
@@ -1330,7 +1335,11 @@ func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, er
 
 	switch p.Type {
 	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE, proto.JobType_JOB_TYPE_FORGET, proto.JobType_JOB_TYPE_VERIFY:
-		// All four types are handled by the executor — payload is passed through as-is.
+		// Handled by the executor — payload is passed through as-is.
+	case proto.JobType_JOB_TYPE_REPAIR:
+		if !m.cfg.RepairAvailable {
+			return executor.JobAssignment{}, errors.New("this agent's restic does not support repository repairs (0.16 or later needed)")
+		}
 	default:
 		return executor.JobAssignment{}, fmt.Errorf("unsupported job type: %v", p.Type)
 	}

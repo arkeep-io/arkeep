@@ -828,10 +828,10 @@ func (r *gormJobRepository) HasWaitingForDestinations(ctx context.Context, desti
 }
 
 // maintenanceJobTypes are the per-destination job types (retention sweep,
-// integrity check) dispatched straight to the agent rather than through the
-// backup scheduler's DispatchPending: a pending one can only be in flight, so
-// it is swept together with running jobs.
-var maintenanceJobTypes = []string{"retention", "check"}
+// integrity check, repair) dispatched straight to the agent rather than
+// through the backup scheduler's DispatchPending: a pending one can only be in
+// flight, so it is swept together with running jobs.
+var maintenanceJobTypes = []string{"retention", "check", "repair"}
 
 // HasActiveJobOfType reports whether a job of jobType against the destination
 // is pending, waiting or running.

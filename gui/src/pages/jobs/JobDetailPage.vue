@@ -30,6 +30,7 @@ import { useWebSocket } from '@/services/websocket'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiResponse, Job, JobLog, JobStatus, JobStatusPayload, JobLogPayload, ResticProgressEvent } from '@/types'
 import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration, formatBytes, progressPercent } from '@/lib/jobUtils'
+import { formatParams } from '@/lib/repair'
 
 // ---------------------------------------------------------------------------
 // Route
@@ -322,6 +323,17 @@ onMounted(fetchJob)
                 </div>
             </div>
 
+        </div>
+
+        <!-- Repair parameters and requester (ADR 0026) -->
+        <div v-if="!loading && job && (job.params || job.requested_by)"
+            class="border rounded-md p-4 flex flex-col gap-1 text-sm" data-testid="job-params">
+            <p v-if="job.requested_by" class="text-muted-foreground">
+                Started by <span class="text-foreground">{{ job.requested_by }}</span>
+            </p>
+            <p v-for="line in (job.params ? formatParams(job.params) : [])" :key="line" class="font-mono text-xs">
+                {{ line }}
+            </p>
         </div>
 
         <!-- Started / Finished timestamps (full width, subtle) -->

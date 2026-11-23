@@ -87,6 +87,23 @@ func TestProtoToJob(t *testing.T) {
 	}
 }
 
+// TestProtoToJob_Repair: a repair reaches the executor only on an agent that
+// reported the repair capability, as the server expects.
+func TestProtoToJob_Repair(t *testing.T) {
+	assignment := &proto.JobAssignment{JobId: "job-1", Type: proto.JobType_JOB_TYPE_REPAIR}
+
+	if _, err := (&Manager{}).protoToJob(assignment); err == nil {
+		t.Error("an agent without repair support accepted a repair job")
+	}
+	job, err := (&Manager{cfg: Config{RepairAvailable: true}}).protoToJob(assignment)
+	if err != nil {
+		t.Fatalf("protoToJob() error = %v", err)
+	}
+	if job.Type != proto.JobType_JOB_TYPE_REPAIR {
+		t.Errorf("job.Type = %v, want JOB_TYPE_REPAIR", job.Type)
+	}
+}
+
 // TestSnapshotImportPayloadDestination is a regression test for import and
 // sync failing with "an empty password is not allowed": the password used to
 // travel as Env["RESTIC_PASSWORD"], which the env allowlist drops.

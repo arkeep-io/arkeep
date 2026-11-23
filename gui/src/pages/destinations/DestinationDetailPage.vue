@@ -44,6 +44,7 @@ import { summariseSync } from '@/lib/syncSummary'
 import { lockExplanation, lockLabel } from '@/lib/destinationLocks'
 import { scheduleLabel } from '@/lib/cron'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
+import DestinationRepairSection from '@/components/destinations/DestinationRepairSection.vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -102,6 +103,22 @@ async function fetchDestination() {
     } finally {
         loading.value = false
     }
+}
+
+// refreshDestination reloads the destination without the loading state, so
+// the sections stay mounted: the repair section keeps following its job.
+async function refreshDestination() {
+    try {
+        const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
+        destination.value = res.data
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to load destination')
+    }
+}
+
+function onRepairChanged() {
+    refreshDestination()
+    fetchJobs()
 }
 
 async function fetchJobs() {
@@ -244,6 +261,8 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                                 {{ destination.enabled ? 'Enabled' : 'Disabled' }}
                             </Badge>
                             <Badge v-if="destination.append_only" variant="outline">Append-only</Badge>
+                            <Badge v-if="destination.maintenance" variant="outline"
+                                class="border-amber-500/40 text-amber-600 dark:text-amber-400">In maintenance</Badge>
                             <Badge v-if="destination.locks.length" variant="outline">{{ lockLabel(destination.locks) }}</Badge>
                             <Badge v-if="destination.retention_needs_review" variant="destructive">
                                 Retention needs reconfiguration
@@ -449,6 +468,10 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                 No maintenance agent is assigned, so scheduled checks cannot run. Edit the destination to choose one.
             </p>
         </div>
+
+        <!-- ── Maintenance & repair (ADR 0026) ─────────────────────────────── -->
+        <DestinationRepairSection v-if="!loading && destination && authStore.isAdmin"
+            :destination="destination" @changed="onRepairChanged" />
 
         <!-- ── Recent Jobs (backups + retention runs) ─────────────────────── -->
         <div class="flex flex-col gap-3">

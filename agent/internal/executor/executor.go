@@ -34,6 +34,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"github.com/arkeep-io/arkeep/shared/repair"
 	"github.com/arkeep-io/arkeep/shared/validation"
 )
 
@@ -122,6 +123,14 @@ type checkPayload struct {
 	RepoPassword  string             `json:"repo_password"`
 	Mode          string             `json:"mode"`
 	SubsetPercent int                `json:"subset_percent"`
+}
+
+// repairPayload mirrors the struct serialized by the server for a repair job
+// (ADR 0026): one restic repair command against one destination.
+type repairPayload struct {
+	Destination  destinationPayload `json:"destination"`
+	RepoPassword string             `json:"repo_password"`
+	Repair       repair.Params      `json:"repair"`
 }
 
 // restorePayload mirrors the struct serialized by the server snapshot handler.
@@ -475,6 +484,8 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 		e.executeRetention(jobCtx, job, sink, reporter)
 	case proto.JobType_JOB_TYPE_VERIFY:
 		e.executeCheck(jobCtx, job, sink, reporter)
+	case proto.JobType_JOB_TYPE_REPAIR:
+		e.executeRepair(jobCtx, job, sink, reporter)
 	default:
 		// JOB_TYPE_BACKUP and unspecified types all run the backup handler.
 		e.executeBackup(jobCtx, job, sink, reporter)
@@ -1077,6 +1088,106 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, nil, 0, "")
 	log("info", fmt.Sprintf("integrity check of destination %s passed: no errors found", destID))
 	reporter.ReportStatus(job.JobID, "succeeded", "integrity check passed")
+}
+
+// executeRepair runs one repository repair command (ADR 0026) and streams
+// restic's output to the job log as it runs. The server only sends it while
+// the destination is in maintenance, so nothing else uses the repository.
+func (e *Executor) executeRepair(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	log := func(level, msg string) {
+		sink.SendLog(job.JobID, level, msg)
+		switch level {
+		case "error":
+			e.logger.Error(msg, zap.String("job_id", job.JobID))
+		case "warn":
+			e.logger.Warn(msg, zap.String("job_id", job.JobID))
+		default:
+			e.logger.Info(msg, zap.String("job_id", job.JobID))
+		}
+	}
+
+	var payload repairPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		msg := fmt.Sprintf("failed to deserialize repair job payload: %v", err)
+		log("error", msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+		return
+	}
+	destID := payload.Destination.DestinationID
+	params := payload.Repair
+	startedAt := time.Now().UTC()
+	fail := func(msg string) {
+		log("error", msg)
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+	}
+
+	// Validated by the server already: checked again so a payload that
+	// bypassed it never reaches restic.
+	args, err := restic.BuildRepairArgs(params)
+	if err != nil {
+		fail(fmt.Sprintf("invalid repair request: %v", err))
+		return
+	}
+
+	reporter.ReportStatus(job.JobID, "running", "starting repair "+params.Action)
+	log("info", fmt.Sprintf("repair of destination %s: running restic %s", destID, strings.Join(args, " ")))
+
+	repoURL := payload.Destination.RepoURL
+	if restic.DestinationType(payload.Destination.Type) == restic.DestLocal {
+		repoURL = translateLocalPath(repoURL, e.dockerHostRoot)
+	}
+	d := restic.Destination{
+		Type:     restic.DestinationType(payload.Destination.Type),
+		RepoURL:  repoURL,
+		Password: payload.RepoPassword,
+		Env:      payload.Destination.Env,
+	}
+
+	// restic separates paragraphs with blank lines: they carry nothing in a
+	// job log, which shows one entry per line.
+	err = e.wrapper.Repair(ctx, d, params, func(line string) {
+		if strings.TrimSpace(line) != "" {
+			log("info", line)
+		}
+	})
+
+	if ctx.Err() != nil {
+		reporter.ReportDestinationResult(job.JobID, destID, "cancelled", "", startedAt, nil, 0, "repair cancelled")
+		log("warn", "repair cancelled")
+		reporter.ReportStatus(job.JobID, "cancelled", "repair cancelled")
+		return
+	}
+	if err != nil {
+		fail(repairFailure(params, restic.ExitCode(err)))
+		return
+	}
+
+	log("info", fmt.Sprintf("repair %s of destination %s finished: restic exited with code 0", params.Action, destID))
+	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, nil, 0, "")
+	reporter.ReportStatus(job.JobID, "succeeded", params.Action+" finished")
+}
+
+// repairFailure explains a failed repair command from restic's exit code.
+// The output above it in the job log has restic's own message.
+func repairFailure(p repair.Params, code int) string {
+	if code < 0 {
+		return fmt.Sprintf("repair %s did not complete: restic did not exit normally", p.Action)
+	}
+	msg := fmt.Sprintf("repair %s failed: restic exited with code %d", p.Action, code)
+	switch code {
+	case 10:
+		return msg + ": the repository does not exist"
+	case 11:
+		return msg + ": the repository is locked by another operation; once it has ended, a stale lock can be removed with the unlock action"
+	case 12:
+		return msg + ": wrong repository password"
+	case 1:
+		if p.Action == repair.Check {
+			return msg + ": the repository has errors, listed in the job log"
+		}
+	}
+	return msg
 }
 
 // executeRestore runs a single restore job to completion.
