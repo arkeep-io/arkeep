@@ -42,6 +42,7 @@ import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/t
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
 import { summariseSync } from '@/lib/syncSummary'
 import { lockExplanation, lockLabel } from '@/lib/destinationLocks'
+import { scheduleLabel } from '@/lib/cron'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
 import DestinationRepairSection from '@/components/destinations/DestinationRepairSection.vue'
 
@@ -224,22 +225,6 @@ function onSaved() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function scheduleLabel(cron: string): string {
-    if (!cron) return 'Not scheduled'
-    const presets: Record<string, string> = {
-        '0 * * * *': 'Hourly',
-        '0 2 * * *': 'Daily at 02:00',
-        '0 0 * * *': 'Daily at midnight',
-        '0 2 * * 0': 'Weekly (Sun)',
-        '0 2 * * 1': 'Weekly (Mon)',
-        '0 2 1 * *': 'Monthly',
-        '0 3 * * *': 'Daily at 03:00',
-        '0 3 * * 0': 'Weekly (Sun 03:00)',
-        '0 3 1 * *': 'Monthly (03:00)',
-    }
-    return presets[cron] ?? cron
-}
-
 function checkModeLabel(d: Destination): string {
     switch (d.check_mode) {
         case 'structure': return 'Structure only'
@@ -367,8 +352,8 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Retention Schedule</p>
-                <p class="text-sm font-mono font-medium">
-                    {{ destination.append_only || !destination.retention_enabled ? '—' : scheduleLabel(destination.retention_schedule) }}
+                <p class="text-sm font-mono font-medium" :title="destination.retention_schedule">
+                    {{ destination.append_only || !destination.retention_enabled ? '—' : scheduleLabel(destination.retention_schedule) || 'Not scheduled' }}
                 </p>
             </div>
             <div class="p-4 border rounded-md">
@@ -458,7 +443,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                 </div>
                 <div class="flex items-center justify-between">
                     <span class="text-xs text-muted-foreground">Schedule</span>
-                    <span class="text-sm font-mono font-medium">{{ scheduleLabel(destination.check_schedule) }}</span>
+                    <span class="text-sm font-mono font-medium" :title="destination.check_schedule">{{ scheduleLabel(destination.check_schedule) || 'Not scheduled' }}</span>
                 </div>
             </div>
 

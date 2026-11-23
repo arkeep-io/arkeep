@@ -101,6 +101,10 @@ export interface Agent {
   arch: string
   status: AgentStatus
   version: string
+  // Versions of the restic and rclone binaries embedded in the agent;
+  // empty for agents that do not report them.
+  restic_version: string
+  rclone_version: string
   docker_available: boolean
   // identity_bound is true once the agent registered with its mTLS client
   // certificate; RPCs from any other certificate are refused.
@@ -496,7 +500,17 @@ export interface NotificationSettings {
   agent_online: boolean
   // Event notifications by email; the webhook has its own switch.
   email_enabled: boolean
+  // How often the job report email is sent, and the time of the daily one
+  // ("HH:MM" in the server's time zone).
+  report_frequency: ReportFrequency
+  report_time: string
+  // The minute past the hour of the hourly report, 0 to 59.
+  report_minute: number
+  // The server's time zone (e.g. "CET"), read-only.
+  server_timezone: string
 }
+
+export type ReportFrequency = 'off' | 'hourly' | 'daily'
 
 // LogRetentionSettings controls automatic pruning of job_logs rows. Days are
 // counted from each log line's timestamp; 0 means "keep forever" (disabled).

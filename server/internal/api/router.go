@@ -68,6 +68,11 @@ type RouterConfig struct {
 	// nil, the manual-prune endpoint responds 503.
 	LogRetention LogPruner
 
+	// JobReport reschedules the job report email after its settings change.
+	// Satisfied by *jobreport.Service. Optional — if nil, a change takes
+	// effect at the next server start.
+	JobReport JobReportScheduler
+
 	// SnapshotSync records snapshots found in a destination's repository and
 	// evicts the records of snapshots no longer there (import, sync). Required.
 	SnapshotSync *snapshotsync.Service
@@ -154,7 +159,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
 	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
+	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.JobReport, cfg.Logger)
 	notificationProviderHandler := NewNotificationProviderHandler(cfg.NotificationProviders, cfg.Audit, cfg.Logger)
 	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler := NewDashboardHandler(cfg.Dashboard, cfg.Logger)

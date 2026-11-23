@@ -45,6 +45,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, PolicyRecentJob, ApiResponse, TriggerResponse } from '@/types'
 import { formatDate, statusDotClass, statusLabel } from '@/lib/jobUtils'
+import { scheduleLabel } from '@/lib/cron'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
@@ -91,26 +92,6 @@ const triggeringId = ref<string | null>(null)
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Returns a human-readable label for common cron expressions.
- * Falls back to the raw expression for custom schedules.
- */
-function scheduleLabel(cron: string): string {
-    const presets: Record<string, string> = {
-        '0 * * * *': 'Hourly',
-        '0 2 * * *': 'Daily at 02:00',
-        '0 0 * * *': 'Daily at midnight',
-        '0 2 * * 0': 'Weekly (Sun)',
-        '0 2 * * 1': 'Weekly (Mon)',
-        '0 2 1 * *': 'Monthly',
-        '@daily': 'Daily',
-        '@weekly': 'Weekly',
-        '@monthly': 'Monthly',
-        '@hourly': 'Hourly',
-    }
-    return presets[cron] ?? cron
-}
 
 /** Number of recent runs shown as dots; the server returns at most this many. */
 const RECENT_RUNS = 5
@@ -333,7 +314,7 @@ onMounted(fetchPolicies)
                                 {{ policy.agent_name }}
                             </TableCell>
                             <TableCell>
-                                <span class="font-mono text-xs text-muted-foreground">
+                                <span class="font-mono text-xs text-muted-foreground" :title="policy.schedule">
                                     {{ scheduleLabel(policy.schedule) }}
                                 </span>
                             </TableCell>

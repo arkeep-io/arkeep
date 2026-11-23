@@ -186,7 +186,12 @@ type Agent struct {
 	// Advertised by the agent in the Register RPC via AgentCapabilities.docker.
 	// Used by the GUI to show or hide the Docker volume source option in the policy form.
 	DockerAvailable bool `gorm:"not null;default:false"`
-	// RepairAvailable is true when the agent reported AgentCapabilities.repair:
+	// ResticVersion and RcloneVersion are the versions of the binaries
+	// embedded in the agent, reported on every registration; empty for
+	// agents that predate the report.
+	ResticVersion string `gorm:"not null;default:''"`
+	RcloneVersion string `gorm:"not null;default:''"`
+  // RepairAvailable is true when the agent reported AgentCapabilities.repair:
 	// its restic has the repair commands (ADR 0026). The server refuses a
 	// repair on a maintenance agent without it.
 	RepairAvailable bool `gorm:"not null;default:false"`

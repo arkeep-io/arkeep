@@ -263,7 +263,11 @@ type RegisterRequest struct {
 	// for deduplication and upsert, ensuring the same physical agent is never
 	// registered twice even if its hostname changes (e.g. Docker redeploy).
 	// Empty on first-ever registration; populated on all subsequent connects.
-	AgentId       string `protobuf:"bytes,6,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	AgentId string `protobuf:"bytes,6,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// versions of the restic and rclone binaries embedded in the agent
+	// (e.g. "0.19.1", "1.76.0"); empty from agents older than this field
+	ResticVersion string `protobuf:"bytes,7,opt,name=restic_version,json=resticVersion,proto3" json:"restic_version,omitempty"`
+	RcloneVersion string `protobuf:"bytes,8,opt,name=rclone_version,json=rcloneVersion,proto3" json:"rclone_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -336,6 +340,20 @@ func (x *RegisterRequest) GetCapabilities() *AgentCapabilities {
 func (x *RegisterRequest) GetAgentId() string {
 	if x != nil {
 		return x.AgentId
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetResticVersion() string {
+	if x != nil {
+		return x.ResticVersion
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetRcloneVersion() string {
+	if x != nil {
+		return x.RcloneVersion
 	}
 	return ""
 }
@@ -2233,14 +2251,16 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc4\x01\n" +
+	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\x92\x02\n" +
 	"\x0fRegisterRequest\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x0e\n" +
 	"\x02os\x18\x03 \x01(\tR\x02os\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12<\n" +
 	"\fcapabilities\x18\x05 \x01(\v2\x18.agent.AgentCapabilitiesR\fcapabilities\x12\x19\n" +
-	"\bagent_id\x18\x06 \x01(\tR\aagentId\"_\n" +
+	"\bagent_id\x18\x06 \x01(\tR\aagentId\x12%\n" +
+	"\x0erestic_version\x18\a \x01(\tR\rresticVersion\x12%\n" +
+	"\x0erclone_version\x18\b \x01(\tR\rrcloneVersion\"G\n" +
 	"\x11AgentCapabilities\x12\x16\n" +
 	"\x06docker\x18\x01 \x01(\bR\x06docker\x12\x16\n" +
 	"\x06repair\x18\x04 \x01(\bR\x06repairJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06resticR\x06rclone\"L\n" +

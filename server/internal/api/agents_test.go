@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+
+	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
 func TestAgentHandler_List(t *testing.T) {
@@ -124,6 +126,26 @@ func TestAgentHandler_GetByID(t *testing.T) {
 		}
 		if data.Name != "test-agent" {
 			t.Errorf("name = %q, want test-agent", data.Name)
+		}
+	})
+
+	t.Run("returns the restic and rclone versions", func(t *testing.T) {
+		e := newTestEnv(t)
+		agent := &db.Agent{Name: "versions", Status: "offline", ResticVersion: "0.19.1", RcloneVersion: "1.76.0"}
+		if err := e.deps.agents.Create(context.Background(), agent); err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		resp := e.get(t, "/api/v1/agents/"+agent.ID.String(), e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			ResticVersion string `json:"restic_version"`
+			RcloneVersion string `json:"rclone_version"`
+		}
+		decodeData(t, resp, &data)
+		if data.ResticVersion != "0.19.1" || data.RcloneVersion != "1.76.0" {
+			t.Errorf("restic/rclone version = %q/%q, want 0.19.1/1.76.0", data.ResticVersion, data.RcloneVersion)
 		}
 	})
 

@@ -115,6 +115,16 @@ export function formatDuration(startedAt: string | null | undefined, finishedAt:
     return `${h}h ${m % 60}m`
 }
 
+/**
+ * Restic's percent_done fraction as a 0–100 percentage. Restic divides the
+ * bytes read by the bytes its initial scan counted, so files that grow during
+ * the backup push it past 1: cap it so the bar never shows more than 100%.
+ */
+export function progressPercent(percentDone: number | undefined): number {
+    if (!Number.isFinite(percentDone)) return 0
+    return Math.min(Math.max(percentDone! * 100, 0), 100)
+}
+
 /** Human-readable byte size string. */
 export function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B'

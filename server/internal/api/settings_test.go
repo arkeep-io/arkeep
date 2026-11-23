@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"testing"
@@ -522,6 +523,124 @@ func TestSettingsHandler_NotificationEmailSwitch(t *testing.T) {
 			t.Error("email_enabled = true, want it left off")
 		}
 	})
+}
+
+func TestSettingsHandler_JobReport(t *testing.T) {
+	type reportData struct {
+		JobSuccess      bool   `json:"job_success"`
+		ReportFrequency string `json:"report_frequency"`
+		ReportTime      string `json:"report_time"`
+		ReportMinute    int    `json:"report_minute"`
+		ServerTimezone  string `json:"server_timezone"`
+	}
+	get := func(t *testing.T, e *testEnv) reportData {
+		t.Helper()
+		resp := e.get(t, "/api/v1/settings/notifications", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+		var data reportData
+		decodeData(t, resp, &data)
+		return data
+	}
+	events := map[string]any{"job_success": true, "job_failure": true, "agent_offline": true, "agent_online": false}
+
+	t.Run("off by default, with the server time zone", func(t *testing.T) {
+		e := newTestEnv(t)
+		data := get(t, e)
+		if data.ReportFrequency != "off" || data.ReportTime != "07:00" || data.ReportMinute != 0 {
+			t.Errorf("got %+v, want off at 07:00, minute 0", data)
+		}
+		if data.ServerTimezone == "" {
+			t.Error("server_timezone is empty")
+		}
+	})
+
+	t.Run("saves the schedule and reschedules the report", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := map[string]any{"report_frequency": "daily", "report_time": "18:30", "report_minute": 30}
+		maps.Copy(body, events)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusOK)
+		var data reportData
+		decodeData(t, resp, &data)
+		if data.ReportFrequency != "daily" || data.ReportTime != "18:30" || data.ReportMinute != 30 {
+			t.Errorf("PUT answered %+v, want daily at 18:30, minute 30", data)
+		}
+		if got := get(t, e); got.ReportFrequency != "daily" || got.ReportTime != "18:30" || got.ReportMinute != 30 {
+			t.Errorf("GET %+v, want daily at 18:30, minute 30", got)
+		}
+		if n := e.jobReport.reloads.Load(); n != 1 {
+			t.Errorf("job report rescheduled %d times, want 1", n)
+		}
+	})
+
+	t.Run("a request without the report fields keeps them", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := map[string]any{"report_frequency": "hourly"}
+		maps.Copy(body, events)
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), events), http.StatusOK)
+		if got := get(t, e); got.ReportFrequency != "hourly" {
+			t.Errorf("report_frequency = %q, want the stored hourly", got.ReportFrequency)
+		}
+		if n := e.jobReport.reloads.Load(); n != 1 {
+			t.Errorf("job report rescheduled %d times, want only for the request that changed it", n)
+		}
+	})
+
+	t.Run("an unchanged schedule is not rescheduled", func(t *testing.T) {
+		e := newTestEnv(t)
+		// The defaults as the GUI sends them with every save.
+		body := map[string]any{"report_frequency": "off", "report_time": "07:00", "report_minute": 0}
+		maps.Copy(body, events)
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		body["report_frequency"] = "daily"
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		body["job_success"] = false
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+
+		if n := e.jobReport.reloads.Load(); n != 1 {
+			t.Errorf("job report rescheduled %d times, want only for the request that changed it", n)
+		}
+	})
+
+	t.Run("a failed reschedule still answers with the saved settings", func(t *testing.T) {
+		e := newTestEnv(t)
+		e.jobReport.err = errors.New("scheduler unavailable")
+		body := map[string]any{"report_frequency": "daily", "report_time": "18:30"}
+		maps.Copy(body, events)
+		resp := e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body)
+		assertStatus(t, resp, http.StatusOK)
+		var data reportData
+		decodeData(t, resp, &data)
+		if data.ReportFrequency != "daily" || data.ReportTime != "18:30" {
+			t.Errorf("PUT answered %+v, want the saved daily at 18:30", data)
+		}
+		if got := get(t, e); got.ReportFrequency != "daily" || got.ReportTime != "18:30" {
+			t.Errorf("GET %+v, want daily at 18:30", got)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"unknown frequency", map[string]any{"report_frequency": "weekly"}},
+		{"invalid time", map[string]any{"report_time": "7:00"}},
+		{"time out of range", map[string]any{"report_time": "24:00"}},
+		{"minute out of range", map[string]any{"report_minute": 60}},
+	} {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			maps.Copy(tt.body, events)
+			assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), tt.body), http.StatusBadRequest)
+			if got := get(t, e); got.ReportFrequency != "off" || got.ReportTime != "07:00" || got.ReportMinute != 0 || !got.JobSuccess {
+				t.Errorf("settings changed by a rejected request: %+v", got)
+			}
+		})
+	}
 }
 
 func TestSettingsHandler_LogRetention(t *testing.T) {

@@ -36,8 +36,12 @@ var logoPNG []byte
 
 const logoCID = "arkeep-logo"
 
-// emailItem is one label/value pair, used for the key figures and the details.
+// emailItem is one label/value pair of the details.
 type emailItem struct{ Label, Value string }
+
+// emailMetric is one key figure. Color is the color of the value; empty is
+// the text color.
+type emailMetric struct{ Label, Value, Color string }
 
 // destinationRow is one row of the destination list of a backup email.
 type destinationRow struct {
@@ -51,7 +55,7 @@ type emailContent struct {
 	Title, Preheader                             string
 	StatusLabel, StatusColor, StatusBG, StatusFG string
 	Headline, Summary                            string
-	Metrics                                      []emailItem
+	Metrics                                      []emailMetric
 	ErrorTitle, Error                            string
 	Destinations                                 []destinationRow
 	Details                                      []emailItem
@@ -63,6 +67,9 @@ type emailContent struct {
 	ActionHint string
 	// Note is a closing paragraph below the action.
 	Note string
+	// Reports holds the tables of the job report, one per job type, shown
+	// after Destinations.
+	Reports []reportTable
 	// LogoSrc is template.URL because html/template rejects cid: URLs in a
 	// plain string. Empty hides the image.
 	LogoSrc template.URL
@@ -235,7 +242,11 @@ func renderEmailText(e emailContent) string {
 	}
 	if len(e.Metrics) > 0 {
 		section()
-		aligned(e.Metrics)
+		items := make([]emailItem, len(e.Metrics))
+		for i, m := range e.Metrics {
+			items[i] = emailItem{m.Label, m.Value}
+		}
+		aligned(items)
 	}
 	if e.Error != "" {
 		section()
@@ -253,6 +264,22 @@ func renderEmailText(e emailContent) string {
 			if d.Error != "" {
 				line(indent(d.Error, "    "))
 			}
+		}
+	}
+	for _, t := range e.Reports {
+		section()
+		line(t.Title + " (" + t.countsText() + "):")
+		for _, r := range t.Rows {
+			parts := []string{r.Started, r.Duration}
+			// "–" (nothing written) is left out rather than written as "– added".
+			if t.ExtraLabel != "" && r.Extra != "–" {
+				parts = append(parts, r.Extra+" "+strings.ToLower(t.ExtraLabel))
+			}
+			line("- " + joinNames(r.Name, " · ", r.Agent) + ": " + r.Status)
+			line("  " + strings.Join(parts, " · "))
+		}
+		if t.More != "" {
+			line(t.More)
 		}
 	}
 	if len(e.Details) > 0 {
@@ -324,7 +351,7 @@ func newJobEmail(title string, failed bool, p jobEmailData, at time.Time, baseUR
 	}
 
 	if duration != "" {
-		e.Metrics = append(e.Metrics, emailItem{"Duration", duration})
+		e.Metrics = append(e.Metrics, emailMetric{Label: "Duration", Value: duration})
 	}
 
 	// Sentences after the first one of the preheader.
@@ -352,7 +379,9 @@ func newJobEmail(title string, failed bool, p jobEmailData, at time.Time, baseUR
 				e.Destinations = append(e.Destinations, newDestinationRow(d))
 			}
 			counts := fmt.Sprintf("%d of %d", succeeded, len(p.Destinations))
-			e.Metrics = append(e.Metrics, emailItem{"Added", formatEmailBytes(added)}, emailItem{"Destinations", counts})
+			e.Metrics = append(e.Metrics,
+				emailMetric{Label: "Added", Value: formatEmailBytes(added)},
+				emailMetric{Label: "Destinations", Value: counts})
 			if failed {
 				extra = append(extra, counts+" destinations succeeded.")
 			} else {

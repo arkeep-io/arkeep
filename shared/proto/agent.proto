@@ -122,6 +122,10 @@ message RegisterRequest {
   // registered twice even if its hostname changes (e.g. Docker redeploy).
   // Empty on first-ever registration; populated on all subsequent connects.
   string agent_id = 6;
+  // versions of the restic and rclone binaries embedded in the agent
+  // (e.g. "0.19.1", "1.76.0"); empty from agents older than this field
+  string restic_version = 7;
+  string rclone_version = 8;
 }
 
 // AgentCapabilities describes which optional features are available on the agent.

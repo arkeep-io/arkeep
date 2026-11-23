@@ -228,6 +228,9 @@ importers:
       clsx:
         specifier: 2.1.1
         version: 2.1.1
+      cronstrue:
+        specifier: 3.38.0
+        version: 3.38.0
       ofetch:
         specifier: 1.5.1
         version: 1.5.1
@@ -1830,6 +1833,10 @@ packages:
   core-js-compat@3.51.0:
     resolution: {integrity: sha512-52r6fkXgxv4GLMjmFcMWRx7X9bw071xTTdrDcdyPGRqU2oE+9pCG0bAOMifSBdLw0JRBZKEF0q3B55qPlLuE8g==}
     engines: {node: '>=6.4.0'}
+
+  cronstrue@3.38.0:
+    resolution: {integrity: sha512-i10xR7fS4AH9LKwmt3gYdt/5lSsB2qFGSNfC8aeyYybxo48DCMz+nUrSVI4kUj8yo+SgTbMJqp/BWEem9avlcA==}
+    hasBin: true
 
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
@@ -5113,6 +5120,8 @@ snapshots:
   core-js-compat@3.51.0:
     dependencies:
       browserslist: 4.29.6
+
+  cronstrue@3.38.0: {}
 
   cross-spawn@7.0.6:
     dependencies:

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -172,6 +173,20 @@ type testEnv struct {
 	sched   *scheduler.Scheduler
 	mgr     *agentmanager.Manager
 	mailer  *fakeMailer
+	// jobReport counts the reschedules of the job report.
+	jobReport *fakeJobReport
+}
+
+// fakeJobReport is a test double for JobReportScheduler. Reload fails with
+// err when it is set.
+type fakeJobReport struct {
+	reloads atomic.Int32
+	err     error
+}
+
+func (f *fakeJobReport) Reload(context.Context) error {
+	f.reloads.Add(1)
+	return f.err
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -190,6 +205,7 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 	sched := newTestScheduler(t, deps, mgr)
 	hub := websocket.NewHub()
 	mailer := &fakeMailer{configured: true}
+	jobReport := &fakeJobReport{}
 
 	cfg := RouterConfig{
 		AuthService:   authSvc,
@@ -207,6 +223,7 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 		OIDCProviders: deps.oidc,
 		Settings:      deps.settings,
 		LogRetention:  logretention.NewService(deps.jobs, deps.settings, zap.NewNop()),
+		JobReport:     jobReport,
 		SnapshotSync:  snapshotsync.NewService(deps.dests, deps.snaps, deps.settings, mgr, zap.NewNop()),
 		Dashboard:     deps.dash,
 		Audit:         deps.audit,
@@ -230,12 +247,13 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 	t.Cleanup(srv.Close)
 
 	return &testEnv{
-		Server:  srv,
-		deps:    deps,
-		authSvc: authSvc,
-		sched:   sched,
-		mgr:     mgr,
-		mailer:  mailer,
+		Server:    srv,
+		deps:      deps,
+		authSvc:   authSvc,
+		sched:     sched,
+		mgr:       mgr,
+		mailer:    mailer,
+		jobReport: jobReport,
 	}
 }
 

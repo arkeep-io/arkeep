@@ -42,6 +42,7 @@ import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
 import AgentSheet from '@/components/agents/AgentSheet.vue'
 import AgentDeleteDialog from '@/components/agents/AgentDeleteDialog.vue'
+import AgentToolsIndicator from '@/components/agents/AgentToolsIndicator.vue'
 import {
     ChartContainer,
     ChartCrosshair,
@@ -395,7 +396,11 @@ onUnmounted(() => {
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Version</p>
-                <p class="text-sm font-mono font-medium">{{ mergedAgent.version || '—' }}</p>
+                <div class="flex items-center gap-1.5">
+                    <p class="text-sm font-mono font-medium">{{ mergedAgent.version || '—' }}</p>
+                    <AgentToolsIndicator :restic-version="mergedAgent.restic_version"
+                        :rclone-version="mergedAgent.rclone_version" />
+                </div>
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Last Seen</p>
