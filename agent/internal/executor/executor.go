@@ -228,13 +228,27 @@ type Executor struct {
 	// runningMu protects runningCancel — the cancel func for the job currently
 	// being executed. Cancel() calls it directly when a job is in flight.
 	runningMu     sync.Mutex
-	runningCancel map[string]context.CancelFunc
+	runningCancel map[string]context.CancelCauseFunc
 
 	// jobsMu protects jobs — the IDs of the jobs queued or running here. The
 	// server sends its pending jobs again when the stream reconnects, and
 	// those already queued here must not run twice.
 	jobsMu sync.Mutex
 	jobs   map[string]bool
+}
+
+// errCancelledByServer is the cause of a job context cancelled by Cancel, as
+// opposed to the agent's own context ending when it shuts down.
+var errCancelledByServer = errors.New("cancel requested by the server")
+
+// cancelReason says why the job context ctx ended, for the job log and the
+// status message: a cancel from the server (a user, or the queue timeout), or
+// the agent shutting down.
+func cancelReason(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), errCancelledByServer) {
+		return errCancelledByServer.Error()
+	}
+	return "agent shutting down"
 }
 
 // ErrQueueFull is returned by Enqueue when the job queue has no room left.
@@ -265,7 +279,7 @@ func New(
 		dockerHostRoot: dockerHostRoot,
 		hostname:       hostname,
 		cancelled:      make(map[string]bool),
-		runningCancel:  make(map[string]context.CancelFunc),
+		runningCancel:  make(map[string]context.CancelCauseFunc),
 		jobs:           make(map[string]bool),
 	}
 	// Assign only a non-nil client: a nil *docker.Client stored in the
@@ -471,12 +485,12 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 // It creates a per-job context so the job can be cancelled independently
 // of the executor's lifetime context.
 func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
-	jobCtx, cancel := context.WithCancel(ctx)
+	jobCtx, cancel := context.WithCancelCause(ctx)
 	e.runningMu.Lock()
 	e.runningCancel[job.JobID] = cancel
 	e.runningMu.Unlock()
 	defer func() {
-		cancel()
+		cancel(nil)
 		e.runningMu.Lock()
 		delete(e.runningCancel, job.JobID)
 		e.runningMu.Unlock()
@@ -504,7 +518,7 @@ func (e *Executor) Cancel(jobID string) {
 	// Check if it is currently executing.
 	e.runningMu.Lock()
 	if cancel, ok := e.runningCancel[jobID]; ok {
-		cancel()
+		cancel(errCancelledByServer)
 		e.runningMu.Unlock()
 		e.logger.Info("cancel signal sent to running job", zap.String("job_id", jobID))
 		return
@@ -630,7 +644,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// --- 5. Backup to each destination ---
 	backupFailed := false
 	for _, dest := range payload.Destinations {
-		// Stop immediately if the agent is shutting down.
+		// Stop immediately if the job was cancelled or the agent is shutting down.
 		if ctx.Err() != nil {
 			break
 		}
@@ -850,14 +864,15 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 	}
 
-	// If the context was cancelled (agent shutting down), the job was interrupted.
+	// If the context was cancelled (a cancel from the server, or the agent
+	// shutting down), the job was interrupted.
 	// Report it as cancelled so the UI shows the right state. The server-side
 	// orphan recovery will also mark it failed if this report doesn't reach the
 	// server (e.g. connection already closed).
 	if ctx.Err() != nil {
-		log("warn", "backup cancelled: agent shutting down")
+		log("warn", "backup cancelled: "+cancelReason(ctx))
 		runPostHook()
-		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 
@@ -989,15 +1004,15 @@ func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink
 	case ctx.Err() != nil:
 		// Interrupted between two tags: the sweep did not complete, so it
 		// must not read as a successful one (R-12).
-		destStatus, destErrMsg = "cancelled", "retention sweep cancelled: agent shutting down"
+		destStatus, destErrMsg = "cancelled", "retention sweep cancelled: "+cancelReason(ctx)
 	case sweepFailed:
 		destStatus, destErrMsg = "failed", "one or more retention tags failed"
 	}
 	reporter.ReportDestinationResult(job.JobID, payload.Destination.DestinationID, destStatus, "", time.Now().UTC(), nil, repoSizeBytes, destErrMsg)
 
 	if ctx.Err() != nil {
-		log("warn", "retention sweep cancelled: agent shutting down")
-		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+		log("warn", "retention sweep cancelled: "+cancelReason(ctx))
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 
@@ -1327,8 +1342,8 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 
 	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, includePaths, excludePaths, e.dockerHostRoot); err != nil {
 		if ctx.Err() != nil {
-			log("warn", "restore cancelled: agent shutting down")
-			reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+			log("warn", "restore cancelled: "+cancelReason(ctx))
+			reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 			return
 		}
 		if strings.Contains(err.Error(), "Access is denied") {
