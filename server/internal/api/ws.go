@@ -97,9 +97,9 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 //  2. The notifications:<user_id> topic, always added automatically from JWT.
 //
 // Unknown or malformed topic strings are silently ignored — the client will
-// simply never receive messages for topics that do not exist.
-// Admin users may subscribe to any topic; regular users are limited to the
-// same set for now (ownership enforcement is handled at the publish site).
+// simply never receive messages for topics that do not exist. A notification
+// topic in the query is dropped: a client only ever receives its own
+// notifications, never another user's.
 func (h *WSHandler) resolveTopics(r *http.Request, claims *auth.Claims) []string {
 	seen := make(map[string]struct{})
 	var topics []string
@@ -121,6 +121,9 @@ func (h *WSHandler) resolveTopics(r *http.Request, claims *auth.Claims) []string
 	// Optional explicit topics from query parameter.
 	if raw := r.URL.Query().Get("topics"); raw != "" {
 		for _, t := range strings.Split(raw, ",") {
+			if strings.HasPrefix(strings.TrimSpace(t), "notifications:") {
+				continue
+			}
 			add(t)
 		}
 	}
