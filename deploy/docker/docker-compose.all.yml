@@ -73,6 +73,11 @@ services:
       # The agent auto-detects Docker and uses the /hostfs mount below for path
       # translation — no env var required. Override only for custom mount points:
       #   ARKEEP_DOCKER_HOST_ROOT: "/custom-mountpoint"
+      # A local destination must be on a mount: a host folder mounted :rw under
+      # /hostfs, or a volume. The agent refuses paths on the container's own
+      # filesystem, which are lost when the container is recreated. To allow
+      # them anyway (tests only):
+      #   ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION: "true"
       # ── Agent hostname ───────────────────────────────────────────────────────
       # Read from the host's /etc/hostname through the /hostfs mount below, so the
       # agent shows the host's name instead of the container ID. Override if needed:

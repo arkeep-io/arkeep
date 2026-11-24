@@ -37,6 +37,7 @@ on Home Assistant.
 | Hostname | yes | Name of the agent in Arkeep, also recorded on every snapshot. Keep it stable: Arkeep groups snapshots by hostname. With several Home Assistant installations, give each one its own. |
 | CA certificate | no | Path of a CA certificate, under `/ssl`, when the server uses a gRPC certificate from a private CA. Not needed with the certificate Arkeep generates itself. |
 | Log level | yes | `debug`, `info`, `warn` or `error`. |
+| Allow local destinations inside the app | no | Back up to a local destination outside `/share` and `/media` anyway (see below). Leave it off. |
 
 Enrolling over plain HTTP does not expose the agent secret: the agent proves
 it knows the secret without sending it, and accepts the server's answer only
@@ -77,7 +78,10 @@ configuration. The database files in it change while Home Assistant runs, so
 do not rely on that copy of them.
 
 A local destination must be under `/share` or `/media`, and outside the folders
-the policy backs up.
+the policy backs up. A path outside the folders listed above, such as
+`/backups`, is inside the app's own container: it is lost when the app is
+updated or reinstalled, so the agent refuses it and the backup fails with
+`not on a bind mount or a volume`.
 
 ## Restoring
 

@@ -32,6 +32,7 @@ import (
 
 	"github.com/arkeep-io/arkeep/agent/internal/docker"
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
+	"github.com/arkeep-io/arkeep/agent/internal/mountcheck"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 	"github.com/arkeep-io/arkeep/shared/repair"
@@ -220,6 +221,13 @@ type Executor struct {
 	// agent runs in; "" for a native agent or when it cannot be told.
 	selfContainerID string
 
+	// checkEphemeral makes backups refuse a local destination that is not on
+	// a bind mount or a volume (see CheckEphemeralLocalDestinations).
+	// mountinfoPath is where the mounts are read, mountcheck.ProcMountInfo
+	// except in tests.
+	checkEphemeral bool
+	mountinfoPath  string
+
 	// cancelledMu protects cancelled — jobs marked for cancellation before
 	// they are dequeued. Populated by Cancel() when a job is still queued.
 	cancelledMu sync.Mutex
@@ -278,6 +286,7 @@ func New(
 		logger:         logger.Named("executor"),
 		dockerHostRoot: dockerHostRoot,
 		hostname:       hostname,
+		mountinfoPath:  mountcheck.ProcMountInfo,
 		cancelled:      make(map[string]bool),
 		runningCancel:  make(map[string]context.CancelCauseFunc),
 		jobs:           make(map[string]bool),
@@ -293,6 +302,48 @@ func New(
 		e.selfContainerID = docker.SelfContainerID()
 	}
 	return e
+}
+
+// CheckEphemeralLocalDestinations makes backups refuse a local destination
+// that is on the container's own writable layer or on a tmpfs: writing there
+// succeeds, and the repository is lost when the container is recreated.
+// main.go enables it when the agent runs in a container, unless
+// ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION is set.
+func (e *Executor) CheckEphemeralLocalDestinations() {
+	e.checkEphemeral = true
+}
+
+// ephemeralDestinationError returns why a backup to the local repository repo
+// (translated from originalURL) must fail, or "" when it is on persistent
+// storage or the check does not apply. When the mounts cannot be read it logs
+// a warning and lets the backup run: the check must never be the reason a
+// backup fails on a setup it cannot see.
+func (e *Executor) ephemeralDestinationError(repo, originalURL string, log func(level, msg string)) string {
+	if !e.checkEphemeral {
+		return ""
+	}
+	kind, err := mountcheck.Ephemeral(e.mountinfoPath, repo)
+	if err != nil {
+		log("warn", fmt.Sprintf("could not tell whether local path %q is on a bind mount or a volume, backing up anyway: %v", repo, err))
+		return ""
+	}
+	if kind == "" {
+		return ""
+	}
+	path := fmt.Sprintf("%q", repo)
+	if repo != originalURL {
+		path = fmt.Sprintf("%q (translated from %q via ARKEEP_DOCKER_HOST_ROOT=%q)", repo, originalURL, e.dockerHostRoot)
+	}
+	msg := fmt.Sprintf(
+		"local path %s is on %s, not on a bind mount or a volume: the repository would be lost when the container is recreated — "+
+			"mount persistent storage at that path (e.g. -v /srv/arkeep-backups:%s, or a named volume); "+
+			"in the Home Assistant app use a folder under /share or /media",
+		path, kind, repo,
+	)
+	if _, err := os.Stat(filepath.Join(repo, "config")); err == nil {
+		msg += ". The snapshots already in it can still be restored until the container is recreated: copy the repository to persistent storage now"
+	}
+	return msg + ". To back up there anyway, set ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION=true"
 }
 
 // TranslateLocalPath applies the same host-path translation used for backup
@@ -678,6 +729,14 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			// its directory: ensureWritableDir would create a missing one.
 			if _, statErr := os.Stat(dest.RepoURL); dest.RepoMustExist && os.IsNotExist(statErr) {
 				errMsg := restic.RepositoryNotFoundError(dest.RepoURL).Error()
+				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, errMsg)
+				backupFailed = true
+				continue
+			}
+			// Before ensureWritableDir, which would create the directory on
+			// the container's layer.
+			if errMsg := e.ephemeralDestinationError(dest.RepoURL, originalURL, log); errMsg != "" {
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, errMsg)
 				backupFailed = true
