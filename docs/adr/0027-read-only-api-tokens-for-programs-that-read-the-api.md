@@ -1,6 +1,6 @@
 # 0027. Read-only API tokens for programs that read the API
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-23
 - **Deciders:** Arkeep maintainers
 

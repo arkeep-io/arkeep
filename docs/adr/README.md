@@ -67,5 +67,5 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0023](0023-auto-pki-per-agent-mtls-and-enrollment-authenticated-with-the-agent-secret.md) | Auto-PKI, per-agent mTLS, and enrollment authenticated with the agent secret | Accepted |
 | [0024](0024-publish-the-home-assistant-app-with-a-deploy-key-and-images-only-the-release-can-write.md) | Publish the Home Assistant app with a deploy key, and images only the release can write | Accepted |
 | [0025](0025-publish-the-helm-chart-only-on-ghcr.md) | Publish the Helm chart only on GHCR | Accepted |
-| [0026](0026-repair-repositories-from-the-gui-under-a-destination-maintenance-mode.md) | Repair repositories from the GUI under a destination maintenance mode | Proposed |
-| [0027](0027-read-only-api-tokens-for-programs-that-read-the-api.md) | Read-only API tokens for programs that read the API | Proposed |
+| [0026](0026-repair-repositories-from-the-gui-under-a-destination-maintenance-mode.md) | Repair repositories from the GUI under a destination maintenance mode | Accepted |
+| [0027](0027-read-only-api-tokens-for-programs-that-read-the-api.md) | Read-only API tokens for programs that read the API | Accepted |
