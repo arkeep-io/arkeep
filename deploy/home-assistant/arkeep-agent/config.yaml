@@ -63,3 +63,4 @@ schema:
   ARKEEP_AGENT_HOSTNAME: str
   ARKEEP_GRPC_TLS_CA: str?
   ARKEEP_LOG_LEVEL: list(debug|info|warn|error)
+  ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION: bool?
