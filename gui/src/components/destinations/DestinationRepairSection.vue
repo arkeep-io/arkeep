@@ -268,9 +268,10 @@ function selectAction(value: unknown) {
             <template v-else>
                 <p class="text-sm text-muted-foreground">
                     Put the destination in maintenance to keep every job off it while you repair it, for instance
-                    between the steps of restic's repair procedure. Scheduled jobs are not lost: they wait and run
-                    when the maintenance ends. A repair started outside a maintenance also puts the destination in
-                    maintenance, for as long as it runs.
+                    between the steps of restic's repair procedure. Scheduled jobs wait and run when the maintenance
+                    ends, unless they wait longer than the queue timeout set in Settings, which makes them fail. A
+                    repair started outside a maintenance also puts the destination in maintenance, for as long as it
+                    runs.
                 </p>
                 <Button variant="outline" size="sm" class="self-start" data-testid="start-maintenance"
                     :disabled="maintenanceLoading" @click="setMaintenance(true)">
