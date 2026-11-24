@@ -73,7 +73,7 @@ const offset = computed(() => (page.value - 1) * pageSize)
 const totalPages = computed(() => Math.ceil(total.value / pageSize))
 
 // Server-side column sort, kept in the URL; by name when unset (issue #320).
-const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort({ key: 'name' })
+const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort('policies', { key: 'name' })
 
 // Sheet
 const sheetOpen = ref(false)

@@ -84,7 +84,7 @@ const needsReviewCount = computed(() => destinations.value.filter(d => d.retenti
 
 // Usage-column sort, applied server-side so ordering is global across pages
 // and kept in the URL. Cycles: none → desc → asc → none.
-const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort()
+const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort('destinations')
 
 // Sheet
 const sheetOpen = ref(false)
