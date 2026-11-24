@@ -1126,3 +1126,4 @@ func TestCancelReason(t *testing.T) {
 			t.Errorf("status message = %q, want %q", reporter.lastMsg, "agent shutting down")
 		}
 	})
+}
