@@ -82,6 +82,30 @@ type RefreshToken struct {
 	SessionExpiresAt *time.Time
 }
 
+// APIToken is a long-lived credential a user creates for a program that reads
+// the API on their behalf, such as a Home Assistant integration (ADR 0027).
+// The raw token is shown once at creation and never stored: only its SHA-256
+// hash. A token is read-only whatever its owner's role: it authenticates GET
+// requests with the rights of the "user" role. It stops working when it
+// expires, when it is revoked (the row is deleted) and while its owner is
+// disabled; deleting the owner deletes it.
+type APIToken struct {
+	Base
+	UserID    uuid.UUID `gorm:"type:text;not null;index"`
+	Name      string    `gorm:"not null"`
+	TokenHash string    `gorm:"not null;uniqueIndex"` // SHA-256 hex of the raw token
+	// Hint is the start of the raw token ("ark_" and a few characters), kept
+	// so a user can tell their tokens apart. It is not enough to guess one.
+	Hint string `gorm:"not null"`
+	// Scope is "read", the only scope so far.
+	Scope      string `gorm:"not null;default:'read'"`
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+}
+
+// TableName maps to the migration-created table name.
+func (APIToken) TableName() string { return "api_tokens" }
+
 // PasswordResetToken stores a hashed, single-use token for the self-service
 // password reset flow. Only local accounts can reset their password — OIDC
 // users are managed by their identity provider. The raw token is never stored:

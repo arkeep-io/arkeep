@@ -66,6 +66,36 @@ type RefreshTokenRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// APITokenRepository
+// -----------------------------------------------------------------------------
+
+// APITokenWithOwner is an API token with its owner's email, for the admin
+// listing of every user's tokens.
+type APITokenWithOwner struct {
+	db.APIToken
+	UserEmail string
+}
+
+type APITokenRepository interface {
+	Create(ctx context.Context, token *db.APIToken) error
+	// GetByHash returns the token with this hash. Expiry and the owner's
+	// state are checked by the caller. Returns ErrNotFound if none matches.
+	GetByHash(ctx context.Context, hash string) (*db.APIToken, error)
+	// ListByUser returns a user's tokens, newest first.
+	ListByUser(ctx context.Context, userID uuid.UUID) ([]db.APIToken, error)
+	// CountByUser returns how many tokens a user has.
+	CountByUser(ctx context.Context, userID uuid.UUID) (int64, error)
+	// ListAll returns every user's tokens with their owner's email, newest
+	// first.
+	ListAll(ctx context.Context) ([]APITokenWithOwner, error)
+	// Delete removes a token. With a non-nil userID it removes the token only
+	// if that user owns it. Returns the deleted token, or ErrNotFound.
+	Delete(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*db.APIToken, error)
+	// TouchLastUsed records that the token was used at t.
+	TouchLastUsed(ctx context.Context, id uuid.UUID, t time.Time) error
+}
+
+// -----------------------------------------------------------------------------
 // PasswordResetTokenRepository
 // -----------------------------------------------------------------------------
 

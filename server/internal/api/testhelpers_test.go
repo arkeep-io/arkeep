@@ -77,6 +77,7 @@ type testDeps struct {
 	passwordChanges repositories.PasswordChangeChallengeRepository
 
 	notifProviders repositories.NotificationProviderRepository
+	apiTokens      repositories.APITokenRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -103,6 +104,7 @@ func newTestDeps(t *testing.T) *testDeps {
 		passwordChanges: repositories.NewPasswordChangeChallengeRepository(gdb),
 
 		notifProviders: repositories.NewNotificationProviderRepository(gdb),
+		apiTokens:      repositories.NewAPITokenRepository(gdb),
 	}
 }
 
@@ -234,6 +236,8 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 
 		NotificationProviders: deps.notifProviders,
 		RecoveryCodes: deps.recoveryCodes,
+		APITokens:     deps.apiTokens,
+		APITokenValidator: auth.NewAPITokenValidator(deps.apiTokens, deps.users, zap.NewNop()),
 		Mailer:        mailer,
 		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),
 		PublicBaseURL: baseURL,

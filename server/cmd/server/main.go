@@ -238,6 +238,7 @@ func run(ctx context.Context, cfg *config) error {
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
 	passwordChangeRepo := repositories.NewPasswordChangeChallengeRepository(gormDB)
 	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
+	apiTokenRepo := repositories.NewAPITokenRepository(gormDB)
 
 	// The initial admin can only be created within api.SetupWindow of this
 	// start (see api/setup.go); tell the operator before the window closes.
@@ -540,6 +541,8 @@ func run(ctx context.Context, cfg *config) error {
 		Challenges:         challengeRepo,
 		PasswordChanges:    passwordChangeRepo,
 		RecoveryCodes:      recoveryCodeRepo,
+		APITokens:          apiTokenRepo,
+		APITokenValidator:  auth.NewAPITokenValidator(apiTokenRepo, userRepo, logger),
 		Mailer:             notifService,
 		Pinger:             hcPinger,
 		Queue:              destQueue,
