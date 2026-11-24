@@ -92,7 +92,7 @@ func unescape(s string) string {
 // symlinks resolved) is what is looked up. mountinfo is the file to read,
 // ProcMountInfo outside tests.
 func Ephemeral(mountinfo, path string) (string, error) {
-	f, err := os.Open(mountinfo)
+	f, err := os.Open(filepath.Clean(mountinfo))
 	if err != nil {
 		return "", err
 	}
