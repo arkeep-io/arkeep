@@ -21,8 +21,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BriefcaseBusiness } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job, JobStatus, JobType } from '@/types'
 import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration } from '@/lib/jobUtils'
@@ -126,6 +126,9 @@ async function goToPage(p: number) {
 }
 
 onMounted(fetchJobs)
+
+// Refresh in place when a job is created or changes on the server.
+useLiveRefresh('jobs', fetchJobs)
 </script>
 
 <template>
@@ -140,7 +143,7 @@ onMounted(fetchJobs)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <RefreshControl page="jobs" :loading="loading" :refresh="fetchJobs" />
+                <RefreshButton live :loading="loading" :refresh="fetchJobs" />
             </div>
         </div>
 

@@ -36,8 +36,8 @@ import {
     HardDrive,
     ClipboardList,
 } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
@@ -353,7 +353,7 @@ onUnmounted(() => {
 
             <!-- Actions -->
             <div v-if="!loading && mergedAgent" class="flex items-center gap-2">
-                <RefreshControl page="agent-detail" :loading="loading" :refresh="refreshAll" />
+                <RefreshButton :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Rename

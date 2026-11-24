@@ -15,8 +15,8 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Server, ShieldCheck, BriefcaseBusiness, Camera, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {
@@ -182,6 +182,10 @@ async function fetchAll({ quiet = false }: FetchOptions = {}) {
 }
 
 onMounted(fetchAll)
+
+// Refresh in place when a job is created or changes on the server: the
+// recent jobs, and the counters that depend on them.
+useLiveRefresh('jobs', fetchAll)
 </script>
 
 <template>
@@ -195,7 +199,7 @@ onMounted(fetchAll)
                     Overview of your backup infrastructure.
                 </p>
             </div>
-            <RefreshControl page="dashboard" :loading="loading" :refresh="fetchAll" />
+            <RefreshButton live :loading="loading" :refresh="fetchAll" />
         </div>
 
         <!-- Error banner -->

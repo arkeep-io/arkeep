@@ -19,8 +19,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { KeyRound, MoreHorizontal, PencilLine, Plus, ShieldOff, Trash2, Users } from '@lucide/vue'
 import UserSheet from '@/components/users/UserSheet.vue'
 import SetPasswordDialog from '@/components/users/SetPasswordDialog.vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiResponse, User } from '@/types'
@@ -214,7 +214,7 @@ async function confirmReset() {
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <RefreshControl page="users" :loading="loading" :refresh="fetchUsers" />
+                <RefreshButton :loading="loading" :refresh="fetchUsers" />
                 <Button @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New User

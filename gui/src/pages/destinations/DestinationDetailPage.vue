@@ -37,8 +37,8 @@ import {
     ShieldCheck,
     DatabaseBackup,
 } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
@@ -301,7 +301,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && destination" class="flex items-center gap-2">
-                <RefreshControl page="destination-detail" :loading="loading" :refresh="refreshAll" />
+                <RefreshButton :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin && destination.retention_enabled && !destination.append_only"
                     variant="outline" size="sm" :disabled="triggerLoading" @click="triggerRetention">
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />

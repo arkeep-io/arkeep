@@ -28,8 +28,8 @@ import {
     Server,
     Eye,
 } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, ApiResponse } from '@/types'
@@ -279,7 +279,7 @@ onUnmounted(teardownSubscriptions)
                     Machines registered for backup management
                 </p>
             </div>
-            <RefreshControl page="agents" :loading="loading" :refresh="fetchAgents" />
+            <RefreshButton :loading="loading" :refresh="fetchAgents" />
         </div>
 
         <!-- Error banner -->

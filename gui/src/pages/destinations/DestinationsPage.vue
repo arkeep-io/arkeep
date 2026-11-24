@@ -47,8 +47,8 @@ import { formatDate } from '@/lib/jobUtils'
 import { lockExplanation, lockLabel } from '@/lib/destinationLocks'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Destination, ApiResponse } from '@/types'
@@ -246,7 +246,7 @@ onMounted(fetchDestinations)
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <RefreshControl page="destinations" :loading="loading" :refresh="fetchDestinations" />
+        <RefreshButton :loading="loading" :refresh="fetchDestinations" />
         <Button v-if="authStore.isAdmin" @click="openCreate">
           <Plus class="w-4 h-4" />
           New Destination

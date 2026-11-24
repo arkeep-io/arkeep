@@ -32,8 +32,8 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RotateCcw, Trash2 } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Destination, PaginatedResponse, Snapshot, SyncDestinationResponse } from '@/types'
 import { summariseSync } from '@/lib/syncSummary'
@@ -272,7 +272,7 @@ onMounted(fetchSnapshots)
                     <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
                     {{ destinationFilter ? 'Sync Destination' : 'Sync All' }}
                 </Button>
-                <RefreshControl page="snapshots" :loading="loading" :refresh="fetchSnapshots" />
+                <RefreshButton :loading="loading" :refresh="fetchSnapshots" />
             </div>
         </div>
 

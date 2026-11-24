@@ -24,8 +24,8 @@ import {
     Ban,
     Hourglass,
 } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import { useAuthStore } from '@/stores/auth'
@@ -90,7 +90,7 @@ const isRunning = computed(() =>
 // Data fetching
 // ---------------------------------------------------------------------------
 
-// A quiet refresh (auto-refresh) keeps the progress bar and, while the job
+// A quiet refresh keeps the progress bar and, while the job
 // runs, the logs: they arrive live over the WebSocket, and the stored logs may
 // not hold the latest lines yet.
 async function fetchJob({ quiet = false }: FetchOptions = {}) {
@@ -241,6 +241,12 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
 // ---------------------------------------------------------------------------
 
 onMounted(fetchJob)
+
+// Refresh the job's metadata when it changes on the server (destinations
+// finishing, a cancel, an interruption), or when the socket comes back. Only
+// the metadata, like the terminal job.status handler above: the logs stay as
+// they arrived live.
+useLiveRefresh((c) => c.type === 'jobs' && (c.id === jobId || c.id === ''), () => refreshJobMeta())
 </script>
 
 <template>
@@ -276,7 +282,7 @@ onMounted(fetchJob)
                     <XCircle class="w-3.5 h-3.5" />
                     {{ cancelling ? 'Cancelling…' : 'Cancel Job' }}
                 </Button>
-                <RefreshControl page="job-detail" :loading="loading" :refresh="fetchJob" />
+                <RefreshButton live :loading="loading" :refresh="fetchJob" />
             </div>
         </div>
 

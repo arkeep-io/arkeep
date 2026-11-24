@@ -37,8 +37,8 @@ import {
     CalendarClock,
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
@@ -226,7 +226,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && policy" class="flex items-center gap-2">
-                <RefreshControl page="policy-detail" :loading="loading" :refresh="refreshAll" />
+                <RefreshButton :loading="loading" :refresh="refreshAll" />
                 <!-- The span receives hover while the disabled button has pointer-events: none -->
                 <Tooltip v-if="authStore.isAdmin" :disabled="policy.enabled">
                     <TooltipTrigger as-child>

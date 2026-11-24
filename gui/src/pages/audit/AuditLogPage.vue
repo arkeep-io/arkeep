@@ -21,8 +21,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ChevronLeft, ChevronRight, ScrollText } from '@lucide/vue'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, AuditLog } from '@/types'
 
@@ -169,7 +169,7 @@ onMounted(fetchEntries)
                     Record of all significant admin actions.
                 </p>
             </div>
-            <RefreshControl page="audit" :loading="loading" :refresh="fetchEntries" />
+            <RefreshButton :loading="loading" :refresh="fetchEntries" />
         </div>
 
         <!-- Error banner -->

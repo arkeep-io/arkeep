@@ -41,8 +41,8 @@ import {
     ShieldCheck,
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import RefreshControl from '@/components/shared/RefreshControl.vue'
-import type { FetchOptions } from '@/composables/useAutoRefresh'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, PolicyRecentJob, ApiResponse, TriggerResponse } from '@/types'
 import { formatDate, statusDotClass, statusLabel } from '@/lib/jobUtils'
@@ -238,7 +238,7 @@ onMounted(fetchPolicies)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <RefreshControl page="policies" :loading="loading" :refresh="fetchPolicies" />
+                <RefreshButton :loading="loading" :refresh="fetchPolicies" />
                 <Button v-if="authStore.isAdmin" @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Policy
