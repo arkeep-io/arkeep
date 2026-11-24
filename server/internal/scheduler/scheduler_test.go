@@ -701,7 +701,7 @@ func TestDispatch_AgentGoneBeforeRunning_FreesDestination(t *testing.T) {
 	other := q.dispatchAs(q.agent("other-agent"), dest)
 	if got := q.status(other); got != "pending" {
 		t.Errorf("other agent's job status = %q, want \"pending\" (sent, not queued behind the gone agent)", got)
-  }
+	}
 }
 
 // TestScheduledRunAdvancesNextRunAt covers issue #321: after a scheduled run the

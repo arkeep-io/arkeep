@@ -49,7 +49,7 @@ var ErrHookFailed = errors.New("hook: command failed")
 type Result struct {
 	// Output is the combined stdout+stderr of the hook process, trimmed of
 	// leading/trailing whitespace. Included verbatim in the job log stream.
-	Output   string
+	Output string
 	// ExitCode is the exit code of the hook process. 0 means success.
 	ExitCode int
 	// Duration is how long the hook took to run.

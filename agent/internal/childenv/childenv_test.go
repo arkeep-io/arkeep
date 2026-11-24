@@ -36,12 +36,12 @@ func TestFilter(t *testing.T) {
 
 func TestName(t *testing.T) {
 	tests := map[string]string{
-		"PATH=/bin":    "PATH",
-		"A=b=c":        "A",
-		"EMPTY=":       "EMPTY",
-		"NOVALUE":      "NOVALUE",
-		"=C:=C:\\dir":  "=C:",
-		"":             "",
+		"PATH=/bin":   "PATH",
+		"A=b=c":       "A",
+		"EMPTY=":      "EMPTY",
+		"NOVALUE":     "NOVALUE",
+		"=C:=C:\\dir": "=C:",
+		"":            "",
 	}
 	for kv, want := range tests {
 		if got := name(kv); got != want {

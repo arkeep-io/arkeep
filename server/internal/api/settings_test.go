@@ -125,13 +125,17 @@ func TestSettingsHandler_GetOIDCByID(t *testing.T) {
 			"client_secret": "sec",
 		})
 		assertStatus(t, createResp, http.StatusCreated)
-		var created struct{ ID string `json:"id"` }
+		var created struct {
+			ID string `json:"id"`
+		}
 		decodeData(t, createResp, &created)
 
 		resp := e.get(t, "/api/v1/settings/oidc/"+created.ID, e.adminToken(t))
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ ID string `json:"id"` }
+		var data struct {
+			ID string `json:"id"`
+		}
 		decodeData(t, resp, &data)
 		if data.ID != created.ID {
 			t.Errorf("id = %q, want %q", data.ID, created.ID)
@@ -161,7 +165,9 @@ func TestSettingsHandler_UpdateOIDC(t *testing.T) {
 			"client_secret": "sec",
 		})
 		assertStatus(t, createResp, http.StatusCreated)
-		var created struct{ ID string `json:"id"` }
+		var created struct {
+			ID string `json:"id"`
+		}
 		decodeData(t, createResp, &created)
 
 		// Use doJSON for PUT.
@@ -174,7 +180,9 @@ func TestSettingsHandler_UpdateOIDC(t *testing.T) {
 		resp := e.doJSON(t, "PUT", "/api/v1/settings/oidc/"+created.ID, e.adminToken(t), req)
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ Name string `json:"name"` }
+		var data struct {
+			Name string `json:"name"`
+		}
 		decodeData(t, resp, &data)
 		if data.Name != "New Name" {
 			t.Errorf("name = %q, want New Name", data.Name)
@@ -214,7 +222,9 @@ func TestSettingsHandler_DeleteOIDC(t *testing.T) {
 			"client_secret": "sec",
 		})
 		assertStatus(t, createResp, http.StatusCreated)
-		var created struct{ ID string `json:"id"` }
+		var created struct {
+			ID string `json:"id"`
+		}
 		decodeData(t, createResp, &created)
 
 		resp := e.del(t, "/api/v1/settings/oidc/"+created.ID, e.adminToken(t))

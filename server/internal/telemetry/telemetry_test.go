@@ -113,8 +113,8 @@ type fixedStats struct {
 	agents, policies int
 }
 
-func (s *fixedStats) TotalAgentsCount() int { return s.agents }
-func (s *fixedStats) ActivePoliciesCount() int  { return s.policies }
+func (s *fixedStats) TotalAgentsCount() int    { return s.agents }
+func (s *fixedStats) ActivePoliciesCount() int { return s.policies }
 
 // redirectTransport rewrites every outbound request to target, preserving
 // the original path so the test server sees the expected URL path.
