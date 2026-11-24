@@ -36,5 +36,9 @@ export default mergeConfig(viteConfig, defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
     setupFiles: ['src/test/setup.ts'],
+    // The first test of a form's file mounts the whole form (vee-validate, zod,
+    // shadcn-vue) on a cold module cache: about 1 s alone, but over 5 s (the
+    // default) when the suite runs in parallel on a loaded machine.
+    testTimeout: 15000,
   },
 }))
