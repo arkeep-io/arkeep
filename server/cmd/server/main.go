@@ -24,6 +24,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentwatchdog"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/changes"
 	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
@@ -226,7 +227,10 @@ func run(ctx context.Context, cfg *config) error {
 	agentRepo := repositories.NewAgentRepository(gormDB)
 	destinationRepo := repositories.NewDestinationRepository(gormDB)
 	policyRepo := repositories.NewPolicyRepository(gormDB)
-	jobRepo := repositories.NewJobRepository(gormDB)
+	// The hub is created first: the job repository announces its writes on it
+	// (changes topic), so that open pages refresh themselves.
+	wsHub := websocket.NewHub()
+	jobRepo := changes.NewJobRepository(repositories.NewJobRepository(gormDB), wsHub)
 	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
@@ -380,7 +384,6 @@ func run(ctx context.Context, cfg *config) error {
 	// --- WebSocket Hub ---
 	// The hub must start before the HTTP server so clients can connect
 	// immediately after the server is ready.
-	wsHub := websocket.NewHub()
 
 	// background tracks the long-running services started below. They all
 	// return once ctx is cancelled, and shutdown waits for them before the
