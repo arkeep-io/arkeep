@@ -40,6 +40,8 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodDelete, "/api/v1/settings/notification-providers/" + id},
 		{http.MethodPost, "/api/v1/settings/notification-providers/test"},
 		{http.MethodPost, "/api/v1/users/" + id + "/password"},
+		{http.MethodGet, "/api/v1/api-tokens"},
+		{http.MethodDelete, "/api/v1/api-tokens/" + id},
 	}
 
 	e := newTestEnv(t)

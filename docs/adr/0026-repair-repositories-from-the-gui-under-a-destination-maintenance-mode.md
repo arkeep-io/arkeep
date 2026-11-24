@@ -1,6 +1,6 @@
 # 0026. Repair repositories from the GUI under a destination maintenance mode
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-21
 - **Deciders:** Arkeep maintainers
 

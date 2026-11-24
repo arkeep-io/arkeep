@@ -215,7 +215,7 @@ func renderEmailBodies(e emailContent) (text, html string, err error) {
 // show HTML. Sections follow the order of templates/email.html.
 func renderEmailText(e emailContent) string {
 	var b strings.Builder
-	line := func(s string) { b.WriteString(s);b.WriteString("\n") }
+	line := func(s string) { b.WriteString(s); b.WriteString("\n") }
 	section := func() {
 		if b.Len() > 0 {
 			b.WriteString("\n")

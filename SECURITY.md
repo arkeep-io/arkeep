@@ -170,6 +170,28 @@ revokes every other active session for the account except the one used to enroll
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.
 
+### API tokens
+
+Users can create API tokens on their profile for programs that read the API, such as a
+Home Assistant integration (ADR 0027).
+
+- A token is read-only: it authenticates `GET` requests with the rights of the `user`
+  role, whatever its owner's role. Any other request made with it is refused.
+- Only its SHA-256 hash is stored; the token is shown once, at creation.
+- It stops working when it expires, when it is revoked, and while its owner is disabled.
+  Users revoke their own tokens on their profile; admins revoke anyone's under
+  **Settings → API Tokens**. Creating and revoking a token are audited.
+- An administrator's Set password, a password reset by email, an administrator's
+  two-factor reset and an OIDC login refused by the allowed groups revoke every token of
+  the user, as they end every session: a token created with a stolen session does not
+  outlive the clean-up. A password change from the profile keeps them.
+- A token is not bound to the OIDC session lifetime (`session_max_hours`): to cut the
+  access of an OIDC user at once, disable the user in Arkeep.
+- A token cannot list, create or revoke tokens.
+
+Treat a token like a password for read access: it can read everything the `user` role
+can, job logs included.
+
 ### Passwords set by an administrator
 
 An administrator can set another local user's password (`POST /api/v1/users/{id}/password`),

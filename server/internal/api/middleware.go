@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
 // contextKey is an unexported type for context keys defined in this package.
@@ -19,18 +20,35 @@ const (
 	// contextKeyUser is the context key under which the authenticated
 	// *auth.Claims are stored after successful JWT validation.
 	contextKeyUser contextKey = iota
+
+	// contextKeyAPIToken holds the *db.APIToken of a request authenticated
+	// with an API token rather than a session.
+	contextKeyAPIToken
 )
 
-// Authenticate is a middleware that validates the JWT Bearer token present in
-// the Authorization header. On success it stores the parsed claims in the
+// APITokenAuthenticator validates API tokens (ADR 0027). Satisfied by
+// *auth.APITokenValidator.
+type APITokenAuthenticator interface {
+	ValidateAPIToken(ctx context.Context, raw string) (*auth.Claims, *db.APIToken, error)
+}
+
+// Authenticate is a middleware that validates the Bearer credential present
+// in the Authorization header. On success it stores the parsed claims in the
 // request context so downstream handlers can retrieve them via claimsFromCtx.
 // On failure it writes a 401 and stops the chain.
 //
 // Token format: "Authorization: Bearer <token>"
 //
-// validator should be *auth.AuthService in production — it performs both
-// signature verification and denylist checking (revoked tokens are rejected).
-func Authenticate(validator auth.TokenValidator) func(http.Handler) http.Handler {
+// The credential is either a JWT access token from a session or, when
+// apiTokens is not nil, an API token ("ark_..."). validator should be
+// *auth.AuthService in production — it performs both signature verification
+// and denylist checking (revoked tokens are rejected).
+//
+// API tokens are read-only (ADR 0027): their claims carry the "user" role
+// whatever the owner's role, and any method other than GET is refused with
+// 403, so a token can never change anything even on a route open to the
+// "user" role, such as marking notifications as read.
+func Authenticate(validator auth.TokenValidator, apiTokens APITokenAuthenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
@@ -45,6 +63,26 @@ func Authenticate(validator auth.TokenValidator) func(http.Handler) http.Handler
 				return
 			}
 
+			if auth.IsAPIToken(parts[1]) {
+				if apiTokens == nil {
+					ErrUnauthorized(w)
+					return
+				}
+				claims, token, err := apiTokens.ValidateAPIToken(r.Context(), parts[1])
+				if err != nil {
+					ErrUnauthorized(w)
+					return
+				}
+				if r.Method != http.MethodGet {
+					errJSON(w, http.StatusForbidden, "API tokens are read-only", "api_token_read_only")
+					return
+				}
+				ctx := context.WithValue(r.Context(), contextKeyUser, claims)
+				ctx = context.WithValue(ctx, contextKeyAPIToken, token)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			claims, err := validator.ValidateAccessToken(parts[1])
 			if err != nil {
 				ErrUnauthorized(w)
@@ -55,6 +93,27 @@ func Authenticate(validator auth.TokenValidator) func(http.Handler) http.Handler
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// apiTokenFromCtx returns the API token that authenticated the request, or
+// nil for a session.
+func apiTokenFromCtx(ctx context.Context) *db.APIToken {
+	t, _ := ctx.Value(contextKeyAPIToken).(*db.APIToken)
+	return t
+}
+
+// RequireSession refuses requests authenticated with an API token. It guards
+// the routes that manage API tokens: a token must never be able to list,
+// create or revoke tokens, even read-only. It must be used after
+// Authenticate.
+func RequireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if apiTokenFromCtx(r.Context()) != nil {
+			errJSON(w, http.StatusForbidden, "API tokens cannot manage API tokens", "api_token_forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // RequireRole returns a middleware that allows the request to proceed only if

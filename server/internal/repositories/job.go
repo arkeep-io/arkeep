@@ -508,7 +508,7 @@ func (r *gormJobRepository) ListRecentBackupsByPolicies(ctx context.Context, pol
 
 	ranked := r.db.WithContext(ctx).
 		Model(&db.Job{}).
-		Select("jobs.id, jobs.policy_id, jobs.status, jobs.created_at, jobs.started_at, jobs.ended_at, " +
+		Select("jobs.id, jobs.policy_id, jobs.status, jobs.created_at, jobs.started_at, jobs.ended_at, "+
 			"ROW_NUMBER() OVER (PARTITION BY jobs.policy_id ORDER BY jobs.created_at DESC, jobs.id DESC) AS rn").
 		Where("jobs.policy_id IN ? AND jobs.type = ?", policyIDs, "backup")
 

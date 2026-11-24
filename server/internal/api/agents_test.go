@@ -68,8 +68,10 @@ func TestAgentHandler_List(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var data struct {
-			Items []struct{ Name string `json:"name"` } `json:"items"`
-			Total int64                                 `json:"total"`
+			Items []struct {
+				Name string `json:"name"`
+			} `json:"items"`
+			Total int64 `json:"total"`
 		}
 		decodeData(t, resp, &data)
 		if data.Total != 2 {
@@ -179,7 +181,9 @@ func TestAgentHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ Name string `json:"name"` }
+		var data struct {
+			Name string `json:"name"`
+		}
 		decodeData(t, resp, &data)
 		if data.Name != "updated-name" {
 			t.Errorf("name = %q, want updated-name", data.Name)

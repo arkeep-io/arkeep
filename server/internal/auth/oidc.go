@@ -34,6 +34,7 @@ const (
 type OIDCAuthProvider struct {
 	tokenIssuer
 	providerRepo repositories.OIDCProviderRepository
+	apiTokenRepo repositories.APITokenRepository
 	logger       *zap.Logger
 }
 
@@ -42,12 +43,14 @@ func NewOIDCAuthProvider(
 	providerRepo repositories.OIDCProviderRepository,
 	userRepo repositories.UserRepository,
 	tokenRepo repositories.RefreshTokenRepository,
+	apiTokenRepo repositories.APITokenRepository,
 	jwtManager *JWTManager,
 	logger *zap.Logger,
 ) *OIDCAuthProvider {
 	return &OIDCAuthProvider{
 		tokenIssuer:  tokenIssuer{userRepo: userRepo, tokenRepo: tokenRepo, jwtManager: jwtManager},
 		providerRepo: providerRepo,
+		apiTokenRepo: apiTokenRepo,
 		logger:       logger.Named("oidc_auth"),
 	}
 }
@@ -418,9 +421,10 @@ func (p *OIDCAuthProvider) canChangeRole(ctx context.Context, user *db.User) (bo
 	return true, nil
 }
 
-// revokeSessions ends every session of the account linked to this OIDC
-// identity, so a user removed from the allowed groups also loses the sessions
-// open in other browsers. Only the account already linked to (provider, sub)
+// revokeSessions ends every session and revokes every API token of the
+// account linked to this OIDC identity, so a user removed from the allowed
+// groups also loses the sessions open in other browsers and the programs
+// reading the API for them. Only the account already linked to (provider, sub)
 // is touched: matching by email would let a denied IdP account end someone
 // else's sessions. Failures are logged, the login is denied regardless.
 func (p *OIDCAuthProvider) revokeSessions(ctx context.Context, providerID, sub string) {
@@ -433,6 +437,12 @@ func (p *OIDCAuthProvider) revokeSessions(ctx context.Context, providerID, sub s
 	}
 	if err := p.tokenRepo.RevokeAllForUser(ctx, user.ID); err != nil {
 		p.logger.Warn("failed to revoke sessions of denied OIDC user",
+			zap.String("user_id", user.ID.String()),
+			zap.Error(err),
+		)
+	}
+	if err := p.apiTokenRepo.DeleteByUserID(ctx, user.ID); err != nil {
+		p.logger.Warn("failed to revoke api tokens of denied OIDC user",
 			zap.String("user_id", user.ID.String()),
 			zap.Error(err),
 		)
