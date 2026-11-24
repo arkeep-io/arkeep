@@ -30,6 +30,7 @@ import (
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/housekeeping"
+	"github.com/arkeep-io/arkeep/server/internal/jobreport"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -85,7 +86,11 @@ func newRootCmd() *cobra.Command {
 		Long: `Arkeep server is the central component of the Arkeep backup system.
 It exposes a REST API for the web GUI, a gRPC server for agents,
 and manages scheduling, policies, and notifications.`,
+		// A runtime error is not a usage error: printing the help after it only
+		// buries the error in the logs.
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg.secretsFromEnv()
 			return run(cmd.Context(), cfg)
 		},
 	}
@@ -98,19 +103,33 @@ and manages scheduling, policies, and notifications.`,
 	root.PersistentFlags().StringVar(&cfg.grpcTLSKey, "grpc-tls-key", envOrDefault("ARKEEP_GRPC_TLS_KEY", ""), "Path to PEM private key file for gRPC TLS (requires --grpc-tls-cert)")
 	root.PersistentFlags().StringVar(&cfg.dbDriver, "db-driver", envOrDefault("ARKEEP_DB_DRIVER", "sqlite"), "Database driver (sqlite or postgres)")
 	root.PersistentFlags().StringVar(&cfg.dbDSN, "db-dsn", envOrDefault("ARKEEP_DB_DSN", "./arkeep.db"), "Database DSN or file path for SQLite")
-	root.PersistentFlags().StringVar(&cfg.secretKey, "secret-key", envOrDefault("ARKEEP_SECRET_KEY", ""), "Master secret key for encrypting credentials at rest (required)")
+	root.PersistentFlags().StringVar(&cfg.secretKey, "secret-key", "", "Master secret key for encrypting credentials at rest (required; or ARKEEP_SECRET_KEY)")
 	root.PersistentFlags().StringVar(&cfg.logLevel, "log-level", envOrDefault("ARKEEP_LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&cfg.dataDir, "data-dir", envOrDefault("ARKEEP_DATA_DIR", "./data"), "Directory for server data (RSA keys, etc.)")
-	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", envOrDefault("ARKEEP_AGENT_SECRET", ""), "Shared secret agents present to enroll and authenticate (required)")
+	root.PersistentFlags().StringVar(&cfg.agentSecret, "agent-secret", "", "Shared secret agents present to enroll and authenticate (required; or ARKEEP_AGENT_SECRET)")
 	root.PersistentFlags().StringVar(&cfg.baseURL, "base-url", envOrDefault("ARKEEP_BASE_URL", ""), "External base URL of the server (e.g. https://arkeep.example.com); used for links in outbound email. Required for self-service password reset emails (disabled when unset)")
 	root.PersistentFlags().BoolVar(&cfg.secureCookies, "secure-cookies", envOrDefault("ARKEEP_SECURE_COOKIES", "false") == "true", "Set Secure flag on auth cookies (enable in production over HTTPS)")
 	root.PersistentFlags().BoolVar(&cfg.telemetry, "telemetry", envOrDefault("ARKEEP_TELEMETRY", "true") != "false", "Send anonymous usage stats (opt-out)")
 	root.PersistentFlags().BoolVar(&cfg.updateCheck, "update-check", envOrDefault("ARKEEP_UPDATE_CHECK", "true") != "false", "Check GitHub for new Arkeep releases (set to false to never contact api.github.com)")
 	root.PersistentFlags().StringVar(&cfg.trustedProxies, "trusted-proxies", envOrDefault("ARKEEP_TRUSTED_PROXIES", ""), "Comma-separated IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the client address (default: loopback only; \"none\" to trust none)")
-	root.PersistentFlags().StringVar(&cfg.metricsToken, "metrics-token", envOrDefault("ARKEEP_METRICS_TOKEN", ""), "Bearer token required to read /metrics (unset: /metrics is public)")
+	root.PersistentFlags().StringVar(&cfg.metricsToken, "metrics-token", "", "Bearer token required to read /metrics (unset: /metrics is public; or ARKEEP_METRICS_TOKEN)")
 	root.PersistentFlags().BoolVar(&cfg.grpcInsecure, "grpc-insecure", envOrDefault("ARKEEP_GRPC_INSECURE", "false") == "true", "Disable TLS for gRPC transport (development only — never use in production)")
 
 	return root
+}
+
+// secretsFromEnv reads from the environment the secrets not given as flags.
+// They are not the flags' default values, which the help prints.
+func (c *config) secretsFromEnv() {
+	if c.secretKey == "" {
+		c.secretKey = os.Getenv("ARKEEP_SECRET_KEY")
+	}
+	if c.agentSecret == "" {
+		c.agentSecret = os.Getenv("ARKEEP_AGENT_SECRET")
+	}
+	if c.metricsToken == "" {
+		c.metricsToken = os.Getenv("ARKEEP_METRICS_TOKEN")
+	}
 }
 
 func newVersionCmd() *cobra.Command {
@@ -413,6 +432,22 @@ func run(ctx context.Context, cfg *config) error {
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	background.Go(func() { logRetentionSvc.Start(ctx) })
 
+	// --- Job report ---
+	// Emails one report of all jobs that finished since the previous one,
+	// hourly or daily (see Settings → Notifications). Off by default.
+	jobReportSvc, err := jobreport.New(settingsRepo, notifService, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create job report service: %w", err)
+	}
+	if err := jobReportSvc.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start job report service: %w", err)
+	}
+	defer func() {
+		if err := jobReportSvc.Stop(); err != nil {
+			logger.Warn("job report shutdown error", zap.Error(err))
+		}
+	}()
+
 	// --- Housekeeping ---
 	// Deletes expired refresh tokens and notifications read more than 30 days
 	// ago, once a day.
@@ -495,6 +530,7 @@ func run(ctx context.Context, cfg *config) error {
 		OIDCProviders:      oidcProviderRepo,
 		Settings:           settingsRepo,
 		LogRetention:       logRetentionSvc,
+		JobReport:          jobReportSvc,
 		SnapshotSync:       snapshotSyncSvc,
 		Secure:             cfg.secureCookies,
 		Dashboard:          dashboardRepo,

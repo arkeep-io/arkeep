@@ -29,7 +29,8 @@ import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiResponse, Job, JobLog, JobStatus, JobStatusPayload, JobLogPayload, ResticProgressEvent } from '@/types'
-import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration, formatBytes } from '@/lib/jobUtils'
+import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration, formatBytes, progressPercent } from '@/lib/jobUtils'
+import { formatParams } from '@/lib/repair'
 
 // ---------------------------------------------------------------------------
 // Route
@@ -324,6 +325,17 @@ onMounted(fetchJob)
 
         </div>
 
+        <!-- Repair parameters and requester (ADR 0026) -->
+        <div v-if="!loading && job && (job.params || job.requested_by)"
+            class="border rounded-md p-4 flex flex-col gap-1 text-sm" data-testid="job-params">
+            <p v-if="job.requested_by" class="text-muted-foreground">
+                Started by <span class="text-foreground">{{ job.requested_by }}</span>
+            </p>
+            <p v-for="line in (job.params ? formatParams(job.params) : [])" :key="line" class="font-mono text-xs">
+                {{ line }}
+            </p>
+        </div>
+
         <!-- Started / Finished timestamps (full width, subtle) -->
         <div v-if="!loading && job" class="flex items-center gap-6 text-sm text-muted-foreground -mt-2">
             <span>Started: <span class="text-foreground">{{ formatDate(job.started_at) }}</span></span>
@@ -494,13 +506,13 @@ onMounted(fetchJob)
             </div>
             <template v-if="progressData">
                 <div class="flex items-center justify-between text-sm">
-                    <span class="font-medium tabular-nums">{{ Math.round(progressData.percent_done * 100) }}%</span>
+                    <span class="font-medium tabular-nums">{{ Math.round(progressPercent(progressData.percent_done)) }}%</span>
                     <span class="text-muted-foreground text-xs tabular-nums">
                         {{ formatBytes(progressData.bytes_done) }} / {{ formatBytes(progressData.total_bytes) }}
                         &mdash; {{ progressData.files_done }} / {{ progressData.total_files }} files
                     </span>
                 </div>
-                <Progress :model-value="progressData.percent_done * 100" />
+                <Progress :model-value="progressPercent(progressData.percent_done)" />
             </template>
             <p v-else class="text-sm text-muted-foreground">Preparing...</p>
         </div>

@@ -294,6 +294,22 @@ type DestinationRepository interface {
 	// ListLocks returns the holds of active jobs on the given destinations,
 	// oldest first.
 	ListLocks(ctx context.Context, destinationIDs []uuid.UUID) ([]db.DestinationLock, error)
+
+	// Maintenance mode (ADR 0026). While a destination is in maintenance,
+	// TryAcquireBusyAll refuses every claim on it, so jobs wait in the queue.
+	//
+	// StartMaintenance puts the destination in maintenance until
+	// EndMaintenance, which is refused with ErrRepairInProgress while a repair
+	// of it is pending or running.
+	StartMaintenance(ctx context.Context, id uuid.UUID, by string) error
+	EndMaintenance(ctx context.Context, id uuid.UUID) error
+	// ClaimForRepair admits an existing repair job, or refuses it with
+	// ErrDestinationBusy or ErrRepairInProgress; auto reports that the
+	// destination was not in maintenance and now is for the job's duration.
+	ClaimForRepair(ctx context.Context, destinationID, jobID uuid.UUID, by string) (auto bool, err error)
+	// ClearEndedMaintenance clears the maintenance columns of destinations
+	// whose maintenance was started by a repair that has ended.
+	ClearEndedMaintenance(ctx context.Context) (int64, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -374,6 +390,11 @@ type JobRepository interface {
 	// ID, PolicyID, Status, CreatedAt, StartedAt and EndedAt are filled.
 	ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
+	// ListEndedBetween returns the jobs that reached a terminal status with
+	// an end time in (from, to], ordered by start time, for the job report
+	// email. A job still running at to is not included: it ends after to and
+	// is listed by the next call.
+	ListEndedBetween(ctx context.Context, from, to time.Time) ([]JobReportRow, error)
 
 	// Destination queue (issue #285). A job whose destinations are held by
 	// another operation waits in status "waiting" until all of them are free.

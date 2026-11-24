@@ -2,7 +2,9 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"os"
 	"testing"
 	"time"
 
@@ -454,8 +456,10 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 		t.Fatalf("Migrate(35): %v", err)
 	}
 
+	// The restic and rclone version columns of agents only exist from 000046
+	// on, repair_available, and jobs.params and requested_by, from 000047 on.
 	agent := &Agent{Name: "agent", Status: "online"}
-	if err := gdb.Create(agent).Error; err != nil {
+	if err := gdb.Omit("restic_version", "rclone_version", "repair_available").Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	holders := map[string]struct{ jobType, status, wantMode string }{
@@ -471,7 +475,7 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 			t.Fatalf("create destination: %v", err)
 		}
 		j := &Job{AgentID: agent.ID, Type: h.jobType, Status: h.status}
-		if err := gdb.Create(j).Error; err != nil {
+		if err := gdb.Omit("params", "requested_by").Create(j).Error; err != nil {
 			t.Fatalf("create job: %v", err)
 		}
 		if err := gdb.Exec(`UPDATE destinations SET busy_job_id = ?, busy_since = ? WHERE id = ?`, j.ID.String(), time.Now().UTC(), d.ID.String()).Error; err != nil {
@@ -675,12 +679,14 @@ func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
 		t.Fatalf("Migrate(40): %v", err)
 	}
 
+	// The restic and rclone version columns of agents only exist from 000046
+	// on, repair_available, and jobs.params and requested_by, from 000047 on.
 	agent := &Agent{Name: "agent", Status: "online"}
-	if err := gdb.Create(agent).Error; err != nil {
+	if err := gdb.Omit("restic_version", "rclone_version", "repair_available").Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	job := &Job{AgentID: agent.ID, Type: "backup", Status: "succeeded"}
-	if err := gdb.Create(job).Error; err != nil {
+	if err := gdb.Omit("params", "requested_by").Create(job).Error; err != nil {
 		t.Fatalf("create job: %v", err)
 	}
 	dests := map[string]*Destination{}
@@ -871,5 +877,169 @@ func TestSQLiteMigration_SnapshotSummary(t *testing.T) {
 	}
 	if got.SnapshotSummary != (SnapshotSummary{}) || got.SizeBytes != 10 {
 		t.Errorf("existing snapshot after Up: summary %+v, size %d; want an unknown summary and the size kept", got.SnapshotSummary, got.SizeBytes)
+	}
+}
+
+// TestSQLitePragmasSurviveReconnect checks that foreign_keys and secure_delete
+// are on for every connection, not only the first: database/sql replaces a
+// connection whose query its context interrupted, and the replacement used to
+// run with foreign keys off, so ON DELETE CASCADE stopped working and left
+// orphan rows behind (they made 000043 fail on upgrade to v0.12.0).
+func TestSQLitePragmasSurviveReconnect(t *testing.T) {
+	path := t.TempDir() + "/pragmas.db"
+	gdb, err := New(Config{Driver: "sqlite", DSN: path, Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		t.Fatalf("sql.DB: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database file not at the DSN path: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	var n int
+	err = gdb.WithContext(ctx).Raw("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 100000000) SELECT count(*) FROM c").Scan(&n).Error
+	if err == nil {
+		t.Fatal("the long query was not interrupted")
+	}
+
+	for _, pragma := range []string{"foreign_keys", "secure_delete"} {
+		var v int
+		if err := gdb.Raw("PRAGMA " + pragma).Scan(&v).Error; err != nil {
+			t.Fatalf("PRAGMA %s: %v", pragma, err)
+		}
+		if v != 1 {
+			t.Errorf("PRAGMA %s = %d after an interrupted query, want 1", pragma, v)
+		}
+	}
+}
+
+// openAt42 returns a database migrated up to 000042, before the notification
+// providers, with one delivery of an existing notification and one orphan
+// delivery whose notification is gone, as a database that ran with foreign
+// keys off holds.
+func openAt42(t *testing.T, path string) (*migrate.Migrate, *sql.DB) {
+	t.Helper()
+	if err := InitEncryption(bytes.Repeat([]byte("k"), 32)); err != nil {
+		t.Fatalf("InitEncryption: %v", err)
+	}
+	sqlDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	m := newSQLiteMigrator(t, sqlDB)
+	if err := m.Migrate(42); err != nil {
+		t.Fatalf("Migrate(42): %v", err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (id, email, display_name, role, is_active) VALUES ('u1', 'a@test.local', 'A', 'admin', 1)`,
+		`INSERT INTO notifications (id, user_id, type, title, body, payload) VALUES ('n1', 'u1', 'job_failure', 't', 'b', '{}')`,
+		`INSERT INTO notification_delivery_queue (id, notification_id, type) VALUES ('d-kept', 'n1', 'webhook')`,
+		`PRAGMA foreign_keys = OFF`,
+		`INSERT INTO notification_delivery_queue (id, notification_id, type) VALUES ('d-orphan', 'gone', 'email')`,
+	} {
+		if _, err := sqlDB.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	return m, sqlDB
+}
+
+// deliveryIDs lists the ids in notification_delivery_queue.
+func deliveryIDs(t *testing.T, sqlDB *sql.DB) []string {
+	t.Helper()
+	rows, err := sqlDB.Query(`SELECT id FROM notification_delivery_queue ORDER BY id`)
+	if err != nil {
+		t.Fatalf("list deliveries: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// TestSQLiteMigration_NotificationProvidersOrphanDeliveries checks that 000043
+// applies to a queue holding a delivery whose notification is gone, and drops
+// that delivery: in v0.12.0 the rebuild ran with foreign keys on and stopped
+// at the copy, leaving the database dirty.
+func TestSQLiteMigration_NotificationProvidersOrphanDeliveries(t *testing.T) {
+	path := t.TempDir() + "/orphans.db"
+	m, _ := openAt42(t, path)
+	if _, _, err := m.Version(); err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+
+	gdb, err := New(Config{Driver: "sqlite", DSN: path, Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
+	if err != nil {
+		t.Fatalf("New (migrating 000043 onwards): %v", err)
+	}
+	sqlDB, _ := gdb.DB()
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if got := deliveryIDs(t, sqlDB); len(got) != 1 || got[0] != "d-kept" {
+		t.Errorf("deliveries after 000043 = %v, want [d-kept]", got)
+	}
+	var violations int
+	if err := sqlDB.QueryRow(`SELECT count(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil {
+		t.Fatalf("foreign_key_check: %v", err)
+	}
+	if violations != 0 {
+		t.Errorf("foreign key violations after 000043 = %d, want 0", violations)
+	}
+}
+
+// TestSQLiteRepairsMigration43LeftDirty reproduces the state v0.12.0 left
+// behind when 000043 stopped at the copy of the queue (version 43 dirty, the
+// providers table and the new queue created, the old queue untouched) and
+// checks that opening the database repairs it and applies the migrations.
+func TestSQLiteRepairsMigration43LeftDirty(t *testing.T) {
+	path := t.TempDir() + "/dirty.db"
+	_, raw := openAt42(t, path)
+	for _, q := range []string{
+		`CREATE TABLE notification_providers (id TEXT NOT NULL PRIMARY KEY)`,
+		`CREATE TABLE notification_delivery_queue_new (id TEXT NOT NULL PRIMARY KEY, provider_id TEXT)`,
+		`UPDATE schema_migrations SET version = 43, dirty = 1`,
+	} {
+		if _, err := raw.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	_ = raw.Close()
+
+	gdb, err := New(Config{Driver: "sqlite", DSN: path, Logger: zap.NewNop(), LogLevel: gormlogger.Silent})
+	if err != nil {
+		t.Fatalf("New on a database left dirty at 43: %v", err)
+	}
+	sqlDB, _ := gdb.DB()
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	var version int
+	var dirty bool
+	if err := sqlDB.QueryRow(`SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty); err != nil {
+		t.Fatalf("schema_migrations: %v", err)
+	}
+	if version < 44 || dirty {
+		t.Errorf("schema_migrations = (%d, dirty %v), want >= 44 and clean", version, dirty)
+	}
+	if got := deliveryIDs(t, sqlDB); len(got) != 1 || got[0] != "d-kept" {
+		t.Errorf("deliveries after the repair = %v, want [d-kept]", got)
+	}
+	if gdb.Migrator().HasTable("notification_delivery_queue_new") {
+		t.Error("notification_delivery_queue_new still exists")
+	}
+	if !gdb.Migrator().HasColumn(&NotificationDelivery{}, "provider_id") {
+		t.Error("notification_delivery_queue has no provider_id: 000043 was not applied")
 	}
 }

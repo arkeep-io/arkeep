@@ -122,6 +122,10 @@ message RegisterRequest {
   // registered twice even if its hostname changes (e.g. Docker redeploy).
   // Empty on first-ever registration; populated on all subsequent connects.
   string agent_id = 6;
+  // versions of the restic and rclone binaries embedded in the agent
+  // (e.g. "0.19.1", "1.76.0"); empty from agents older than this field
+  string restic_version = 7;
+  string rclone_version = 8;
 }
 
 // AgentCapabilities describes which optional features are available on the agent.
@@ -133,6 +137,10 @@ message AgentCapabilities {
   // restic and rclone were always true: both binaries are embedded in the agent.
   reserved 2, 3;
   reserved "restic", "rclone";
+  // repair is true when the agent's restic runs the repair commands (restic
+  // 0.16 or later) and the agent handles JOB_TYPE_REPAIR. The server refuses a
+  // repair on a maintenance agent that does not report it.
+  bool repair = 4;
 }
 
 // RegisterResponse contains the identity the server assigns to this agent.
@@ -243,6 +251,11 @@ enum JobType {
   // The job_id carries a correlation_id; the agent responds by opening
   // UploadSnapshotDownload.
   JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE = 9;
+  // JOB_TYPE_REPAIR runs one restic repair command (unlock, repair index,
+  // repair snapshots, repair packs, find --pack or check) on the destination's
+  // maintenance agent while the destination is in maintenance. An agent that
+  // does not know this type rejects it as unsupported.
+  JOB_TYPE_REPAIR = 10;
 }
 
 // ─── ReportJobStatus ─────────────────────────────────────────────────────────

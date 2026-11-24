@@ -121,6 +121,32 @@ type destinationResponse struct {
 	// integrity check exclusive (issue #319). Lets the GUI explain why a job
 	// on this destination is waiting.
 	Locks []destinationLockResponse `json:"locks"`
+
+	// Maintenance is the destination's maintenance mode (ADR 0026), null when
+	// it is not in maintenance.
+	Maintenance *destinationMaintenanceResponse `json:"maintenance"`
+	// RepairAvailable reports that the maintenance agent can run repairs: it
+	// reported the repair capability at its last registration.
+	RepairAvailable bool `json:"repair_available"`
+}
+
+// destinationMaintenanceResponse describes a destination in maintenance. No
+// job can claim it meanwhile. Effective is true once the jobs that held it
+// when the maintenance started have ended: only then can a repair start.
+// RepairJobID is set when a repair put the destination in maintenance for
+// its own duration, "" when an admin did.
+type destinationMaintenanceResponse struct {
+	Since       string `json:"since"`
+	By          string `json:"by"`
+	RepairJobID string `json:"repair_job_id"`
+	Effective   bool   `json:"effective"`
+}
+
+// maintenanceAgentInfo is what a destination response shows of its
+// maintenance agent, resolved by the caller.
+type maintenanceAgentInfo struct {
+	Name            string
+	RepairAvailable bool
 }
 
 // destinationLockResponse is one job's hold on a destination.
@@ -139,24 +165,24 @@ func (h *DestinationHandler) singleDestinationResponse(ctx context.Context, d *d
 	if counts, err := h.repo.PolicyCountsByDestination(ctx); err == nil {
 		policyCount = counts[d.ID]
 	}
-	agentName := ""
+	var agentInfo maintenanceAgentInfo
 	if d.RetentionAgentID != nil {
 		if agent, err := h.agentRepo.GetByID(ctx, *d.RetentionAgentID); err == nil {
-			agentName = agent.Name
+			agentInfo = maintenanceAgentInfo{Name: agent.Name, RepairAvailable: agent.RepairAvailable}
 		}
 	}
 	locks, err := h.repo.ListLocks(ctx, []uuid.UUID{d.ID})
 	if err != nil {
 		h.logger.Warn("failed to load destination locks", zap.String("destination_id", d.ID.String()), zap.Error(err))
 	}
-	return destinationToResponse(d, policyCount, agentName, locks)
+	return destinationToResponse(d, policyCount, agentInfo, locks)
 }
 
 // destinationToResponse converts a db.Destination to a destinationResponse.
-// policyCount, retentionAgentName and locks (the destination's own) are
+// policyCount, the maintenance agent and locks (the destination's own) are
 // resolved by the caller (List/GetByID) to avoid this pure conversion function
 // needing repository access.
-func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentName string, locks []db.DestinationLock) destinationResponse {
+func destinationToResponse(d *db.Destination, policyCount int64, agent maintenanceAgentInfo, locks []db.DestinationLock) destinationResponse {
 	resp := destinationResponse{
 		ID:            d.ID.String(),
 		Name:          d.Name,
@@ -187,7 +213,8 @@ func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentN
 		RetentionYearly:      d.RetentionYearly,
 		RetentionSchedule:    d.RetentionSchedule,
 		RetentionEnabled:     d.RetentionEnabled,
-		RetentionAgentName:   retentionAgentName,
+		RetentionAgentName:   agent.Name,
+		RepairAvailable:      agent.RepairAvailable,
 		AppendOnly:           d.AppendOnly,
 		RetentionNeedsReview: d.RetentionNeedsReview,
 		CheckEnabled:         d.CheckEnabled,
@@ -210,6 +237,17 @@ func destinationToResponse(d *db.Destination, policyCount int64, retentionAgentN
 			Mode:  l.Mode,
 			Since: l.AcquiredAt.UTC().Format(time.RFC3339),
 		})
+	}
+	if d.MaintenanceSince != nil {
+		m := &destinationMaintenanceResponse{
+			Since:     d.MaintenanceSince.UTC().Format(time.RFC3339),
+			By:        d.MaintenanceBy,
+			Effective: len(locks) == 0,
+		}
+		if d.MaintenanceJobID != nil {
+			m.RepairJobID = d.MaintenanceJobID.String()
+		}
+		resp.Maintenance = m
 	}
 	if d.RetentionAgentID != nil {
 		resp.RetentionAgentID = d.RetentionAgentID.String()
@@ -261,15 +299,15 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Dedup retention agent IDs before resolving names, same technique as
 	// PolicyHandler.List's agent-name batching, to avoid N+1 lookups.
-	agentNameByID := make(map[uuid.UUID]string)
+	agentByID := make(map[uuid.UUID]maintenanceAgentInfo)
 	for i := range destinations {
 		if destinations[i].RetentionAgentID != nil {
-			agentNameByID[*destinations[i].RetentionAgentID] = ""
+			agentByID[*destinations[i].RetentionAgentID] = maintenanceAgentInfo{}
 		}
 	}
-	for agentID := range agentNameByID {
+	for agentID := range agentByID {
 		if agent, err := h.agentRepo.GetByID(r.Context(), agentID); err == nil {
-			agentNameByID[agentID] = agent.Name
+			agentByID[agentID] = maintenanceAgentInfo{Name: agent.Name, RepairAvailable: agent.RepairAvailable}
 		}
 	}
 
@@ -289,11 +327,14 @@ func (h *DestinationHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]destinationResponse, len(destinations))
 	for i := range destinations {
-		agentName := ""
+		var agentInfo maintenanceAgentInfo
 		if destinations[i].RetentionAgentID != nil {
-			agentName = agentNameByID[*destinations[i].RetentionAgentID]
+			agentInfo = agentByID[*destinations[i].RetentionAgentID]
 		}
-		items[i] = destinationToResponse(&destinations[i], policyCounts[destinations[i].ID], agentName, locksByDest[destinations[i].ID])
+		items[i] = destinationToResponse(&destinations[i], policyCounts[destinations[i].ID], agentInfo, locksByDest[destinations[i].ID])
+		if items[i].Maintenance != nil {
+			items[i].Maintenance.By = requesterFor(r, items[i].Maintenance.By)
+		}
 	}
 
 	Ok(w, listDestinationsResponse{Items: items, Total: total})
@@ -535,7 +576,11 @@ func (h *DestinationHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, h.singleDestinationResponse(r.Context(), dest))
+	resp := h.singleDestinationResponse(r.Context(), dest)
+	if resp.Maintenance != nil {
+		resp.Maintenance.By = requesterFor(r, resp.Maintenance.By)
+	}
+	Ok(w, resp)
 }
 
 // updateDestinationRequest is the JSON body for PATCH /api/v1/destinations/{id}.

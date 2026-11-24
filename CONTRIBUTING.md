@@ -125,6 +125,30 @@ In `server/internal/db/migrations/`, add a migration that updates the `CHECK` co
 constraint needs separate files for SQLite and PostgreSQL (see the `sqlite/` and `postgres/`
 folders).
 
+SQLite can only change a `CHECK` constraint by rebuilding the table. SQLite migrations run
+without a wrapping transaction (`NoTxWrap`), so write the rebuild like
+`sqlite/000043_notification_providers.up.sql`, following SQLite's
+[procedure](https://www.sqlite.org/lang_altertable.html#otheralter):
+
+```sql
+PRAGMA foreign_keys = OFF; -- a no-op inside a transaction: before BEGIN
+BEGIN;
+CREATE TABLE things_new (...);
+INSERT INTO things_new (...) SELECT ... FROM things
+    WHERE EXISTS (SELECT 1 FROM parents p WHERE p.id = things.parent_id); -- skip orphan rows
+DROP TABLE things;
+ALTER TABLE things_new RENAME TO things;
+-- recreate the indexes
+COMMIT;
+PRAGMA foreign_keys = ON;
+```
+
+Without the transaction a failure leaves the database half migrated and marked dirty, and the
+server no longer starts. Copy only rows whose parents exist: a database can hold orphan rows,
+and with foreign keys on copying one fails the migration. Add a test in
+`server/internal/db/migrations_test.go` that migrates a database holding data, orphan rows
+included.
+
 **2. Server — repository URL, environment and validation**
 
 In `server/internal/destutil/destutil.go`:

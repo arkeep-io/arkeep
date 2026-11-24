@@ -862,6 +862,45 @@ func TestParseCheckOutput(t *testing.T) {
 	}
 }
 
+// TestParseCheckOutput_FatalBeforeCheck uses output captured from restic
+// 0.19.1 when check stops before reading the repository. Its summary still
+// counts one error: the result must not claim the repository contains errors.
+func TestParseCheckOutput_FatalBeforeCheck(t *testing.T) {
+	summary := `{"message_type":"summary","num_errors":1,"broken_packs":null,"suggest_repair_index":false,"suggest_prune":false}` + "\n"
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "locked by another operation",
+			stderr: `{"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked by PID 24 on 7fa21b83-arkeep-agent by root (UID 0, GID 0)\nlock was created at 2026-11-19 23:29:45 (3.04s ago)\nstorage ID d9f189be\nthe ` + "`unlock`" + ` command can be used to remove stale locks"}`,
+			want:   "unable to create lock in backend: repository is already locked by PID 24 on 7fa21b83-arkeep-agent by root (UID 0, GID 0)\nlock was created at 2026-11-19 23:29:45 (3.04s ago)\nstorage ID d9f189be\nthe `unlock` command can be used to remove stale locks",
+		},
+		{
+			name:   "wrong password",
+			stderr: `{"message_type":"exit_error","code":12,"message":"Fatal: wrong password or no key found"}`,
+			want:   "Fatal: wrong password or no key found",
+		},
+		{
+			name:   "missing repository",
+			stderr: `{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file: stat /repo/config: no such file or directory"}`,
+			want:   "Fatal: repository does not exist: unable to open config file: stat /repo/config: no such file or directory",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCheckOutput(summary, tt.stderr+"\n")
+			if got.NumErrors != 0 {
+				t.Errorf("NumErrors = %d, want 0: the repository was not checked", got.NumErrors)
+			}
+			if !slices.Equal(got.Messages, []string{tt.want}) {
+				t.Errorf("Messages = %q, want %q", got.Messages, []string{tt.want})
+			}
+		})
+	}
+}
+
 // TestEmptyRestoreSummary uses lines printed by restic 0.19.1: a selection
 // that matches nothing ends with a summary without total_files.
 func TestEmptyRestoreSummary(t *testing.T) {

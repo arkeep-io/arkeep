@@ -361,9 +361,12 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 			}
 			existing.Hostname = req.Hostname
 			existing.Version = req.Version
+			existing.ResticVersion = req.ResticVersion
+			existing.RcloneVersion = req.RcloneVersion
 			existing.OS = req.Os
 			existing.Arch = req.Arch
 			existing.DockerAvailable = req.Capabilities != nil && req.Capabilities.Docker
+			existing.RepairAvailable = req.Capabilities != nil && req.Capabilities.Repair
 
 			if err := s.agentRepo.Update(ctx, existing); err != nil {
 				logger.Error("register: failed to update agent record", zap.Error(err))
@@ -399,10 +402,13 @@ func (s *Server) Register(ctx context.Context, req *proto.RegisterRequest) (*pro
 		Name:            req.Hostname,
 		Hostname:        req.Hostname,
 		Version:         req.Version,
+		ResticVersion:   req.ResticVersion,
+		RcloneVersion:   req.RcloneVersion,
 		OS:              req.Os,
 		Arch:            req.Arch,
 		Status:          "offline", // transitions to "online" when StreamJobs opens
 		DockerAvailable: req.Capabilities != nil && req.Capabilities.Docker,
+		RepairAvailable: req.Capabilities != nil && req.Capabilities.Repair,
 	}
 
 	if err := s.agentRepo.Create(ctx, agent); err != nil {
@@ -658,6 +664,19 @@ func (s *Server) ReportJobStatus(ctx context.Context, req *proto.JobStatusReport
 			zap.String("job_id", req.JobId),
 			zap.String("reported_status", dbStatus),
 		)
+		// A job that starts only now was closed while it sat in the agent's
+		// queue, and the cancel did not reach the agent (it was offline, or
+		// the cancel raced the assignment). The job no longer holds its
+		// destinations, so tell the agent to abort it.
+		if dbStatus == "running" {
+			if err := s.agentManager.SendCancel(req.AgentId, req.JobId); err != nil {
+				s.logger.Warn("could not cancel a job started after it was closed",
+					zap.String("job_id", req.JobId),
+					zap.String("agent_id", req.AgentId),
+					zap.Error(err),
+				)
+			}
+		}
 		return &proto.JobStatusResponse{Ok: true}, nil
 	}
 	if err != nil {

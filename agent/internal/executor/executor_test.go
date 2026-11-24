@@ -524,6 +524,10 @@ func TestEnsureWritableDir(t *testing.T) {
 	})
 
 	t.Run("read-only leaf returns error", func(t *testing.T) {
+		// root bypasses directory permission bits, so the write probe succeeds.
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: read-only permissions are not enforced")
+		}
 		leaf := t.TempDir()
 		if err := os.Chmod(leaf, 0555); err != nil {
 			t.Fatal(err)
@@ -1033,6 +1037,32 @@ func TestIsFilesystemRoot(t *testing.T) {
 	}
 }
 
+// TestCancel_QueuedJobIsSkipped: the server cancels a job that is still queued
+// here behind another one. The job must not run when its turn comes, and a
+// cancel for a job this agent never received must not be kept.
+func TestCancel_QueuedJobIsSkipped(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
+	job := JobAssignment{JobID: "queued-job", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: []byte("not json")}
+	if err := e.Enqueue(job); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	e.Cancel("queued-job")
+	e.Cancel("never-sent-here")
+
+	reporter := &fakeReporter{}
+	e.run(context.Background(), <-e.queue, fakeSink{}, reporter)
+
+	if !slices.Equal(reporter.statuses, []string{"cancelled"}) {
+		t.Errorf("statuses = %v, want only cancelled: the job must not start", reporter.statuses)
+	}
+	e.cancelledMu.Lock()
+	defer e.cancelledMu.Unlock()
+	if len(e.cancelled) != 0 {
+		t.Errorf("cancelled = %v, want empty once the queued job was skipped", e.cancelled)
+	}
+}
+
 // TestCancelReason: a job cancelled from the server must not read as
 // interrupted by the agent shutting down, in the job log or the status
 // message, and a job stopped by the agent shutting down still says so.
@@ -1096,4 +1126,3 @@ func TestCancelReason(t *testing.T) {
 			t.Errorf("status message = %q, want %q", reporter.lastMsg, "agent shutting down")
 		}
 	})
-}

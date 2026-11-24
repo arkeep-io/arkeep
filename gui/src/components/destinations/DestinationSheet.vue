@@ -25,6 +25,7 @@ import {
     FieldGroup,
     FieldLabel,
 } from '@/components/ui/field'
+import CronHint from '@/components/shared/CronHint.vue'
 import {
     Select,
     SelectContent,
@@ -942,6 +943,7 @@ function onOpenChange(value: boolean) {
                                 <Input id="retention-schedule" v-model="retentionSchedule" class="font-mono" placeholder="0 2 * * *"
                                     :class="retentionScheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                                 <FieldError v-if="retentionScheduleError">{{ retentionScheduleError }}</FieldError>
+                                <CronHint v-else :expression="retentionSchedule" />
                             </Field>
 
                             <p class="text-sm font-medium">Retention</p>
@@ -1096,6 +1098,7 @@ function onOpenChange(value: boolean) {
                             <Input id="check-schedule" v-model="checkSchedule" class="font-mono" :placeholder="DEFAULT_CHECK_SCHEDULE"
                                 :class="checkScheduleError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
                             <FieldError v-if="checkScheduleError">{{ checkScheduleError }}</FieldError>
+                            <CronHint v-else :expression="checkSchedule" />
                         </Field>
                     </template>
 
