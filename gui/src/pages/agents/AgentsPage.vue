@@ -63,7 +63,7 @@ const page = ref(1)
 const pageSize = 20
 
 // Server-side column sort, kept in the URL; by name when unset (issue #320).
-const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort('agents', { key: 'name' })
+const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort('agents', { keys: ['name', 'hostname', 'os', 'version', 'status', 'last_seen'], key: 'name' })
 
 // Tracks live status overrides received via WebSocket.
 // Keyed by agent ID so we only override the field that changed without

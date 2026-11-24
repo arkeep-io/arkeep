@@ -2,13 +2,16 @@
 //
 // The sort column and direction live in the URL query (?sort=&order=), so they
 // survive a reload and travel with a shared link. Without ?sort= the server
-// applies the list's default order; pass it as defaults so the matching header
+// applies the list's default order; pass it as key and order so the matching header
 // shows as active.
 //
 // The last sort chosen on a list is also kept in the browser (localStorage,
 // under arkeep:list-sort:<list>), so coming back to the list from the menu,
-// whose links carry no ?sort=, shows it sorted the same way. A ?sort= in the URL
-// always wins: a shared link shows what its author saw.
+// whose links carry no ?sort=, shows it sorted the same way; the remembered
+// sort is then written to the URL, so a link copied from the page shows the
+// same order. A ?sort= in the URL always wins: a shared link shows what its
+// author saw. A sort on a column the list cannot sort by (keys), in the URL or
+// remembered, is ignored.
 
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -26,7 +29,7 @@ export function listSortStorageKey(list: string): string {
   return `arkeep:list-sort:${list}`
 }
 
-export function useListSort(list: string, defaults: { key?: string; order?: SortOrder } = {}) {
+export function useListSort(list: string, options: { keys: string[]; key?: string; order?: SortOrder }) {
   const route = useRoute()
   const router = useRouter()
   const stored = useLocalStorage<StoredSort | null>(listSortStorageKey(list), null, {
@@ -37,19 +40,26 @@ export function useListSort(list: string, defaults: { key?: string; order?: Sort
 
   // The sort chosen for the list: the URL's, otherwise the remembered one.
   // Null while the list's default order applies.
-  const chosen = computed<StoredSort | null>(() => {
-    if (querySort.value) {
-      return { key: querySort.value, order: route.query.order === 'desc' ? 'desc' : 'asc' }
-    }
+  const remembered = computed<StoredSort | null>(() => {
     const s = stored.value
-    if (s && typeof s.key === 'string' && s.key && (s.order === 'asc' || s.order === 'desc')) {
+    if (s && options.keys.includes(s.key) && (s.order === 'asc' || s.order === 'desc')) {
       return s
     }
     return null
   })
+  const chosen = computed<StoredSort | null>(() => {
+    if (options.keys.includes(querySort.value)) {
+      return { key: querySort.value, order: route.query.order === 'desc' ? 'desc' : 'asc' }
+    }
+    return remembered.value
+  })
 
-  const sortKey = computed(() => chosen.value?.key || defaults.key || '')
-  const sortOrder = computed<SortOrder>(() => chosen.value?.order ?? defaults.order ?? 'asc')
+  const sortKey = computed(() => chosen.value?.key || options.key || '')
+  const sortOrder = computed<SortOrder>(() => chosen.value?.order ?? options.order ?? 'asc')
+
+  if (!options.keys.includes(querySort.value) && remembered.value) {
+    router.replace({ query: { ...route.query, sort: remembered.value.key, order: remembered.value.order } })
+  }
 
   // Appended to the list request; empty while the server default applies.
   const queryParams = computed(() =>
