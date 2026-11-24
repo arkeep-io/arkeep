@@ -91,6 +91,9 @@ type APITokenRepository interface {
 	// Delete removes a token. With a non-nil userID it removes the token only
 	// if that user owns it. Returns the deleted token, or ErrNotFound.
 	Delete(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*db.APIToken, error)
+	// DeleteByUserID removes every token of a user, when the account may be
+	// in someone else's hands (the events that also end every session).
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
 	// TouchLastUsed records that the token was used at t.
 	TouchLastUsed(ctx context.Context, id uuid.UUID, t time.Time) error
 }

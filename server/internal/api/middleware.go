@@ -45,8 +45,8 @@ type APITokenAuthenticator interface {
 // and denylist checking (revoked tokens are rejected).
 //
 // API tokens are read-only (ADR 0027): their claims carry the "user" role
-// whatever the owner's role, and any method other than GET or HEAD is refused
-// with 403, so a token can never change anything even on a route open to the
+// whatever the owner's role, and any method other than GET is refused with
+// 403, so a token can never change anything even on a route open to the
 // "user" role, such as marking notifications as read.
 func Authenticate(validator auth.TokenValidator, apiTokens APITokenAuthenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -73,7 +73,7 @@ func Authenticate(validator auth.TokenValidator, apiTokens APITokenAuthenticator
 					ErrUnauthorized(w)
 					return
 				}
-				if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				if r.Method != http.MethodGet {
 					errJSON(w, http.StatusForbidden, "API tokens are read-only", "api_token_read_only")
 					return
 				}

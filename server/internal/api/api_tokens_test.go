@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 )
@@ -291,4 +292,108 @@ func TestAPITokens_OtherUsers(t *testing.T) {
 	resp = e.get(t, "/api/v1/policies", alice.Token)
 	_ = resp.Body.Close()
 	assertStatus(t, resp, http.StatusUnauthorized)
+}
+
+// createDBAPIToken stores an API token for userID and returns the raw token.
+func createDBAPIToken(t *testing.T, deps *testDeps, userID uuid.UUID) string {
+	t.Helper()
+	raw, hash, hint, err := auth.GenerateAPIToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := &db.APIToken{UserID: userID, Name: "x", TokenHash: hash, Hint: hint, Scope: auth.APITokenScopeRead}
+	if err := deps.apiTokens.Create(context.Background(), token); err != nil {
+		t.Fatalf("create api token: %v", err)
+	}
+	return raw
+}
+
+// assertAPITokenCount checks how many API tokens userID holds.
+func assertAPITokenCount(t *testing.T, deps *testDeps, userID uuid.UUID, want int) {
+	t.Helper()
+	tokens, err := deps.apiTokens.ListByUser(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != want {
+		t.Errorf("user holds %d API tokens, want %d", len(tokens), want)
+	}
+}
+
+// TestAPITokens_RevokedWhenAccountIsReset: the events that end every session
+// because the account may be in someone else's hands also revoke its API
+// tokens, so a token created with a stolen session does not outlive the
+// clean-up. A password change from the profile keeps them, like the session
+// that made it.
+func TestAPITokens_RevokedWhenAccountIsReset(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("admin sets the password", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "target@test.local", "user")
+		createDBAPIToken(t, e.deps, id)
+		assertStatus(t, setPassword(t, e, e.adminToken(t), id, "temporary-pass-1", true), http.StatusOK)
+		assertAPITokenCount(t, e.deps, id, 0)
+	})
+
+	t.Run("admin resets two-factor", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "locked@test.local", "user")
+		enable2FA(t, e.deps, id)
+		createDBAPIToken(t, e.deps, id)
+		resp := e.post(t, "/api/v1/users/"+id.String()+"/2fa/reset", e.adminToken(t), nil)
+		_ = resp.Body.Close()
+		assertStatus(t, resp, http.StatusNoContent)
+		assertAPITokenCount(t, e.deps, id, 0)
+	})
+
+	t.Run("password reset by email", func(t *testing.T) {
+		e := newTestEnvWithBaseURL(t, testBaseURL)
+		id := createDBUser(t, e.deps, "reset@example.com", "user")
+		createDBAPIToken(t, e.deps, id)
+		resp := e.post(t, "/api/v1/auth/password-reset/request", "", map[string]string{"email": "reset@example.com"})
+		_ = resp.Body.Close()
+		assertStatus(t, resp, http.StatusOK)
+		if len(e.mailer.sent) == 0 {
+			t.Fatal("no email sent")
+		}
+		resp = e.post(t, "/api/v1/auth/password-reset/confirm", "", map[string]string{
+			"token":    tokenFromEmail(t, e.mailer.sent[len(e.mailer.sent)-1].body),
+			"password": "brand-new-password",
+		})
+		_ = resp.Body.Close()
+		assertStatus(t, resp, http.StatusOK)
+		assertAPITokenCount(t, e.deps, id, 0)
+	})
+
+	t.Run("OIDC login denied by the groups", func(t *testing.T) {
+		e := newTestEnv(t)
+		idp := newFakeIdP(t, "arkeep")
+		p := newGroupsProvider(t, e, idp, "arkeep-users", "")
+		idp.sub, idp.groups = "bob", []string{"arkeep-users"}
+		oidcCallback(t, e, p.ID)
+		user, err := e.deps.users.GetByOIDC(ctx, p.ID.String(), "bob")
+		if err != nil {
+			t.Fatalf("GetByOIDC: %v", err)
+		}
+		createDBAPIToken(t, e.deps, user.ID)
+
+		idp.groups = []string{"other"}
+		oidcCallback(t, e, p.ID)
+		assertAPITokenCount(t, e.deps, user.ID, 0)
+	})
+
+	t.Run("password change from the profile keeps them", func(t *testing.T) {
+		e := newTestEnv(t)
+		id := createDBUser(t, e.deps, "self@test.local", "user")
+		raw := createDBAPIToken(t, e.deps, id)
+		resp := e.patch(t, "/api/v1/users/me", e.tokenForUser(t, id, "user"), map[string]any{
+			"password": "new-password-456", "current_password": "test-password-123",
+		})
+		_ = resp.Body.Close()
+		assertStatus(t, resp, http.StatusOK)
+		resp = e.get(t, "/api/v1/policies", raw)
+		_ = resp.Body.Close()
+		assertStatus(t, resp, http.StatusOK)
+	})
 }

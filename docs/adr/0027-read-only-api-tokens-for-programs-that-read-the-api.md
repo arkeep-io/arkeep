@@ -21,8 +21,8 @@ webhook only reports events, with no state to read after a restart.
   256 bits prefixed with `ark_`, shown once at creation. Only its SHA-256 hash
   is stored, with a name, a hint (the prefix and 4 characters), an optional
   expiry (1 to 3650 days, or none), the time of its last use and its scope.
-- The only scope is **`read`**: the token authenticates `GET` and `HEAD`
-  requests with the rights of the **`user` role**, whatever its owner's role.
+- The only scope is **`read`**: the token authenticates `GET` requests with
+  the rights of the **`user` role**, whatever its owner's role.
   Any other method is refused with 403 (`api_token_read_only`), so a token can
   never change anything, even on a route open to the `user` role. An admin's
   token cannot read admin-only routes either.
@@ -30,6 +30,12 @@ webhook only reports events, with no state to read after a restart.
   session. `Authenticate` tells the two apart by the prefix.
 - A token stops working when it expires, when it is revoked (its row is
   deleted), while its owner is disabled, and when its owner is deleted.
+- The events that end every session of a user because the account may be in
+  someone else's hands also revoke the user's tokens: an admin's Set password,
+  a password reset by email, an admin's two-factor reset, and an OIDC login
+  refused by the provider's allowed groups. A token created with a stolen
+  session does not outlive the clean-up. A password change from the profile
+  keeps them, as it keeps the session that made it.
 - Tokens are managed from a session only: a token can neither list, create
   nor revoke tokens (`RequireSession`). Users manage their own; admins list
   and revoke everyone's (Settings → API Tokens). Creating and revoking a token
@@ -44,6 +50,10 @@ webhook only reports events, with no state to read after a restart.
 - A leaked token exposes what the `user` role reads, including job logs,
   until it is revoked or expires. Its hash cannot be reversed, and the hint is
   too short to guess the rest.
+- A token is not bound to the lifetime of an OIDC session
+  (`session_max_hours`): a user removed from the allowed groups at the
+  identity provider keeps their tokens until their next login is refused.
+  To cut access at once, an admin disables the user in Arkeep.
 - `last_used_at` is written at most once a minute per token and per server
   process.
 - The WebSocket endpoint still takes a session's JWT only: a program polls.

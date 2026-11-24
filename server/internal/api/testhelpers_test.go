@@ -147,7 +147,7 @@ func newTestAuthService(t *testing.T, deps *testDeps) *auth.AuthService {
 	t.Cleanup(denylist.Stop)
 
 	local := auth.NewLocalAuthProvider(deps.users, deps.tokens, jwtMgr, logger)
-	oidcProv := auth.NewOIDCAuthProvider(deps.oidc, deps.users, deps.tokens, jwtMgr, logger)
+	oidcProv := auth.NewOIDCAuthProvider(deps.oidc, deps.users, deps.tokens, deps.apiTokens, jwtMgr, logger)
 	return auth.NewAuthService(local, oidcProv, deps.tokens, jwtMgr, denylist)
 }
 

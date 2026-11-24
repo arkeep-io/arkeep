@@ -257,7 +257,7 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	localProvider := auth.NewLocalAuthProvider(userRepo, refreshTokenRepo, jwtManager, logger)
-	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager, logger)
+	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, apiTokenRepo, jwtManager, logger)
 	denylist := auth.NewDenylist()
 	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager, denylist)
 

@@ -154,8 +154,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.PasswordChanges, cfg.Audit, cfg.Logger, cfg.Secure)
 	apiTokenHandler := NewAPITokenHandler(cfg.APITokens, cfg.Users, cfg.Audit, cfg.Logger)
-	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
-	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
+	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.APITokens, cfg.Audit, cfg.Logger)
+	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.APITokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	// Registered without auto-PKI too: it then answers 405 with a proof that
 	// the agent can check (ADR 0023), instead of an unauthenticated 405.
 	enrollHandler := NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
@@ -164,7 +164,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Jobs, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
+	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.APITokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
 	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.JobReport, cfg.Logger)
 	notificationProviderHandler := NewNotificationProviderHandler(cfg.NotificationProviders, cfg.Audit, cfg.Logger)

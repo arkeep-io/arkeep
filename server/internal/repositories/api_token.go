@@ -104,6 +104,14 @@ func (r *gormAPITokenRepository) Delete(ctx context.Context, id uuid.UUID, userI
 	return &token, nil
 }
 
+// DeleteByUserID removes every token of a user.
+func (r *gormAPITokenRepository) DeleteByUserID(ctx context.Context, userID uuid.UUID) error {
+	if err := r.db.WithContext(ctx).Delete(&db.APIToken{}, "user_id = ?", userID).Error; err != nil {
+		return fmt.Errorf("api_tokens: delete by user: %w", err)
+	}
+	return nil
+}
+
 // TouchLastUsed records that the token was used at t. UpdatedAt is left
 // alone: it records changes to the token, not its use.
 func (r *gormAPITokenRepository) TouchLastUsed(ctx context.Context, id uuid.UUID, t time.Time) error {
