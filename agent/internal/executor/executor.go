@@ -1081,9 +1081,9 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 	result, err := e.wrapper.Check(ctx, d, restic.CheckOptions{Mode: payload.Mode, SubsetPercent: payload.SubsetPercent})
 
 	if ctx.Err() != nil {
-		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, "integrity check cancelled")
-		log("warn", "integrity check cancelled")
-		reporter.ReportStatus(job.JobID, "cancelled", "integrity check cancelled")
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, "integrity check cancelled: "+cancelReason(ctx))
+		log("warn", "integrity check cancelled: "+cancelReason(ctx))
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 
@@ -1182,9 +1182,9 @@ func (e *Executor) executeRepair(ctx context.Context, job JobAssignment, sink Lo
 	})
 
 	if ctx.Err() != nil {
-		reporter.ReportDestinationResult(job.JobID, destID, "cancelled", "", startedAt, nil, 0, "repair cancelled")
-		log("warn", "repair cancelled")
-		reporter.ReportStatus(job.JobID, "cancelled", "repair cancelled")
+		reporter.ReportDestinationResult(job.JobID, destID, "cancelled", "", startedAt, nil, 0, "repair cancelled: "+cancelReason(ctx))
+		log("warn", "repair cancelled: "+cancelReason(ctx))
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 	if err != nil {

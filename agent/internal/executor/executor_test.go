@@ -21,6 +21,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"github.com/arkeep-io/arkeep/shared/repair"
 )
 
 type fakeSink struct{}
@@ -1072,58 +1073,84 @@ func TestCancelReason(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(retentionSweepPayload{
-		Destination:  destinationPayload{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"},
-		RepoPassword: "pw",
-		Retention:    retentionPayload{Last: 3},
-		Tags:         []string{"policy-a"},
-	})
-	if err != nil {
-		t.Fatal(err)
+	dest := destinationPayload{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}
+	jobOf := func(jobType proto.JobType, payload any) JobAssignment {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return JobAssignment{JobID: "job-1", Type: jobType, Payload: raw}
 	}
-	job := JobAssignment{JobID: "job-1", Type: proto.JobType_JOB_TYPE_FORGET, Payload: raw}
+	jobs := []struct {
+		name       string
+		job        JobAssignment
+		destPrefix string
+	}{
+		{
+			name: "retention sweep",
+			job: jobOf(proto.JobType_JOB_TYPE_FORGET, retentionSweepPayload{
+				Destination: dest, RepoPassword: "pw", Retention: retentionPayload{Last: 3}, Tags: []string{"policy-a"},
+			}),
+			destPrefix: "retention sweep cancelled: ",
+		},
+		{
+			name:       "integrity check",
+			job:        jobOf(proto.JobType_JOB_TYPE_VERIFY, checkPayload{Destination: dest, RepoPassword: "pw", Mode: restic.CheckModeStructure}),
+			destPrefix: "integrity check cancelled: ",
+		},
+		{
+			name:       "repair",
+			job:        jobOf(proto.JobType_JOB_TYPE_REPAIR, repairPayload{Destination: dest, RepoPassword: "pw", Repair: repair.Params{Action: repair.Index}}),
+			destPrefix: "repair cancelled: ",
+		},
+	}
 
-	t.Run("cancel from the server", func(t *testing.T) {
-		e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
-		reporter := &fakeReporter{}
-		done := make(chan struct{})
-		go func() {
-			e.execute(context.Background(), job, fakeSink{}, reporter)
-			close(done)
-		}()
-		deadline := time.Now().Add(5 * time.Second)
-		for {
-			e.runningMu.Lock()
-			_, running := e.runningCancel[job.JobID]
-			e.runningMu.Unlock()
-			if running {
-				break
+	for _, tt := range jobs {
+		t.Run(tt.name+", cancel from the server", func(t *testing.T) {
+			e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			done := make(chan struct{})
+			go func() {
+				e.execute(context.Background(), tt.job, fakeSink{}, reporter)
+				close(done)
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				e.runningMu.Lock()
+				_, running := e.runningCancel[tt.job.JobID]
+				e.runningMu.Unlock()
+				if running {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the job never started")
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
-			if time.Now().After(deadline) {
-				t.Fatal("the job never started")
+			e.Cancel(tt.job.JobID)
+			<-done
+
+			if reporter.lastMsg != "cancel requested by the server" {
+				t.Errorf("status message = %q, want %q", reporter.lastMsg, "cancel requested by the server")
 			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		e.Cancel(job.JobID)
-		<-done
+			if got, want := reporter.destResults["dest-1"].errMsg, tt.destPrefix+"cancel requested by the server"; got != want {
+				t.Errorf("destination error = %q, want %q", got, want)
+			}
+		})
 
-		if reporter.lastMsg != "cancel requested by the server" {
-			t.Errorf("status message = %q, want %q", reporter.lastMsg, "cancel requested by the server")
-		}
-		if got := reporter.destResults["dest-1"].errMsg; got != "retention sweep cancelled: cancel requested by the server" {
-			t.Errorf("destination error = %q, want the server cancel", got)
-		}
-	})
+		t.Run(tt.name+", agent shutting down", func(t *testing.T) {
+			e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			e.execute(ctx, tt.job, fakeSink{}, reporter)
 
-	t.Run("agent shutting down", func(t *testing.T) {
-		e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
-		reporter := &fakeReporter{}
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		e.execute(ctx, job, fakeSink{}, reporter)
-
-		if reporter.lastMsg != "agent shutting down" {
-			t.Errorf("status message = %q, want %q", reporter.lastMsg, "agent shutting down")
-		}
-	})
+			if reporter.lastMsg != "agent shutting down" {
+				t.Errorf("status message = %q, want %q", reporter.lastMsg, "agent shutting down")
+			}
+			if got, want := reporter.destResults["dest-1"].errMsg, tt.destPrefix+"agent shutting down"; got != want {
+				t.Errorf("destination error = %q, want %q", got, want)
+			}
+		})
+	}
 }
