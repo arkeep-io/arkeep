@@ -40,5 +40,16 @@ export default mergeConfig(viteConfig, defineConfig({
     // shadcn-vue) on a cold module cache: about 1 s alone, but over 5 s (the
     // default) when the suite runs in parallel on a loaded machine.
     testTimeout: 15000,
+    // pnpm test:coverage (task test:gui:coverage): a summary in the terminal
+    // and an HTML report in coverage/. Every source file counts, tested or not.
+    // shadcn-vue's components (components/ui) are generated, and the tests'
+    // helpers and type declarations hold no logic to cover.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,vue}'],
+      exclude: ['src/**/*.test.ts', 'src/test/**', 'src/components/ui/**', 'src/**/*.d.ts'],
+      reporter: ['text-summary', 'html'],
+      reportsDirectory: 'coverage',
+    },
   },
 }))

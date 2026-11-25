@@ -151,6 +151,11 @@ tasks:
     dir: gui
     cmd: pnpm test
 
+  test:gui:coverage:
+    desc: Run GUI tests with coverage (summary in the terminal, HTML report in gui/coverage/)
+    dir: gui
+    cmd: pnpm test:coverage
+
   # ─── Proto ──────────────────────────────────────────────────────────────────
   proto:
     desc: Generate Go code from protobuf definitions
