@@ -25,7 +25,7 @@ import {
     Hourglass,
 } from '@lucide/vue'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import { useAuthStore } from '@/stores/auth'
@@ -90,15 +90,10 @@ const isRunning = computed(() =>
 // Data fetching
 // ---------------------------------------------------------------------------
 
-// A quiet refresh keeps the progress bar and, while the job
-// runs, the logs: they arrive live over the WebSocket, and the stored logs may
-// not hold the latest lines yet.
-async function fetchJob({ quiet = false }: FetchOptions = {}) {
-    if (!quiet) {
-        loading.value = true
-        error.value = null
-        progressData.value = null
-    }
+async function fetchJob() {
+    loading.value = true
+    error.value = null
+    progressData.value = null
     try {
         const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
         // Guard against a stale response: if a terminal WS status already
@@ -107,7 +102,6 @@ async function fetchJob({ quiet = false }: FetchOptions = {}) {
         if (terminalSeen.value && !TERMINAL.includes(res.data.status)) return
         if (TERMINAL.includes(res.data.status)) terminalSeen.value = true
         job.value = res.data
-        error.value = null
 
         // Restore cached progress so the bar is visible immediately on reload.
         if (isRunning.value) {
@@ -119,11 +113,11 @@ async function fetchJob({ quiet = false }: FetchOptions = {}) {
 
         // Fetch logs separately. For finished jobs this is the only source of
         // truth; for running jobs we load historic DB logs and then append live ones.
-        if (!quiet || !isRunning.value) await fetchLogs()
+        await fetchLogs()
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load job.')
     } finally {
-        if (!quiet) loading.value = false
+        loading.value = false
     }
 }
 
