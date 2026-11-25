@@ -228,9 +228,11 @@ func run(ctx context.Context, cfg *config) error {
 	destinationRepo := repositories.NewDestinationRepository(gormDB)
 	policyRepo := repositories.NewPolicyRepository(gormDB)
 	// The hub is created first: the job repository announces its writes on it
-	// (changes topic), so that open pages refresh themselves.
+	// (changes topic), so that open pages refresh themselves. Bursts of
+	// changes are coalesced to one per type and second.
 	wsHub := websocket.NewHub()
-	jobRepo := changes.NewJobRepository(repositories.NewJobRepository(gormDB), wsHub)
+	changePublisher := changes.Coalesce(wsHub, changes.CoalesceWindow)
+	jobRepo := changes.NewJobRepository(repositories.NewJobRepository(gormDB), changePublisher)
 	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
