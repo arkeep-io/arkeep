@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAuthStore } from '@/stores/auth'
+import { router } from '@/router'
 import { ArkeepWebSocketClient, liveUpdatesUnavailable, UNAVAILABLE_AFTER_MS } from './websocket'
+
+vi.mock('@/router', () => ({ router: { push: vi.fn() } }))
 
 // FakeSocket stands in for the browser WebSocket: tests open, close and feed
 // it by hand. Every instance is kept in sockets, the last one being current.
@@ -204,6 +207,22 @@ describe('ArkeepWebSocketClient', () => {
     current().drop()
     await vi.advanceTimersByTimeAsync(2_000)
     expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  // A refused renewal ended the session: on a page that only listens nothing
+  // else would notice, so the socket sends the user to the login page and
+  // stops retrying without a token.
+  it('goes to the login page when the renewal ends the session', async () => {
+    const auth = useAuthStore()
+    auth.accessToken = 'old'
+    auth.refresh = vi.fn(async () => { auth.accessToken = null; return false })
+    client.subscribe('changes', () => {})
+    current().drop()
+    const attempts = sockets.length
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(router.push).toHaveBeenCalledWith('/login')
+    expect(sockets.length).toBe(attempts)
   })
 
   it('clears the warning on disconnect', () => {

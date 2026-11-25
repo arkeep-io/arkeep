@@ -5,6 +5,7 @@
 // transparently. A single WebSocket connection is shared across all subscribers.
 
 import { ref } from 'vue'
+import { router } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -286,12 +287,17 @@ export class ArkeepWebSocketClient {
         // Pages that only update from this socket send no request that would
         // renew the token on a 401, so the socket renews it itself, once per
         // outage. While the server is down the renewal fails like the
-        // connection and is tried again on the next attempt; a refused
-        // refresh token ends the session as usual.
+        // connection and is tried again on the next attempt. A refused
+        // refresh token ends the session: nothing else would notice on a
+        // page that only listens, so the socket sends the user to the login
+        // page and stops; the next subscription after signing in reopens it.
         const auth = useAuthStore()
         if (auth.accessToken) {
           try {
-            await auth.refresh()
+            if (!(await auth.refresh())) {
+              router.push('/login')
+              return
+            }
             this.tokenRenewed = true
           } catch { /* unreachable: the next attempt tries again */ }
         }
