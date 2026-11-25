@@ -2,8 +2,10 @@
 // lists every job that finished since the previous report, instead of, or
 // next to, one email per job.
 //
-// The report runs hourly at a set minute or daily at a set time, in the
-// server's local time zone (TZ), like policy schedules. Its period ends at
+// The report runs hourly at a set minute, or daily, weekly (on a set day of
+// the week) or monthly (on a set day of the month, 1 to 28 so it exists in
+// every month) at a set time, in the server's local time zone (TZ), like
+// policy schedules. Its period ends at
 // that time; the email goes out sendDelay later. The period always starts
 // where the previous report ended: the end of the last period is stored as
 // KeyLastSentAt, and jobs are selected by their end time. So
@@ -34,11 +36,17 @@ import (
 // Setting keys (stored in the settings key-value table).
 const (
 	// KeyFrequency is how often the report is sent: FrequencyOff (default),
-	// FrequencyHourly or FrequencyDaily.
+	// FrequencyHourly, FrequencyDaily, FrequencyWeekly or FrequencyMonthly.
 	KeyFrequency = "notification.report.frequency"
-	// KeyTime is the time of day of the daily report, "HH:MM" in the server's
-	// time zone. Default DefaultTime.
+	// KeyTime is the time of day of the daily, weekly and monthly report,
+	// "HH:MM" in the server's time zone. Default DefaultTime.
 	KeyTime = "notification.report.time"
+	// KeyWeekday is the day of the week of the weekly report, 0 (Sunday) to
+	// 6 (Saturday) like time.Weekday. Default DefaultWeekday.
+	KeyWeekday = "notification.report.weekday"
+	// KeyDay is the day of the month of the monthly report, 1 to MaxDay.
+	// Default 1.
+	KeyDay = "notification.report.day"
 	// KeyMinute is the minute past the hour of the hourly report, 0 to 59.
 	// Default 0 (on the full hour).
 	KeyMinute = "notification.report.minute"
@@ -51,13 +59,23 @@ const (
 
 // Report frequencies.
 const (
-	FrequencyOff    = "off"
-	FrequencyHourly = "hourly"
-	FrequencyDaily  = "daily"
+	FrequencyOff     = "off"
+	FrequencyHourly  = "hourly"
+	FrequencyDaily   = "daily"
+	FrequencyWeekly  = "weekly"
+	FrequencyMonthly = "monthly"
 )
 
-// DefaultTime is the time of the daily report when none is set.
+// DefaultTime is the time of the daily, weekly and monthly report when none
+// is set.
 const DefaultTime = "07:00"
+
+// DefaultWeekday is the day of the weekly report when none is set.
+const DefaultWeekday = time.Monday
+
+// MaxDay is the last day of the month the monthly report can be sent on: the
+// last one that exists in every month.
+const MaxDay = 28
 
 // sendDelay is how long after the end of its period (the configured time) a
 // report is sent. A job's end time is taken before the job is saved, and on
@@ -78,16 +96,23 @@ const (
 
 // retryDelays are the waits before the retries of a report whose send failed,
 // counted from each failure. The hourly report is retried once: anything that
-// takes longer is covered by the next hourly report anyway. After the last
-// retry the next scheduled report covers the period.
+// takes longer is covered by the next hourly report anyway. The weekly and
+// monthly reports, whose next report is far off, are retried for longer.
+// After the last retry the next scheduled report covers the period.
 var retryDelays = map[string][]time.Duration{
-	FrequencyHourly: {5 * time.Minute},
-	FrequencyDaily:  {5 * time.Minute, 30 * time.Minute},
+	FrequencyHourly:  {5 * time.Minute},
+	FrequencyDaily:   {5 * time.Minute, 30 * time.Minute},
+	FrequencyWeekly:  {5 * time.Minute, 30 * time.Minute, 2 * time.Hour, 6 * time.Hour},
+	FrequencyMonthly: {5 * time.Minute, 30 * time.Minute, 2 * time.Hour, 6 * time.Hour},
 }
 
 // ValidFrequency reports whether f is one of the report frequencies.
 func ValidFrequency(f string) bool {
-	return f == FrequencyOff || f == FrequencyHourly || f == FrequencyDaily
+	switch f {
+	case FrequencyOff, FrequencyHourly, FrequencyDaily, FrequencyWeekly, FrequencyMonthly:
+		return true
+	}
+	return false
 }
 
 var timeOfDay = regexp.MustCompile(`^([01][0-9]|2[0-3]):([0-5][0-9])$`)
@@ -104,6 +129,35 @@ func ParseMinute(s string) (int, error) {
 // ValidMinute reports whether m is a minute past the hour, 0 to 59.
 func ValidMinute(m int) bool {
 	return m >= 0 && m <= 59
+}
+
+// ParseWeekday parses the day of the weekly report, 0 (Sunday) to 6.
+func ParseWeekday(s string) (time.Weekday, error) {
+	d, err := strconv.Atoi(s)
+	if err != nil || !ValidWeekday(d) {
+		return 0, fmt.Errorf("invalid weekday %q, want 0 (Sunday) to 6 (Saturday)", s)
+	}
+	return time.Weekday(d), nil
+}
+
+// ValidWeekday reports whether d is a day of the week, 0 (Sunday) to 6.
+func ValidWeekday(d int) bool {
+	return d >= 0 && d <= 6
+}
+
+// ParseDay parses the day of the month of the monthly report, 1 to MaxDay.
+func ParseDay(s string) (int, error) {
+	d, err := strconv.Atoi(s)
+	if err != nil || !ValidDay(d) {
+		return 0, fmt.Errorf("invalid day of the month %q, want 1 to %d", s, MaxDay)
+	}
+	return d, nil
+}
+
+// ValidDay reports whether d is a day of the month of the monthly report, 1
+// to MaxDay.
+func ValidDay(d int) bool {
+	return d >= 1 && d <= MaxDay
 }
 
 // ParseTime parses a time of day written as "HH:MM" (24-hour clock).
@@ -133,10 +187,14 @@ type settingsStore interface {
 // config is the report configuration as stored in the settings.
 type config struct {
 	frequency string
-	// hour and minute are the time of the daily report.
+	// hour and minute are the time of the daily, weekly and monthly report.
 	hour, minute int
 	// hourlyMinute is the minute past the hour of the hourly report.
 	hourlyMinute int
+	// weekday is the day of the weekly report.
+	weekday time.Weekday
+	// day is the day of the month of the monthly report.
+	day int
 	// lastSentAt is zero when not stored.
 	lastSentAt time.Time
 }
@@ -269,12 +327,17 @@ func (s *Service) prepare(ctx context.Context) (config, error) {
 // schedule runs the report sendDelay after each end of a period.
 func (s *Service) schedule(cfg config) error {
 	delay := uint(sendDelay / time.Second)
+	atTime := gocron.NewAtTimes(gocron.NewAtTime(uint(cfg.hour), uint(cfg.minute), delay))
 	var def gocron.JobDefinition
 	switch cfg.frequency {
 	case FrequencyHourly:
 		def = gocron.CronJob(fmt.Sprintf("%d %d * * * *", delay, cfg.hourlyMinute), true)
 	case FrequencyDaily:
-		def = gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(uint(cfg.hour), uint(cfg.minute), delay)))
+		def = gocron.DailyJob(1, atTime)
+	case FrequencyWeekly:
+		def = gocron.WeeklyJob(1, gocron.NewWeekdays(cfg.weekday), atTime)
+	case FrequencyMonthly:
+		def = gocron.MonthlyJob(1, gocron.NewDaysOfTheMonth(cfg.day), atTime)
 	default:
 		s.logger.Info("job report off")
 		return nil
@@ -287,8 +350,13 @@ func (s *Service) schedule(cfg config) error {
 		return fmt.Errorf("failed to schedule job report: %w", err)
 	}
 	at := fmt.Sprintf("%02d:%02d", cfg.hour, cfg.minute)
-	if cfg.frequency == FrequencyHourly {
+	switch cfg.frequency {
+	case FrequencyHourly:
 		at = fmt.Sprintf("XX:%02d", cfg.hourlyMinute)
+	case FrequencyWeekly:
+		at = cfg.weekday.String() + " " + at
+	case FrequencyMonthly:
+		at = fmt.Sprintf("day %d %s", cfg.day, at)
 	}
 	s.logger.Info("job report scheduled", zap.String("frequency", cfg.frequency), zap.String("at", at))
 	return nil
@@ -400,7 +468,7 @@ func (s *Service) scheduleRetry(frequency string) {
 }
 
 func (s *Service) load(ctx context.Context) (config, error) {
-	cfg := config{frequency: FrequencyOff}
+	cfg := config{frequency: FrequencyOff, weekday: DefaultWeekday, day: 1}
 	settings, err := s.settings.GetMany(ctx, settingsPrefix)
 	if err != nil {
 		return cfg, fmt.Errorf("failed to load job report settings: %w", err)
@@ -429,6 +497,18 @@ func (s *Service) load(ctx context.Context) (config, error) {
 		if cfg.hourlyMinute, err = ParseMinute(v); err != nil {
 			s.logger.Warn("invalid job report minute, using the full hour", zap.Error(err))
 			cfg.hourlyMinute = 0
+		}
+	}
+	if v := idx[KeyWeekday]; v != "" {
+		if cfg.weekday, err = ParseWeekday(v); err != nil {
+			s.logger.Warn("invalid job report weekday, using the default", zap.Error(err))
+			cfg.weekday = DefaultWeekday
+		}
+	}
+	if v := idx[KeyDay]; v != "" {
+		if cfg.day, err = ParseDay(v); err != nil {
+			s.logger.Warn("invalid job report day of the month, using the first", zap.Error(err))
+			cfg.day = 1
 		}
 	}
 	if v := idx[KeyLastSentAt]; v != "" {
@@ -470,10 +550,33 @@ func lastDue(cfg config, now time.Time) time.Time {
 		}
 		return due.In(now.Location())
 	}
+	// time.Date, not AddDate on a due time: the time of day stays the
+	// configured one across a change of daylight saving time.
 	y, mo, d := now.Date()
-	due := time.Date(y, mo, d, cfg.hour, cfg.minute, 0, 0, now.Location())
+	at := func(mo time.Month, d int) time.Time {
+		return time.Date(y, mo, d, cfg.hour, cfg.minute, 0, 0, now.Location())
+	}
+	switch cfg.frequency {
+	case FrequencyWeekly:
+		// The configured weekday of this week (today or earlier), or of the
+		// previous one if its time has not come yet.
+		back := (int(now.Weekday()) - int(cfg.weekday) + 7) % 7
+		due := at(mo, d-back)
+		if due.After(now) {
+			due = at(mo, d-back-7)
+		}
+		return due
+	case FrequencyMonthly:
+		// day is at most MaxDay, so it exists in the previous month too.
+		due := at(mo, cfg.day)
+		if due.After(now) {
+			due = at(mo-1, cfg.day)
+		}
+		return due
+	}
+	due := at(mo, d)
 	if due.After(now) {
-		due = due.AddDate(0, 0, -1)
+		due = at(mo, d-1)
 	}
 	return due
 }

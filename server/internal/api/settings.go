@@ -763,12 +763,16 @@ type notificationSettingsResponse struct {
 	// has its own switch in the webhook settings.
 	EmailEnabled bool `json:"email_enabled"`
 	// ReportFrequency is how often the job report email is sent: "off",
-	// "hourly" or "daily". ReportTime is the time of the daily report, "HH:MM"
-	// in the server's time zone.
+	// "hourly", "daily", "weekly" or "monthly". ReportTime is the time of the
+	// daily, weekly and monthly report, "HH:MM" in the server's time zone.
 	ReportFrequency string `json:"report_frequency"`
 	ReportTime      string `json:"report_time"`
 	// ReportMinute is the minute past the hour of the hourly report, 0 to 59.
 	ReportMinute int `json:"report_minute"`
+	// ReportWeekday is the day of the weekly report, 0 (Sunday) to 6.
+	ReportWeekday int `json:"report_weekday"`
+	// ReportDay is the day of the month of the monthly report, 1 to 28.
+	ReportDay int `json:"report_day"`
 	// ServerTimezone names the server's time zone (e.g. "CET", "UTC"), so the
 	// GUI can say in which zone ReportTime is. Read-only.
 	ServerTimezone string `json:"server_timezone"`
@@ -785,6 +789,8 @@ func notificationSettingsFrom(idx map[string]string) notificationSettingsRespons
 		EmailEnabled:    boolSetting(idx, notification.KeyEmailEnabled, true),
 		ReportFrequency: idx[jobreport.KeyFrequency],
 		ReportTime:      idx[jobreport.KeyTime],
+		ReportWeekday:   int(jobreport.DefaultWeekday),
+		ReportDay:       1,
 		ServerTimezone:  notification.ServerZone(),
 	}
 	if !jobreport.ValidFrequency(resp.ReportFrequency) {
@@ -795,6 +801,12 @@ func notificationSettingsFrom(idx map[string]string) notificationSettingsRespons
 	}
 	if m, err := jobreport.ParseMinute(idx[jobreport.KeyMinute]); err == nil {
 		resp.ReportMinute = m
+	}
+	if d, err := jobreport.ParseWeekday(idx[jobreport.KeyWeekday]); err == nil {
+		resp.ReportWeekday = int(d)
+	}
+	if d, err := jobreport.ParseDay(idx[jobreport.KeyDay]); err == nil {
+		resp.ReportDay = d
 	}
 	return resp
 }
@@ -820,11 +832,13 @@ type upsertNotificationSettingsRequest struct {
 	// EmailEnabled is optional: when omitted the stored value is kept, so
 	// clients that predate it do not turn email notifications off.
 	EmailEnabled *bool `json:"email_enabled"`
-	// ReportFrequency, ReportTime and ReportMinute are optional like
-	// EmailEnabled.
+	// ReportFrequency, ReportTime, ReportMinute, ReportWeekday and ReportDay
+	// are optional like EmailEnabled.
 	ReportFrequency *string `json:"report_frequency"`
 	ReportTime      *string `json:"report_time"`
 	ReportMinute    *int    `json:"report_minute"`
+	ReportWeekday   *int    `json:"report_weekday"`
+	ReportDay       *int    `json:"report_day"`
 }
 
 // UpsertNotificationSettings handles PUT /api/v1/settings/notifications (admin only).
@@ -834,7 +848,7 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 		return
 	}
 	if req.ReportFrequency != nil && !jobreport.ValidFrequency(*req.ReportFrequency) {
-		ErrBadRequest(w, "report_frequency must be off, hourly or daily")
+		ErrBadRequest(w, "report_frequency must be off, hourly, daily, weekly or monthly")
 		return
 	}
 	if req.ReportTime != nil {
@@ -845,6 +859,14 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 	}
 	if req.ReportMinute != nil && !jobreport.ValidMinute(*req.ReportMinute) {
 		ErrBadRequest(w, "report_minute must be 0 to 59")
+		return
+	}
+	if req.ReportWeekday != nil && !jobreport.ValidWeekday(*req.ReportWeekday) {
+		ErrBadRequest(w, "report_weekday must be 0 (Sunday) to 6 (Saturday)")
+		return
+	}
+	if req.ReportDay != nil && !jobreport.ValidDay(*req.ReportDay) {
+		ErrBadRequest(w, "report_day must be 1 to "+strconv.Itoa(jobreport.MaxDay))
 		return
 	}
 
@@ -892,6 +914,18 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 			value string
 		}{jobreport.KeyMinute, strconv.Itoa(*req.ReportMinute)})
 	}
+	if req.ReportWeekday != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyWeekday, strconv.Itoa(*req.ReportWeekday)})
+	}
+	if req.ReportDay != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyDay, strconv.Itoa(*req.ReportDay)})
+	}
 	for _, p := range pairs {
 		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
 			h.logger.Error("failed to save notification event setting",
@@ -917,7 +951,9 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 	// server start.
 	scheduleChanged := resp.ReportFrequency != before.ReportFrequency ||
 		resp.ReportTime != before.ReportTime ||
-		resp.ReportMinute != before.ReportMinute
+		resp.ReportMinute != before.ReportMinute ||
+		resp.ReportWeekday != before.ReportWeekday ||
+		resp.ReportDay != before.ReportDay
 	if scheduleChanged && h.jobReport != nil {
 		if err := h.jobReport.Reload(ctx); err != nil {
 			h.logger.Error("failed to reschedule job report, the saved schedule applies at the next server start", zap.Error(err))
@@ -925,7 +961,8 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "",
-		map[string]any{"email_enabled": resp.EmailEnabled, "report_frequency": resp.ReportFrequency, "report_time": resp.ReportTime, "report_minute": resp.ReportMinute})
+		map[string]any{"email_enabled": resp.EmailEnabled, "report_frequency": resp.ReportFrequency, "report_time": resp.ReportTime, "report_minute": resp.ReportMinute,
+			"report_weekday": resp.ReportWeekday, "report_day": resp.ReportDay})
 	Ok(w, resp)
 }
 

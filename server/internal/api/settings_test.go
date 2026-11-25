@@ -541,6 +541,8 @@ func TestSettingsHandler_JobReport(t *testing.T) {
 		ReportFrequency string `json:"report_frequency"`
 		ReportTime      string `json:"report_time"`
 		ReportMinute    int    `json:"report_minute"`
+		ReportWeekday   int    `json:"report_weekday"`
+		ReportDay       int    `json:"report_day"`
 		ServerTimezone  string `json:"server_timezone"`
 	}
 	get := func(t *testing.T, e *testEnv) reportData {
@@ -556,8 +558,9 @@ func TestSettingsHandler_JobReport(t *testing.T) {
 	t.Run("off by default, with the server time zone", func(t *testing.T) {
 		e := newTestEnv(t)
 		data := get(t, e)
-		if data.ReportFrequency != "off" || data.ReportTime != "07:00" || data.ReportMinute != 0 {
-			t.Errorf("got %+v, want off at 07:00, minute 0", data)
+		if data.ReportFrequency != "off" || data.ReportTime != "07:00" || data.ReportMinute != 0 ||
+			data.ReportWeekday != 1 || data.ReportDay != 1 {
+			t.Errorf("got %+v, want off at 07:00, minute 0, Monday, day 1", data)
 		}
 		if data.ServerTimezone == "" {
 			t.Error("server_timezone is empty")
@@ -580,6 +583,53 @@ func TestSettingsHandler_JobReport(t *testing.T) {
 		}
 		if n := e.jobReport.reloads.Load(); n != 1 {
 			t.Errorf("job report rescheduled %d times, want 1", n)
+		}
+	})
+
+	for _, tt := range []struct {
+		name string
+		body map[string]any
+		want func(reportData) bool
+	}{
+		{"weekly", map[string]any{"report_frequency": "weekly", "report_weekday": 0, "report_time": "18:30"},
+			func(d reportData) bool {
+				return d.ReportFrequency == "weekly" && d.ReportWeekday == 0 && d.ReportTime == "18:30"
+			}},
+		{"monthly", map[string]any{"report_frequency": "monthly", "report_day": 28, "report_time": "18:30"},
+			func(d reportData) bool {
+				return d.ReportFrequency == "monthly" && d.ReportDay == 28 && d.ReportTime == "18:30"
+			}},
+	} {
+		t.Run("saves a "+tt.name+" schedule", func(t *testing.T) {
+			e := newTestEnv(t)
+			maps.Copy(tt.body, events)
+			resp := e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), tt.body)
+			assertStatus(t, resp, http.StatusOK)
+			var data reportData
+			decodeData(t, resp, &data)
+			if !tt.want(data) {
+				t.Errorf("PUT answered %+v, want %v", data, tt.body)
+			}
+			if got := get(t, e); !tt.want(got) {
+				t.Errorf("GET %+v, want %v", got, tt.body)
+			}
+			if n := e.jobReport.reloads.Load(); n != 1 {
+				t.Errorf("job report rescheduled %d times, want 1", n)
+			}
+		})
+	}
+
+	t.Run("a changed day reschedules the report", func(t *testing.T) {
+		e := newTestEnv(t)
+		body := map[string]any{"report_frequency": "monthly", "report_day": 5}
+		maps.Copy(body, events)
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+		body["report_day"] = 6
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+		body["report_weekday"] = 3
+		assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), body), http.StatusOK)
+		if n := e.jobReport.reloads.Load(); n != 3 {
+			t.Errorf("job report rescheduled %d times, want 3", n)
 		}
 	})
 
@@ -637,16 +687,21 @@ func TestSettingsHandler_JobReport(t *testing.T) {
 		name string
 		body map[string]any
 	}{
-		{"unknown frequency", map[string]any{"report_frequency": "weekly"}},
+		{"unknown frequency", map[string]any{"report_frequency": "yearly"}},
 		{"invalid time", map[string]any{"report_time": "7:00"}},
 		{"time out of range", map[string]any{"report_time": "24:00"}},
 		{"minute out of range", map[string]any{"report_minute": 60}},
+		{"weekday out of range", map[string]any{"report_weekday": 7}},
+		{"negative weekday", map[string]any{"report_weekday": -1}},
+		{"day 29", map[string]any{"report_day": 29}},
+		{"day 0", map[string]any{"report_day": 0}},
 	} {
 		t.Run("rejects "+tt.name, func(t *testing.T) {
 			e := newTestEnv(t)
 			maps.Copy(tt.body, events)
 			assertStatus(t, e.doJSON(t, "PUT", "/api/v1/settings/notifications", e.adminToken(t), tt.body), http.StatusBadRequest)
-			if got := get(t, e); got.ReportFrequency != "off" || got.ReportTime != "07:00" || got.ReportMinute != 0 || !got.JobSuccess {
+			if got := get(t, e); got.ReportFrequency != "off" || got.ReportTime != "07:00" || got.ReportMinute != 0 ||
+				got.ReportWeekday != 1 || got.ReportDay != 1 || !got.JobSuccess {
 				t.Errorf("settings changed by a rejected request: %+v", got)
 			}
 		})

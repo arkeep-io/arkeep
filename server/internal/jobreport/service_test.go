@@ -119,6 +119,32 @@ func TestParseTime(t *testing.T) {
 	}
 }
 
+func TestParseWeekday(t *testing.T) {
+	for _, s := range []string{"0", "1", "6"} {
+		if _, err := ParseWeekday(s); err != nil {
+			t.Errorf("ParseWeekday(%q): %v", s, err)
+		}
+	}
+	for _, s := range []string{"", "-1", "7", "monday"} {
+		if _, err := ParseWeekday(s); err == nil {
+			t.Errorf("ParseWeekday(%q) accepted, want an error", s)
+		}
+	}
+}
+
+func TestParseDay(t *testing.T) {
+	for _, s := range []string{"1", "15", "28"} {
+		if _, err := ParseDay(s); err != nil {
+			t.Errorf("ParseDay(%q): %v", s, err)
+		}
+	}
+	for _, s := range []string{"", "0", "29", "31", "first"} {
+		if _, err := ParseDay(s); err == nil {
+			t.Errorf("ParseDay(%q) accepted, want an error", s)
+		}
+	}
+}
+
 func TestParseMinute(t *testing.T) {
 	for _, s := range []string{"0", "30", "59"} {
 		if _, err := ParseMinute(s); err != nil {
@@ -146,6 +172,16 @@ func TestSchedule_NextRun(t *testing.T) {
 			func(n time.Time) bool { return n.Minute() == 30 && n.Second() == 30 }},
 		{"daily at 07:15", map[string]string{KeyFrequency: FrequencyDaily, KeyTime: "07:15"}, 24 * time.Hour,
 			func(n time.Time) bool { return n.Hour() == 7 && n.Minute() == 15 && n.Second() == 30 }},
+		{"weekly on Wednesday at 07:15", map[string]string{KeyFrequency: FrequencyWeekly, KeyWeekday: "3", KeyTime: "07:15"}, 7 * 24 * time.Hour,
+			func(n time.Time) bool {
+				return n.Weekday() == time.Wednesday && n.Hour() == 7 && n.Minute() == 15 && n.Second() == 30
+			}},
+		{"weekly by default on Monday", map[string]string{KeyFrequency: FrequencyWeekly}, 7 * 24 * time.Hour,
+			func(n time.Time) bool { return n.Weekday() == time.Monday && n.Hour() == 7 && n.Minute() == 0 }},
+		{"monthly on day 5 at 07:15", map[string]string{KeyFrequency: FrequencyMonthly, KeyDay: "5", KeyTime: "07:15"}, 31 * 24 * time.Hour,
+			func(n time.Time) bool { return n.Day() == 5 && n.Hour() == 7 && n.Minute() == 15 && n.Second() == 30 }},
+		{"monthly by default on day 1", map[string]string{KeyFrequency: FrequencyMonthly}, 31 * 24 * time.Hour,
+			func(n time.Time) bool { return n.Day() == 1 && n.Hour() == 7 && n.Minute() == 0 }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,9 +219,51 @@ func TestLastDue(t *testing.T) {
 		{"daily, earlier today", config{frequency: FrequencyDaily, hour: 7}, time.Date(2026, 11, 19, 7, 0, 0, 0, vienna)},
 		{"daily, later today", config{frequency: FrequencyDaily, hour: 18, minute: 30}, time.Date(2026, 11, 18, 18, 30, 0, 0, vienna)},
 		{"daily, right now", config{frequency: FrequencyDaily, hour: 10, minute: 30}, now},
+		// now is a Thursday.
+		{"weekly, earlier this week", config{frequency: FrequencyWeekly, weekday: time.Monday, hour: 7}, time.Date(2026, 11, 16, 7, 0, 0, 0, vienna)},
+		{"weekly, today earlier", config{frequency: FrequencyWeekly, weekday: time.Thursday, hour: 7}, time.Date(2026, 11, 19, 7, 0, 0, 0, vienna)},
+		{"weekly, today later", config{frequency: FrequencyWeekly, weekday: time.Thursday, hour: 18}, time.Date(2026, 11, 12, 18, 0, 0, 0, vienna)},
+		{"weekly, later this week", config{frequency: FrequencyWeekly, weekday: time.Saturday, hour: 7}, time.Date(2026, 11, 14, 7, 0, 0, 0, vienna)},
+		{"weekly, Sunday", config{frequency: FrequencyWeekly, weekday: time.Sunday, hour: 7}, time.Date(2026, 11, 15, 7, 0, 0, 0, vienna)},
+		{"weekly, right now", config{frequency: FrequencyWeekly, weekday: time.Thursday, hour: 10, minute: 30}, now},
+		{"monthly, earlier this month", config{frequency: FrequencyMonthly, day: 1, hour: 7}, time.Date(2026, 11, 1, 7, 0, 0, 0, vienna)},
+		{"monthly, today earlier", config{frequency: FrequencyMonthly, day: 19, hour: 7}, time.Date(2026, 11, 19, 7, 0, 0, 0, vienna)},
+		{"monthly, today later", config{frequency: FrequencyMonthly, day: 19, hour: 18}, time.Date(2026, 10, 19, 18, 0, 0, 0, vienna)},
+		{"monthly, later this month", config{frequency: FrequencyMonthly, day: 28, hour: 7}, time.Date(2026, 10, 28, 7, 0, 0, 0, vienna)},
+		{"monthly, right now", config{frequency: FrequencyMonthly, day: 19, hour: 10, minute: 30}, now},
 	}
 	for _, tt := range tests {
 		if got := lastDue(tt.cfg, now); !got.Equal(tt.want) {
+			t.Errorf("%s: lastDue = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestLastDue_AcrossBoundaries checks the weekly and monthly report across a
+// change of year and of daylight saving time: the due time stays at the
+// configured time of day.
+func TestLastDue_AcrossBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config
+		now  time.Time
+		want time.Time
+	}{
+		{"monthly, previous year", config{frequency: FrequencyMonthly, day: 15, hour: 7},
+			time.Date(2027, 1, 10, 12, 0, 0, 0, vienna), time.Date(2026, 12, 15, 7, 0, 0, 0, vienna)},
+		{"monthly, day 28 in February", config{frequency: FrequencyMonthly, day: 28, hour: 7},
+			time.Date(2027, 3, 1, 12, 0, 0, 0, vienna), time.Date(2027, 2, 28, 7, 0, 0, 0, vienna)},
+		{"weekly, previous year", config{frequency: FrequencyWeekly, weekday: time.Wednesday, hour: 7},
+			time.Date(2027, 1, 2, 12, 0, 0, 0, vienna), time.Date(2026, 12, 30, 7, 0, 0, 0, vienna)},
+		// 2026-10-25: the clocks go back from CEST to CET.
+		{"weekly, across the end of DST", config{frequency: FrequencyWeekly, weekday: time.Friday, hour: 7},
+			time.Date(2026, 10, 29, 12, 0, 0, 0, vienna), time.Date(2026, 10, 23, 7, 0, 0, 0, vienna)},
+		{"monthly, across the end of DST", config{frequency: FrequencyMonthly, day: 20, hour: 7},
+			time.Date(2026, 11, 10, 12, 0, 0, 0, vienna), time.Date(2026, 10, 20, 7, 0, 0, 0, vienna)},
+	}
+	for _, tt := range tests {
+		got := lastDue(tt.cfg, tt.now)
+		if !got.Equal(tt.want) || got.Hour() != tt.cfg.hour {
 			t.Errorf("%s: lastDue = %v, want %v", tt.name, got, tt.want)
 		}
 	}
