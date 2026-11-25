@@ -37,7 +37,7 @@ import {
     ClipboardList,
 } from '@lucide/vue'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import type { FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
@@ -315,6 +315,10 @@ onMounted(async () => {
 onUnmounted(() => {
     unsubscribe?.()
 })
+
+// Refresh the recent jobs in place when a job is created or changes on the
+// server.
+useLiveRefresh('jobs', fetchJobs)
 </script>
 
 <template>
@@ -353,7 +357,7 @@ onUnmounted(() => {
 
             <!-- Actions -->
             <div v-if="!loading && mergedAgent" class="flex items-center gap-2">
-                <RefreshButton :loading="loading" :refresh="refreshAll" />
+                <RefreshButton live :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Rename

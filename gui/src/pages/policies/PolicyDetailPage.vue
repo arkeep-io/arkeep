@@ -38,7 +38,7 @@ import {
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import type { FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, Job, ApiResponse } from '@/types'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
@@ -194,6 +194,10 @@ function jobStatusVariant(status: string): 'default' | 'secondary' | 'outline' |
 // ---------------------------------------------------------------------------
 
 onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
+
+// Refresh the recent jobs in place when a job is created or changes on the
+// server.
+useLiveRefresh('jobs', fetchJobs)
 </script>
 
 <template>
@@ -226,7 +230,7 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && policy" class="flex items-center gap-2">
-                <RefreshButton :loading="loading" :refresh="refreshAll" />
+                <RefreshButton live :loading="loading" :refresh="refreshAll" />
                 <!-- The span receives hover while the disabled button has pointer-events: none -->
                 <Tooltip v-if="authStore.isAdmin" :disabled="policy.enabled">
                     <TooltipTrigger as-child>

@@ -11,9 +11,22 @@ vi.mock('@/services/api', () => ({
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
 
-vi.mock('@/services/websocket', () => ({
-  wsClient: { subscribe: () => () => {} },
-}))
+// The WebSocket client is replaced: tests deliver change messages by hand.
+const changeHandlers = vi.hoisted(() => new Set<(msg: unknown) => void>())
+vi.mock('@/services/websocket', async () => {
+  const { ref } = await import('vue')
+  return {
+    CHANGES_TOPIC: 'changes',
+    liveUpdatesUnavailable: ref(false),
+    wsClient: {
+      subscribe: (topic: string, handler: (msg: unknown) => void) => {
+        if (topic === 'changes') changeHandlers.add(handler)
+        return () => changeHandlers.delete(handler)
+      },
+      onReconnect: () => () => {},
+    },
+  }
+})
 
 const agent: Agent = {
   id: 'a1',
@@ -51,6 +64,7 @@ async function mountWith(a: Agent) {
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.mocked(api).mockReset()
+    changeHandlers.clear()
   })
 
   it('shows the versions of the embedded restic and rclone next to the agent version', async () => {
@@ -64,5 +78,19 @@ describe('AgentDetailPage', () => {
     const wrapper = await mountWith({ ...agent, restic_version: '', rclone_version: '' })
     expect(wrapper.text()).toContain('0.13.0')
     expect(wrapper.find('[data-testid="agent-tools-indicator"]').exists()).toBe(false)
+  })
+
+  it('refreshes the recent jobs when a job changes', async () => {
+    await mountWith(agent)
+    vi.useFakeTimers()
+    try {
+      const jobCalls = () => vi.mocked(api).mock.calls.filter(([url]) => String(url).includes('/jobs')).length
+      const before = jobCalls()
+      for (const handler of changeHandlers) handler({ type: 'change', topic: 'changes', payload: { type: 'jobs', id: 'j1' } })
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(jobCalls()).toBe(before + 1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

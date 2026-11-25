@@ -38,7 +38,7 @@ import {
     DatabaseBackup,
 } from '@lucide/vue'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import type { FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
@@ -248,6 +248,10 @@ function checkModeLabel(d: Destination): string {
 // ---------------------------------------------------------------------------
 
 onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
+
+// Refresh the recent jobs in place when a job is created or changes on the
+// server.
+useLiveRefresh('jobs', fetchJobs)
 </script>
 
 <template>
@@ -301,7 +305,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && destination" class="flex items-center gap-2">
-                <RefreshButton :loading="loading" :refresh="refreshAll" />
+                <RefreshButton live :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin && destination.retention_enabled && !destination.append_only"
                     variant="outline" size="sm" :disabled="triggerLoading" @click="triggerRetention">
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
