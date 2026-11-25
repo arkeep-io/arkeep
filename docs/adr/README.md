@@ -69,3 +69,4 @@ describe the architecture as implemented and are marked **Accepted**.
 | [0025](0025-publish-the-helm-chart-only-on-ghcr.md) | Publish the Helm chart only on GHCR | Accepted |
 | [0026](0026-repair-repositories-from-the-gui-under-a-destination-maintenance-mode.md) | Repair repositories from the GUI under a destination maintenance mode | Accepted |
 | [0027](0027-read-only-api-tokens-for-programs-that-read-the-api.md) | Read-only API tokens for programs that read the API | Accepted |
+| [0028](0028-refresh-gui-pages-from-change-events-published-by-the-repositories.md) | Refresh GUI pages from change events published by the repositories | Accepted |
