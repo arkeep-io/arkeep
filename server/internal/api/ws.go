@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -62,7 +61,7 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Topic resolution ---
-	topics := connectionTopics(h.resolveTopics(r, claims))
+	topics := connectionTopics(h.resolveTopics(r, claims), claims.Role)
 
 	// --- Upgrade & run ---
 	client, err := websocket.NewClient(h.hub, w, r, topics, h.logger)
@@ -92,16 +91,19 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// connectionTopics adds the topics every authenticated connection receives
-// without asking to the ones resolveTopics resolved: the changes topic, on
-// which the server announces what changed so the GUI refreshes the pages
-// showing it. Every client hears every change and filters by type itself: the
-// messages only carry types and IDs of objects any role can read.
-func connectionTopics(topics []string) []string {
-	if slices.Contains(topics, websocket.ChangesTopic) {
-		return topics
+// connectionTopics adds the topics a connection receives without asking to
+// the ones resolveTopics resolved: the changes topic, on which the server
+// announces what changed so the GUI refreshes the pages showing it, and for
+// an admin the admin changes topic. Every client hears every change of its
+// topics and filters by type itself: the messages only carry types and IDs of
+// objects its role can read (users and audit log entries only reach admins).
+// The role is the one of the access token the connection opened with.
+func connectionTopics(topics []string, role string) []string {
+	topics = append(topics, websocket.ChangesTopic)
+	if role == "admin" {
+		topics = append(topics, websocket.AdminChangesTopic)
 	}
-	return append(topics, websocket.ChangesTopic)
+	return topics
 }
 
 // resolveTopics builds the final topic list for a client connection.
@@ -134,7 +136,10 @@ func (h *WSHandler) resolveTopics(r *http.Request, claims *auth.Claims) []string
 	// Optional explicit topics from query parameter.
 	if raw := r.URL.Query().Get("topics"); raw != "" {
 		for _, t := range strings.Split(raw, ",") {
-			if strings.HasPrefix(strings.TrimSpace(t), "notifications:") {
+			// Notifications are only ever the user's own, and the changes
+			// topics are given by role in connectionTopics.
+			t = strings.TrimSpace(t)
+			if strings.HasPrefix(t, "notifications:") || t == websocket.ChangesTopic || t == websocket.AdminChangesTopic {
 				continue
 			}
 			add(t)

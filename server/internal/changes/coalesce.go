@@ -26,8 +26,11 @@ type coalescer struct {
 	mu sync.Mutex
 	// open holds the types whose window is running, with the change gathered
 	// in it (nil while none).
-	open map[string]*websocket.Change
+	open map[windowKey]*websocket.Change
 }
+
+// windowKey identifies a window: changes are gathered per topic and type.
+type windowKey struct{ topic, changeType string }
 
 // Coalesce returns a Publisher that coalesces the changes published through
 // it on pub, per type, over window.
@@ -36,24 +39,25 @@ func Coalesce(pub Publisher, window time.Duration) Publisher {
 		pub:       pub,
 		window:    window,
 		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
-		open:      make(map[string]*websocket.Change),
+		open:      make(map[windowKey]*websocket.Change),
 	}
 }
 
 func (c *coalescer) Publish(topic string, msg websocket.Message) {
 	change, ok := msg.Payload.(websocket.Change)
-	if topic != websocket.ChangesTopic || msg.Type != websocket.MsgChange || !ok {
+	if msg.Type != websocket.MsgChange || !ok {
 		c.pub.Publish(topic, msg)
 		return
 	}
+	key := windowKey{topic, change.Type}
 
 	c.mu.Lock()
-	gathered, running := c.open[change.Type]
+	gathered, running := c.open[key]
 	switch {
 	case !running:
-		c.open[change.Type] = nil
+		c.open[key] = nil
 	case gathered == nil:
-		c.open[change.Type] = &change
+		c.open[key] = &change
 	case gathered.ID != change.ID:
 		gathered.ID = ""
 	}
@@ -61,24 +65,24 @@ func (c *coalescer) Publish(topic string, msg websocket.Message) {
 
 	if !running {
 		c.pub.Publish(topic, msg)
-		c.afterFunc(c.window, func() { c.flush(change.Type) })
+		c.afterFunc(c.window, func() { c.flush(key) })
 	}
 }
 
-// flush ends the window of a type: it publishes the change gathered in it and
-// opens a new window, or closes it when nothing was gathered.
-func (c *coalescer) flush(changeType string) {
+// flush ends a window: it publishes the change gathered in it and opens a new
+// window, or closes it when nothing was gathered.
+func (c *coalescer) flush(key windowKey) {
 	c.mu.Lock()
-	gathered := c.open[changeType]
+	gathered := c.open[key]
 	if gathered == nil {
-		delete(c.open, changeType)
+		delete(c.open, key)
 	} else {
-		c.open[changeType] = nil
+		c.open[key] = nil
 	}
 	c.mu.Unlock()
 
 	if gathered != nil {
-		c.pub.Publish(websocket.ChangesTopic, websocket.Message{Type: websocket.MsgChange, Payload: *gathered})
-		c.afterFunc(c.window, func() { c.flush(changeType) })
+		c.pub.Publish(key.topic, websocket.Message{Type: websocket.MsgChange, Payload: *gathered})
+		c.afterFunc(c.window, func() { c.flush(key) })
 	}
 }

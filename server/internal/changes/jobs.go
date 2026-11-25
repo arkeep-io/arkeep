@@ -1,7 +1,7 @@
 // Package changes tells connected GUI clients that objects changed, so the
 // pages showing them refresh themselves instead of polling. Repositories are
-// wrapped in decorators that publish a websocket.MsgChange on
-// websocket.ChangesTopic after every successful write: every write goes
+// wrapped in decorators that publish a websocket.MsgChange on the topic of
+// its type (websocket.ChangeTopic) after every successful write: every write goes
 // through the repository, whatever package makes it, so none can forget to
 // publish. The transactions are inside the repository methods, so a client
 // that refreshes on the event reads the committed state.
@@ -31,40 +31,13 @@ type Publisher interface {
 // page receives them as job.log messages on job:<id>.
 type jobRepository struct {
 	repositories.JobRepository
-	pub Publisher
+	notifier
 }
 
 // NewJobRepository wraps jobs so that its writes publish a "jobs" change on
 // pub.
 func NewJobRepository(jobs repositories.JobRepository, pub Publisher) repositories.JobRepository {
-	return &jobRepository{JobRepository: jobs, pub: pub}
-}
-
-// changed publishes a change of the job id, or of several jobs when id is
-// the nil UUID.
-func (r *jobRepository) changed(id uuid.UUID) {
-	change := websocket.Change{Type: websocket.ChangeTypeJobs}
-	if id != uuid.Nil {
-		change.ID = id.String()
-	}
-	r.pub.Publish(websocket.ChangesTopic, websocket.Message{Type: websocket.MsgChange, Payload: change})
-}
-
-// after publishes a change of id when err is nil, and returns err.
-func (r *jobRepository) after(id uuid.UUID, err error) error {
-	if err == nil {
-		r.changed(id)
-	}
-	return err
-}
-
-// afterBulk publishes a change of several jobs when the write succeeded and
-// changed at least one row.
-func (r *jobRepository) afterBulk(n int64, err error) (int64, error) {
-	if err == nil && n > 0 {
-		r.changed(uuid.Nil)
-	}
-	return n, err
+	return &jobRepository{JobRepository: jobs, notifier: newNotifier(pub, websocket.ChangeTypeJobs)}
 }
 
 func (r *jobRepository) Create(ctx context.Context, job *db.Job) error {

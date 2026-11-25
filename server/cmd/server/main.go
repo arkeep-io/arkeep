@@ -222,24 +222,24 @@ func run(ctx context.Context, cfg *config) error {
 	}()
 
 	// --- Repositories ---
-	userRepo := repositories.NewUserRepository(gormDB)
-	refreshTokenRepo := repositories.NewRefreshTokenRepository(gormDB)
-	agentRepo := repositories.NewAgentRepository(gormDB)
-	destinationRepo := repositories.NewDestinationRepository(gormDB)
-	policyRepo := repositories.NewPolicyRepository(gormDB)
-	// The hub is created first: the job repository announces its writes on it
-	// (changes topic), so that open pages refresh themselves. Bursts of
-	// changes are coalesced to one per type and second.
+	// The hub is created first: the repositories of the objects the GUI lists
+	// announce their writes on it (changes topics), so that open pages refresh
+	// themselves. Bursts of changes are coalesced to one per type and second.
 	wsHub := websocket.NewHub()
 	changePublisher := changes.Coalesce(wsHub, changes.CoalesceWindow)
+	userRepo := changes.NewUserRepository(repositories.NewUserRepository(gormDB), changePublisher)
+	refreshTokenRepo := repositories.NewRefreshTokenRepository(gormDB)
+	agentRepo := changes.NewAgentRepository(repositories.NewAgentRepository(gormDB), changePublisher)
+	destinationRepo := changes.NewDestinationRepository(repositories.NewDestinationRepository(gormDB), changePublisher)
+	policyRepo := changes.NewPolicyRepository(repositories.NewPolicyRepository(gormDB), changePublisher)
 	jobRepo := changes.NewJobRepository(repositories.NewJobRepository(gormDB), changePublisher)
-	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
+	snapshotRepo := changes.NewSnapshotRepository(repositories.NewSnapshotRepository(gormDB), changePublisher)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 	notificationProviderRepo := repositories.NewNotificationProviderRepository(gormDB)
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
-	auditRepo := repositories.NewAuditRepository(gormDB)
+	auditRepo := changes.NewAuditRepository(repositories.NewAuditRepository(gormDB), changePublisher)
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
 	passwordChangeRepo := repositories.NewPasswordChangeChallengeRepository(gormDB)
