@@ -34,8 +34,25 @@ const success = ref(false)
 // which already documents this as living on this page.
 const webhookExists = ref(false)
 
-// The server's time zone (e.g. "CET"), in which the daily job report time is.
+// The server's time zone (e.g. "CET"), in which the job report time is.
 const serverTimezone = ref('')
+
+// The days of the weekly report, Monday first, with the server's numbering
+// (0 is Sunday).
+const WEEKDAYS = [
+    { value: 1, label: 'Monday' },
+    { value: 2, label: 'Tuesday' },
+    { value: 3, label: 'Wednesday' },
+    { value: 4, label: 'Thursday' },
+    { value: 5, label: 'Friday' },
+    { value: 6, label: 'Saturday' },
+    { value: 0, label: 'Sunday' },
+]
+
+// The last day of the month the monthly report can be sent on: the last one
+// that exists in every month (the server enforces the same limit).
+const MAX_REPORT_DAY = 28
+const MONTH_DAYS = Array.from({ length: MAX_REPORT_DAY }, (_, i) => i + 1)
 
 // The webhook URL is checked only when the webhook is enabled: a disabled
 // webhook is saved without one.
@@ -46,9 +63,11 @@ const schema = toTypedSchema(
         agent_offline: z.boolean(),
         agent_online: z.boolean(),
         email_enabled: z.boolean(),
-        report_frequency: z.enum(['off', 'hourly', 'daily']),
+        report_frequency: z.enum(['off', 'hourly', 'daily', 'weekly', 'monthly']),
         report_time: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/, 'Must be a time (HH:MM)'),
         report_minute: integerInRange(0, 59),
+        report_weekday: z.number().int().min(0).max(6),
+        report_day: z.number().int().min(1).max(MAX_REPORT_DAY),
         webhook_enabled: z.boolean(),
         webhook_url: z.string(),
         webhook_secret: z.string(),
@@ -70,6 +89,8 @@ const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
         report_frequency: 'off' as ReportFrequency,
         report_time: '07:00',
         report_minute: 0,
+        report_weekday: 1,
+        report_day: 1,
         webhook_enabled: false,
         webhook_url: '',
         webhook_secret: '',
@@ -88,13 +109,17 @@ const {
     errorMessage: reportMinuteError,
     resetField: resetReportMinute,
 } = useField<number | string>('report_minute')
+const { value: reportWeekday, resetField: resetReportWeekday } = useField<number>('report_weekday')
+const { value: reportDay, resetField: resetReportDay } = useField<number>('report_day')
 
-// Only the field of the chosen frequency is shown. The other one goes back to
-// its saved value, so an unsaved, invalid entry in a hidden field cannot block
-// saving without a visible error.
+// Only the fields of the chosen frequency are shown. The others go back to
+// their saved value, so an unsaved, invalid entry in a hidden field cannot
+// block saving without a visible error.
 watch(reportFrequency, (frequency) => {
     if (frequency !== 'hourly') resetReportMinute()
-    if (frequency !== 'daily') resetReportTime()
+    if (frequency !== 'weekly') resetReportWeekday()
+    if (frequency !== 'monthly') resetReportDay()
+    if (frequency === 'off' || frequency === 'hourly') resetReportTime()
 })
 const { value: webhookEnabled } = useField<boolean>('webhook_enabled')
 const { value: webhookUrl, errorMessage: webhookUrlError } = useField<string>('webhook_url')
@@ -164,6 +189,8 @@ const submit = handleSubmit(async (values) => {
                     report_frequency: values.report_frequency,
                     report_time: values.report_time,
                     report_minute: values.report_minute,
+                    report_weekday: values.report_weekday,
+                    report_day: values.report_day,
                 },
             }),
             api('/api/v1/settings/webhook', {
@@ -413,7 +440,7 @@ function discard() {
                     <div class="min-w-0">
                         <p class="text-sm font-medium">Frequency</p>
                         <p class="text-xs text-muted-foreground">
-                            Hourly at a set minute, or daily at a set time.
+                            Hourly at a set minute, or daily, weekly or monthly at a set time.
                         </p>
                     </div>
                     <Select :model-value="reportFrequency"
@@ -425,6 +452,8 @@ function discard() {
                             <SelectItem value="off">Off</SelectItem>
                             <SelectItem value="hourly">Hourly</SelectItem>
                             <SelectItem value="daily">Daily</SelectItem>
+                            <SelectItem value="weekly">Weekly</SelectItem>
+                            <SelectItem value="monthly">Monthly</SelectItem>
                         </SelectContent>
                     </Select>
                 </div>
@@ -444,7 +473,39 @@ function discard() {
                     <FieldError v-if="reportMinuteError" class="text-right">{{ reportMinuteError }}</FieldError>
                 </div>
 
-                <div v-if="reportFrequency === 'daily'" class="flex flex-col gap-1.5 border-t px-4 py-3">
+                <div v-if="reportFrequency === 'weekly'" class="flex items-center justify-between gap-4 border-t px-4 py-3">
+                    <FieldLabel for="report-weekday" class="text-sm font-medium">Day</FieldLabel>
+                    <Select :model-value="String(reportWeekday)"
+                        @update:model-value="reportWeekday = Number($event)">
+                        <SelectTrigger id="report-weekday" class="w-32 shrink-0" aria-label="Report day of the week">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem v-for="d in WEEKDAYS" :key="d.value" :value="String(d.value)">
+                                {{ d.label }}
+                            </SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                <div v-if="reportFrequency === 'monthly'" class="flex items-center justify-between gap-4 border-t px-4 py-3">
+                    <div class="min-w-0">
+                        <FieldLabel for="report-day" class="text-sm font-medium">Day of the month</FieldLabel>
+                        <p class="text-xs text-muted-foreground">1 to {{ MAX_REPORT_DAY }}, so it falls in every month.</p>
+                    </div>
+                    <Select :model-value="String(reportDay)"
+                        @update:model-value="reportDay = Number($event)">
+                        <SelectTrigger id="report-day" class="w-32 shrink-0" aria-label="Report day of the month">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem v-for="d in MONTH_DAYS" :key="d" :value="String(d)">{{ d }}</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                <div v-if="reportFrequency === 'daily' || reportFrequency === 'weekly' || reportFrequency === 'monthly'"
+                    class="flex flex-col gap-1.5 border-t px-4 py-3">
                     <div class="flex items-center justify-between gap-4">
                         <div class="min-w-0">
                             <FieldLabel for="report-time" class="text-sm font-medium">Time</FieldLabel>

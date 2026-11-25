@@ -518,17 +518,21 @@ export interface NotificationSettings {
   agent_online: boolean
   // Event notifications by email; the webhook has its own switch.
   email_enabled: boolean
-  // How often the job report email is sent, and the time of the daily one
-  // ("HH:MM" in the server's time zone).
+  // How often the job report email is sent, and the time of the daily,
+  // weekly and monthly one ("HH:MM" in the server's time zone).
   report_frequency: ReportFrequency
   report_time: string
   // The minute past the hour of the hourly report, 0 to 59.
   report_minute: number
+  // The day of the weekly report, 0 (Sunday) to 6.
+  report_weekday: number
+  // The day of the month of the monthly report, 1 to 28.
+  report_day: number
   // The server's time zone (e.g. "CET"), read-only.
   server_timezone: string
 }
 
-export type ReportFrequency = 'off' | 'hourly' | 'daily'
+export type ReportFrequency = 'off' | 'hourly' | 'daily' | 'weekly' | 'monthly'
 
 // LogRetentionSettings controls automatic pruning of job_logs rows. Days are
 // counted from each log line's timestamp; 0 means "keep forever" (disabled).

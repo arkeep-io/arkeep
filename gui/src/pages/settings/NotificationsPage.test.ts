@@ -11,7 +11,7 @@ vi.mock('@/services/api', async (importActual) => ({
 // The stored settings as the page saves them; GET adds server_timezone.
 const events = {
   job_success: false, job_failure: true, agent_offline: true, agent_online: false, email_enabled: true,
-  report_frequency: 'off', report_time: '07:00', report_minute: 0,
+  report_frequency: 'off', report_time: '07:00', report_minute: 0, report_weekday: 1, report_day: 1,
 }
 
 // openPage mounts the page with the stored settings and webhook (null = none).
@@ -31,6 +31,13 @@ async function openPage(webhook: { url: string; enabled: boolean } | null, store
 // putBody returns the body saved to url, if any.
 function putBody(url: string) {
   return vi.mocked(api).mock.calls.find(([u, opts]) => u === url && opts?.method === 'PUT')?.[1]?.body
+}
+
+// chooseIn picks value in the select whose trigger has the given id.
+async function chooseIn(wrapper: Awaited<ReturnType<typeof openPage>>, triggerId: string, value: string) {
+  const select = wrapper.findAllComponents({ name: 'Select' }).find((s) => s.find(`#${triggerId}`).exists())!
+  select.vm.$emit('update:modelValue', value)
+  await settle()
 }
 
 // enableWebhook switches the webhook on, as its toggle does.
@@ -141,6 +148,39 @@ describe('NotificationsPage', () => {
       await submitForm(wrapper)
 
       expect(putBody('/api/v1/settings/notifications')).toEqual({ ...events, report_frequency: 'daily' })
+    })
+
+    it('saves the day and the time of the weekly report', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'weekly' })
+      expect(wrapper.find('#report-day').exists()).toBe(false)
+      await chooseIn(wrapper, 'report-weekday', '0')
+      await wrapper.find('#report-time').setValue('18:30')
+      await submitForm(wrapper)
+
+      expect(putBody('/api/v1/settings/notifications')).toEqual({
+        ...events, report_frequency: 'weekly', report_weekday: 0, report_time: '18:30',
+      })
+    })
+
+    it('saves the day of the month and the time of the monthly report', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'monthly' })
+      expect(wrapper.find('#report-weekday').exists()).toBe(false)
+      await chooseIn(wrapper, 'report-day', '28')
+      await wrapper.find('#report-time').setValue('18:30')
+      await submitForm(wrapper)
+
+      expect(putBody('/api/v1/settings/notifications')).toEqual({
+        ...events, report_frequency: 'monthly', report_day: 28, report_time: '18:30',
+      })
+    })
+
+    it('drops an unsaved weekday when the monthly report is chosen', async () => {
+      const wrapper = await openPage(null, { report_frequency: 'weekly' })
+      await chooseIn(wrapper, 'report-weekday', '5')
+      await chooseIn(wrapper, 'report-frequency', 'monthly')
+      await submitForm(wrapper)
+
+      expect(putBody('/api/v1/settings/notifications')).toEqual({ ...events, report_frequency: 'monthly' })
     })
   })
 
