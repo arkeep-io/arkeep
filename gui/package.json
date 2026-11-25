@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@fontsource/be-vietnam-pro": "5.3.0",
+    "@internationalized/date": "3.12.4",
     "@lucide/vue": "1.78.0",
     "@tailwindcss/vite": "4.3.5",
     "@unovis/ts": "1.8.1",

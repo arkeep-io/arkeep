@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { getLocalTimeZone, parseDate, today } from '@internationalized/date'
+import type { DateValue } from 'reka-ui'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -7,6 +9,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Calendar } from '@/components/ui/calendar'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
@@ -14,7 +18,7 @@ import {
     Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import ApiTokenRevokeDialog from '@/components/users/ApiTokenRevokeDialog.vue'
-import { AlertCircle, KeyRound, Loader2 } from '@lucide/vue'
+import { AlertCircle, CalendarIcon, KeyRound, Loader2 } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import { formatDate } from '@/lib/jobUtils'
 import type { ApiResponse, ApiToken, CreatedApiToken } from '@/types'
@@ -46,13 +50,27 @@ onMounted(fetchTokens)
 // Create
 // ---------------------------------------------------------------------------
 
-// Expiry choices, in days; "never" sends null.
+// Expiry choices, in days; "custom" sends the end of the chosen day, "never"
+// sends no expiry.
 const expiryOptions = [
+    { value: '7', label: '7 days' },
     { value: '30', label: '30 days' },
     { value: '90', label: '90 days' },
     { value: '365', label: '1 year' },
+    { value: 'custom', label: 'Custom' },
     { value: 'never', label: 'No expiry' },
 ]
+
+// The range of a custom expiry date: from tomorrow, up to the last day whose
+// end is within the server's limit of 3650 days.
+const minExpiryDate = today(getLocalTimeZone()).add({ days: 1 })
+const maxExpiryDate = today(getLocalTimeZone()).add({ days: 3649 })
+
+// endOfDay is the last second of the day "YYYY-MM-DD" in the browser's time
+// zone: a token with a custom date works for the whole of that day.
+function endOfDay(day: string): Date {
+    return new Date(parseDate(day).add({ days: 1 }).toDate(getLocalTimeZone()).getTime() - 1000)
+}
 
 const createDialogOpen = ref(false)
 const createError = ref<string | null>(null)
@@ -63,12 +81,42 @@ const createForm = useForm({
     validationSchema: toTypedSchema(z.object({
         name: z.string().trim().min(1, 'Name is required').max(100, 'At most 100 characters'),
         expiry: z.string(),
+        // The chosen day as "YYYY-MM-DD" when expiry is "custom".
+        expiry_date: z.string(),
+    }).superRefine((data, ctx) => {
+        if (data.expiry === 'custom' && !data.expiry_date) {
+            ctx.addIssue({ code: 'custom', path: ['expiry_date'], message: 'Pick a date' })
+        }
     })),
-    initialValues: { name: '', expiry: '365' },
+    initialValues: { name: '', expiry: '365', expiry_date: '' },
 })
 const { isSubmitting: creating } = createForm
 const { value: name, errorMessage: nameError } = useField<string>('name', undefined, { form: createForm })
 const { value: expiry } = useField<string>('expiry', undefined, { form: createForm })
+const { value: expiryDate, errorMessage: expiryDateError } = useField<string>('expiry_date', undefined, { form: createForm })
+
+const datePickerOpen = ref(false)
+
+// The calendar's value: the chosen day, or none yet.
+const calendarDate = computed<DateValue | undefined>({
+    get: () => (expiryDate.value ? parseDate(expiryDate.value) : undefined),
+    set: (v) => {
+        expiryDate.value = v ? v.toString() : ''
+        datePickerOpen.value = false
+    },
+})
+
+// The date the token will expire, as the form stands; null for no expiry or
+// a custom date not picked yet.
+const expiresOn = computed<Date | null>(() => {
+    if (expiry.value === 'never') return null
+    if (expiry.value === 'custom') return expiryDate.value ? endOfDay(expiryDate.value) : null
+    return new Date(Date.now() + Number(expiry.value) * 24 * 60 * 60 * 1000)
+})
+
+function formatDay(d: Date): string {
+    return d.toLocaleDateString(undefined, { dateStyle: 'long' })
+}
 
 function openCreateDialog(): void {
     createForm.resetForm()
@@ -85,7 +133,9 @@ const submitCreate = createForm.handleSubmit(async (values) => {
             method: 'POST',
             body: {
                 name: values.name.trim(),
-                expires_in_days: values.expiry === 'never' ? null : Number(values.expiry),
+                ...(values.expiry === 'custom'
+                    ? { expires_at: endOfDay(values.expiry_date).toISOString() }
+                    : { expires_in_days: values.expiry === 'never' ? null : Number(values.expiry) }),
             },
         })
         createdToken.value = res.data
@@ -205,7 +255,34 @@ function isExpired(t: ApiToken): boolean {
                                 </SelectItem>
                             </SelectContent>
                         </Select>
-                        <FieldDescription>You can revoke the token at any time.</FieldDescription>
+                        <FieldDescription v-if="expiry !== 'custom'">
+                            {{ expiresOn ? `The token will expire on ${formatDay(expiresOn)}.` : 'The token will never expire.' }}
+                            You can revoke it at any time.
+                        </FieldDescription>
+                    </Field>
+                    <Field v-if="expiry === 'custom'">
+                        <FieldLabel for="api-token-expiry-date">Expiry date</FieldLabel>
+                        <Popover v-model:open="datePickerOpen">
+                            <PopoverTrigger as-child>
+                                <Button id="api-token-expiry-date" variant="outline"
+                                    class="w-56 justify-start font-normal"
+                                    :class="[
+                                        expiresOn ? '' : 'text-muted-foreground',
+                                        expiryDateError ? 'border-destructive focus-visible:ring-destructive/30' : '',
+                                    ]">
+                                    <CalendarIcon class="size-4" />
+                                    {{ expiresOn ? formatDay(expiresOn) : 'Pick a date' }}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent class="w-auto p-0" align="start">
+                                <Calendar v-model="calendarDate" :min-value="minExpiryDate"
+                                    :max-value="maxExpiryDate" initial-focus />
+                            </PopoverContent>
+                        </Popover>
+                        <FieldError v-if="expiryDateError">{{ expiryDateError }}</FieldError>
+                        <FieldDescription v-else>
+                            The token works until the end of that day. You can revoke it at any time.
+                        </FieldDescription>
                     </Field>
                 </FieldGroup>
                 <DialogFooter>

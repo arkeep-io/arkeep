@@ -131,9 +131,12 @@ func (h *APITokenHandler) ListMine(w http.ResponseWriter, r *http.Request) {
 // createAPITokenRequest is the body of POST /api/v1/users/me/api-tokens.
 type createAPITokenRequest struct {
 	Name string `json:"name"`
-	// ExpiresInDays is the token's lifetime, from 1 to 3650 days. Null or
-	// absent means the token does not expire.
-	ExpiresInDays *int `json:"expires_in_days"`
+	// ExpiresInDays is the token's lifetime, from 1 to 3650 days. ExpiresAt
+	// is its expiry as a date and time (RFC 3339), in the future and at most
+	// 3650 days ahead. At most one of the two is set: with neither, the token
+	// does not expire.
+	ExpiresInDays *int    `json:"expires_in_days"`
+	ExpiresAt     *string `json:"expires_at"`
 }
 
 // CreateMine handles POST /api/v1/users/me/api-tokens. The response holds
@@ -157,14 +160,31 @@ func (h *APITokenHandler) CreateMine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := h.now()
+	maxExpiry := now.Add(apiTokenMaxExpiryDays * 24 * time.Hour)
 	var expiresAt *time.Time
-	if req.ExpiresInDays != nil {
+	switch {
+	case req.ExpiresInDays != nil && req.ExpiresAt != nil:
+		ErrUnprocessable(w, "set expires_in_days or expires_at, not both")
+		return
+	case req.ExpiresInDays != nil:
 		days := *req.ExpiresInDays
 		if days < 1 || days > apiTokenMaxExpiryDays {
 			ErrUnprocessable(w, "expires_in_days must be between 1 and 3650, or null for no expiry")
 			return
 		}
 		t := now.Add(time.Duration(days) * 24 * time.Hour).UTC()
+		expiresAt = &t
+	case req.ExpiresAt != nil:
+		t, err := time.Parse(time.RFC3339, *req.ExpiresAt)
+		if err != nil {
+			ErrUnprocessable(w, "expires_at must be an RFC 3339 date and time")
+			return
+		}
+		if !t.After(now) || t.After(maxExpiry) {
+			ErrUnprocessable(w, "expires_at must be in the future and at most 3650 days ahead")
+			return
+		}
+		t = t.UTC()
 		expiresAt = &t
 	}
 

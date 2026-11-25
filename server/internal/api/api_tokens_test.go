@@ -173,6 +173,10 @@ func TestAPITokens_Validation(t *testing.T) {
 		"zero days":     {"name": "x", "expires_in_days": 0},
 		"too many days": {"name": "x", "expires_in_days": 3651},
 		"negative days": {"name": "x", "expires_in_days": -1},
+		"days and date": {"name": "x", "expires_in_days": 30, "expires_at": time.Now().Add(48 * time.Hour).Format(time.RFC3339)},
+		"invalid date":  {"name": "x", "expires_at": "2030-01-01"},
+		"past date":     {"name": "x", "expires_at": time.Now().Add(-time.Minute).Format(time.RFC3339)},
+		"date too far":  {"name": "x", "expires_at": time.Now().Add(3651 * 24 * time.Hour).Format(time.RFC3339)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			resp := e.post(t, "/api/v1/users/me/api-tokens", session, body)
@@ -191,6 +195,20 @@ func TestAPITokens_Validation(t *testing.T) {
 	}
 	if d := time.Until(expires); d < 29*24*time.Hour || d > 31*24*time.Hour {
 		t.Errorf("expires in %v, want 30 days", d)
+	}
+
+	// A chosen date and time is kept as given, in UTC.
+	want := time.Now().Add(10 * 24 * time.Hour).Truncate(time.Second).In(time.FixedZone("CET", 3600))
+	created = createAPIToken(t, e, userID, "user", map[string]any{"name": "y", "expires_at": want.Format(time.RFC3339)})
+	if created.ExpiresAt == nil {
+		t.Fatal("expires_at not set")
+	}
+	got, err := time.Parse(time.RFC3339, *created.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(want) {
+		t.Errorf("expires_at = %v, want %v", got, want)
 	}
 }
 

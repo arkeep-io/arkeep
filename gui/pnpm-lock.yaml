@@ -204,6 +204,9 @@ importers:
       '@fontsource/be-vietnam-pro':
         specifier: 5.3.0
         version: 5.3.0
+      '@internationalized/date':
+        specifier: 3.12.4
+        version: 3.12.4
       '@lucide/vue':
         specifier: 1.78.0
         version: 1.78.0(vue@3.5.46(typescript@6.0.3))
