@@ -89,7 +89,14 @@ function syncUrl() {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// Requests are numbered so that an answer older than the one shown is
+// dropped: a live refresh started before a filter or page change may answer
+// after it.
+let lastRequest = 0
+let shownRequest = 0
+
 async function fetchJobs({ quiet = false }: FetchOptions = {}) {
+    const request = ++lastRequest
     if (!quiet) {
         loading.value = true
         error.value = null
@@ -103,10 +110,13 @@ async function fetchJobs({ quiet = false }: FetchOptions = {}) {
         if (agentIdFilter.value) params.set('agent_id', agentIdFilter.value)
         if (destinationIdFilter.value) params.set('destination_id', destinationIdFilter.value)
         const res = await api<ApiResponse<JobListResponse>>(`/api/v1/jobs?${params}`)
+        if (request < shownRequest) return
+        shownRequest = request
         jobs.value = res.data.items
         total.value = res.data.total
         error.value = null
     } catch (e: any) {
+        if (request < shownRequest) return
         error.value = apiErrorMessage(e, 'Failed to load jobs.')
     } finally {
         if (!quiet) loading.value = false

@@ -161,7 +161,14 @@ function formatBytes(bytes: number): string {
 // Data fetching — dashboard aggregates + last 5 jobs in parallel
 // ---------------------------------------------------------------------------
 
+// Requests are numbered so that an answer older than the one shown is
+// dropped: two live refreshes, or a live refresh and the refresh button, may
+// answer out of order.
+let lastRequest = 0
+let shownRequest = 0
+
 async function fetchAll({ quiet = false }: FetchOptions = {}) {
+    const request = ++lastRequest
     if (!quiet) {
         loading.value = true
         error.value = null
@@ -171,10 +178,13 @@ async function fetchAll({ quiet = false }: FetchOptions = {}) {
             api<ApiResponse<DashboardData>>('/api/v1/dashboard'),
             api<ApiResponse<{ items: Job[]; total: number }>>('/api/v1/jobs?limit=5'),
         ])
+        if (request < shownRequest) return
+        shownRequest = request
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
         error.value = null
     } catch (e: any) {
+        if (request < shownRequest) return
         error.value = apiErrorMessage(e, 'Failed to load dashboard data.')
     } finally {
         if (!quiet) loading.value = false
