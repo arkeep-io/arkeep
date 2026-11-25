@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"go.uber.org/zap"
@@ -61,7 +62,7 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Topic resolution ---
-	topics := h.resolveTopics(r, claims)
+	topics := connectionTopics(h.resolveTopics(r, claims))
 
 	// --- Upgrade & run ---
 	client, err := websocket.NewClient(h.hub, w, r, topics, h.logger)
@@ -89,6 +90,18 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_id", claims.UserID),
 		zap.String("remote_addr", r.RemoteAddr),
 	)
+}
+
+// connectionTopics adds the topics every authenticated connection receives
+// without asking to the ones resolveTopics resolved: the changes topic, on
+// which the server announces what changed so the GUI refreshes the pages
+// showing it. Every client hears every change and filters by type itself: the
+// messages only carry types and IDs of objects any role can read.
+func connectionTopics(topics []string) []string {
+	if slices.Contains(topics, websocket.ChangesTopic) {
+		return topics
+	}
+	return append(topics, websocket.ChangesTopic)
 }
 
 // resolveTopics builds the final topic list for a client connection.

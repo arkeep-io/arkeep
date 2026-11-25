@@ -39,9 +39,10 @@ import {
     Trash2,
     Play,
     ShieldCheck,
-    RefreshCw,
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import type { FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, PolicyRecentJob, ApiResponse, TriggerResponse } from '@/types'
 import { formatDate, statusDotClass, statusLabel } from '@/lib/jobUtils'
@@ -120,17 +121,20 @@ function lastRunDate(policy: Policy): string | null {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchPolicies() {
-    loading.value = true
-    error.value = null
+async function fetchPolicies({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<PolicyListResponse>>(`/api/v1/policies?limit=${pageSize}&offset=${offset.value}${sortParams.value}`)
         policies.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load policies')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -234,9 +238,7 @@ onMounted(fetchPolicies)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchPolicies">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton :loading="loading" :refresh="fetchPolicies" />
                 <Button v-if="authStore.isAdmin" @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Policy

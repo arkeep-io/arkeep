@@ -20,7 +20,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { BriefcaseBusiness, RefreshCw } from '@lucide/vue'
+import { BriefcaseBusiness } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job, JobStatus, JobType } from '@/types'
 import { statusVariant, statusClass, statusLabel, statusIcon, formatDate, formatDuration } from '@/lib/jobUtils'
@@ -87,9 +89,11 @@ function syncUrl() {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchJobs() {
-    loading.value = true
-    error.value = null
+async function fetchJobs({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     syncUrl()
     try {
         const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset.value) })
@@ -101,10 +105,11 @@ async function fetchJobs() {
         const res = await api<ApiResponse<JobListResponse>>(`/api/v1/jobs?${params}`)
         jobs.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load jobs.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -121,6 +126,9 @@ async function goToPage(p: number) {
 }
 
 onMounted(fetchJobs)
+
+// Refresh in place when a job is created or changes on the server.
+useLiveRefresh('jobs', fetchJobs)
 </script>
 
 <template>
@@ -135,9 +143,7 @@ onMounted(fetchJobs)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJobs">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="fetchJobs" />
             </div>
         </div>
 

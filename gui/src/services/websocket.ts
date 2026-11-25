@@ -4,6 +4,7 @@
 // Consumers subscribe to named topics; the client handles connection lifecycle
 // transparently. A single WebSocket connection is shared across all subscribers.
 
+import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -14,6 +15,7 @@ type MessageType =
   | 'agent.status'
   | 'agent.metrics'
   | 'notification'
+  | 'change'
   | 'ping'
 
 interface WSMessage<T = unknown> {
@@ -30,10 +32,23 @@ const INITIAL_BACKOFF_MS = 1_000
 const MAX_BACKOFF_MS = 30_000
 const BACKOFF_MULTIPLIER = 2
 const PING_INTERVAL_MS = 25_000
+// UNAVAILABLE_AFTER_MS is how long the socket must stay down before
+// liveUpdatesUnavailable turns true: a normal reconnect (server restart,
+// laptop waking up) takes a few seconds and should not flash a warning.
+export const UNAVAILABLE_AFTER_MS = 30_000
+
+// CHANGES_TOPIC carries "something changed" events ({ type, id }). The server
+// subscribes every connection to it, like notifications:<user_id>.
+export const CHANGES_TOPIC = 'changes'
+
+// liveUpdatesUnavailable is true while the socket has been down for longer
+// than UNAVAILABLE_AFTER_MS, e.g. behind a proxy that does not upgrade
+// WebSocket connections: pages then only change when refreshed by hand.
+export const liveUpdatesUnavailable = ref(false)
 
 // ─── WebSocket Client ─────────────────────────────────────────────────────────
 
-class ArkeepWebSocketClient {
+export class ArkeepWebSocketClient {
   private ws: WebSocket | null = null
   private subscriptions: Map<string, Set<MessageHandler>> = new Map()
   private backoffMs = INITIAL_BACKOFF_MS
@@ -44,6 +59,16 @@ class ArkeepWebSocketClient {
   // openedTopics is the topics parameter the current socket was opened with.
   private openedTopics = ''
   private resyncQueued = false
+  // lost is true once a socket closed without being asked to: the next open
+  // is a reconnect, and events may have been missed meanwhile.
+  private lost = false
+  private reconnectListeners: Set<() => void> = new Set()
+  // handshakeFailed is true when the last socket closed without ever
+  // opening. The browser hides why; after a server restart it is a 401 on an
+  // access token the server no longer knows (its signing keys may live in
+  // memory), so the next attempt renews the token first.
+  private handshakeFailed = false
+  private unavailableTimer: ReturnType<typeof setTimeout> | null = null
 
   // connect opens the WebSocket connection. It is called automatically when
   // the first subscription is added if the socket is not yet open.
@@ -61,8 +86,22 @@ class ArkeepWebSocketClient {
   disconnect(): void {
     this.destroyed = true
     this._clearTimers()
+    this._clearUnavailable()
+    this.lost = false
     this.ws?.close()
     this.ws = null
+  }
+
+  // onReconnect registers a listener called each time the socket opens again
+  // after it was lost (not on the first connection, nor when the client
+  // reopens it itself to change its topics). Events published while it was
+  // down are gone: listeners refetch what they show. Returns a function that
+  // removes the listener.
+  onReconnect(listener: () => void): () => void {
+    this.reconnectListeners.add(listener)
+    return () => {
+      this.reconnectListeners.delete(listener)
+    }
   }
 
   // subscribe registers a handler for messages on the given topic.
@@ -124,8 +163,9 @@ class ArkeepWebSocketClient {
       ...this.explicitTopics,
       ...this.subscriptions.keys(),
     ].filter(
-      // Filter out the notifications topic — the server adds it automatically
-      (t) => !t.startsWith('notifications:'),
+      // Filter out the topics the server adds automatically, so subscribing to
+      // them never reopens the socket.
+      (t) => !t.startsWith('notifications:') && t !== CHANGES_TOPIC,
     )
     return [...new Set(allTopics)].join(',')
   }
@@ -159,6 +199,7 @@ class ArkeepWebSocketClient {
     if (this.destroyed) return
     if (this.ws?.readyState === WebSocket.CONNECTING) return
 
+    let opened = false
     try {
       this.openedTopics = this._topicsParam()
       this.ws = new WebSocket(this._buildURL())
@@ -168,9 +209,15 @@ class ArkeepWebSocketClient {
     }
 
     this.ws.onopen = () => {
+      opened = true
       console.debug('[WS] Connected')
       this.backoffMs = INITIAL_BACKOFF_MS
       this._startPing()
+      this._clearUnavailable()
+      if (this.lost) {
+        this.lost = false
+        for (const listener of this.reconnectListeners) listener()
+      }
     }
 
     this.ws.onmessage = (event: MessageEvent<string>) => {
@@ -185,6 +232,9 @@ class ArkeepWebSocketClient {
       console.debug(`[WS] Closed (code=${event.code})`)
       this._clearTimers()
       if (!this.destroyed) {
+        this.lost = true
+        this.handshakeFailed = !opened
+        this._startUnavailableTimer()
         this._scheduleReconnect()
       }
     }
@@ -223,13 +273,45 @@ class ArkeepWebSocketClient {
     const delay = this.backoffMs
     console.debug(`[WS] Reconnecting in ${delay}ms`)
 
-    this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
+      if (this.handshakeFailed) {
+        this.handshakeFailed = false
+        // Pages that only update from this socket send no request that would
+        // renew the token on a 401, so the socket renews it itself. While the
+        // server is down this fails like the connection, at most once per
+        // attempt; a refused refresh token ends the session as usual.
+        const auth = useAuthStore()
+        if (auth.accessToken) {
+          try {
+            await auth.refresh()
+          } catch { /* unreachable: the next attempt tries again */ }
+        }
+      }
       this._open()
     }, delay)
 
     // Exponential backoff capped at MAX_BACKOFF_MS
     this.backoffMs = Math.min(this.backoffMs * BACKOFF_MULTIPLIER, MAX_BACKOFF_MS)
+  }
+
+  // _startUnavailableTimer turns liveUpdatesUnavailable on if the socket is
+  // still down after UNAVAILABLE_AFTER_MS. The first failure starts the
+  // countdown; the next ones while it runs do not restart it.
+  private _startUnavailableTimer(): void {
+    if (this.unavailableTimer !== null || liveUpdatesUnavailable.value) return
+    this.unavailableTimer = setTimeout(() => {
+      this.unavailableTimer = null
+      liveUpdatesUnavailable.value = true
+    }, UNAVAILABLE_AFTER_MS)
+  }
+
+  private _clearUnavailable(): void {
+    if (this.unavailableTimer !== null) {
+      clearTimeout(this.unavailableTimer)
+      this.unavailableTimer = null
+    }
+    liveUpdatesUnavailable.value = false
   }
 
   private _startPing(): void {

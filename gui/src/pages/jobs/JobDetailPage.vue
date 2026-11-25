@@ -16,7 +16,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Progress } from '@/components/ui/progress'
 import {
     ArrowLeft,
-    RefreshCw,
     FileText,
     Server,
     CalendarClock,
@@ -25,6 +24,8 @@ import {
     Ban,
     Hourglass,
 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import { useAuthStore } from '@/stores/auth'
@@ -89,10 +90,15 @@ const isRunning = computed(() =>
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchJob() {
-    loading.value = true
-    error.value = null
-    progressData.value = null
+// A quiet refresh keeps the progress bar and, while the job
+// runs, the logs: they arrive live over the WebSocket, and the stored logs may
+// not hold the latest lines yet.
+async function fetchJob({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+        progressData.value = null
+    }
     try {
         const res = await api<ApiResponse<Job>>(`/api/v1/jobs/${jobId}`)
         // Guard against a stale response: if a terminal WS status already
@@ -101,6 +107,7 @@ async function fetchJob() {
         if (terminalSeen.value && !TERMINAL.includes(res.data.status)) return
         if (TERMINAL.includes(res.data.status)) terminalSeen.value = true
         job.value = res.data
+        error.value = null
 
         // Restore cached progress so the bar is visible immediately on reload.
         if (isRunning.value) {
@@ -112,11 +119,11 @@ async function fetchJob() {
 
         // Fetch logs separately. For finished jobs this is the only source of
         // truth; for running jobs we load historic DB logs and then append live ones.
-        await fetchLogs()
+        if (!quiet || !isRunning.value) await fetchLogs()
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load job.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -234,6 +241,12 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
 // ---------------------------------------------------------------------------
 
 onMounted(fetchJob)
+
+// Refresh the job's metadata when it changes on the server (destinations
+// finishing, a cancel, an interruption), or when the socket comes back. Only
+// the metadata, like the terminal job.status handler above: the logs stay as
+// they arrived live.
+useLiveRefresh((c) => c.type === 'jobs' && (c.id === jobId || c.id === ''), () => refreshJobMeta())
 </script>
 
 <template>
@@ -269,9 +282,7 @@ onMounted(fetchJob)
                     <XCircle class="w-3.5 h-3.5" />
                     {{ cancelling ? 'Cancelling…' : 'Cancel Job' }}
                 </Button>
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJob">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="fetchJob" />
             </div>
         </div>
 
