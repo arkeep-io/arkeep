@@ -164,7 +164,8 @@ describe('ArkeepWebSocketClient', () => {
   it('keeps retrying when the renewal fails while the server is down', async () => {
     const auth = useAuthStore()
     auth.accessToken = 'old'
-    auth.refresh = vi.fn().mockRejectedValue(new Error('unreachable'))
+    const refresh = vi.fn().mockRejectedValue(new Error('unreachable'))
+    auth.refresh = refresh
     client.subscribe('changes', () => {})
     current().drop()
     await vi.advanceTimersByTimeAsync(1_000)
@@ -173,6 +174,36 @@ describe('ArkeepWebSocketClient', () => {
     await vi.advanceTimersByTimeAsync(2_000)
 
     expect(sockets.length).toBe(attempts + 1)
+    // A failed renewal changed nothing: the next attempt tries again, so the
+    // token is renewed once the server is back.
+    expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  // Behind a proxy that does not pass WebSocket connections, every handshake
+  // fails while the server answers: renewing the token before each attempt
+  // would rotate the refresh token every 30 s for as long as the tab is open.
+  it('renews the token once per outage, not before every attempt', async () => {
+    const auth = useAuthStore()
+    auth.accessToken = 'old'
+    const refresh = vi.fn(async () => { auth.accessToken = 'new'; return true })
+    auth.refresh = refresh
+    client.subscribe('changes', () => {})
+
+    current().drop()
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(30_000)
+      current().drop()
+    }
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    // Once the socket opened again, a new outage may renew it again.
+    await vi.advanceTimersByTimeAsync(30_000)
+    current().open()
+    current().drop()
+    await vi.advanceTimersByTimeAsync(1_000)
+    current().drop()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
 
   it('clears the warning on disconnect', () => {

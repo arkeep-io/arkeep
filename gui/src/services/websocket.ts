@@ -68,6 +68,11 @@ export class ArkeepWebSocketClient {
   // access token the server no longer knows (its signing keys may live in
   // memory), so the next attempt renews the token first.
   private handshakeFailed = false
+  // tokenRenewed is true once the socket renewed the token since it last
+  // opened. A handshake that keeps failing with a fresh token is not about
+  // the token (e.g. a proxy that does not pass WebSocket connections), so it
+  // is not renewed again until the socket opens.
+  private tokenRenewed = false
   private unavailableTimer: ReturnType<typeof setTimeout> | null = null
 
   // connect opens the WebSocket connection. It is called automatically when
@@ -210,6 +215,7 @@ export class ArkeepWebSocketClient {
 
     this.ws.onopen = () => {
       opened = true
+      this.tokenRenewed = false
       console.debug('[WS] Connected')
       this.backoffMs = INITIAL_BACKOFF_MS
       this._startPing()
@@ -275,16 +281,18 @@ export class ArkeepWebSocketClient {
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null
-      if (this.handshakeFailed) {
+      if (this.handshakeFailed && !this.tokenRenewed) {
         this.handshakeFailed = false
         // Pages that only update from this socket send no request that would
-        // renew the token on a 401, so the socket renews it itself. While the
-        // server is down this fails like the connection, at most once per
-        // attempt; a refused refresh token ends the session as usual.
+        // renew the token on a 401, so the socket renews it itself, once per
+        // outage. While the server is down the renewal fails like the
+        // connection and is tried again on the next attempt; a refused
+        // refresh token ends the session as usual.
         const auth = useAuthStore()
         if (auth.accessToken) {
           try {
             await auth.refresh()
+            this.tokenRenewed = true
           } catch { /* unreachable: the next attempt tries again */ }
         }
       }
