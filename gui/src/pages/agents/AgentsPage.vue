@@ -26,9 +26,11 @@ import {
     PencilLine,
     Trash2,
     Server,
-    RefreshCw,
     Eye,
 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, ApiResponse } from '@/types'
@@ -100,20 +102,30 @@ const mergedAgents = computed(() =>
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchAgents() {
-    loading.value = true
-    error.value = null
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
+async function fetchAgents({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<AgentListResponse>>(
             `/api/v1/agents?limit=${pageSize}&offset=${offset.value}${sortParams.value}`
         )
+        if (!request.show()) return
         agents.value = res.data.items
         total.value = res.data.total
         subscribeToAgents()
+        error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load agents')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -262,6 +274,10 @@ function compareVersions(a: string, b: string): number {
 onMounted(fetchAgents)
 
 onUnmounted(teardownSubscriptions)
+
+// Refresh in place when an agent is added, renamed or deleted, or changes
+// status, on the server.
+useLiveRefresh('agents', fetchAgents)
 </script>
 
 <template>
@@ -275,9 +291,7 @@ onUnmounted(teardownSubscriptions)
                     Machines registered for backup management
                 </p>
             </div>
-            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchAgents">
-                <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-            </Button>
+            <RefreshButton live :loading="loading" :refresh="fetchAgents" />
         </div>
 
         <!-- Error banner -->

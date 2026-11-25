@@ -61,7 +61,7 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Topic resolution ---
-	topics := h.resolveTopics(r, claims)
+	topics := connectionTopics(h.resolveTopics(r, claims), claims.Role)
 
 	// --- Upgrade & run ---
 	client, err := websocket.NewClient(h.hub, w, r, topics, h.logger)
@@ -89,6 +89,21 @@ func (h *WSHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_id", claims.UserID),
 		zap.String("remote_addr", r.RemoteAddr),
 	)
+}
+
+// connectionTopics adds the topics a connection receives without asking to
+// the ones resolveTopics resolved: the changes topic, on which the server
+// announces what changed so the GUI refreshes the pages showing it, and for
+// an admin the admin changes topic. Every client hears every change of its
+// topics and filters by type itself: the messages only carry types and IDs of
+// objects its role can read (users and audit log entries only reach admins).
+// The role is the one of the access token the connection opened with.
+func connectionTopics(topics []string, role string) []string {
+	topics = append(topics, websocket.ChangesTopic)
+	if role == "admin" {
+		topics = append(topics, websocket.AdminChangesTopic)
+	}
+	return topics
 }
 
 // resolveTopics builds the final topic list for a client connection.
@@ -121,7 +136,10 @@ func (h *WSHandler) resolveTopics(r *http.Request, claims *auth.Claims) []string
 	// Optional explicit topics from query parameter.
 	if raw := r.URL.Query().Get("topics"); raw != "" {
 		for _, t := range strings.Split(raw, ",") {
-			if strings.HasPrefix(strings.TrimSpace(t), "notifications:") {
+			// Notifications are only ever the user's own, and the changes
+			// topics are given by role in connectionTopics.
+			t = strings.TrimSpace(t)
+			if strings.HasPrefix(t, "notifications:") || t == websocket.ChangesTopic || t == websocket.AdminChangesTopic {
 				continue
 			}
 			add(t)

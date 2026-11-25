@@ -8,7 +8,46 @@
 //	job:<uuid>                — status updates for a specific backup job
 //	agent:<uuid>             — online/offline/error transitions for an agent
 //	notifications:<user_id>  — in-app notifications for a specific user
+//	changes                  — "something changed" events for every client
+//	changes:admin            — the same, for objects only admins can read
 package websocket
+
+// ChangesTopic carries MsgChange events: a small notice that an object of some
+// type changed, so the pages showing that type refresh themselves. The server
+// subscribes every authenticated connection to it; the client filters by type.
+const ChangesTopic = "changes"
+
+// AdminChangesTopic carries the MsgChange events of the types only admins can
+// read (users, audit log). The server subscribes only admin connections to it.
+const AdminChangesTopic = "changes:admin"
+
+// Object types carried by MsgChange events.
+const (
+	ChangeTypeJobs         = "jobs"
+	ChangeTypeAgents       = "agents"
+	ChangeTypePolicies     = "policies"
+	ChangeTypeDestinations = "destinations"
+	ChangeTypeSnapshots    = "snapshots"
+	ChangeTypeUsers        = "users"
+	ChangeTypeAudit        = "audit"
+)
+
+// ChangeTopic returns the topic the changes of changeType are published on.
+func ChangeTopic(changeType string) string {
+	switch changeType {
+	case ChangeTypeUsers, ChangeTypeAudit:
+		return AdminChangesTopic
+	default:
+		return ChangesTopic
+	}
+}
+
+// Change is the payload of a MsgChange event. ID is the changed object's ID,
+// or empty when a write changed several objects at once.
+type Change struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
 
 // MessageType identifies the kind of event carried by a Message.
 // The GUI uses this field to route the payload to the correct store update.
@@ -35,6 +74,11 @@ const (
 	// the subscribed user.
 	MsgNotification MessageType = "notification"
 
+	// MsgChange is published on ChangesTopic (or AdminChangesTopic) after an
+	// object changed. It only says what changed (Change): clients fetch the
+	// new state themselves.
+	MsgChange MessageType = "change"
+
 	// MsgPing is sent by the hub periodically to keep the connection alive
 	// and let the client detect stale connections.
 	MsgPing MessageType = "ping"
@@ -60,6 +104,7 @@ type Message struct {
 	//   - agent.status:  {"status":"online","ip_address":"..."}
 	//   - agent.metrics: {"cpu_percent":12.5,"mem_percent":60.1,"disk_percent":45.0}
 	//   - notification:  {"id":"...","type":"...","title":"...","body":"..."}
+	//   - change:        {"type":"jobs","id":"..."} (id "" for a bulk change)
 	//   - ping:          {} (empty)
 	Payload any `json:"payload"`
 }

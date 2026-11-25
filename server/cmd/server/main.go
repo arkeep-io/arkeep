@@ -24,6 +24,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentwatchdog"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/changes"
 	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
@@ -221,19 +222,24 @@ func run(ctx context.Context, cfg *config) error {
 	}()
 
 	// --- Repositories ---
-	userRepo := repositories.NewUserRepository(gormDB)
+	// The hub is created first: the repositories of the objects the GUI lists
+	// announce their writes on it (changes topics), so that open pages refresh
+	// themselves. Bursts of changes are coalesced to one per type and second.
+	wsHub := websocket.NewHub()
+	changePublisher := changes.Coalesce(wsHub, changes.CoalesceWindow)
+	userRepo := changes.NewUserRepository(repositories.NewUserRepository(gormDB), changePublisher)
 	refreshTokenRepo := repositories.NewRefreshTokenRepository(gormDB)
-	agentRepo := repositories.NewAgentRepository(gormDB)
-	destinationRepo := repositories.NewDestinationRepository(gormDB)
-	policyRepo := repositories.NewPolicyRepository(gormDB)
-	jobRepo := repositories.NewJobRepository(gormDB)
-	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
+	agentRepo := changes.NewAgentRepository(repositories.NewAgentRepository(gormDB), changePublisher)
+	destinationRepo := changes.NewDestinationRepository(repositories.NewDestinationRepository(gormDB), changePublisher)
+	policyRepo := changes.NewPolicyRepository(repositories.NewPolicyRepository(gormDB), changePublisher)
+	jobRepo := changes.NewJobRepository(repositories.NewJobRepository(gormDB), changePublisher)
+	snapshotRepo := changes.NewSnapshotRepository(repositories.NewSnapshotRepository(gormDB), changePublisher)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 	notificationProviderRepo := repositories.NewNotificationProviderRepository(gormDB)
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
-	auditRepo := repositories.NewAuditRepository(gormDB)
+	auditRepo := changes.NewAuditRepository(repositories.NewAuditRepository(gormDB), changePublisher)
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
 	passwordChangeRepo := repositories.NewPasswordChangeChallengeRepository(gormDB)
@@ -380,7 +386,6 @@ func run(ctx context.Context, cfg *config) error {
 	// --- WebSocket Hub ---
 	// The hub must start before the HTTP server so clients can connect
 	// immediately after the server is ready.
-	wsHub := websocket.NewHub()
 
 	// background tracks the long-running services started below. They all
 	// return once ctx is cancelled, and shutdown waits for them before the

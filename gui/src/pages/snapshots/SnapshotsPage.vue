@@ -31,7 +31,10 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RefreshCw, RotateCcw, Trash2 } from '@lucide/vue'
+import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RotateCcw, Trash2 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Destination, PaginatedResponse, Snapshot, SyncDestinationResponse } from '@/types'
 import { summariseSync } from '@/lib/syncSummary'
@@ -114,21 +117,31 @@ function abbreviate(id: string | undefined): string {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchSnapshots() {
-    loading.value = true
-    error.value = null
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
+async function fetchSnapshots({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const params = new URLSearchParams({ limit: String(pageSize), offset: String(offset.value) })
         if (policyFilter.value) params.set('policy_id', policyFilter.value)
         if (destinationFilter.value) params.set('destination_id', destinationFilter.value)
 
         const res = await api<ApiResponse<SnapshotListResponse>>(`/api/v1/snapshots?${params}`)
+        if (!request.show()) return
         snapshots.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load snapshots.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -246,6 +259,9 @@ async function syncSnapshots() {
 }
 
 onMounted(fetchSnapshots)
+
+// Refresh in place when a snapshot changes on the server.
+useLiveRefresh('snapshots', fetchSnapshots)
 </script>
 
 <template>
@@ -267,9 +283,7 @@ onMounted(fetchSnapshots)
                     <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
                     {{ destinationFilter ? 'Sync Destination' : 'Sync All' }}
                 </Button>
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchSnapshots">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="fetchSnapshots" />
             </div>
         </div>
 

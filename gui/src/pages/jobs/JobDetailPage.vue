@@ -16,7 +16,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Progress } from '@/components/ui/progress'
 import {
     ArrowLeft,
-    RefreshCw,
     FileText,
     Server,
     CalendarClock,
@@ -25,6 +24,8 @@ import {
     Ban,
     Hourglass,
 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { useWebSocket } from '@/services/websocket'
 import { useAuthStore } from '@/stores/auth'
@@ -234,6 +235,12 @@ useWebSocket<JobLogPayload>(`job:${jobId}`, (msg) => {
 // ---------------------------------------------------------------------------
 
 onMounted(fetchJob)
+
+// Refresh the job's metadata when it changes on the server (destinations
+// finishing, a cancel, an interruption), or when the socket comes back. Only
+// the metadata, like the terminal job.status handler above: the logs stay as
+// they arrived live.
+useLiveRefresh((c) => c.type === 'jobs' && (c.id === jobId || c.id === ''), () => refreshJobMeta())
 </script>
 
 <template>
@@ -269,9 +276,7 @@ onMounted(fetchJob)
                     <XCircle class="w-3.5 h-3.5" />
                     {{ cancelling ? 'Cancelling…' : 'Cancel Job' }}
                 </Button>
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchJob">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="fetchJob" />
             </div>
         </div>
 

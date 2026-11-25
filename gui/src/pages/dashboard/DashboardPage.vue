@@ -12,10 +12,12 @@ import {
     TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Server, ShieldCheck, BriefcaseBusiness, Camera, RefreshCw, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
+import { Server, ShieldCheck, BriefcaseBusiness, Camera, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {
@@ -160,24 +162,39 @@ function formatBytes(bytes: number): string {
 // Data fetching — dashboard aggregates + last 5 jobs in parallel
 // ---------------------------------------------------------------------------
 
-async function fetchAll() {
-    loading.value = true
-    error.value = null
+// Answers older than the one shown are dropped (see requestOrder): two live
+// refreshes, or a live refresh and the refresh button, may answer out of order.
+const beginRequest = requestOrder()
+
+async function fetchAll({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const [dashRes, jobsRes] = await Promise.all([
             api<ApiResponse<DashboardData>>('/api/v1/dashboard'),
             api<ApiResponse<{ items: Job[]; total: number }>>('/api/v1/jobs?limit=5'),
         ])
+        if (!request.show()) return
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
+        error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load dashboard data.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
 onMounted(fetchAll)
+
+// Refresh in place when something the dashboard counts changes on the server:
+// the recent jobs, and the counters of agents, policies, destinations (checks),
+// snapshots and jobs.
+useLiveRefresh(['jobs', 'agents', 'policies', 'destinations', 'snapshots'], fetchAll)
 </script>
 
 <template>
@@ -191,9 +208,7 @@ onMounted(fetchAll)
                     Overview of your backup infrastructure.
                 </p>
             </div>
-            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchAll">
-                <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-            </Button>
+            <RefreshButton live :loading="loading" :refresh="fetchAll" />
         </div>
 
         <!-- Error banner -->

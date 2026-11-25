@@ -11,9 +11,29 @@ vi.mock('@/services/api', () => ({
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
 
-vi.mock('@/services/websocket', () => ({
-  wsClient: { subscribe: () => () => {} },
+// The page reads the agent's ID from the route.
+vi.mock('vue-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('vue-router')>()),
+  useRoute: () => ({ params: { id: 'a1' }, query: {} }),
 }))
+
+// The WebSocket client is replaced: tests deliver change messages by hand.
+const changeHandlers = vi.hoisted(() => new Set<(msg: unknown) => void>())
+vi.mock('@/services/websocket', async () => {
+  const { ref } = await import('vue')
+  return {
+    CHANGES_TOPIC: 'changes',
+    ADMIN_CHANGES_TOPIC: 'changes:admin',
+    liveUpdatesUnavailable: ref(false),
+    wsClient: {
+      subscribe: (topic: string, handler: (msg: unknown) => void) => {
+        if (topic === 'changes') changeHandlers.add(handler)
+        return () => changeHandlers.delete(handler)
+      },
+      onReconnect: () => () => {},
+    },
+  }
+})
 
 const agent: Agent = {
   id: 'a1',
@@ -51,6 +71,7 @@ async function mountWith(a: Agent) {
 describe('AgentDetailPage', () => {
   beforeEach(() => {
     vi.mocked(api).mockReset()
+    changeHandlers.clear()
   })
 
   it('shows the versions of the embedded restic and rclone next to the agent version', async () => {
@@ -64,5 +85,30 @@ describe('AgentDetailPage', () => {
     const wrapper = await mountWith({ ...agent, restic_version: '', rclone_version: '' })
     expect(wrapper.text()).toContain('0.13.0')
     expect(wrapper.find('[data-testid="agent-tools-indicator"]').exists()).toBe(false)
+  })
+
+  it('refreshes the recent jobs when a job changes, and the agent when it changes', async () => {
+    await mountWith(agent)
+    vi.useFakeTimers()
+    try {
+      const calls = (path: string) => vi.mocked(api).mock.calls.filter(([url]) => String(url).includes(path)).length
+      const change = async (type: string, id: string) => {
+        for (const handler of changeHandlers) handler({ type: 'change', topic: 'changes', payload: { type, id } })
+        await vi.advanceTimersByTimeAsync(1_000)
+      }
+      const jobs = calls('/jobs')
+      const agents = calls('/agents/a1')
+
+      await change('jobs', 'j1')
+      expect(calls('/jobs')).toBe(jobs + 1)
+      expect(calls('/agents/a1')).toBe(agents)
+
+      await change('agents', 'another')
+      expect(calls('/agents/a1')).toBe(agents)
+      await change('agents', 'a1')
+      expect(calls('/agents/a1')).toBe(agents + 1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

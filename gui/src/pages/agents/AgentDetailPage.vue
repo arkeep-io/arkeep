@@ -27,7 +27,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import {
     ArrowLeft,
-    RefreshCw,
     PencilLine,
     Trash2,
     KeyRound,
@@ -37,6 +36,8 @@ import {
     HardDrive,
     ClipboardList,
 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import { wsClient } from '@/services/websocket'
 import type { Agent, AgentStatus, Job, ApiResponse } from '@/types'
@@ -136,21 +137,24 @@ const resetIdentityLoading = ref(false)
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchAgent() {
-    loading.value = true
-    error.value = null
+async function fetchAgent({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<Agent>>(`/api/v1/agents/${agentId}`)
         agent.value = res.data
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load agent')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
-async function fetchJobs() {
-    jobsLoading.value = true
+async function fetchJobs({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) jobsLoading.value = true
     try {
         const res = await api<ApiResponse<JobListResponse>>(
             `/api/v1/jobs?agent_id=${agentId}&limit=5&offset=0`
@@ -159,8 +163,13 @@ async function fetchJobs() {
     } catch {
         // Non-fatal — jobs section just stays empty
     } finally {
-        jobsLoading.value = false
+        if (!quiet) jobsLoading.value = false
     }
+}
+
+// refreshAll reloads the agent and its latest jobs.
+function refreshAll(options: FetchOptions = {}) {
+    return Promise.all([fetchAgent(options), fetchJobs(options)])
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +315,14 @@ onMounted(async () => {
 onUnmounted(() => {
     unsubscribe?.()
 })
+
+// Refresh the recent jobs in place when a job is created or changes on the
+// server.
+useLiveRefresh('jobs', fetchJobs)
+
+// Refresh the agent in place when it changes on the server (a rename, its
+// identity, its status).
+useLiveRefresh((c) => c.type === 'agents' && (c.id === agentId || c.id === ''), fetchAgent)
 </script>
 
 <template>
@@ -344,9 +361,7 @@ onUnmounted(() => {
 
             <!-- Actions -->
             <div v-if="!loading && mergedAgent" class="flex items-center gap-2">
-                <Button variant="outline" size="icon" aria-label="Refresh" @click="fetchAgent(); fetchJobs()">
-                    <RefreshCw class="w-4 h-4" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin" variant="outline" size="sm" @click="editSheetOpen = true">
                     <PencilLine class="w-4 h-4 mr-1.5" />
                     Rename

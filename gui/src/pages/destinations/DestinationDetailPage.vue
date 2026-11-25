@@ -37,6 +37,8 @@ import {
     ShieldCheck,
     DatabaseBackup,
 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
@@ -92,16 +94,19 @@ const resetRepoLoading = ref(false)
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchDestination() {
-    loading.value = true
-    error.value = null
+async function fetchDestination({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
         destination.value = res.data
+        error.value = null
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load destination')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -121,8 +126,8 @@ function onRepairChanged() {
     fetchJobs()
 }
 
-async function fetchJobs() {
-    jobsLoading.value = true
+async function fetchJobs({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) jobsLoading.value = true
     try {
         const res = await api<ApiResponse<JobListResponse>>(
             `/api/v1/jobs?destination_id=${destinationId}&limit=10&offset=0`
@@ -131,8 +136,13 @@ async function fetchJobs() {
     } catch {
         // Non-fatal — jobs section stays empty
     } finally {
-        jobsLoading.value = false
+        if (!quiet) jobsLoading.value = false
     }
+}
+
+// refreshAll reloads the destination and its latest jobs.
+function refreshAll(options: FetchOptions = {}) {
+    return Promise.all([fetchDestination(options), fetchJobs(options)])
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +248,14 @@ function checkModeLabel(d: Destination): string {
 // ---------------------------------------------------------------------------
 
 onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
+
+// Refresh the recent jobs in place when a job is created or changes on the
+// server.
+useLiveRefresh('jobs', fetchJobs)
+
+// Refresh the destination in place when it changes on the server, or a job
+// does: the jobs holding it (locks) are released by the job's own writes.
+useLiveRefresh((c) => c.type === 'jobs' || (c.type === 'destinations' && (c.id === destinationId || c.id === '')), fetchDestination)
 </script>
 
 <template>
@@ -291,9 +309,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && destination" class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchDestination(); fetchJobs()">
-                    <RefreshCw class="w-4 h-4" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin && destination.retention_enabled && !destination.append_only"
                     variant="outline" size="sm" :disabled="triggerLoading" @click="triggerRetention">
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
