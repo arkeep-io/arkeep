@@ -11,6 +11,13 @@ vi.mock('@/services/api', () => ({
   api,
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
+// The unovis charts measure text with SVG APIs jsdom lacks, and finish
+// rendering after the test ends. Stubbing them by name does not work (their
+// components are all named "index"): the module is replaced.
+vi.mock('@unovis/vue', () => {
+  const chart = { render: () => null }
+  return { VisXYContainer: chart, VisArea: chart, VisAxis: chart, VisGroupedBar: chart }
+})
 // The live refresh is captured: tests run it by hand, as a change event would.
 vi.mock('@/composables/useLiveRefresh', () => ({
   useLiveRefresh: (_concerns: unknown, refresh: (o: { quiet?: boolean }) => unknown) => {
