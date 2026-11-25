@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountPage, settle } from '@/test/mount'
 import { api } from '@/services/api'
 import type { ApiToken } from '@/types'
@@ -31,6 +31,18 @@ async function openSection(tokens: ApiToken[]) {
   })
   const { wrapper } = await mountPage(ApiTokensSection, { attachTo: document.body })
   return wrapper
+}
+
+// choose picks value in the select whose trigger has the given id.
+async function choose(wrapper: Awaited<ReturnType<typeof openSection>>, triggerId: string, value: string) {
+  const select = wrapper.findAllComponents({ name: 'Select' }).find((s) => s.find(`#${triggerId}`).exists())!
+  select.vm.$emit('update:modelValue', value)
+  await settle()
+}
+
+// postBody returns the body of the token creation, if any.
+function postBody() {
+  return vi.mocked(api).mock.calls.find(([, o]) => (o as any)?.method === 'POST')?.[1]?.body
 }
 
 const click = async (wrapper: Awaited<ReturnType<typeof openSection>>, label: string) => {
@@ -76,6 +88,72 @@ describe('ApiTokensSection', () => {
     await click(wrapper, 'Done')
     expect(wrapper.find('[data-testid="created-api-token"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('ark_secret-token-value')
+  })
+
+  describe('expiry', () => {
+    // A fixed "now", so the calendar shows a known month. Only Date is faked:
+    // the page's timers and promises run as usual.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date(2026, 10, 10, 9, 0))
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('offers 7 days first and says when the token expires', async () => {
+      const wrapper = await openSection([])
+      await click(wrapper, 'Create token')
+      await choose(wrapper, 'api-token-expiry', '7')
+      await wrapper.find('#api-token-name').setValue('HA')
+
+      const expected = new Date(2026, 10, 17).toLocaleDateString(undefined, { dateStyle: 'long' })
+      expect(document.body.textContent).toContain(`The token will expire on ${expected}.`)
+      await click(wrapper, 'Create')
+      expect(postBody()).toEqual({ name: 'HA', expires_in_days: 7 })
+    })
+
+    it('says a token without expiry never expires', async () => {
+      const wrapper = await openSection([])
+      await click(wrapper, 'Create token')
+      await choose(wrapper, 'api-token-expiry', 'never')
+      await wrapper.find('#api-token-name').setValue('HA')
+
+      expect(document.body.textContent).toContain('The token will never expire.')
+      await click(wrapper, 'Create')
+      expect(postBody()).toEqual({ name: 'HA', expires_in_days: null })
+    })
+
+    it('requires a date for a custom expiry', async () => {
+      const wrapper = await openSection([])
+      await click(wrapper, 'Create token')
+      await choose(wrapper, 'api-token-expiry', 'custom')
+      await wrapper.find('#api-token-name').setValue('HA')
+      await click(wrapper, 'Create')
+
+      expect(document.querySelector('[data-slot="field-error"]')?.textContent).toContain('Pick a date')
+      expect(postBody()).toBeUndefined()
+    })
+
+    it('sends the end of the day picked in the calendar', async () => {
+      const wrapper = await openSection([])
+      await click(wrapper, 'Create token')
+      await choose(wrapper, 'api-token-expiry', 'custom')
+      await wrapper.find('#api-token-name').setValue('HA')
+
+      await wrapper.find('#api-token-expiry-date').trigger('click')
+      await settle()
+      // Today and earlier days cannot be picked.
+      expect(document.querySelector('[data-value="2026-11-10"]')?.hasAttribute('data-disabled')).toBe(true)
+      const day = document.querySelector<HTMLElement>('[data-value="2026-11-20"]')!
+      day.click()
+      await settle()
+
+      const expected = new Date(2026, 10, 20).toLocaleDateString(undefined, { dateStyle: 'long' })
+      expect(wrapper.find('#api-token-expiry-date').text()).toContain(expected)
+      await click(wrapper, 'Create')
+      expect(postBody()).toEqual({ name: 'HA', expires_at: new Date(2026, 10, 20, 23, 59, 59).toISOString() })
+    })
   })
 
   it('revokes a token after confirmation', async () => {
