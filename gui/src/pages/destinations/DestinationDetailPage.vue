@@ -252,6 +252,10 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
 // Refresh the recent jobs in place when a job is created or changes on the
 // server.
 useLiveRefresh('jobs', fetchJobs)
+
+// Refresh the destination in place when it changes on the server, or a job
+// does: the jobs holding it (locks) are released by the job's own writes.
+useLiveRefresh((c) => c.type === 'jobs' || (c.type === 'destinations' && (c.id === destinationId || c.id === '')), fetchDestination)
 </script>
 
 <template>

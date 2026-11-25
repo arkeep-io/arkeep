@@ -41,6 +41,9 @@ export const UNAVAILABLE_AFTER_MS = 30_000
 // CHANGES_TOPIC carries "something changed" events ({ type, id }). The server
 // subscribes every connection to it, like notifications:<user_id>.
 export const CHANGES_TOPIC = 'changes'
+// ADMIN_CHANGES_TOPIC carries the events of the types only admins can read
+// (users, audit log). The server subscribes only admin connections to it.
+export const ADMIN_CHANGES_TOPIC = 'changes:admin'
 
 // liveUpdatesUnavailable is true while the socket has been down for longer
 // than UNAVAILABLE_AFTER_MS, e.g. behind a proxy that does not upgrade
@@ -171,7 +174,7 @@ export class ArkeepWebSocketClient {
     ].filter(
       // Filter out the topics the server adds automatically, so subscribing to
       // them never reopens the socket.
-      (t) => !t.startsWith('notifications:') && t !== CHANGES_TOPIC,
+      (t) => !t.startsWith('notifications:') && t !== CHANGES_TOPIC && t !== ADMIN_CHANGES_TOPIC,
     )
     return [...new Set(allTopics)].join(',')
   }

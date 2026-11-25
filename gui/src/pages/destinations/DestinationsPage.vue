@@ -48,7 +48,8 @@ import { lockExplanation, lockLabel } from '@/lib/destinationLocks'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import type { FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { Destination, ApiResponse } from '@/types'
@@ -146,17 +147,24 @@ watch(sortParams, () => {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
 async function fetchDestinations({ quiet = false }: FetchOptions = {}) {
+  const request = beginRequest()
   if (!quiet) {
     loading.value = true
     error.value = null
   }
   try {
     const res = await api<ApiResponse<DestinationListResponse>>(`/api/v1/destinations?limit=${pageSize}&offset=${offset.value}${sortParams.value}`)
+    if (!request.show()) return
     destinations.value = res.data.items
     total.value = res.data.total
     error.value = null
   } catch (e: any) {
+    if (request.stale) return
     error.value = apiErrorMessage(e, 'Failed to load destinations')
   } finally {
     if (!quiet) loading.value = false
@@ -232,6 +240,10 @@ async function confirmDelete() {
 // ---------------------------------------------------------------------------
 
 onMounted(fetchDestinations)
+
+// Refresh in place when a destination changes on the server, or what the list
+// shows about it: the policies using it, the jobs holding it (locks).
+useLiveRefresh(['destinations', 'policies', 'jobs'], fetchDestinations)
 </script>
 
 <template>
@@ -246,7 +258,7 @@ onMounted(fetchDestinations)
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <RefreshButton :loading="loading" :refresh="fetchDestinations" />
+        <RefreshButton live :loading="loading" :refresh="fetchDestinations" />
         <Button v-if="authStore.isAdmin" @click="openCreate">
           <Plus class="w-4 h-4" />
           New Destination

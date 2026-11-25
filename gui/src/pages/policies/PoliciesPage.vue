@@ -42,7 +42,8 @@ import {
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import type { FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, PolicyRecentJob, ApiResponse, TriggerResponse } from '@/types'
 import { formatDate, statusDotClass, statusLabel } from '@/lib/jobUtils'
@@ -121,17 +122,24 @@ function lastRunDate(policy: Policy): string | null {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
 async function fetchPolicies({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
     if (!quiet) {
         loading.value = true
         error.value = null
     }
     try {
         const res = await api<ApiResponse<PolicyListResponse>>(`/api/v1/policies?limit=${pageSize}&offset=${offset.value}${sortParams.value}`)
+        if (!request.show()) return
         policies.value = res.data.items
         total.value = res.data.total
         error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load policies')
     } finally {
         if (!quiet) loading.value = false
@@ -224,6 +232,10 @@ async function confirmDelete() {
 // ---------------------------------------------------------------------------
 
 onMounted(fetchPolicies)
+
+// Refresh in place when a policy, or a job of one (its recent runs), changes
+// on the server.
+useLiveRefresh(['policies', 'jobs'], fetchPolicies)
 </script>
 
 <template>
@@ -238,7 +250,7 @@ onMounted(fetchPolicies)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <RefreshButton :loading="loading" :refresh="fetchPolicies" />
+                <RefreshButton live :loading="loading" :refresh="fetchPolicies" />
                 <Button v-if="authStore.isAdmin" @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Policy

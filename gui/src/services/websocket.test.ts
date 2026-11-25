@@ -50,12 +50,13 @@ describe('ArkeepWebSocketClient', () => {
     vi.useRealTimers()
   })
 
-  it('never puts the changes topic in the URL, so subscribing to it does not reconnect', async () => {
+  it('never puts the changes topics in the URL, so subscribing to them does not reconnect', async () => {
     client.subscribe('job:j1', () => {})
     current().open()
     const opened = sockets.length
 
     client.subscribe('changes', () => {})
+    client.subscribe('changes:admin', () => {})
     await Promise.resolve()
 
     expect(sockets.length).toBe(opened)

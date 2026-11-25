@@ -319,6 +319,10 @@ onUnmounted(() => {
 // Refresh the recent jobs in place when a job is created or changes on the
 // server.
 useLiveRefresh('jobs', fetchJobs)
+
+// Refresh the agent in place when it changes on the server (a rename, its
+// identity, its status).
+useLiveRefresh((c) => c.type === 'agents' && (c.id === agentId || c.id === ''), fetchAgent)
 </script>
 
 <template>

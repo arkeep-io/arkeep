@@ -7,17 +7,20 @@ import { useLiveRefresh, type ChangeFilter, LIVE_REFRESH_DELAY_MS } from './useL
 // reconnections by hand.
 const ws = vi.hoisted(() => ({
   handlers: new Set<(msg: unknown) => void>(),
+  adminHandlers: new Set<(msg: unknown) => void>(),
   reconnect: new Set<() => void>(),
 }))
 vi.mock('@/services/websocket', async () => {
   const { ref } = await import('vue')
   return {
     CHANGES_TOPIC: 'changes',
+    ADMIN_CHANGES_TOPIC: 'changes:admin',
     liveUpdatesUnavailable: ref(false),
     wsClient: {
       subscribe: (topic: string, handler: (msg: unknown) => void) => {
-        if (topic === 'changes') ws.handlers.add(handler)
-        return () => ws.handlers.delete(handler)
+        const handlers = topic === 'changes:admin' ? ws.adminHandlers : ws.handlers
+        handlers.add(handler)
+        return () => handlers.delete(handler)
       },
       onReconnect: (listener: () => void) => {
         ws.reconnect.add(listener)
@@ -29,6 +32,10 @@ vi.mock('@/services/websocket', async () => {
 
 function change(type: string, id = '') {
   for (const handler of ws.handlers) handler({ type: 'change', topic: 'changes', payload: { type, id } })
+}
+
+function adminChange(type: string, id = '') {
+  for (const handler of ws.adminHandlers) handler({ type: 'change', topic: 'changes:admin', payload: { type, id } })
 }
 
 function reconnect() {
@@ -49,6 +56,7 @@ describe('useLiveRefresh', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     ws.handlers.clear()
+    ws.adminHandlers.clear()
     ws.reconnect.clear()
   })
   afterEach(() => {
@@ -83,6 +91,30 @@ describe('useLiveRefresh', () => {
     change('jobs')
     await vi.advanceTimersByTimeAsync(LIVE_REFRESH_DELAY_MS)
     expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('follows several types', async () => {
+    const refresh = vi.fn()
+    withPage(['policies', 'jobs'], refresh)
+
+    change('agents')
+    await vi.advanceTimersByTimeAsync(LIVE_REFRESH_DELAY_MS)
+    expect(refresh).not.toHaveBeenCalled()
+
+    change('policies', 'p')
+    await vi.advanceTimersByTimeAsync(LIVE_REFRESH_DELAY_MS)
+    change('jobs', 'j')
+    await vi.advanceTimersByTimeAsync(LIVE_REFRESH_DELAY_MS)
+    expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('hears the changes sent to admins', async () => {
+    const refresh = vi.fn()
+    withPage('users', refresh)
+
+    adminChange('users', 'u')
+    await vi.advanceTimersByTimeAsync(LIVE_REFRESH_DELAY_MS)
+    expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes once more when a change arrives during a refresh', async () => {
@@ -135,6 +167,7 @@ describe('useLiveRefresh', () => {
 
     expect(refresh).not.toHaveBeenCalled()
     expect(ws.handlers.size).toBe(0)
+    expect(ws.adminHandlers.size).toBe(0)
     expect(ws.reconnect.size).toBe(0)
   })
 })

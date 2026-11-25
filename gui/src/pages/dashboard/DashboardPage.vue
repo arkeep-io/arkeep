@@ -17,6 +17,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Server, ShieldCheck, BriefcaseBusiness, Camera, AlertCircle, CheckCircle, XCircle } from '@lucide/vue'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
 import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Job } from '@/types'
 import {
@@ -161,14 +162,12 @@ function formatBytes(bytes: number): string {
 // Data fetching — dashboard aggregates + last 5 jobs in parallel
 // ---------------------------------------------------------------------------
 
-// Requests are numbered so that an answer older than the one shown is
-// dropped: two live refreshes, or a live refresh and the refresh button, may
-// answer out of order.
-let lastRequest = 0
-let shownRequest = 0
+// Answers older than the one shown are dropped (see requestOrder): two live
+// refreshes, or a live refresh and the refresh button, may answer out of order.
+const beginRequest = requestOrder()
 
 async function fetchAll({ quiet = false }: FetchOptions = {}) {
-    const request = ++lastRequest
+    const request = beginRequest()
     if (!quiet) {
         loading.value = true
         error.value = null
@@ -178,13 +177,12 @@ async function fetchAll({ quiet = false }: FetchOptions = {}) {
             api<ApiResponse<DashboardData>>('/api/v1/dashboard'),
             api<ApiResponse<{ items: Job[]; total: number }>>('/api/v1/jobs?limit=5'),
         ])
-        if (request < shownRequest) return
-        shownRequest = request
+        if (!request.show()) return
         data.value = dashRes.data
         recentJobs.value = jobsRes.data.items
         error.value = null
     } catch (e: any) {
-        if (request < shownRequest) return
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load dashboard data.')
     } finally {
         if (!quiet) loading.value = false
@@ -193,9 +191,10 @@ async function fetchAll({ quiet = false }: FetchOptions = {}) {
 
 onMounted(fetchAll)
 
-// Refresh in place when a job is created or changes on the server: the
-// recent jobs, and the counters that depend on them.
-useLiveRefresh('jobs', fetchAll)
+// Refresh in place when something the dashboard counts changes on the server:
+// the recent jobs, and the counters of agents, policies, destinations (checks),
+// snapshots and jobs.
+useLiveRefresh(['jobs', 'agents', 'policies', 'destinations', 'snapshots'], fetchAll)
 </script>
 
 <template>

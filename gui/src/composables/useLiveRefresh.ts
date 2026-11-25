@@ -11,7 +11,7 @@
 // meanwhile were missed (not on the first connection: the page has just
 // loaded its data).
 import { onUnmounted } from 'vue'
-import { CHANGES_TOPIC, liveUpdatesUnavailable, wsClient } from '@/services/websocket'
+import { ADMIN_CHANGES_TOPIC, CHANGES_TOPIC, liveUpdatesUnavailable, wsClient } from '@/services/websocket'
 
 // FetchOptions are the options of a page's fetch function. quiet: refresh the
 // data in place, without the loading state (live updates); the refresh
@@ -22,25 +22,26 @@ export interface FetchOptions {
 
 // Change is the payload of a "change" message.
 export interface Change {
-  type: string // "jobs"
+  type: string // "jobs", "agents", "policies", "destinations", "snapshots", "users", "audit"
   id: string // "" for a bulk change
 }
 
 // LIVE_REFRESH_DELAY_MS coalesces a burst of changes into one request.
 export const LIVE_REFRESH_DELAY_MS = 1_000
 
-// concerns is the type of changes a page follows ("jobs"), or a function
-// for a finer choice, e.g. one job: (c) => c.type === 'jobs' && (c.id === id || c.id === '').
-export type ChangeFilter = string | ((change: Change) => boolean)
+// concerns is the type of changes a page follows ("jobs"), the types
+// (["jobs", "policies"]), or a function for a finer choice, e.g. one job:
+// (c) => c.type === 'jobs' && (c.id === id || c.id === '').
+export type ChangeFilter = string | string[] | ((change: Change) => boolean)
 
 export function useLiveRefresh(
   concerns: ChangeFilter,
   refresh: (options: FetchOptions) => unknown,
   { delayMs = LIVE_REFRESH_DELAY_MS }: { delayMs?: number } = {},
 ) {
-  const matches = typeof concerns === 'string'
-    ? (c: Change) => c.type === concerns
-    : concerns
+  const matches = typeof concerns === 'function'
+    ? concerns
+    : (c: Change) => ([] as string[]).concat(concerns).includes(c.type)
 
   let timer: ReturnType<typeof setTimeout> | null = null
   let running = false
@@ -75,14 +76,17 @@ export function useLiveRefresh(
     if (timer === null) timer = setTimeout(run, delayMs)
   }
 
-  const unsubscribe = wsClient.subscribe<Change>(CHANGES_TOPIC, (msg) => {
+  // The users and audit log changes come on the admin topic, which the server
+  // only fills for admins.
+  const onChange = (msg: { type: string; payload?: Change }) => {
     if (msg.type === 'change' && msg.payload && matches(msg.payload)) schedule()
-  })
+  }
+  const unsubscribes = [CHANGES_TOPIC, ADMIN_CHANGES_TOPIC].map((topic) => wsClient.subscribe<Change>(topic, onChange))
   const stopReconnect = wsClient.onReconnect(schedule)
 
   onUnmounted(() => {
     stopped = true
-    unsubscribe()
+    for (const unsubscribe of unsubscribes) unsubscribe()
     stopReconnect()
     if (timer !== null) clearTimeout(timer)
   })

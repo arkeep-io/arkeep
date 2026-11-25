@@ -33,7 +33,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Camera, Info, Loader2, MoreHorizontal, RefreshCcw, RotateCcw, Trash2 } from '@lucide/vue'
 import RefreshButton from '@/components/shared/RefreshButton.vue'
-import type { FetchOptions } from '@/composables/useLiveRefresh'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, Destination, PaginatedResponse, Snapshot, SyncDestinationResponse } from '@/types'
 import { summariseSync } from '@/lib/syncSummary'
@@ -116,7 +117,12 @@ function abbreviate(id: string | undefined): string {
 // Data fetching
 // ---------------------------------------------------------------------------
 
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
 async function fetchSnapshots({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
     if (!quiet) {
         loading.value = true
         error.value = null
@@ -127,10 +133,12 @@ async function fetchSnapshots({ quiet = false }: FetchOptions = {}) {
         if (destinationFilter.value) params.set('destination_id', destinationFilter.value)
 
         const res = await api<ApiResponse<SnapshotListResponse>>(`/api/v1/snapshots?${params}`)
+        if (!request.show()) return
         snapshots.value = res.data.items
         total.value = res.data.total
         error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load snapshots.')
     } finally {
         if (!quiet) loading.value = false
@@ -251,6 +259,9 @@ async function syncSnapshots() {
 }
 
 onMounted(fetchSnapshots)
+
+// Refresh in place when a snapshot changes on the server.
+useLiveRefresh('snapshots', fetchSnapshots)
 </script>
 
 <template>
@@ -272,7 +283,7 @@ onMounted(fetchSnapshots)
                     <RefreshCcw v-else class="w-4 h-4 mr-1.5" />
                     {{ destinationFilter ? 'Sync Destination' : 'Sync All' }}
                 </Button>
-                <RefreshButton :loading="loading" :refresh="fetchSnapshots" />
+                <RefreshButton live :loading="loading" :refresh="fetchSnapshots" />
             </div>
         </div>
 

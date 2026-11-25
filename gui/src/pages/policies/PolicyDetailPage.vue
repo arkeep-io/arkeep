@@ -198,6 +198,10 @@ onMounted(() => Promise.all([fetchPolicy(), fetchJobs()]))
 // Refresh the recent jobs in place when a job is created or changes on the
 // server.
 useLiveRefresh('jobs', fetchJobs)
+
+// Refresh the policy in place when it changes on the server (an edit, its
+// last and next run).
+useLiveRefresh((c) => c.type === 'policies' && (c.id === policyId || c.id === ''), fetchPolicy)
 </script>
 
 <template>
