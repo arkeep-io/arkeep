@@ -340,6 +340,18 @@ func TestSnapshotHandler_Restore(t *testing.T) {
 			sources: `["/srv/app"]`,
 			body:    map[string]any{"target_path": "/srv/app"},
 		},
+		{
+			// Snapshots made by a policy store the policy's sources in the
+			// GUI's object form.
+			name:    "returns 400 when a whole-snapshot restore of a policy snapshot targets a source folder",
+			sources: `[{"type":"directory","path":"/srv/app"},{"type":"docker-volume","path":"pg_data"}]`,
+			body:    map[string]any{"target_path": "/srv/app"},
+		},
+		{
+			name:    "returns 400 when a whole-snapshot restore of a policy snapshot targets a folder above a source",
+			sources: `[{"type":"directory","path":"/srv/app"}]`,
+			body:    map[string]any{"target_path": "/srv"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTestEnv(t)

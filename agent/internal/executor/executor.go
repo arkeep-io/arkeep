@@ -1436,7 +1436,8 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 // root (/hostfs/data/app), so each one is compared with both the target as
 // sent and translatedTarget. The in-place sentinel "/" is never nested; the
 // server refuses whole-snapshot restores to a source folder, since only it
-// knows the sources.
+// knows the sources. Windows targets (drive paths) are not checked here: the
+// server's check covers them.
 func nestedRestoreTarget(target, translatedTarget string, includePaths []string) (msg string, nested bool) {
 	if target == "/" {
 		return "", false
