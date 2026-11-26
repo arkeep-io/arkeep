@@ -48,3 +48,13 @@ export function integerInRange(min: number, max: number) {
       .max(max, message),
   )
 }
+
+// Repository repair parameters (ADR 0026), mirroring shared/repair: at most
+// REPAIR_MAX_IDS snapshot or pack IDs and REPAIR_MAX_FILTERS hosts or tags
+// per request, each matching its pattern.
+export const REPAIR_MAX_IDS = 100
+export const REPAIR_MAX_FILTERS = 20
+export const REPAIR_SNAPSHOT_ID_RE = /^[0-9a-f]{8,64}$/
+export const REPAIR_PACK_ID_RE = /^[0-9a-f]{64}$/
+export const REPAIR_HOST_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/
+export const REPAIR_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._:@+=-]{0,254}$/

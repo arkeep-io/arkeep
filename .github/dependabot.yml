@@ -86,6 +86,11 @@ updates:
       default-days: 7
     labels:
       - "dependencies"
+    # A PostgreSQL major upgrade needs a data migration (pg_upgrade or
+    # dump/restore) and, from 18, a different volume layout: done by hand.
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
     groups:
       compose-images:
         patterns:

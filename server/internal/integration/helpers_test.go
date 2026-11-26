@@ -210,10 +210,12 @@ func newFakeAgent(t *testing.T, addr string) *fakeAgent {
 func (a *fakeAgent) register(t *testing.T) string {
 	t.Helper()
 	resp, err := a.client.Register(context.Background(), &proto.RegisterRequest{
-		Hostname: "integration-test-host",
-		Version:  "0.0.0-test",
-		Os:       "linux",
-		Arch:     "amd64",
+		Hostname:      "integration-test-host",
+		Version:       "0.0.0-test",
+		Os:            "linux",
+		Arch:          "amd64",
+		ResticVersion: "0.19.1",
+		RcloneVersion: "1.76.0",
 	})
 	if err != nil {
 		t.Fatalf("fakeAgent.register: %v", err)

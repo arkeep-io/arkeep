@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+
+	"github.com/arkeep-io/arkeep/server/internal/db"
 )
 
 func TestAgentHandler_List(t *testing.T) {
@@ -66,8 +68,10 @@ func TestAgentHandler_List(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var data struct {
-			Items []struct{ Name string `json:"name"` } `json:"items"`
-			Total int64                                 `json:"total"`
+			Items []struct {
+				Name string `json:"name"`
+			} `json:"items"`
+			Total int64 `json:"total"`
 		}
 		decodeData(t, resp, &data)
 		if data.Total != 2 {
@@ -127,6 +131,26 @@ func TestAgentHandler_GetByID(t *testing.T) {
 		}
 	})
 
+	t.Run("returns the restic and rclone versions", func(t *testing.T) {
+		e := newTestEnv(t)
+		agent := &db.Agent{Name: "versions", Status: "offline", ResticVersion: "0.19.1", RcloneVersion: "1.76.0"}
+		if err := e.deps.agents.Create(context.Background(), agent); err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		resp := e.get(t, "/api/v1/agents/"+agent.ID.String(), e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			ResticVersion string `json:"restic_version"`
+			RcloneVersion string `json:"rclone_version"`
+		}
+		decodeData(t, resp, &data)
+		if data.ResticVersion != "0.19.1" || data.RcloneVersion != "1.76.0" {
+			t.Errorf("restic/rclone version = %q/%q, want 0.19.1/1.76.0", data.ResticVersion, data.RcloneVersion)
+		}
+	})
+
 	t.Run("returns 404 for non-existent UUID", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.get(t, "/api/v1/agents/00000000-0000-0000-0000-000000000001", e.adminToken(t))
@@ -157,7 +181,9 @@ func TestAgentHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ Name string `json:"name"` }
+		var data struct {
+			Name string `json:"name"`
+		}
 		decodeData(t, resp, &data)
 		if data.Name != "updated-name" {
 			t.Errorf("name = %q, want updated-name", data.Name)

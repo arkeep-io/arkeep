@@ -60,8 +60,10 @@ func TestUserHandler_List(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var data struct {
-			Items []struct{ Email string `json:"email"` } `json:"items"`
-			Total int64                                   `json:"total"`
+			Items []struct {
+				Email string `json:"email"`
+			} `json:"items"`
+			Total int64 `json:"total"`
 		}
 		decodeData(t, resp, &data)
 		if data.Total != 2 {
@@ -223,7 +225,9 @@ func TestUserHandler_Update(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ DisplayName string `json:"display_name"` }
+		var data struct {
+			DisplayName string `json:"display_name"`
+		}
 		decodeData(t, resp, &data)
 		if data.DisplayName != "Updated Name" {
 			t.Errorf("display_name = %q, want Updated Name", data.DisplayName)
@@ -314,7 +318,9 @@ func TestUserHandler_UpdateMe(t *testing.T) {
 		})
 		assertStatus(t, resp, http.StatusOK)
 
-		var data struct{ DisplayName string `json:"display_name"` }
+		var data struct {
+			DisplayName string `json:"display_name"`
+		}
 		decodeData(t, resp, &data)
 		if data.DisplayName != "My New Name" {
 			t.Errorf("display_name = %q, want My New Name", data.DisplayName)

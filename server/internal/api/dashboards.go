@@ -30,14 +30,14 @@ func NewDashboardHandler(repo repositories.DashboardRepository, logger *zap.Logg
 
 // dayJobActivityResponse is the per-day job counts for the activity chart.
 type dayJobActivityResponse struct {
-	Date      string `json:"date"`       // "YYYY-MM-DD"
+	Date      string `json:"date"` // "YYYY-MM-DD"
 	Succeeded int64  `json:"succeeded"`
 	Failed    int64  `json:"failed"`
 }
 
 // daySizeActivityResponse is the per-day backed-up size for the size chart.
 type daySizeActivityResponse struct {
-	Date      string `json:"date"`       // "YYYY-MM-DD"
+	Date      string `json:"date"` // "YYYY-MM-DD"
 	SizeBytes int64  `json:"size_bytes"`
 }
 

@@ -50,6 +50,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/executor"
 	"github.com/arkeep-io/arkeep/agent/internal/metrics"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
+	"github.com/arkeep-io/arkeep/agent/scripts"
 	"github.com/arkeep-io/arkeep/shared/enrollproof"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
 )
@@ -539,18 +540,23 @@ func (m *Manager) register(ctx context.Context, client proto.AgentServiceClient)
 	}
 
 	// AgentCapabilities reflect what is available on this host. restic and
-	// rclone are embedded in the agent, so only Docker varies.
+	// rclone are embedded in the agent, so only Docker varies. Repair tells
+	// the server that this agent handles JOB_TYPE_REPAIR (ADR 0026): the
+	// embedded restic, pinned at build time, has the repair commands.
 	caps := &proto.AgentCapabilities{
 		Docker: m.cfg.DockerAvailable,
+		Repair: true,
 	}
 
 	resp, err := client.Register(ctx, &proto.RegisterRequest{
-		Hostname:     hostname,
-		Version:      m.cfg.Version,
-		Os:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		Capabilities: caps,
-		AgentId:      state.AgentID, // empty on first run; server uses it as primary dedup key
+		Hostname:      hostname,
+		Version:       m.cfg.Version,
+		Os:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		Capabilities:  caps,
+		AgentId:       state.AgentID, // empty on first run; server uses it as primary dedup key
+		ResticVersion: scripts.ResticVersion,
+		RcloneVersion: scripts.RcloneVersion,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("register RPC failed: %w", err)
@@ -1326,8 +1332,8 @@ func (m *Manager) protoToJob(p *proto.JobAssignment) (executor.JobAssignment, er
 	}
 
 	switch p.Type {
-	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE, proto.JobType_JOB_TYPE_FORGET, proto.JobType_JOB_TYPE_VERIFY:
-		// All four types are handled by the executor — payload is passed through as-is.
+	case proto.JobType_JOB_TYPE_BACKUP, proto.JobType_JOB_TYPE_RESTORE, proto.JobType_JOB_TYPE_FORGET, proto.JobType_JOB_TYPE_VERIFY, proto.JobType_JOB_TYPE_REPAIR:
+		// Handled by the executor — payload is passed through as-is.
 	default:
 		return executor.JobAssignment{}, fmt.Errorf("unsupported job type: %v", p.Type)
 	}

@@ -80,7 +80,7 @@
                 {{range .Metrics}}
                 <td valign="top" class="metric" style="padding:14px 16px;">
                   <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">{{.Label}}</div>
-                  <div class="metric-value" style="margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:24px;font-weight:700;color:#ece7e3;">{{.Value}}</div>
+                  <div class="metric-value" style="margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:18px;line-height:24px;font-weight:700;color:{{if .Color}}{{.Color}}{{else}}#ece7e3{{end}};">{{.Value}}</div>
                 </td>
                 {{end}}
               </tr>
@@ -126,6 +126,36 @@
               </tr>
               {{end}}
             </table>
+          </td>
+        </tr>
+        {{end}}
+
+        {{range .Reports}}
+        <!-- Job report table -->
+        <tr>
+          <td class="px" style="padding:22px 32px 0 32px;">
+            <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:22px;font-weight:700;color:#ece7e3;">{{.Title}}</div>
+            <div style="margin-top:2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#a39b96;">{{range $i, $c := .Counts}}{{if $i}} · {{end}}{{if $c.Color}}<span style="color:{{$c.Color}};">{{$c.Text}}</span>{{else}}{{$c.Text}}{{end}}{{end}}</div>
+            <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-top:12px;table-layout:fixed;">
+              <tr>
+                <td align="left" valign="bottom" style="padding:0 0 7px 0;border-bottom:1px solid #2f2723;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">Job</td>
+                <td width="{{.StartedWidth}}" align="left" valign="bottom" style="width:{{.StartedWidth}}px;padding:0 0 7px 0;border-bottom:1px solid #2f2723;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">Started</td>
+                <td width="68" align="right" valign="bottom" style="width:68px;padding:0 0 7px 0;border-bottom:1px solid #2f2723;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">Duration</td>
+                {{if .ExtraLabel}}<td width="76" align="right" valign="bottom" style="width:76px;padding:0 0 7px 0;border-bottom:1px solid #2f2723;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">{{.ExtraLabel}}</td>{{end}}
+                <td width="88" align="right" valign="bottom" style="width:88px;padding:0 0 7px 0;border-bottom:1px solid #2f2723;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:16px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#a39b96;">Status</td>
+              </tr>
+              {{$extra := .ExtraLabel}}{{$w := .StartedWidth}}
+              {{range $i, $r := .Rows}}
+              <tr>
+                <td valign="top" style="padding:6px 8px 6px 0;{{if $i}}border-top:1px solid #2f2723;{{end}}font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#ece7e3;word-break:break-word;"><span style="font-weight:600;">{{$r.Name}}</span>{{if $r.Agent}} <span style="color:#a39b96;">· {{$r.Agent}}</span>{{end}}</td>
+                <td width="{{$w}}" align="left" valign="top" style="width:{{$w}}px;padding:6px 0;{{if $i}}border-top:1px solid #2f2723;{{end}}font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#a39b96;">{{$r.Started}}</td>
+                <td width="68" align="right" valign="top" style="width:68px;padding:6px 0;{{if $i}}border-top:1px solid #2f2723;{{end}}font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#a39b96;">{{$r.Duration}}</td>
+                {{if $extra}}<td width="76" align="right" valign="top" style="width:76px;padding:6px 0;{{if $i}}border-top:1px solid #2f2723;{{end}}font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#a39b96;">{{$r.Extra}}</td>{{end}}
+                <td width="88" align="right" valign="top" style="width:88px;padding:6px 0;{{if $i}}border-top:1px solid #2f2723;{{end}}font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;font-weight:700;color:{{$r.StatusFG}};">{{$r.Status}}</td>
+              </tr>
+              {{end}}
+            </table>
+            {{if .More}}<div style="margin-top:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#a39b96;">{{.More}}</div>{{end}}
           </td>
         </tr>
         {{end}}

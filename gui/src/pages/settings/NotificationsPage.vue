@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useForm, useField } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
-import { isHttpURL } from '@/lib/validation'
+import { integerInRange, isHttpURL } from '@/lib/validation'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,12 +14,13 @@ import {
     FieldLabel,
 } from '@/components/ui/field'
 import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Loader2, Mail, RefreshCw, Send, Webhook } from '@lucide/vue'
 import { api, apiErrorMessage } from '@/services/api'
 import NotificationProviders from '@/components/notifications/NotificationProviders.vue'
 import UnsavedChangesBar from '@/components/shared/UnsavedChangesBar.vue'
-import type { ApiResponse, NotificationSettings, WebhookSettings } from '@/types'
+import type { ApiResponse, NotificationSettings, ReportFrequency, WebhookSettings } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Form
@@ -33,6 +34,26 @@ const success = ref(false)
 // which already documents this as living on this page.
 const webhookExists = ref(false)
 
+// The server's time zone (e.g. "CET"), in which the job report time is.
+const serverTimezone = ref('')
+
+// The days of the weekly report, Monday first, with the server's numbering
+// (0 is Sunday).
+const WEEKDAYS = [
+    { value: 1, label: 'Monday' },
+    { value: 2, label: 'Tuesday' },
+    { value: 3, label: 'Wednesday' },
+    { value: 4, label: 'Thursday' },
+    { value: 5, label: 'Friday' },
+    { value: 6, label: 'Saturday' },
+    { value: 0, label: 'Sunday' },
+]
+
+// The last day of the month the monthly report can be sent on: the last one
+// that exists in every month (the server enforces the same limit).
+const MAX_REPORT_DAY = 28
+const MONTH_DAYS = Array.from({ length: MAX_REPORT_DAY }, (_, i) => i + 1)
+
 // The webhook URL is checked only when the webhook is enabled: a disabled
 // webhook is saved without one.
 const schema = toTypedSchema(
@@ -42,6 +63,11 @@ const schema = toTypedSchema(
         agent_offline: z.boolean(),
         agent_online: z.boolean(),
         email_enabled: z.boolean(),
+        report_frequency: z.enum(['off', 'hourly', 'daily', 'weekly', 'monthly']),
+        report_time: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/, 'Must be a time (HH:MM)'),
+        report_minute: integerInRange(0, 59),
+        report_weekday: z.number().int().min(0).max(6),
+        report_day: z.number().int().min(1).max(MAX_REPORT_DAY),
         webhook_enabled: z.boolean(),
         webhook_url: z.string(),
         webhook_secret: z.string(),
@@ -60,6 +86,11 @@ const { handleSubmit, resetForm, isSubmitting, meta } = useForm({
         agent_offline: true,
         agent_online: false,
         email_enabled: true,
+        report_frequency: 'off' as ReportFrequency,
+        report_time: '07:00',
+        report_minute: 0,
+        report_weekday: 1,
+        report_day: 1,
         webhook_enabled: false,
         webhook_url: '',
         webhook_secret: '',
@@ -71,6 +102,25 @@ const { value: jobFailure } = useField<boolean>('job_failure')
 const { value: agentOffline } = useField<boolean>('agent_offline')
 const { value: agentOnline } = useField<boolean>('agent_online')
 const { value: emailEnabled } = useField<boolean>('email_enabled')
+const { value: reportFrequency } = useField<ReportFrequency>('report_frequency')
+const { value: reportTime, errorMessage: reportTimeError, resetField: resetReportTime } = useField<string>('report_time')
+const {
+    value: reportMinute,
+    errorMessage: reportMinuteError,
+    resetField: resetReportMinute,
+} = useField<number | string>('report_minute')
+const { value: reportWeekday, resetField: resetReportWeekday } = useField<number>('report_weekday')
+const { value: reportDay, resetField: resetReportDay } = useField<number>('report_day')
+
+// Only the fields of the chosen frequency are shown. The others go back to
+// their saved value, so an unsaved, invalid entry in a hidden field cannot
+// block saving without a visible error.
+watch(reportFrequency, (frequency) => {
+    if (frequency !== 'hourly') resetReportMinute()
+    if (frequency !== 'weekly') resetReportWeekday()
+    if (frequency !== 'monthly') resetReportDay()
+    if (frequency === 'off' || frequency === 'hourly') resetReportTime()
+})
 const { value: webhookEnabled } = useField<boolean>('webhook_enabled')
 const { value: webhookUrl, errorMessage: webhookUrlError } = useField<string>('webhook_url')
 const { value: webhookSecret } = useField<string>('webhook_secret')
@@ -101,7 +151,8 @@ async function fetchWebhook(): Promise<WebhookSettings | null> {
 async function fetchAll() {
     loading.value = true
     try {
-        const [events, webhook] = await Promise.all([fetchSettings(), fetchWebhook()])
+        const [{ server_timezone, ...events }, webhook] = await Promise.all([fetchSettings(), fetchWebhook()])
+        serverTimezone.value = server_timezone
         resetForm({
             values: {
                 ...events,
@@ -135,6 +186,11 @@ const submit = handleSubmit(async (values) => {
                     agent_offline: values.agent_offline,
                     agent_online: values.agent_online,
                     email_enabled: values.email_enabled,
+                    report_frequency: values.report_frequency,
+                    report_time: values.report_time,
+                    report_minute: values.report_minute,
+                    report_weekday: values.report_weekday,
+                    report_day: values.report_day,
                 },
             }),
             api('/api/v1/settings/webhook', {
@@ -366,7 +422,107 @@ function discard() {
             <NotificationProviders />
         </div>
 
-        <!-- Saves the events, email and webhook. -->
+        <Separator class="my-6" />
+
+        <!-- Saved with the form above, from the bar below. -->
+        <!-- ── Job report ──────────────────────────────────────────── -->
+        <section class="flex flex-col gap-3">
+            <div>
+                <h3 class="text-sm font-medium">Job report</h3>
+                <p class="text-xs text-muted-foreground">
+                    One email listing all jobs that finished since the previous report, sent to the
+                    notification recipients. Skipped when no job finished.
+                </p>
+            </div>
+
+            <div class="rounded-lg border">
+                <div class="flex items-center justify-between gap-4 px-4 py-3">
+                    <div class="min-w-0">
+                        <p class="text-sm font-medium">Frequency</p>
+                        <p class="text-xs text-muted-foreground">
+                            Hourly at a set minute, or daily, weekly or monthly at a set time.
+                        </p>
+                    </div>
+                    <Select :model-value="reportFrequency"
+                        @update:model-value="reportFrequency = $event as ReportFrequency">
+                        <SelectTrigger id="report-frequency" class="w-32 shrink-0" aria-label="Report frequency">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="off">Off</SelectItem>
+                            <SelectItem value="hourly">Hourly</SelectItem>
+                            <SelectItem value="daily">Daily</SelectItem>
+                            <SelectItem value="weekly">Weekly</SelectItem>
+                            <SelectItem value="monthly">Monthly</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                <!-- The error spans the row, right-aligned under the input, so it is not
+                     wrapped to the width of the input. -->
+                <div v-if="reportFrequency === 'hourly'" class="flex flex-col gap-1.5 border-t px-4 py-3">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="min-w-0">
+                            <FieldLabel for="report-minute" class="text-sm font-medium">Minute</FieldLabel>
+                            <p class="text-xs text-muted-foreground">Minutes past every hour, e.g. 30 for XX:30.</p>
+                        </div>
+                        <Input id="report-minute" v-model="reportMinute" type="number" min="0" max="59"
+                            class="w-32 shrink-0"
+                            :class="reportMinuteError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                    </div>
+                    <FieldError v-if="reportMinuteError" class="text-right">{{ reportMinuteError }}</FieldError>
+                </div>
+
+                <div v-if="reportFrequency === 'weekly'" class="flex items-center justify-between gap-4 border-t px-4 py-3">
+                    <FieldLabel for="report-weekday" class="text-sm font-medium">Day</FieldLabel>
+                    <Select :model-value="String(reportWeekday)"
+                        @update:model-value="reportWeekday = Number($event)">
+                        <SelectTrigger id="report-weekday" class="w-32 shrink-0" aria-label="Report day of the week">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem v-for="d in WEEKDAYS" :key="d.value" :value="String(d.value)">
+                                {{ d.label }}
+                            </SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                <div v-if="reportFrequency === 'monthly'" class="flex items-center justify-between gap-4 border-t px-4 py-3">
+                    <div class="min-w-0">
+                        <FieldLabel for="report-day" class="text-sm font-medium">Day of the month</FieldLabel>
+                        <p class="text-xs text-muted-foreground">1 to {{ MAX_REPORT_DAY }}, so it falls in every month.</p>
+                    </div>
+                    <Select :model-value="String(reportDay)"
+                        @update:model-value="reportDay = Number($event)">
+                        <SelectTrigger id="report-day" class="w-32 shrink-0" aria-label="Report day of the month">
+                            <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem v-for="d in MONTH_DAYS" :key="d" :value="String(d)">{{ d }}</SelectItem>
+                        </SelectContent>
+                    </Select>
+                </div>
+
+                <div v-if="reportFrequency === 'daily' || reportFrequency === 'weekly' || reportFrequency === 'monthly'"
+                    class="flex flex-col gap-1.5 border-t px-4 py-3">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="min-w-0">
+                            <FieldLabel for="report-time" class="text-sm font-medium">Time</FieldLabel>
+                            <p class="text-xs text-muted-foreground">
+                                Server time ({{ serverTimezone || 'unknown zone' }}).
+                            </p>
+                        </div>
+                        <!-- The browser draws the picker icon: dark:scheme-dark makes it light in dark mode. -->
+                        <Input id="report-time" v-model="reportTime" type="time" class="w-32 shrink-0 dark:scheme-dark"
+                            :class="reportTimeError ? 'border-destructive focus-visible:ring-destructive/30' : ''" />
+                    </div>
+                    <FieldError v-if="reportTimeError" class="text-right">{{ reportTimeError }}</FieldError>
+                </div>
+            </div>
+        </section>
+
+        <!-- Saves the events, email, webhook and job report. -->
         <UnsavedChangesBar :dirty="meta.dirty" :saving="isSubmitting" :error="submitError"
             @save="submit" @discard="discard" />
     </template>

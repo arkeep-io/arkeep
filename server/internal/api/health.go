@@ -14,7 +14,8 @@ import (
 //
 // /health/live  — liveness probe: the process is up and responding.
 // /health/ready — readiness probe: the process can serve traffic
-//                 (database reachable, scheduler running).
+//
+//	(database reachable, scheduler running).
 type healthHandler struct {
 	db        *sql.DB
 	scheduler *scheduler.Scheduler
@@ -26,7 +27,7 @@ func newHealthHandler(db *sql.DB, sched *scheduler.Scheduler) *healthHandler {
 
 // healthCheckResult is the per-check entry in the /health/ready response body.
 type healthCheckResult struct {
-	Status    string `json:"status"`              // "ok" | "error"
+	Status    string `json:"status"`               // "ok" | "error"
 	LatencyMs *int64 `json:"latency_ms,omitempty"` // only for database
 	Error     string `json:"error,omitempty"`
 }

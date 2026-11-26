@@ -148,7 +148,7 @@ func TestBuildBackupArgs_Host(t *testing.T) {
 
 func TestBuildStdinBackupArgs_Host(t *testing.T) {
 	opts := StdinBackupOptions{Command: "pg_dump mydb", Filename: "pgdump", Host: "nas-home"}
-	args := buildStdinBackupArgs(opts, "linux")
+	args := buildStdinBackupArgs(opts, nil, "linux")
 
 	want := []string{
 		"backup", "--json", "--stdin-from-command",
@@ -220,7 +220,7 @@ func TestBuildStdinBackupArgs_Linux(t *testing.T) {
 		Filename: "pgdump",
 		Tags:     []string{"policy:abc:command:pgdump"},
 	}
-	args := buildStdinBackupArgs(opts, "linux")
+	args := buildStdinBackupArgs(opts, nil, "linux")
 
 	want := []string{
 		"backup", "--json", "--stdin-from-command",
@@ -242,7 +242,7 @@ func TestBuildStdinBackupArgs_Windows(t *testing.T) {
 		Filename: "pgdump",
 		Tags:     []string{"policy:abc:command:pgdump"},
 	}
-	args := buildStdinBackupArgs(opts, "windows")
+	args := buildStdinBackupArgs(opts, nil, "windows")
 
 	want := []string{
 		"backup", "--json", "--stdin-from-command",
@@ -263,7 +263,7 @@ func TestBuildStdinBackupArgs_CommandAfterEndOfOptions(t *testing.T) {
 	opts := StdinBackupOptions{Command: "--password-command=touch /tmp/pwned", Filename: "x"}
 	for _, goos := range []string{"linux", "windows"} {
 		t.Run(goos, func(t *testing.T) {
-			args := buildStdinBackupArgs(opts, goos)
+			args := buildStdinBackupArgs(opts, nil, goos)
 			idx := slices.Index(args, "--")
 			if idx == -1 {
 				t.Fatalf("expected a \"--\" end-of-options marker in args, got %v", args)
@@ -862,6 +862,45 @@ func TestParseCheckOutput(t *testing.T) {
 	}
 }
 
+// TestParseCheckOutput_FatalBeforeCheck uses output captured from restic
+// 0.19.1 when check stops before reading the repository. Its summary still
+// counts one error: the result must not claim the repository contains errors.
+func TestParseCheckOutput_FatalBeforeCheck(t *testing.T) {
+	summary := `{"message_type":"summary","num_errors":1,"broken_packs":null,"suggest_repair_index":false,"suggest_prune":false}` + "\n"
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "locked by another operation",
+			stderr: `{"message_type":"exit_error","code":11,"message":"unable to create lock in backend: repository is already locked by PID 24 on 7fa21b83-arkeep-agent by root (UID 0, GID 0)\nlock was created at 2026-11-19 23:29:45 (3.04s ago)\nstorage ID d9f189be\nthe ` + "`unlock`" + ` command can be used to remove stale locks"}`,
+			want:   "unable to create lock in backend: repository is already locked by PID 24 on 7fa21b83-arkeep-agent by root (UID 0, GID 0)\nlock was created at 2026-11-19 23:29:45 (3.04s ago)\nstorage ID d9f189be\nthe `unlock` command can be used to remove stale locks",
+		},
+		{
+			name:   "wrong password",
+			stderr: `{"message_type":"exit_error","code":12,"message":"Fatal: wrong password or no key found"}`,
+			want:   "Fatal: wrong password or no key found",
+		},
+		{
+			name:   "missing repository",
+			stderr: `{"message_type":"exit_error","code":10,"message":"Fatal: repository does not exist: unable to open config file: stat /repo/config: no such file or directory"}`,
+			want:   "Fatal: repository does not exist: unable to open config file: stat /repo/config: no such file or directory",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCheckOutput(summary, tt.stderr+"\n")
+			if got.NumErrors != 0 {
+				t.Errorf("NumErrors = %d, want 0: the repository was not checked", got.NumErrors)
+			}
+			if !slices.Equal(got.Messages, []string{tt.want}) {
+				t.Errorf("Messages = %q, want %q", got.Messages, []string{tt.want})
+			}
+		})
+	}
+}
+
 // TestEmptyRestoreSummary uses lines printed by restic 0.19.1: a selection
 // that matches nothing ends with a summary without total_files.
 func TestEmptyRestoreSummary(t *testing.T) {
@@ -1423,5 +1462,117 @@ func TestSnapshotSummary_AddedBytes(t *testing.T) {
 		if got := tt.s.AddedBytes(); got != tt.want {
 			t.Errorf("%s: AddedBytes() = %d, want %d", tt.name, got, tt.want)
 		}
+	}
+}
+
+// TestBuildStdinBackupArgs_HidesVariables: the shell removes the variables
+// named in hidden before it runs the command, which stays a separate argument
+// on Unix so it is run exactly as written.
+func TestBuildStdinBackupArgs_HidesVariables(t *testing.T) {
+	opts := StdinBackupOptions{Command: "pg_dump mydb", Filename: "pgdump"}
+	hidden := []string{"RESTIC_PASSWORD", "RESTIC_REPOSITORY"}
+
+	linux := buildStdinBackupArgs(opts, hidden, "linux")
+	wantLinux := []string{
+		"backup", "--json", "--stdin-from-command", "--stdin-filename", "pgdump", "--",
+		"/bin/sh", "-c", `unset RESTIC_PASSWORD RESTIC_REPOSITORY; exec /bin/sh -c "$1"`, "sh", "pg_dump mydb",
+	}
+	if !slices.Equal(linux, wantLinux) {
+		t.Errorf("linux: buildStdinBackupArgs() = %q, want %q", linux, wantLinux)
+	}
+
+	windows := buildStdinBackupArgs(opts, hidden, "windows")
+	wantWindows := []string{
+		"backup", "--json", "--stdin-from-command", "--stdin-filename", "pgdump", "--",
+		"cmd", "/C", "set RESTIC_PASSWORD=& set RESTIC_REPOSITORY=& pg_dump mydb",
+	}
+	if !slices.Equal(windows, wantWindows) {
+		t.Errorf("windows: buildStdinBackupArgs() = %q, want %q", windows, wantWindows)
+	}
+}
+
+// TestBuildCmd_DropsAgentVariables: the agent's own configuration, and the
+// agent secret above all, never reaches restic, nor through it a command
+// source.
+func TestBuildCmd_DropsAgentVariables(t *testing.T) {
+	t.Setenv("ARKEEP_AGENT_SECRET", "agent-secret-value")
+	t.Setenv("ARKEEP_SERVER_ADDR", "arkeep.example.com:9090")
+	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone", logger: zap.NewNop()}
+	dest := Destination{Type: DestLocal, RepoURL: "/mnt/backups", Password: "repo-pass"}
+
+	cmd := w.buildCmd(context.Background(), dest, []string{"snapshots"})
+
+	for _, kv := range cmd.Env {
+		if strings.HasPrefix(strings.ToUpper(kv), "ARKEEP_") {
+			t.Errorf("%q reached the restic environment", kv)
+		}
+	}
+	if got := envVar(cmd.Env, "RESTIC_PASSWORD"); got != "repo-pass" {
+		t.Errorf("RESTIC_PASSWORD = %q, want repo-pass", got)
+	}
+}
+
+// TestCommandSource_DoesNotSeeSecrets runs a command source the way restic
+// does (--stdin-from-command execs the arguments after "--" with restic's own
+// environment) and checks that the command sees neither the agent secret nor
+// the repository password and backend credentials, keeps the rest of the
+// environment, and runs exactly as written with its exit status.
+func TestCommandSource_DoesNotSeeSecrets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("runs /bin/sh")
+	}
+	t.Setenv("ARKEEP_AGENT_SECRET", "agent-secret-value")
+	t.Setenv("COMMAND_SOURCE_OPERATOR_VAR", "kept")
+	w := &Wrapper{resticBin: "/fake/restic", rcloneBin: "/fake/rclone", logger: zap.NewNop(), cacheDir: t.TempDir()}
+	dest := Destination{
+		Type:     DestSFTP,
+		RepoURL:  "rclone:arkeepsftp:/srv/restic",
+		Password: "repo-pass-value",
+		Env: map[string]string{
+			"RCLONE_CONFIG_ARKEEPSFTP_TYPE": "sftp",
+			"RCLONE_CONFIG_ARKEEPSFTP_PASS": "sftp-pass-value",
+			"aws_secret_access_key":         "aws-secret-value",
+			sftpKnownHostsEnv:               "h.example.com ssh-ed25519 AAAA\n",
+		},
+	}
+
+	// runAsRestic runs command as restic would and returns its output.
+	runAsRestic := func(command string) (string, error) {
+		args := buildStdinBackupArgs(StdinBackupOptions{Command: command}, w.commandSourceHiddenEnv(dest), runtime.GOOS)
+		argv := args[slices.Index(args, "--")+1:]
+		resticEnv := w.buildCmd(context.Background(), dest, nil).Env
+		child := exec.Command(argv[0], argv[1:]...)
+		child.Env = resticEnv
+		out, err := child.CombinedOutput()
+		return string(out), err
+	}
+
+	out, err := runAsRestic("env")
+	if err != nil {
+		t.Fatalf("env: %v\n%s", err, out)
+	}
+	for _, leaked := range []string{"agent-secret-value", "repo-pass-value", "sftp-pass-value", "aws-secret-value", "RESTIC_REPOSITORY", "RESTIC_CACHE_DIR", "KNOWN_HOSTS_FILE", "ARKEEP_"} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("command source environment contains %q:\n%s", leaked, out)
+		}
+	}
+	for _, kept := range []string{"COMMAND_SOURCE_OPERATOR_VAR=kept", "PATH="} {
+		if !strings.Contains(out, kept) {
+			t.Errorf("command source environment lacks %q:\n%s", kept, out)
+		}
+	}
+
+	out, err = runAsRestic(`printf '%s|' "a b" "$1" 'c"d' $0; echo`)
+	if err != nil {
+		t.Fatalf("printf: %v\n%s", err, out)
+	}
+	if want := "a b||c\"d|/bin/sh|\n"; out != want {
+		t.Errorf("command output = %q, want %q", out, want)
+	}
+
+	_, err = runAsRestic("exit 3")
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 3 {
+		t.Errorf("exit status = %v, want 3", err)
 	}
 }

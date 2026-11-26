@@ -1,6 +1,7 @@
 package notification
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -22,6 +23,7 @@ func TestJobSubjectDescribe(t *testing.T) {
 		{"restore", JobSubject{Type: "restore", PolicyName: "nightly"}, "Restore", "nightly", `Restore of policy "nightly"`},
 		{"retention", JobSubject{Type: "retention", DestinationName: "nas"}, "Retention", "nas", `Retention of destination "nas"`},
 		{"check", JobSubject{Type: "check", DestinationName: "nas"}, "Integrity check", "nas", `Integrity check of destination "nas"`},
+		{"repair", JobSubject{Type: "repair", DestinationName: "nas"}, "Repair", "nas", `Repair of destination "nas"`},
 		{"header injection", JobSubject{Type: "check", DestinationName: "nas\r\nBcc: x"}, "Integrity check", "nasBcc: x", `Integrity check of destination "nasBcc: x"`},
 	}
 	for _, tt := range tests {
@@ -48,5 +50,22 @@ func TestJobSubjectFrom(t *testing.T) {
 	got = JobSubjectFrom(check, []repositories.JobDestinationWithName{{DestinationName: "nas"}})
 	if got.PolicyID != uuid.Nil || got.Type != "check" || got.DestinationName != "nas" {
 		t.Errorf("JobSubjectFrom(check) = %+v, want nil policy and destination \"nas\"", got)
+	}
+
+	for _, tt := range []struct {
+		params      string
+		wantPreview bool
+	}{
+		{`{"action":"find-packs","pack_ids":["` + strings.Repeat("a", 64) + `"]}`, true},
+		{`{"action":"repair-snapshots"}`, true},
+		{`{"action":"repair-snapshots","apply":true,"forget":true}`, false},
+		{`{"action":"check"}`, false},
+		{``, false},
+	} {
+		job := &repositories.JobWithNames{Job: db.Job{Type: "repair", Params: tt.params}}
+		got = JobSubjectFrom(job, []repositories.JobDestinationWithName{{DestinationName: "nas"}})
+		if got.RepairPreview != tt.wantPreview || got.DestinationName != "nas" {
+			t.Errorf("JobSubjectFrom(repair %s) = %+v, want RepairPreview %v and destination \"nas\"", tt.params, got, tt.wantPreview)
+		}
 	}
 }

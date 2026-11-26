@@ -26,6 +26,8 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodPost, "/api/v1/destinations/" + id + "/trigger-retention"},
 		{http.MethodPost, "/api/v1/destinations/" + id + "/trigger-check"},
 		{http.MethodPost, "/api/v1/destinations/" + id + "/reset-repository"},
+		{http.MethodPut, "/api/v1/destinations/" + id + "/maintenance"},
+		{http.MethodPost, "/api/v1/destinations/" + id + "/repair"},
 		{http.MethodPost, "/api/v1/policies"},
 		{http.MethodPatch, "/api/v1/policies/" + id},
 		{http.MethodPost, "/api/v1/jobs/" + id + "/cancel"},
@@ -38,6 +40,8 @@ func TestRouter_UserRoleIsReadOnly(t *testing.T) {
 		{http.MethodDelete, "/api/v1/settings/notification-providers/" + id},
 		{http.MethodPost, "/api/v1/settings/notification-providers/test"},
 		{http.MethodPost, "/api/v1/users/" + id + "/password"},
+		{http.MethodGet, "/api/v1/api-tokens"},
+		{http.MethodDelete, "/api/v1/api-tokens/" + id},
 	}
 
 	e := newTestEnv(t)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, Hourglass, KeyRound, Mail, RefreshCcw, ScrollText } from '@lucide/vue'
+import { Bell, Hourglass, KeyRound, KeySquare, Mail, RefreshCcw, ScrollText } from '@lucide/vue'
 </script>
 
 <template>
@@ -53,6 +53,12 @@ import { Bell, Hourglass, KeyRound, Mail, RefreshCcw, ScrollText } from '@lucide
                         active-class="bg-accent text-accent-foreground">
                         <RefreshCcw class="size-4 shrink-0" />
                         Snapshot Sync
+                    </RouterLink>
+                    <RouterLink :to="{ name: 'settings-api-tokens' }"
+                        class="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                        active-class="bg-accent text-accent-foreground">
+                        <KeySquare class="size-4 shrink-0" />
+                        API Tokens
                     </RouterLink>
                 </nav>
             </aside>

@@ -20,7 +20,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ChevronLeft, ChevronRight, RefreshCw, ScrollText } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, ScrollText } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { ApiResponse, AuditLog } from '@/types'
 
@@ -107,9 +110,16 @@ function hasDetails(entry: AuditLog): boolean {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchEntries() {
-    loading.value = true
-    error.value = null
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
+async function fetchEntries({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const params = new URLSearchParams({
             limit: String(pageSize),
@@ -126,12 +136,15 @@ async function fetchEntries() {
         const res = await api<ApiResponse<{ items: AuditLog[]; total: number }>>(
             `/api/v1/audit?${params.toString()}`
         )
+        if (!request.show()) return
         entries.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load audit log.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -148,9 +161,12 @@ watch(emailFilter, () => {
     if (emailDebounceTimer) clearTimeout(emailDebounceTimer)
     emailDebounceTimer = setTimeout(() => { page.value = 1; fetchEntries() }, 400)
 })
-watch(page, fetchEntries)
+watch(page, () => fetchEntries())
 
 onMounted(fetchEntries)
+
+// Refresh in place when an entry is added to the audit log on the server.
+useLiveRefresh('audit', fetchEntries)
 </script>
 
 <template>
@@ -164,9 +180,7 @@ onMounted(fetchEntries)
                     Record of all significant admin actions.
                 </p>
             </div>
-            <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchEntries">
-                <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-            </Button>
+            <RefreshButton live :loading="loading" :refresh="fetchEntries" />
         </div>
 
         <!-- Error banner -->

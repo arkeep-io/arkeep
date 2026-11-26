@@ -22,6 +22,7 @@ type TwoFactorHandler struct {
 	challenges    repositories.TwoFactorChallengeRepository
 	recoveryCodes repositories.RecoveryCodeRepository
 	refresh       repositories.RefreshTokenRepository
+	apiTokens     repositories.APITokenRepository
 	auditRepo     repositories.AuditRepository
 	logger        *zap.Logger
 }
@@ -32,6 +33,7 @@ func NewTwoFactorHandler(
 	challenges repositories.TwoFactorChallengeRepository,
 	recoveryCodes repositories.RecoveryCodeRepository,
 	refresh repositories.RefreshTokenRepository,
+	apiTokens repositories.APITokenRepository,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
 ) *TwoFactorHandler {
@@ -40,6 +42,7 @@ func NewTwoFactorHandler(
 		challenges:    challenges,
 		recoveryCodes: recoveryCodes,
 		refresh:       refresh,
+		apiTokens:     apiTokens,
 		auditRepo:     auditRepo,
 		logger:        logger.Named("two_factor_handler"),
 	}
@@ -380,6 +383,9 @@ func (h *TwoFactorHandler) AdminReset(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.refresh.RevokeAllForUser(r.Context(), user.ID); err != nil {
 		h.logger.Warn("failed to revoke sessions after admin 2fa reset", zap.Error(err))
+	}
+	if err := h.apiTokens.DeleteByUserID(r.Context(), user.ID); err != nil {
+		h.logger.Warn("failed to revoke api tokens after admin 2fa reset", zap.Error(err))
 	}
 
 	logAudit(r, h.auditRepo, h.logger, "user.2fa.reset", "user", user.ID.String(), map[string]any{"email": user.Email})

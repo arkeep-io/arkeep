@@ -30,11 +30,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/arkeep-io/arkeep/agent/internal/childenv"
 )
 
 // cancelGracePeriod is how long a restic subprocess is given to exit after
@@ -432,9 +435,14 @@ func summaryInterceptor(result *BackupResult, onProgress ProgressFunc) ProgressF
 // leading "-" as one of its own global flags (--password-command in
 // particular runs an arbitrary command to obtain the repository password).
 //
+// restic runs the command with its own environment, which holds the
+// repository password and the backend credentials. hidden names those
+// variables: the shell removes them before it runs the command (see
+// shellArgv).
+//
 // Deliberately absent: --use-fs-snapshot (there is no filesystem to
 // snapshot) and --exclude (there is a single stream, nothing to exclude).
-func buildStdinBackupArgs(opts StdinBackupOptions, goos string) []string {
+func buildStdinBackupArgs(opts StdinBackupOptions, hidden []string, goos string) []string {
 	args := []string{"backup", "--json", "--stdin-from-command"}
 	if opts.Filename != "" {
 		args = append(args, "--stdin-filename", opts.Filename)
@@ -446,17 +454,35 @@ func buildStdinBackupArgs(opts StdinBackupOptions, goos string) []string {
 		args = append(args, "--host", opts.Host)
 	}
 	args = append(args, "--")
-	return append(args, shellArgv(opts.Command, goos)...)
+	return append(args, shellArgv(opts.Command, hidden, goos)...)
 }
+
+// envNameRe matches the variable names shellArgv can remove. Every name it is
+// given comes from resticEnv and matches; anything else is refused rather
+// than passed to the shell.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // shellArgv wraps a command string in the host shell, matching how hooks are
 // executed (agent/internal/hooks/runner.go) so a command source and a hook
 // behave identically for the same string.
-func shellArgv(command, goos string) []string {
+//
+// The variables named in hidden are removed first. On Unix a first shell
+// unsets them and execs the shell that runs the command, which is passed as
+// an argument ("$1"), never spliced into the script: the user's command is run
+// exactly as written. On Windows, "set NAME=" removes a variable from cmd's
+// environment before the command runs.
+func shellArgv(command string, hidden []string, goos string) []string {
 	if goos == "windows" {
-		return []string{"cmd", "/C", command}
+		var clear strings.Builder
+		for _, name := range hidden {
+			clear.WriteString("set " + name + "=& ")
+		}
+		return []string{"cmd", "/C", clear.String() + command}
 	}
-	return []string{"/bin/sh", "-c", command}
+	if len(hidden) == 0 {
+		return []string{"/bin/sh", "-c", command}
+	}
+	return []string{"/bin/sh", "-c", "unset " + strings.Join(hidden, " ") + `; exec /bin/sh -c "$1"`, "sh", command}
 }
 
 // BackupFromCommand runs a restic backup whose content is produced by
@@ -469,7 +495,13 @@ func (w *Wrapper) BackupFromCommand(ctx context.Context, dest Destination, opts 
 		return nil, err
 	}
 
-	args := buildStdinBackupArgs(opts, runtime.GOOS)
+	hidden := w.commandSourceHiddenEnv(dest)
+	for _, name := range hidden {
+		if !envNameRe.MatchString(name) {
+			return nil, fmt.Errorf("restic: cannot hide variable %q from the command source: not a valid name", name)
+		}
+	}
+	args := buildStdinBackupArgs(opts, hidden, runtime.GOOS)
 
 	var result BackupResult
 	if err := w.runWithProgress(ctx, dest, args, summaryInterceptor(&result, onProgress)); err != nil {
@@ -622,6 +654,7 @@ func parseCheckOutput(stdout, stderr string) CheckResult {
 			_ = json.Unmarshal([]byte(line), &result)
 		}
 	}
+	var checkErrors, exitErrors int
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -635,9 +668,23 @@ func parseCheckOutput(stdout, stderr string) CheckResult {
 			result.Messages = append(result.Messages, line)
 			continue
 		}
+		switch msg.MessageType {
+		case "error":
+			checkErrors++
+		case "exit_error":
+			exitErrors++
+		}
 		if text := strings.TrimSpace(msg.Message); text != "" {
 			result.Messages = append(result.Messages, text)
 		}
+	}
+	// restic's summary reports one error for any fatal error, including the
+	// ones that stop it before checking anything: a wrong password, a missing
+	// repository, a lock held by another operation. Only a check that found
+	// problems reports them as "error" lines first: without any, the
+	// repository was not checked, and nothing is known to be wrong with it.
+	if exitErrors > 0 && checkErrors == 0 {
+		result.NumErrors = 0
 	}
 	return result
 }
@@ -1428,10 +1475,30 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 	// Build environment: start from the current process env so that PATH,
 	// HOME, and system variables are inherited, then overlay restic-specific
 	// variables. This avoids having to enumerate every variable the OS needs.
-	env := append(cmd.Environ(),
-		"RESTIC_REPOSITORY="+dest.RepoURL,
-		"RESTIC_PASSWORD="+dest.Password,
-	)
+	// The agent's own ARKEEP_* variables are left out: restic and rclone do
+	// not use them, and a command source, which restic runs with its own
+	// environment, must not see the agent secret.
+	overlay, rejected := w.resticEnv(dest)
+	if len(rejected) > 0 && w.logger != nil {
+		w.logger.Warn("dropped destination env vars that are not on the backend allowlist",
+			zap.Strings("keys", rejected))
+	}
+	env := append(childenv.Filter(cmd.Environ()), overlay...)
+
+	cmd.Env = env
+	return cmd
+}
+
+// resticEnv returns the "name=value" variables buildCmd adds for restic on top
+// of the agent's environment: the repository, its password, the cache
+// location and the destination's backend credentials. It also returns the
+// names of the destination variables dropped because they are not on the
+// backend allowlist.
+func (w *Wrapper) resticEnv(dest Destination) (env []string, rejected []string) {
+	env = []string{
+		"RESTIC_REPOSITORY=" + dest.RepoURL,
+		"RESTIC_PASSWORD=" + dest.Password,
+	}
 	// An operator who chose a cache location keeps it: restic reads
 	// RESTIC_CACHE_DIR first, then XDG_CACHE_HOME.
 	if w.cacheDir != "" && os.Getenv("RESTIC_CACHE_DIR") == "" && os.Getenv("XDG_CACHE_HOME") == "" {
@@ -1439,10 +1506,6 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 	}
 
 	allowed, rejected := filterDestEnv(dest.Env)
-	if len(rejected) > 0 {
-		w.logger.Warn("dropped destination env vars that are not on the backend allowlist",
-			zap.Strings("keys", rejected))
-	}
 	for k, v := range allowed {
 		if strings.EqualFold(k, sftpKnownHostsEnv) {
 			env = append(env, sftpRcloneEnvPrefix+"KNOWN_HOSTS_FILE="+w.knownHostsFile(v))
@@ -1450,9 +1513,23 @@ func (w *Wrapper) buildCmd(ctx context.Context, dest Destination, args []string)
 		}
 		env = append(env, k+"="+v)
 	}
+	return env, rejected
+}
 
-	cmd.Env = env
-	return cmd
+// commandSourceHiddenEnv returns the names of the variables a command source
+// must not see: those resticEnv sets for restic (repository password, backend
+// credentials...), which restic would otherwise pass on to the command it
+// runs. The agent's own variables are already absent from restic's
+// environment.
+func (w *Wrapper) commandSourceHiddenEnv(dest Destination) []string {
+	env, _ := w.resticEnv(dest)
+	names := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // knownHostsFile writes content to a file named after its hash in the

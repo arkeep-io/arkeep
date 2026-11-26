@@ -39,12 +39,15 @@ import {
     Trash2,
     Play,
     ShieldCheck,
-    RefreshCw,
 } from '@lucide/vue'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Policy, PolicyRecentJob, ApiResponse, TriggerResponse } from '@/types'
 import { formatDate, statusDotClass, statusLabel } from '@/lib/jobUtils'
+import { scheduleLabel } from '@/lib/cron'
 import PolicySheet from '@/components/policies/PolicySheet.vue'
 import SortableTableHead from '@/components/shared/SortableTableHead.vue'
 import { useListSort } from '@/composables/useListSort'
@@ -72,7 +75,7 @@ const offset = computed(() => (page.value - 1) * pageSize)
 const totalPages = computed(() => Math.ceil(total.value / pageSize))
 
 // Server-side column sort, kept in the URL; by name when unset (issue #320).
-const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort({ key: 'name' })
+const { sortKey, sortOrder, queryParams: sortParams, toggle: toggleSort } = useListSort('policies', { keys: ['name', 'agent', 'status'], key: 'name' })
 
 // Sheet
 const sheetOpen = ref(false)
@@ -91,26 +94,6 @@ const triggeringId = ref<string | null>(null)
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Returns a human-readable label for common cron expressions.
- * Falls back to the raw expression for custom schedules.
- */
-function scheduleLabel(cron: string): string {
-    const presets: Record<string, string> = {
-        '0 * * * *': 'Hourly',
-        '0 2 * * *': 'Daily at 02:00',
-        '0 0 * * *': 'Daily at midnight',
-        '0 2 * * 0': 'Weekly (Sun)',
-        '0 2 * * 1': 'Weekly (Mon)',
-        '0 2 1 * *': 'Monthly',
-        '@daily': 'Daily',
-        '@weekly': 'Weekly',
-        '@monthly': 'Monthly',
-        '@hourly': 'Hourly',
-    }
-    return presets[cron] ?? cron
-}
 
 /** Number of recent runs shown as dots; the server returns at most this many. */
 const RECENT_RUNS = 5
@@ -139,17 +122,27 @@ function lastRunDate(policy: Policy): string | null {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchPolicies() {
-    loading.value = true
-    error.value = null
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
+async function fetchPolicies({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<PolicyListResponse>>(`/api/v1/policies?limit=${pageSize}&offset=${offset.value}${sortParams.value}`)
+        if (!request.show()) return
         policies.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load policies')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -239,6 +232,10 @@ async function confirmDelete() {
 // ---------------------------------------------------------------------------
 
 onMounted(fetchPolicies)
+
+// Refresh in place when a policy, or a job of one (its recent runs), changes
+// on the server.
+useLiveRefresh(['policies', 'jobs'], fetchPolicies)
 </script>
 
 <template>
@@ -253,9 +250,7 @@ onMounted(fetchPolicies)
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" aria-label="Refresh" :disabled="loading" @click="fetchPolicies">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="fetchPolicies" />
                 <Button v-if="authStore.isAdmin" @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New Policy
@@ -333,7 +328,7 @@ onMounted(fetchPolicies)
                                 {{ policy.agent_name }}
                             </TableCell>
                             <TableCell>
-                                <span class="font-mono text-xs text-muted-foreground">
+                                <span class="font-mono text-xs text-muted-foreground" :title="policy.schedule">
                                     {{ scheduleLabel(policy.schedule) }}
                                 </span>
                             </TableCell>

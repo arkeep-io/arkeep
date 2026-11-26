@@ -66,6 +66,39 @@ type RefreshTokenRepository interface {
 }
 
 // -----------------------------------------------------------------------------
+// APITokenRepository
+// -----------------------------------------------------------------------------
+
+// APITokenWithOwner is an API token with its owner's email, for the admin
+// listing of every user's tokens.
+type APITokenWithOwner struct {
+	db.APIToken
+	UserEmail string
+}
+
+type APITokenRepository interface {
+	Create(ctx context.Context, token *db.APIToken) error
+	// GetByHash returns the token with this hash. Expiry and the owner's
+	// state are checked by the caller. Returns ErrNotFound if none matches.
+	GetByHash(ctx context.Context, hash string) (*db.APIToken, error)
+	// ListByUser returns a user's tokens, newest first.
+	ListByUser(ctx context.Context, userID uuid.UUID) ([]db.APIToken, error)
+	// CountByUser returns how many tokens a user has.
+	CountByUser(ctx context.Context, userID uuid.UUID) (int64, error)
+	// ListAll returns every user's tokens with their owner's email, newest
+	// first.
+	ListAll(ctx context.Context) ([]APITokenWithOwner, error)
+	// Delete removes a token. With a non-nil userID it removes the token only
+	// if that user owns it. Returns the deleted token, or ErrNotFound.
+	Delete(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*db.APIToken, error)
+	// DeleteByUserID removes every token of a user, when the account may be
+	// in someone else's hands (the events that also end every session).
+	DeleteByUserID(ctx context.Context, userID uuid.UUID) error
+	// TouchLastUsed records that the token was used at t.
+	TouchLastUsed(ctx context.Context, id uuid.UUID, t time.Time) error
+}
+
+// -----------------------------------------------------------------------------
 // PasswordResetTokenRepository
 // -----------------------------------------------------------------------------
 
@@ -294,6 +327,22 @@ type DestinationRepository interface {
 	// ListLocks returns the holds of active jobs on the given destinations,
 	// oldest first.
 	ListLocks(ctx context.Context, destinationIDs []uuid.UUID) ([]db.DestinationLock, error)
+
+	// Maintenance mode (ADR 0026). While a destination is in maintenance,
+	// TryAcquireBusyAll refuses every claim on it, so jobs wait in the queue.
+	//
+	// StartMaintenance puts the destination in maintenance until
+	// EndMaintenance, which is refused with ErrRepairInProgress while a repair
+	// of it is pending or running.
+	StartMaintenance(ctx context.Context, id uuid.UUID, by string) error
+	EndMaintenance(ctx context.Context, id uuid.UUID) error
+	// ClaimForRepair admits an existing repair job, or refuses it with
+	// ErrDestinationBusy or ErrRepairInProgress; auto reports that the
+	// destination was not in maintenance and now is for the job's duration.
+	ClaimForRepair(ctx context.Context, destinationID, jobID uuid.UUID, by string) (auto bool, err error)
+	// ClearEndedMaintenance clears the maintenance columns of destinations
+	// whose maintenance was started by a repair that has ended.
+	ClearEndedMaintenance(ctx context.Context) (int64, error)
 }
 
 // -----------------------------------------------------------------------------
@@ -374,6 +423,11 @@ type JobRepository interface {
 	// ID, PolicyID, Status, CreatedAt, StartedAt and EndedAt are filled.
 	ListRecentBackupsByPolicies(ctx context.Context, policyIDs []uuid.UUID, perPolicy int) (map[uuid.UUID][]db.Job, error)
 	HasPendingJob(ctx context.Context, policyID uuid.UUID) (bool, error)
+	// ListEndedBetween returns the jobs that reached a terminal status with
+	// an end time in (from, to], ordered by start time, for the job report
+	// email. A job still running at to is not included: it ends after to and
+	// is listed by the next call.
+	ListEndedBetween(ctx context.Context, from, to time.Time) ([]JobReportRow, error)
 
 	// Destination queue (issue #285). A job whose destinations are held by
 	// another operation waits in status "waiting" until all of them are free.

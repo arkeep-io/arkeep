@@ -61,21 +61,27 @@ const (
 	// The job_id carries a correlation_id; the agent responds by opening
 	// UploadSnapshotDownload.
 	JobType_JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE JobType = 9
+	// JOB_TYPE_REPAIR runs one restic repair command (unlock, repair index,
+	// repair snapshots, repair packs, find --pack or check) on the destination's
+	// maintenance agent while the destination is in maintenance. An agent that
+	// does not know this type rejects it as unsupported.
+	JobType_JOB_TYPE_REPAIR JobType = 10
 )
 
 // Enum value maps for JobType.
 var (
 	JobType_name = map[int32]string{
-		0: "JOB_TYPE_UNSPECIFIED",
-		1: "JOB_TYPE_BACKUP",
-		2: "JOB_TYPE_VERIFY",
-		3: "JOB_TYPE_RESTORE",
-		4: "JOB_TYPE_FORGET",
-		5: "JOB_TYPE_LIST_VOLUMES",
-		6: "JOB_TYPE_LIST_SNAPSHOT_FILES",
-		7: "JOB_TYPE_IMPORT_SNAPSHOTS",
-		8: "JOB_TYPE_CANCEL",
-		9: "JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE",
+		0:  "JOB_TYPE_UNSPECIFIED",
+		1:  "JOB_TYPE_BACKUP",
+		2:  "JOB_TYPE_VERIFY",
+		3:  "JOB_TYPE_RESTORE",
+		4:  "JOB_TYPE_FORGET",
+		5:  "JOB_TYPE_LIST_VOLUMES",
+		6:  "JOB_TYPE_LIST_SNAPSHOT_FILES",
+		7:  "JOB_TYPE_IMPORT_SNAPSHOTS",
+		8:  "JOB_TYPE_CANCEL",
+		9:  "JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE",
+		10: "JOB_TYPE_REPAIR",
 	}
 	JobType_value = map[string]int32{
 		"JOB_TYPE_UNSPECIFIED":            0,
@@ -88,6 +94,7 @@ var (
 		"JOB_TYPE_IMPORT_SNAPSHOTS":       7,
 		"JOB_TYPE_CANCEL":                 8,
 		"JOB_TYPE_DOWNLOAD_SNAPSHOT_FILE": 9,
+		"JOB_TYPE_REPAIR":                 10,
 	}
 )
 
@@ -256,7 +263,11 @@ type RegisterRequest struct {
 	// for deduplication and upsert, ensuring the same physical agent is never
 	// registered twice even if its hostname changes (e.g. Docker redeploy).
 	// Empty on first-ever registration; populated on all subsequent connects.
-	AgentId       string `protobuf:"bytes,6,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	AgentId string `protobuf:"bytes,6,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// versions of the restic and rclone binaries embedded in the agent
+	// (e.g. "0.19.1", "1.76.0"); empty from agents older than this field
+	ResticVersion string `protobuf:"bytes,7,opt,name=restic_version,json=resticVersion,proto3" json:"restic_version,omitempty"`
+	RcloneVersion string `protobuf:"bytes,8,opt,name=rclone_version,json=rcloneVersion,proto3" json:"rclone_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -333,13 +344,31 @@ func (x *RegisterRequest) GetAgentId() string {
 	return ""
 }
 
+func (x *RegisterRequest) GetResticVersion() string {
+	if x != nil {
+		return x.ResticVersion
+	}
+	return ""
+}
+
+func (x *RegisterRequest) GetRcloneVersion() string {
+	if x != nil {
+		return x.RcloneVersion
+	}
+	return ""
+}
+
 // AgentCapabilities describes which optional features are available on the agent.
 // Capabilities depend on the binaries installed on the host or container image.
 type AgentCapabilities struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// docker is true when the agent can reach the Docker socket and discover volumes.
 	// Requires the Docker socket to be mounted (read-only) into the agent container.
-	Docker        bool `protobuf:"varint,1,opt,name=docker,proto3" json:"docker,omitempty"`
+	Docker bool `protobuf:"varint,1,opt,name=docker,proto3" json:"docker,omitempty"`
+	// repair is true when the agent's restic runs the repair commands (restic
+	// 0.16 or later) and the agent handles JOB_TYPE_REPAIR. The server refuses a
+	// repair on a maintenance agent that does not report it.
+	Repair        bool `protobuf:"varint,4,opt,name=repair,proto3" json:"repair,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -377,6 +406,13 @@ func (*AgentCapabilities) Descriptor() ([]byte, []int) {
 func (x *AgentCapabilities) GetDocker() bool {
 	if x != nil {
 		return x.Docker
+	}
+	return false
+}
+
+func (x *AgentCapabilities) GetRepair() bool {
+	if x != nil {
+		return x.Repair
 	}
 	return false
 }
@@ -2215,16 +2251,19 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc4\x01\n" +
+	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\x92\x02\n" +
 	"\x0fRegisterRequest\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x0e\n" +
 	"\x02os\x18\x03 \x01(\tR\x02os\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12<\n" +
 	"\fcapabilities\x18\x05 \x01(\v2\x18.agent.AgentCapabilitiesR\fcapabilities\x12\x19\n" +
-	"\bagent_id\x18\x06 \x01(\tR\aagentId\"G\n" +
+	"\bagent_id\x18\x06 \x01(\tR\aagentId\x12%\n" +
+	"\x0erestic_version\x18\a \x01(\tR\rresticVersion\x12%\n" +
+	"\x0erclone_version\x18\b \x01(\tR\rrcloneVersion\"_\n" +
 	"\x11AgentCapabilities\x12\x16\n" +
-	"\x06docker\x18\x01 \x01(\bR\x06dockerJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06resticR\x06rclone\"L\n" +
+	"\x06docker\x18\x01 \x01(\bR\x06docker\x12\x16\n" +
+	"\x06repair\x18\x04 \x01(\bR\x06repairJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06resticR\x06rclone\"L\n" +
 	"\x10RegisterResponse\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1d\n" +
 	"\n" +
@@ -2352,7 +2391,7 @@ const file_agent_proto_rawDesc = "" +
 	"\tlisted_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\blistedAt\x12&\n" +
 	"\x0frepo_size_bytes\x18\x06 \x01(\x03R\rrepoSizeBytes\"5\n" +
 	"\x19SnapshotReconcileResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\x03R\adeleted*\x8e\x02\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted*\xa3\x02\n" +
 	"\aJobType\x12\x18\n" +
 	"\x14JOB_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fJOB_TYPE_BACKUP\x10\x01\x12\x13\n" +
@@ -2363,7 +2402,9 @@ const file_agent_proto_rawDesc = "" +
 	"\x1cJOB_TYPE_LIST_SNAPSHOT_FILES\x10\x06\x12\x1d\n" +
 	"\x19JOB_TYPE_IMPORT_SNAPSHOTS\x10\a\x12\x13\n" +
 	"\x0fJOB_TYPE_CANCEL\x10\b\x12#\n" +
-	"\x1fJOB_TYPE_DOWNLOAD_SNAPSHOT_FILE\x10\t*\x8a\x01\n" +
+	"\x1fJOB_TYPE_DOWNLOAD_SNAPSHOT_FILE\x10\t\x12\x13\n" +
+	"\x0fJOB_TYPE_REPAIR\x10\n" +
+	"*\x8a\x01\n" +
 	"\tJobStatus\x12\x1a\n" +
 	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12JOB_STATUS_RUNNING\x10\x01\x12\x18\n" +

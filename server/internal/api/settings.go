@@ -15,6 +15,7 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/auth"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
+	"github.com/arkeep-io/arkeep/server/internal/jobreport"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
@@ -27,6 +28,12 @@ type LogPruner interface {
 	RunOnce(ctx context.Context) (int64, error)
 }
 
+// JobReportScheduler reschedules the job report email after its settings
+// change. Satisfied by *jobreport.Service.
+type JobReportScheduler interface {
+	Reload(ctx context.Context) error
+}
+
 // SettingsHandler groups settings-related HTTP handlers.
 // All routes in this handler are admin-only, enforced by RequireRole("admin")
 // in the router. Two configuration namespaces are supported:
@@ -37,16 +44,20 @@ type SettingsHandler struct {
 	settingsRepo repositories.SettingsRepository
 	auditRepo    repositories.AuditRepository
 	logPruner    LogPruner
+	jobReport    JobReportScheduler
 	logger       *zap.Logger
 }
 
 // NewSettingsHandler creates a new SettingsHandler. logPruner may be nil, in
-// which case the manual log-prune endpoint is unavailable.
+// which case the manual log-prune endpoint is unavailable. jobReport may be
+// nil, in which case a change of the job report settings takes effect at the
+// next server start.
 func NewSettingsHandler(
 	oidcRepo repositories.OIDCProviderRepository,
 	settingsRepo repositories.SettingsRepository,
 	auditRepo repositories.AuditRepository,
 	logPruner LogPruner,
+	jobReport JobReportScheduler,
 	logger *zap.Logger,
 ) *SettingsHandler {
 	return &SettingsHandler{
@@ -54,6 +65,7 @@ func NewSettingsHandler(
 		settingsRepo: settingsRepo,
 		auditRepo:    auditRepo,
 		logPruner:    logPruner,
+		jobReport:    jobReport,
 		logger:       logger.Named("settings_handler"),
 	}
 }
@@ -373,7 +385,6 @@ func (h *SettingsHandler) DeleteOIDC(w http.ResponseWriter, r *http.Request) {
 	logAudit(r, h.auditRepo, h.logger, "settings.oidc.delete", "settings", id.String(), map[string]any{"name": name})
 	NoContent(w)
 }
-
 
 // =============================================================================
 // SMTP
@@ -751,6 +762,53 @@ type notificationSettingsResponse struct {
 	// EmailEnabled turns event notifications by email on or off. The webhook
 	// has its own switch in the webhook settings.
 	EmailEnabled bool `json:"email_enabled"`
+	// ReportFrequency is how often the job report email is sent: "off",
+	// "hourly", "daily", "weekly" or "monthly". ReportTime is the time of the
+	// daily, weekly and monthly report, "HH:MM" in the server's time zone.
+	ReportFrequency string `json:"report_frequency"`
+	ReportTime      string `json:"report_time"`
+	// ReportMinute is the minute past the hour of the hourly report, 0 to 59.
+	ReportMinute int `json:"report_minute"`
+	// ReportWeekday is the day of the weekly report, 0 (Sunday) to 6.
+	ReportWeekday int `json:"report_weekday"`
+	// ReportDay is the day of the month of the monthly report, 1 to 28.
+	ReportDay int `json:"report_day"`
+	// ServerTimezone names the server's time zone (e.g. "CET", "UTC"), so the
+	// GUI can say in which zone ReportTime is. Read-only.
+	ServerTimezone string `json:"server_timezone"`
+}
+
+// notificationSettingsFrom builds the response from the stored settings,
+// with defaults applied.
+func notificationSettingsFrom(idx map[string]string) notificationSettingsResponse {
+	resp := notificationSettingsResponse{
+		JobSuccess:      boolSetting(idx, notification.KeyEventJobSuccess, true),
+		JobFailure:      boolSetting(idx, notification.KeyEventJobFailure, true),
+		AgentOffline:    boolSetting(idx, notification.KeyEventAgentOffline, true),
+		AgentOnline:     boolSetting(idx, notification.KeyEventAgentOnline, false),
+		EmailEnabled:    boolSetting(idx, notification.KeyEmailEnabled, true),
+		ReportFrequency: idx[jobreport.KeyFrequency],
+		ReportTime:      idx[jobreport.KeyTime],
+		ReportWeekday:   int(jobreport.DefaultWeekday),
+		ReportDay:       1,
+		ServerTimezone:  notification.ServerZone(),
+	}
+	if !jobreport.ValidFrequency(resp.ReportFrequency) {
+		resp.ReportFrequency = jobreport.FrequencyOff
+	}
+	if _, _, err := jobreport.ParseTime(resp.ReportTime); err != nil {
+		resp.ReportTime = jobreport.DefaultTime
+	}
+	if m, err := jobreport.ParseMinute(idx[jobreport.KeyMinute]); err == nil {
+		resp.ReportMinute = m
+	}
+	if d, err := jobreport.ParseWeekday(idx[jobreport.KeyWeekday]); err == nil {
+		resp.ReportWeekday = int(d)
+	}
+	if d, err := jobreport.ParseDay(idx[jobreport.KeyDay]); err == nil {
+		resp.ReportDay = d
+	}
+	return resp
 }
 
 // GetNotificationSettings handles GET /api/v1/settings/notifications (admin only).
@@ -763,15 +821,7 @@ func (h *SettingsHandler) GetNotificationSettings(w http.ResponseWriter, r *http
 		return
 	}
 
-	idx := settingsToMap(settings)
-	resp := notificationSettingsResponse{
-		JobSuccess:   boolSetting(idx, notification.KeyEventJobSuccess, true),
-		JobFailure:   boolSetting(idx, notification.KeyEventJobFailure, true),
-		AgentOffline: boolSetting(idx, notification.KeyEventAgentOffline, true),
-		AgentOnline:  boolSetting(idx, notification.KeyEventAgentOnline, false),
-		EmailEnabled: boolSetting(idx, notification.KeyEmailEnabled, true),
-	}
-	Ok(w, resp)
+	Ok(w, notificationSettingsFrom(settingsToMap(settings)))
 }
 
 type upsertNotificationSettingsRequest struct {
@@ -782,6 +832,13 @@ type upsertNotificationSettingsRequest struct {
 	// EmailEnabled is optional: when omitted the stored value is kept, so
 	// clients that predate it do not turn email notifications off.
 	EmailEnabled *bool `json:"email_enabled"`
+	// ReportFrequency, ReportTime, ReportMinute, ReportWeekday and ReportDay
+	// are optional like EmailEnabled.
+	ReportFrequency *string `json:"report_frequency"`
+	ReportTime      *string `json:"report_time"`
+	ReportMinute    *int    `json:"report_minute"`
+	ReportWeekday   *int    `json:"report_weekday"`
+	ReportDay       *int    `json:"report_day"`
 }
 
 // UpsertNotificationSettings handles PUT /api/v1/settings/notifications (admin only).
@@ -790,8 +847,40 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	if req.ReportFrequency != nil && !jobreport.ValidFrequency(*req.ReportFrequency) {
+		ErrBadRequest(w, "report_frequency must be off, hourly, daily, weekly or monthly")
+		return
+	}
+	if req.ReportTime != nil {
+		if _, _, err := jobreport.ParseTime(*req.ReportTime); err != nil {
+			ErrBadRequest(w, "report_time must be HH:MM")
+			return
+		}
+	}
+	if req.ReportMinute != nil && !jobreport.ValidMinute(*req.ReportMinute) {
+		ErrBadRequest(w, "report_minute must be 0 to 59")
+		return
+	}
+	if req.ReportWeekday != nil && !jobreport.ValidWeekday(*req.ReportWeekday) {
+		ErrBadRequest(w, "report_weekday must be 0 (Sunday) to 6 (Saturday)")
+		return
+	}
+	if req.ReportDay != nil && !jobreport.ValidDay(*req.ReportDay) {
+		ErrBadRequest(w, "report_day must be 1 to "+strconv.Itoa(jobreport.MaxDay))
+		return
+	}
 
 	ctx := r.Context()
+	// The schedule before the change: the GUI sends it with every save, and
+	// the report is rescheduled only when it changed.
+	prev, err := h.settingsRepo.GetMany(ctx, "notification.")
+	if err != nil {
+		h.logger.Error("failed to load notification settings", zap.Error(err))
+		ErrInternal(w)
+		return
+	}
+	before := notificationSettingsFrom(settingsToMap(prev))
+
 	pairs := []struct {
 		key   string
 		value string
@@ -807,6 +896,36 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 			value string
 		}{notification.KeyEmailEnabled, strconv.FormatBool(*req.EmailEnabled)})
 	}
+	if req.ReportFrequency != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyFrequency, *req.ReportFrequency})
+	}
+	if req.ReportTime != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyTime, *req.ReportTime})
+	}
+	if req.ReportMinute != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyMinute, strconv.Itoa(*req.ReportMinute)})
+	}
+	if req.ReportWeekday != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyWeekday, strconv.Itoa(*req.ReportWeekday)})
+	}
+	if req.ReportDay != nil {
+		pairs = append(pairs, struct {
+			key   string
+			value string
+		}{jobreport.KeyDay, strconv.Itoa(*req.ReportDay)})
+	}
 	for _, p := range pairs {
 		if err := h.settingsRepo.Set(ctx, p.key, db.EncryptedString(p.value)); err != nil {
 			h.logger.Error("failed to save notification event setting",
@@ -818,27 +937,33 @@ func (h *SettingsHandler) UpsertNotificationSettings(w http.ResponseWriter, r *h
 		}
 	}
 
-	// Answer with the stored email switch, which the request may have left out.
-	emailEnabled := true
-	stored, err := h.settingsRepo.Get(ctx, notification.KeyEmailEnabled)
-	switch {
-	case err == nil:
-		emailEnabled = string(stored.Value) == "true"
-	case !errors.Is(err, repositories.ErrNotFound):
-		h.logger.Error("failed to load email notification setting", zap.Error(err))
+	// Answer with the stored settings: the request may have left some out.
+	stored, err := h.settingsRepo.GetMany(ctx, "notification.")
+	if err != nil {
+		h.logger.Error("failed to load notification settings", zap.Error(err))
 		ErrInternal(w)
 		return
 	}
+	resp := notificationSettingsFrom(settingsToMap(stored))
+
+	// The settings are saved at this point. A failed reschedule is logged but
+	// not answered as an error: the new schedule then applies at the next
+	// server start.
+	scheduleChanged := resp.ReportFrequency != before.ReportFrequency ||
+		resp.ReportTime != before.ReportTime ||
+		resp.ReportMinute != before.ReportMinute ||
+		resp.ReportWeekday != before.ReportWeekday ||
+		resp.ReportDay != before.ReportDay
+	if scheduleChanged && h.jobReport != nil {
+		if err := h.jobReport.Reload(ctx); err != nil {
+			h.logger.Error("failed to reschedule job report, the saved schedule applies at the next server start", zap.Error(err))
+		}
+	}
 
 	logAudit(r, h.auditRepo, h.logger, "settings.notifications.update", "settings", "",
-		map[string]any{"email_enabled": emailEnabled})
-	Ok(w, notificationSettingsResponse{
-		JobSuccess:   req.JobSuccess,
-		JobFailure:   req.JobFailure,
-		AgentOffline: req.AgentOffline,
-		AgentOnline:  req.AgentOnline,
-		EmailEnabled: emailEnabled,
-	})
+		map[string]any{"email_enabled": resp.EmailEnabled, "report_frequency": resp.ReportFrequency, "report_time": resp.ReportTime, "report_minute": resp.ReportMinute,
+			"report_weekday": resp.ReportWeekday, "report_day": resp.ReportDay})
+	Ok(w, resp)
 }
 
 // =============================================================================

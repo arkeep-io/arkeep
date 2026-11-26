@@ -45,12 +45,21 @@ export async function mountPage(
   return { wrapper, router }
 }
 
+// VALIDATION_DEBOUNCE_MS is how long vee-validate waits, on a real timer,
+// before it runs a form's schema validation (debounceAsync(_validateSchema, 5)
+// in useForm), on submit too.
+const VALIDATION_DEBOUNCE_MS = 5
+
 // settle waits for vee-validate, whose validation and submit handlers chain
-// promises across several macrotasks, and for the resulting re-render.
+// promises across several macrotasks, and for the resulting re-render. Each
+// round waits longer than the validation debounce: timers fire in the order
+// they are due, so a validation asked for before the round always runs within
+// it, however loaded the machine is. Rounds of 0 ms only outlasted it by luck,
+// and lost now and then when the whole suite ran in parallel.
 export async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
     await flushPromises()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, VALIDATION_DEBOUNCE_MS + 1))
   }
 }
 
