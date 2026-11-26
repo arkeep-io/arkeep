@@ -2,6 +2,6 @@
 
 The app runs the agent of the Arkeep release with the same version.
 
-## v0.12.1
+## v0.13.0
 
-Release notes: https://github.com/arkeep-io/arkeep/releases/tag/v0.12.1
+Release notes: https://github.com/arkeep-io/arkeep/releases/tag/v0.13.0
