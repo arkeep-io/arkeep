@@ -319,6 +319,66 @@ func TestSnapshotHandler_Restore(t *testing.T) {
 		}
 	})
 
+	// A folder restore recreates the full path below the target, so a target
+	// that is the original location nests the files and leaves the originals
+	// unchanged. It is refused before any job is created.
+	for _, tc := range []struct {
+		name    string
+		sources string
+		body    map[string]any
+	}{
+		{
+			name:    "returns 400 when the target is the original location of the include paths",
+			sources: `["/var/lib/docker/volumes/X/_data"]`,
+			body: map[string]any{
+				"target_path":   "/var/lib/docker/volumes/X",
+				"include_paths": []string{"/var/lib/docker/volumes/X/_data"},
+			},
+		},
+		{
+			name:    "returns 400 when a whole-snapshot restore targets a source folder",
+			sources: `["/srv/app"]`,
+			body:    map[string]any{"target_path": "/srv/app"},
+		},
+		{
+			// Snapshots made by a policy store the policy's sources in the
+			// GUI's object form.
+			name:    "returns 400 when a whole-snapshot restore of a policy snapshot targets a source folder",
+			sources: `[{"type":"directory","path":"/srv/app"},{"type":"docker-volume","path":"pg_data"}]`,
+			body:    map[string]any{"target_path": "/srv/app"},
+		},
+		{
+			name:    "returns 400 when a whole-snapshot restore of a policy snapshot targets a folder above a source",
+			sources: `[{"type":"directory","path":"/srv/app"}]`,
+			body:    map[string]any{"target_path": "/srv"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			s := createDBSnapshot(t, e.deps)
+			if err := e.deps.gdb.Model(&db.Snapshot{}).Where("id = ?", s.ID).Update("sources", tc.sources).Error; err != nil {
+				t.Fatalf("set sources: %v", err)
+			}
+			agent := createDBAgent(t, e.deps, "restore-agent")
+			tc.body["agent_id"] = agent.ID.String()
+
+			resp := e.post(t, "/api/v1/snapshots/"+s.ID.String()+"/restore", e.adminToken(t), tc.body)
+			assertStatus(t, resp, http.StatusBadRequest)
+			raw, _ := io.ReadAll(resp.Body)
+			if !strings.Contains(string(raw), "original location") {
+				t.Errorf("body = %s, want it to point to the original location", raw)
+			}
+
+			var count int64
+			if err := e.deps.gdb.Model(&db.Job{}).Where("agent_id = ?", agent.ID).Count(&count).Error; err != nil {
+				t.Fatalf("count jobs: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("stored %d jobs, want 0", count)
+			}
+		})
+	}
+
 	t.Run("returns 401 without token", func(t *testing.T) {
 		e := newTestEnv(t)
 		resp := e.post(t, "/api/v1/snapshots/00000000-0000-0000-0000-000000000001/restore",
