@@ -3,7 +3,7 @@
 #   docker build -f agent/Dockerfile -t arkeep-agent .
 
 # ─── Stage 1: download restic + rclone ────────────────────────────────────────
-FROM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS downloader
+FROM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS downloader
 
 RUN apk add --no-cache ca-certificates git
 
@@ -21,7 +21,7 @@ RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
     GOWORK=off go run ./scripts/download_deps.go
 
 # ─── Stage 2: compile ─────────────────────────────────────────────────────────
-FROM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS builder
+FROM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 
 RUN apk add --no-cache git
 
