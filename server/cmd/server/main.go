@@ -24,12 +24,14 @@ import (
 	"github.com/arkeep-io/arkeep/server/internal/agentwatchdog"
 	"github.com/arkeep-io/arkeep/server/internal/api"
 	"github.com/arkeep-io/arkeep/server/internal/auth"
+	"github.com/arkeep-io/arkeep/server/internal/changes"
 	"github.com/arkeep-io/arkeep/server/internal/checkscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/db"
 	"github.com/arkeep-io/arkeep/server/internal/destqueue"
 	grpcserver "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/housekeeping"
+	"github.com/arkeep-io/arkeep/server/internal/jobreport"
 	"github.com/arkeep-io/arkeep/server/internal/logretention"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
 	"github.com/arkeep-io/arkeep/server/internal/notification"
@@ -220,23 +222,29 @@ func run(ctx context.Context, cfg *config) error {
 	}()
 
 	// --- Repositories ---
-	userRepo := repositories.NewUserRepository(gormDB)
+	// The hub is created first: the repositories of the objects the GUI lists
+	// announce their writes on it (changes topics), so that open pages refresh
+	// themselves. Bursts of changes are coalesced to one per type and second.
+	wsHub := websocket.NewHub()
+	changePublisher := changes.Coalesce(wsHub, changes.CoalesceWindow)
+	userRepo := changes.NewUserRepository(repositories.NewUserRepository(gormDB), changePublisher)
 	refreshTokenRepo := repositories.NewRefreshTokenRepository(gormDB)
-	agentRepo := repositories.NewAgentRepository(gormDB)
-	destinationRepo := repositories.NewDestinationRepository(gormDB)
-	policyRepo := repositories.NewPolicyRepository(gormDB)
-	jobRepo := repositories.NewJobRepository(gormDB)
-	snapshotRepo := repositories.NewSnapshotRepository(gormDB)
+	agentRepo := changes.NewAgentRepository(repositories.NewAgentRepository(gormDB), changePublisher)
+	destinationRepo := changes.NewDestinationRepository(repositories.NewDestinationRepository(gormDB), changePublisher)
+	policyRepo := changes.NewPolicyRepository(repositories.NewPolicyRepository(gormDB), changePublisher)
+	jobRepo := changes.NewJobRepository(repositories.NewJobRepository(gormDB), changePublisher)
+	snapshotRepo := changes.NewSnapshotRepository(repositories.NewSnapshotRepository(gormDB), changePublisher)
 	notificationRepo := repositories.NewNotificationRepository(gormDB)
 	oidcProviderRepo := repositories.NewOIDCProviderRepository(gormDB)
 	notificationProviderRepo := repositories.NewNotificationProviderRepository(gormDB)
 	settingsRepo := repositories.NewSettingsRepository(gormDB)
 	dashboardRepo := repositories.NewDashboardRepository(gormDB)
-	auditRepo := repositories.NewAuditRepository(gormDB)
+	auditRepo := changes.NewAuditRepository(repositories.NewAuditRepository(gormDB), changePublisher)
 	resetTokenRepo := repositories.NewPasswordResetTokenRepository(gormDB)
 	challengeRepo := repositories.NewTwoFactorChallengeRepository(gormDB)
 	passwordChangeRepo := repositories.NewPasswordChangeChallengeRepository(gormDB)
 	recoveryCodeRepo := repositories.NewRecoveryCodeRepository(gormDB)
+	apiTokenRepo := repositories.NewAPITokenRepository(gormDB)
 
 	// The initial admin can only be created within api.SetupWindow of this
 	// start (see api/setup.go); tell the operator before the window closes.
@@ -255,7 +263,7 @@ func run(ctx context.Context, cfg *config) error {
 	}
 
 	localProvider := auth.NewLocalAuthProvider(userRepo, refreshTokenRepo, jwtManager, logger)
-	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, jwtManager, logger)
+	oidcProvider := auth.NewOIDCAuthProvider(oidcProviderRepo, userRepo, refreshTokenRepo, apiTokenRepo, jwtManager, logger)
 	denylist := auth.NewDenylist()
 	authService := auth.NewAuthService(localProvider, oidcProvider, refreshTokenRepo, jwtManager, denylist)
 
@@ -378,7 +386,6 @@ func run(ctx context.Context, cfg *config) error {
 	// --- WebSocket Hub ---
 	// The hub must start before the HTTP server so clients can connect
 	// immediately after the server is ready.
-	wsHub := websocket.NewHub()
 
 	// background tracks the long-running services started below. They all
 	// return once ctx is cancelled, and shutdown waits for them before the
@@ -430,6 +437,22 @@ func run(ctx context.Context, cfg *config) error {
 	// deletes rows once an administrator configures a retention window.
 	logRetentionSvc := logretention.NewService(jobRepo, settingsRepo, logger)
 	background.Go(func() { logRetentionSvc.Start(ctx) })
+
+	// --- Job report ---
+	// Emails one report of all jobs that finished since the previous one,
+	// hourly or daily (see Settings → Notifications). Off by default.
+	jobReportSvc, err := jobreport.New(settingsRepo, notifService, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create job report service: %w", err)
+	}
+	if err := jobReportSvc.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start job report service: %w", err)
+	}
+	defer func() {
+		if err := jobReportSvc.Stop(); err != nil {
+			logger.Warn("job report shutdown error", zap.Error(err))
+		}
+	}()
 
 	// --- Housekeeping ---
 	// Deletes expired refresh tokens and notifications read more than 30 days
@@ -513,6 +536,7 @@ func run(ctx context.Context, cfg *config) error {
 		OIDCProviders:      oidcProviderRepo,
 		Settings:           settingsRepo,
 		LogRetention:       logRetentionSvc,
+		JobReport:          jobReportSvc,
 		SnapshotSync:       snapshotSyncSvc,
 		Secure:             cfg.secureCookies,
 		Dashboard:          dashboardRepo,
@@ -522,6 +546,8 @@ func run(ctx context.Context, cfg *config) error {
 		Challenges:         challengeRepo,
 		PasswordChanges:    passwordChangeRepo,
 		RecoveryCodes:      recoveryCodeRepo,
+		APITokens:          apiTokenRepo,
+		APITokenValidator:  auth.NewAPITokenValidator(apiTokenRepo, userRepo, logger),
 		Mailer:             notifService,
 		Pinger:             hcPinger,
 		Queue:              destQueue,

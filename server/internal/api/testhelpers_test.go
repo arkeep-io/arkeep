@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -56,52 +57,54 @@ func newTestGormDB(t *testing.T) (*gorm.DB, *sql.DB) {
 // ─── Repositories ─────────────────────────────────────────────────────────────
 
 type testDeps struct {
-	gdb      *gorm.DB
-	sqlDB    *sql.DB
-	users    repositories.UserRepository
-	tokens   repositories.RefreshTokenRepository
-	agents   repositories.AgentRepository
-	dests    repositories.DestinationRepository
-	policies repositories.PolicyRepository
-	jobs     repositories.JobRepository
-	snaps    repositories.SnapshotRepository
-	notifs   repositories.NotificationRepository
-	oidc     repositories.OIDCProviderRepository
-	settings repositories.SettingsRepository
-	audit    repositories.AuditRepository
-	dash          repositories.DashboardRepository
-	resets        repositories.PasswordResetTokenRepository
-	challenges    repositories.TwoFactorChallengeRepository
-	recoveryCodes repositories.RecoveryCodeRepository
+	gdb             *gorm.DB
+	sqlDB           *sql.DB
+	users           repositories.UserRepository
+	tokens          repositories.RefreshTokenRepository
+	agents          repositories.AgentRepository
+	dests           repositories.DestinationRepository
+	policies        repositories.PolicyRepository
+	jobs            repositories.JobRepository
+	snaps           repositories.SnapshotRepository
+	notifs          repositories.NotificationRepository
+	oidc            repositories.OIDCProviderRepository
+	settings        repositories.SettingsRepository
+	audit           repositories.AuditRepository
+	dash            repositories.DashboardRepository
+	resets          repositories.PasswordResetTokenRepository
+	challenges      repositories.TwoFactorChallengeRepository
+	recoveryCodes   repositories.RecoveryCodeRepository
 	passwordChanges repositories.PasswordChangeChallengeRepository
 
 	notifProviders repositories.NotificationProviderRepository
+	apiTokens      repositories.APITokenRepository
 }
 
 func newTestDeps(t *testing.T) *testDeps {
 	t.Helper()
 	gdb, sqlDB := newTestGormDB(t)
 	return &testDeps{
-		gdb:      gdb,
-		sqlDB:    sqlDB,
-		users:    repositories.NewUserRepository(gdb),
-		tokens:   repositories.NewRefreshTokenRepository(gdb),
-		agents:   repositories.NewAgentRepository(gdb),
-		dests:    repositories.NewDestinationRepository(gdb),
-		policies: repositories.NewPolicyRepository(gdb),
-		jobs:     repositories.NewJobRepository(gdb),
-		snaps:    repositories.NewSnapshotRepository(gdb),
-		notifs:   repositories.NewNotificationRepository(gdb),
-		oidc:     repositories.NewOIDCProviderRepository(gdb),
-		settings: repositories.NewSettingsRepository(gdb),
-		audit:    repositories.NewAuditRepository(gdb),
-		dash:          repositories.NewDashboardRepository(gdb),
-		resets:        repositories.NewPasswordResetTokenRepository(gdb),
-		challenges:    repositories.NewTwoFactorChallengeRepository(gdb),
-		recoveryCodes: repositories.NewRecoveryCodeRepository(gdb),
+		gdb:             gdb,
+		sqlDB:           sqlDB,
+		users:           repositories.NewUserRepository(gdb),
+		tokens:          repositories.NewRefreshTokenRepository(gdb),
+		agents:          repositories.NewAgentRepository(gdb),
+		dests:           repositories.NewDestinationRepository(gdb),
+		policies:        repositories.NewPolicyRepository(gdb),
+		jobs:            repositories.NewJobRepository(gdb),
+		snaps:           repositories.NewSnapshotRepository(gdb),
+		notifs:          repositories.NewNotificationRepository(gdb),
+		oidc:            repositories.NewOIDCProviderRepository(gdb),
+		settings:        repositories.NewSettingsRepository(gdb),
+		audit:           repositories.NewAuditRepository(gdb),
+		dash:            repositories.NewDashboardRepository(gdb),
+		resets:          repositories.NewPasswordResetTokenRepository(gdb),
+		challenges:      repositories.NewTwoFactorChallengeRepository(gdb),
+		recoveryCodes:   repositories.NewRecoveryCodeRepository(gdb),
 		passwordChanges: repositories.NewPasswordChangeChallengeRepository(gdb),
 
 		notifProviders: repositories.NewNotificationProviderRepository(gdb),
+		apiTokens:      repositories.NewAPITokenRepository(gdb),
 	}
 }
 
@@ -144,7 +147,7 @@ func newTestAuthService(t *testing.T, deps *testDeps) *auth.AuthService {
 	t.Cleanup(denylist.Stop)
 
 	local := auth.NewLocalAuthProvider(deps.users, deps.tokens, jwtMgr, logger)
-	oidcProv := auth.NewOIDCAuthProvider(deps.oidc, deps.users, deps.tokens, jwtMgr, logger)
+	oidcProv := auth.NewOIDCAuthProvider(deps.oidc, deps.users, deps.tokens, deps.apiTokens, jwtMgr, logger)
 	return auth.NewAuthService(local, oidcProv, deps.tokens, jwtMgr, denylist)
 }
 
@@ -172,6 +175,20 @@ type testEnv struct {
 	sched   *scheduler.Scheduler
 	mgr     *agentmanager.Manager
 	mailer  *fakeMailer
+	// jobReport counts the reschedules of the job report.
+	jobReport *fakeJobReport
+}
+
+// fakeJobReport is a test double for JobReportScheduler. Reload fails with
+// err when it is set.
+type fakeJobReport struct {
+	reloads atomic.Int32
+	err     error
+}
+
+func (f *fakeJobReport) Reload(context.Context) error {
+	f.reloads.Add(1)
+	return f.err
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -190,52 +207,57 @@ func newTestEnvWithBaseURL(t *testing.T, baseURL string) *testEnv {
 	sched := newTestScheduler(t, deps, mgr)
 	hub := websocket.NewHub()
 	mailer := &fakeMailer{configured: true}
+	jobReport := &fakeJobReport{}
 
 	cfg := RouterConfig{
-		AuthService:   authSvc,
-		Scheduler:     sched,
-		AgentManager:  mgr,
-		Logger:        zap.NewNop(),
-		Hub:           hub,
-		Users:         deps.users,
-		Agents:        deps.agents,
-		Destinations:  deps.dests,
-		Policies:      deps.policies,
-		Jobs:          deps.jobs,
-		Snapshots:     deps.snaps,
-		Notifications: deps.notifs,
-		OIDCProviders: deps.oidc,
-		Settings:      deps.settings,
-		LogRetention:  logretention.NewService(deps.jobs, deps.settings, zap.NewNop()),
-		SnapshotSync:  snapshotsync.NewService(deps.dests, deps.snaps, deps.settings, mgr, zap.NewNop()),
-		Dashboard:     deps.dash,
-		Audit:         deps.audit,
-		ResetTokens:   deps.resets,
-		RefreshTokens: deps.tokens,
-		Challenges:    deps.challenges,
+		AuthService:     authSvc,
+		Scheduler:       sched,
+		AgentManager:    mgr,
+		Logger:          zap.NewNop(),
+		Hub:             hub,
+		Users:           deps.users,
+		Agents:          deps.agents,
+		Destinations:    deps.dests,
+		Policies:        deps.policies,
+		Jobs:            deps.jobs,
+		Snapshots:       deps.snaps,
+		Notifications:   deps.notifs,
+		OIDCProviders:   deps.oidc,
+		Settings:        deps.settings,
+		LogRetention:    logretention.NewService(deps.jobs, deps.settings, zap.NewNop()),
+		JobReport:       jobReport,
+		SnapshotSync:    snapshotsync.NewService(deps.dests, deps.snaps, deps.settings, mgr, zap.NewNop()),
+		Dashboard:       deps.dash,
+		Audit:           deps.audit,
+		ResetTokens:     deps.resets,
+		RefreshTokens:   deps.tokens,
+		Challenges:      deps.challenges,
 		PasswordChanges: deps.passwordChanges,
 
 		NotificationProviders: deps.notifProviders,
-		RecoveryCodes: deps.recoveryCodes,
-		Mailer:        mailer,
-		Pinger:        healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),
-		PublicBaseURL: baseURL,
-		Secure:        false,
-		AutoCerts:     nil,
-		ServerVersion: "0.0.0-test",
-		DB:            deps.sqlDB,
+		RecoveryCodes:         deps.recoveryCodes,
+		APITokens:             deps.apiTokens,
+		APITokenValidator:     auth.NewAPITokenValidator(deps.apiTokens, deps.users, zap.NewNop()),
+		Mailer:                mailer,
+		Pinger:                healthcheck.NewPinger(deps.jobs, deps.policies, zap.NewNop()),
+		PublicBaseURL:         baseURL,
+		Secure:                false,
+		AutoCerts:             nil,
+		ServerVersion:         "0.0.0-test",
+		DB:                    deps.sqlDB,
 	}
 
 	srv := httptest.NewServer(NewRouter(cfg))
 	t.Cleanup(srv.Close)
 
 	return &testEnv{
-		Server:  srv,
-		deps:    deps,
-		authSvc: authSvc,
-		sched:   sched,
-		mgr:     mgr,
-		mailer:  mailer,
+		Server:    srv,
+		deps:      deps,
+		authSvc:   authSvc,
+		sched:     sched,
+		mgr:       mgr,
+		mailer:    mailer,
+		jobReport: jobReport,
 	}
 }
 
@@ -414,4 +436,3 @@ func createDBAgent(t *testing.T, deps *testDeps, name string) *db.Agent {
 	}
 	return a
 }
-

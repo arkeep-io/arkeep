@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,6 +52,8 @@ type config struct {
 	grpcInsecure   bool
 	dockerHostRoot string
 	hostname       string
+
+	allowEphemeralLocal bool
 }
 
 func main() {
@@ -90,6 +93,10 @@ receives backup jobs, and executes them using the embedded restic binary.`,
 	root.PersistentFlags().StringVar(&cfg.serverHTTPAddr, "server-http-addr", envOrDefault("ARKEEP_SERVER_HTTP_ADDR", ""), "Base URL of the server HTTP API for enrollment (default: derived from --server-addr with port 8080)")
 	root.PersistentFlags().StringVar(&cfg.dockerHostRoot, "docker-host-root", envOrDefault("ARKEEP_DOCKER_HOST_ROOT", ""), "Container path where the host filesystem is mounted (default: /hostfs when running inside Docker, empty otherwise). Override only if you mount the host filesystem at a custom path.")
 	root.PersistentFlags().StringVar(&cfg.hostname, "hostname", envOrDefault("ARKEEP_AGENT_HOSTNAME", ""), "Hostname reported to the server and recorded on snapshots (default: the host's hostname, read from <docker-host-root>/etc/hostname inside Docker)")
+	// ParseBool, not == "true": the Home Assistant Supervisor passes a boolean
+	// option as "True".
+	allowEphemeral, _ := strconv.ParseBool(os.Getenv("ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION"))
+	root.PersistentFlags().BoolVar(&cfg.allowEphemeralLocal, "allow-ephemeral-local-destination", allowEphemeral, "In a container, back up to a local destination even when it is not on a bind mount or a volume (the repository is lost when the container is recreated)")
 
 	return root
 }
@@ -196,6 +203,14 @@ func run(ctx context.Context, cfg *config) error {
 
 	// --- Executor ---
 	exec := executor.New(wrapper, dockerClient, hooksRunner, logger, cfg.dockerHostRoot, hostname)
+	if isRunningInContainer() {
+		if cfg.allowEphemeralLocal {
+			logger.Warn("ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION is set: local destinations that are not on a bind mount " +
+				"or a volume are backed up anyway, and lost when the container is recreated")
+		} else {
+			exec.CheckEphemeralLocalDestinations()
+		}
+	}
 
 	// --- Load mTLS credentials from state-dir (written by enrollment) ---
 	// If all three files are present the agent was enrolled previously and can
@@ -320,6 +335,25 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// isRunningInContainer reports whether the process runs in an application
+// container of any runtime: Docker (isRunningInDocker), Podman
+// (/run/.containerenv, "libpod" cgroups) or a Kubernetes pod ("kubepods"
+// cgroups). It only decides whether local destinations are checked for
+// storage lost on recreate; the /hostfs default keeps using
+// isRunningInDocker, so Podman and Kubernetes agents see no other change.
+// System containers (LXC, Proxmox CT), whose root filesystem persists, match
+// none of these.
+func isRunningInContainer() bool {
+	if isRunningInDocker() {
+		return true
+	}
+	if _, err := os.Stat("/run/.containerenv"); err == nil {
+		return true
+	}
+	data, err := os.ReadFile("/proc/self/cgroup")
+	return err == nil && (bytes.Contains(data, []byte("libpod")) || bytes.Contains(data, []byte("kubepods")))
 }
 
 // isRunningInDocker reports whether the process is running inside a Docker

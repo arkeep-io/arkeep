@@ -215,6 +215,13 @@ func (d *Dispatcher) Drain(ctx context.Context) {
 	d.drainMu.Lock()
 	defer d.drainMu.Unlock()
 
+	// A maintenance a repair started ends with the repair (ADR 0026): the
+	// admission rule already ignores it, this keeps the destination's columns
+	// in line. Drains run on every terminal job status, so it happens promptly.
+	if _, err := d.dests.ClearEndedMaintenance(ctx); err != nil {
+		d.logger.Warn("failed to clear ended maintenance", zap.Error(err))
+	}
+
 	timeout := d.timeout(ctx)
 	if timeout > 0 {
 		// Before listing the queue: a failed pending job frees its destinations.

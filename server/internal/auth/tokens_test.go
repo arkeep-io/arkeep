@@ -39,7 +39,7 @@ func TestRefreshToken_RejectsExpired(t *testing.T) {
 		RefreshToken(context.Context, string) (*TokenPair, error)
 	}{
 		"local": NewLocalAuthProvider(users, tokens, jwtMgr, zap.NewNop()),
-		"oidc":  NewOIDCAuthProvider(repositories.NewOIDCProviderRepository(gdb), users, tokens, jwtMgr, zap.NewNop()),
+		"oidc":  NewOIDCAuthProvider(repositories.NewOIDCProviderRepository(gdb), users, tokens, repositories.NewAPITokenRepository(gdb), jwtMgr, zap.NewNop()),
 	}
 	for name, p := range providers {
 		t.Run(name, func(t *testing.T) {

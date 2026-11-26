@@ -15,6 +15,7 @@ import (
 	grpccerts "github.com/arkeep-io/arkeep/server/internal/grpc"
 	"github.com/arkeep-io/arkeep/server/internal/healthcheck"
 	"github.com/arkeep-io/arkeep/server/internal/metrics"
+	"github.com/arkeep-io/arkeep/server/internal/repairs"
 	"github.com/arkeep-io/arkeep/server/internal/repositories"
 	"github.com/arkeep-io/arkeep/server/internal/retentionscheduler"
 	"github.com/arkeep-io/arkeep/server/internal/scheduler"
@@ -54,6 +55,12 @@ type RouterConfig struct {
 	Challenges    repositories.TwoFactorChallengeRepository
 	RecoveryCodes repositories.RecoveryCodeRepository
 
+	// APITokens holds the read-only API tokens (ADR 0027), and
+	// APITokenValidator authenticates requests made with one. When
+	// APITokenValidator is nil, API tokens are refused.
+	APITokens         repositories.APITokenRepository
+	APITokenValidator APITokenAuthenticator
+
 	// NotificationProviders manages the push and chat services events are
 	// sent to (Settings → Notifications).
 	NotificationProviders repositories.NotificationProviderRepository
@@ -66,6 +73,11 @@ type RouterConfig struct {
 	// Retention "run now"). Satisfied by *logretention.Service. Optional — if
 	// nil, the manual-prune endpoint responds 503.
 	LogRetention LogPruner
+
+	// JobReport reschedules the job report email after its settings change.
+	// Satisfied by *jobreport.Service. Optional — if nil, a change takes
+	// effect at the next server start.
+	JobReport JobReportScheduler
 
 	// SnapshotSync records snapshots found in a destination's repository and
 	// evicts the records of snapshots no longer there (import, sync). Required.
@@ -141,8 +153,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// --- Initialize handlers ---
 	setupHandler := NewSetupHandler(cfg.Users, cfg.Audit, cfg.Logger)
 	authHandler := NewAuthHandler(cfg.AuthService, cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.PasswordChanges, cfg.Audit, cfg.Logger, cfg.Secure)
-	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.Audit, cfg.Logger)
-	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
+	apiTokenHandler := NewAPITokenHandler(cfg.APITokens, cfg.Users, cfg.Audit, cfg.Logger)
+	twoFactorHandler := NewTwoFactorHandler(cfg.Users, cfg.Challenges, cfg.RecoveryCodes, cfg.RefreshTokens, cfg.APITokens, cfg.Audit, cfg.Logger)
+	passwordResetHandler := NewPasswordResetHandler(cfg.Users, cfg.ResetTokens, cfg.RefreshTokens, cfg.APITokens, cfg.Mailer, cfg.Audit, cfg.Logger, cfg.PublicBaseURL)
 	// Registered without auto-PKI too: it then answers 405 with a proof that
 	// the agent can check (ADR 0023), instead of an unauthenticated 405.
 	enrollHandler := NewEnrollHandler(cfg.AutoCerts, cfg.AgentSecret, cfg.Logger)
@@ -151,14 +164,17 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	policyHandler := NewPolicyHandler(cfg.Policies, cfg.Agents, cfg.Jobs, cfg.Destinations, cfg.Scheduler, cfg.Pinger, cfg.Audit, cfg.Logger)
 	jobHandler := NewJobHandler(cfg.Jobs, cfg.AgentManager, cfg.Hub, cfg.Pinger, cfg.Queue, cfg.Logger)
 	snapshotHandler := NewSnapshotHandler(cfg.Snapshots, cfg.Destinations, cfg.Policies, cfg.Jobs, cfg.AgentManager, cfg.Audit, cfg.Logger)
-	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
+	userHandler := NewUserHandler(cfg.Users, cfg.RefreshTokens, cfg.APITokens, cfg.PasswordChanges, cfg.Audit, cfg.Logger)
 	notificationHandler := NewNotificationHandler(cfg.Notifications, cfg.Logger)
-	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.Logger)
+	settingsHandler := NewSettingsHandler(cfg.OIDCProviders, cfg.Settings, cfg.Audit, cfg.LogRetention, cfg.JobReport, cfg.Logger)
 	notificationProviderHandler := NewNotificationProviderHandler(cfg.NotificationProviders, cfg.Audit, cfg.Logger)
 	wsHandler := NewWSHandler(cfg.Hub, cfg.AuthService, cfg.Logger)
 	dashboardHandler := NewDashboardHandler(cfg.Dashboard, cfg.Logger)
 	versionHandler := newVersionHandler(cfg.ServerVersion, cfg.UpdateCheck)
 	auditHandler := NewAuditHandler(cfg.Audit, cfg.Logger)
+	repairHandler := NewRepairHandler(cfg.Destinations,
+		repairs.New(cfg.Destinations, cfg.Agents, cfg.Jobs, cfg.AgentManager, cfg.Logger),
+		cfg.Queue, cfg.Audit, cfg.Logger)
 
 	healthHandler := newHealthHandler(cfg.DB, cfg.Scheduler)
 	r.Get("/health/live", healthHandler.Live)
@@ -237,13 +253,19 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// the agents and where their data goes. Objects have no owner, so a
 		// write open to "user" would be a write on every agent.
 		r.Group(func(r chi.Router) {
-			r.Use(Authenticate(cfg.AuthService))
+			r.Use(Authenticate(cfg.AuthService, cfg.APITokenValidator))
 
 			r.Get("/dashboard", dashboardHandler.Get)
 			r.Get("/version", versionHandler.Get)
 
 			r.Get("/users/me", userHandler.GetMe)
 			r.Patch("/users/me", userHandler.UpdateMe)
+
+			// API tokens (ADR 0027): each user manages their own, from a
+			// session only.
+			r.With(RequireSession).Get("/users/me/api-tokens", apiTokenHandler.ListMine)
+			r.With(RequireSession).Post("/users/me/api-tokens", apiTokenHandler.CreateMine)
+			r.With(RequireSession).Delete("/users/me/api-tokens/{id}", apiTokenHandler.RevokeMine)
 
 			// Two-factor self-service enrollment. These live under /api/v1/auth
 			// so the refresh cookie (scoped to /api/v1/auth) reaches Verify.
@@ -274,6 +296,11 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.With(RequireRole("admin")).Post("/destinations/{id}/trigger-check", destinationHandler.TriggerCheck)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/sync", destinationHandler.Sync)
 			r.With(RequireRole("admin")).Post("/destinations/{id}/reset-repository", destinationHandler.ResetRepository)
+			// Maintenance mode and repairs (ADR 0026): no job can claim a
+			// destination in maintenance, and a repair runs one restic repair
+			// command on its maintenance agent.
+			r.With(RequireRole("admin")).Put("/destinations/{id}/maintenance", repairHandler.SetMaintenance)
+			r.With(RequireRole("admin")).Post("/destinations/{id}/repair", repairHandler.Repair)
 
 			// Policies
 			r.Get("/policies", policyHandler.List)
@@ -307,6 +334,10 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			// --- Admin-only routes ---
 			r.Group(func(r chi.Router) {
 				r.Use(RequireRole("admin"))
+
+				// Every user's API tokens, from a session only.
+				r.With(RequireSession).Get("/api-tokens", apiTokenHandler.ListAll)
+				r.With(RequireSession).Delete("/api-tokens/{id}", apiTokenHandler.Revoke)
 
 				// User management
 				r.Get("/users", userHandler.List)

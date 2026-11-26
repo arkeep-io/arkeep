@@ -41,6 +41,7 @@ type PasswordResetHandler struct {
 	users     repositories.UserRepository
 	tokens    repositories.PasswordResetTokenRepository
 	refresh   repositories.RefreshTokenRepository
+	apiTokens repositories.APITokenRepository
 	mailer    Mailer
 	auditRepo repositories.AuditRepository
 	logger    *zap.Logger
@@ -60,6 +61,7 @@ func NewPasswordResetHandler(
 	users repositories.UserRepository,
 	tokens repositories.PasswordResetTokenRepository,
 	refresh repositories.RefreshTokenRepository,
+	apiTokens repositories.APITokenRepository,
 	mailer Mailer,
 	auditRepo repositories.AuditRepository,
 	logger *zap.Logger,
@@ -69,6 +71,7 @@ func NewPasswordResetHandler(
 		users:     users,
 		tokens:    tokens,
 		refresh:   refresh,
+		apiTokens: apiTokens,
 		mailer:    mailer,
 		auditRepo: auditRepo,
 		logger:    logger.Named("password_reset"),
@@ -253,10 +256,14 @@ func (h *PasswordResetHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("password reset: marking token used failed", zap.Error(err))
 	}
 
-	// Invalidate existing sessions — a password change should log out other
-	// devices. Non-fatal: the password is already updated.
+	// Invalidate existing sessions and API tokens — a password change should
+	// log out other devices, and whoever reset the password may not be the
+	// one who created the tokens. Non-fatal: the password is already updated.
 	if err := h.refresh.RevokeAllForUser(ctx, user.ID); err != nil {
 		h.logger.Warn("password reset: revoking sessions failed", zap.Error(err))
+	}
+	if err := h.apiTokens.DeleteByUserID(ctx, user.ID); err != nil {
+		h.logger.Warn("password reset: revoking api tokens failed", zap.Error(err))
 	}
 
 	logAuditDirect(r, h.auditRepo, h.logger, user.ID, user.Email,

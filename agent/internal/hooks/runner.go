@@ -8,6 +8,9 @@
 // failed — for pre-backup hooks this aborts the job; for post-backup hooks
 // the failure is logged but does not change the job outcome.
 //
+// Hooks inherit the agent's environment without the agent's own ARKEEP_*
+// variables (see package childenv).
+//
 // The shell used depends on the host OS:
 //   - Linux / macOS: /bin/sh -c "<command>"
 //   - Windows:       cmd /C "<command>"
@@ -18,10 +21,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/arkeep-io/arkeep/agent/internal/childenv"
 )
 
 // DefaultTimeout is applied when the caller does not specify a timeout.
@@ -43,7 +49,7 @@ var ErrHookFailed = errors.New("hook: command failed")
 type Result struct {
 	// Output is the combined stdout+stderr of the hook process, trimmed of
 	// leading/trailing whitespace. Included verbatim in the job log stream.
-	Output   string
+	Output string
 	// ExitCode is the exit code of the hook process. 0 means success.
 	ExitCode int
 	// Duration is how long the hook took to run.
@@ -94,6 +100,10 @@ func (r *Runner) Run(ctx context.Context, command string, args []string, timeout
 	defer cancel()
 
 	cmd := buildShellCmd(ctx, command, args, timeout)
+	// The hook gets the agent's environment (PATH, HOME, proxies...) but not
+	// its own configuration: ARKEEP_AGENT_SECRET would otherwise reach every
+	// hook and, through a hook that prints its environment, the job log.
+	cmd.Env = childenv.Filter(os.Environ())
 	// On timeout or cancel, kill every process the hook started, not only the
 	// shell: its children would otherwise run on and keep the output pipe
 	// open, so Run would wait for them well past the timeout.

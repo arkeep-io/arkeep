@@ -21,6 +21,7 @@ import (
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"github.com/arkeep-io/arkeep/shared/repair"
 )
 
 type fakeSink struct{}
@@ -1065,5 +1066,122 @@ func TestIsFilesystemRoot(t *testing.T) {
 		if got := isFilesystemRoot(p); got != want {
 			t.Errorf("isFilesystemRoot(%q) = %v, want %v", p, got, want)
 		}
+	}
+}
+
+// TestCancel_QueuedJobIsSkipped: the server cancels a job that is still queued
+// here behind another one. The job must not run when its turn comes, and a
+// cancel for a job this agent never received must not be kept.
+func TestCancel_QueuedJobIsSkipped(t *testing.T) {
+	e := New(nil, nil, nil, zap.NewNop(), "", "")
+	job := JobAssignment{JobID: "queued-job", Type: proto.JobType_JOB_TYPE_BACKUP, Payload: []byte("not json")}
+	if err := e.Enqueue(job); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	e.Cancel("queued-job")
+	e.Cancel("never-sent-here")
+
+	reporter := &fakeReporter{}
+	e.run(context.Background(), <-e.queue, fakeSink{}, reporter)
+
+	if !slices.Equal(reporter.statuses, []string{"cancelled"}) {
+		t.Errorf("statuses = %v, want only cancelled: the job must not start", reporter.statuses)
+	}
+	e.cancelledMu.Lock()
+	defer e.cancelledMu.Unlock()
+	if len(e.cancelled) != 0 {
+		t.Errorf("cancelled = %v, want empty once the queued job was skipped", e.cancelled)
+	}
+}
+
+// TestCancelReason: a job cancelled from the server must not read as
+// interrupted by the agent shutting down, in the job log or the status
+// message, and a job stopped by the agent shutting down still says so.
+func TestCancelReason(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-restic.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dest := destinationPayload{DestinationID: "dest-1", Type: "s3", RepoURL: "s3:s3.example.com/b/"}
+	jobOf := func(jobType proto.JobType, payload any) JobAssignment {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return JobAssignment{JobID: "job-1", Type: jobType, Payload: raw}
+	}
+	jobs := []struct {
+		name       string
+		job        JobAssignment
+		destPrefix string
+	}{
+		{
+			name: "retention sweep",
+			job: jobOf(proto.JobType_JOB_TYPE_FORGET, retentionSweepPayload{
+				Destination: dest, RepoPassword: "pw", Retention: retentionPayload{Last: 3}, Tags: []string{"policy-a"},
+			}),
+			destPrefix: "retention sweep cancelled: ",
+		},
+		{
+			name:       "integrity check",
+			job:        jobOf(proto.JobType_JOB_TYPE_VERIFY, checkPayload{Destination: dest, RepoPassword: "pw", Mode: restic.CheckModeStructure}),
+			destPrefix: "integrity check cancelled: ",
+		},
+		{
+			name:       "repair",
+			job:        jobOf(proto.JobType_JOB_TYPE_REPAIR, repairPayload{Destination: dest, RepoPassword: "pw", Repair: repair.Params{Action: repair.Index}}),
+			destPrefix: "repair cancelled: ",
+		},
+	}
+
+	for _, tt := range jobs {
+		t.Run(tt.name+", cancel from the server", func(t *testing.T) {
+			e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			done := make(chan struct{})
+			go func() {
+				e.execute(context.Background(), tt.job, fakeSink{}, reporter)
+				close(done)
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				e.runningMu.Lock()
+				_, running := e.runningCancel[tt.job.JobID]
+				e.runningMu.Unlock()
+				if running {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the job never started")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			e.Cancel(tt.job.JobID)
+			<-done
+
+			if reporter.lastMsg != "cancel requested by the server" {
+				t.Errorf("status message = %q, want %q", reporter.lastMsg, "cancel requested by the server")
+			}
+			if got, want := reporter.destResults["dest-1"].errMsg, tt.destPrefix+"cancel requested by the server"; got != want {
+				t.Errorf("destination error = %q, want %q", got, want)
+			}
+		})
+
+		t.Run(tt.name+", agent shutting down", func(t *testing.T) {
+			e := New(restic.NewWrapperWithBinaries(script, "/fake/rclone", zap.NewNop()), nil, nil, zap.NewNop(), "", "")
+			reporter := &fakeReporter{}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			e.execute(ctx, tt.job, fakeSink{}, reporter)
+
+			if reporter.lastMsg != "agent shutting down" {
+				t.Errorf("status message = %q, want %q", reporter.lastMsg, "agent shutting down")
+			}
+			if got, want := reporter.destResults["dest-1"].errMsg, tt.destPrefix+"agent shutting down"; got != want {
+				t.Errorf("destination error = %q, want %q", got, want)
+			}
+		})
 	}
 }

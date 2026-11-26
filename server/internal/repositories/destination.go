@@ -345,6 +345,18 @@ func (r *gormDestinationRepository) TryAcquireBusyAll(ctx context.Context, desti
 			return err
 		}
 
+		// A destination in maintenance cannot be claimed at all (ADR 0026):
+		// the job waits in the queue until the maintenance ends.
+		var inMaintenance int64
+		if err := tx.Model(&db.Destination{}).
+			Where("id IN ? AND "+maintenanceActive, ids).
+			Limit(1).Count(&inMaintenance).Error; err != nil {
+			return err
+		}
+		if inMaintenance > 0 {
+			return errBusy
+		}
+
 		conflicts := tx.Model(&db.DestinationLock{}).Where("destination_id IN ? AND job_id <> ?", ids, jobID)
 		if mode == db.LockShared {
 			conflicts = conflicts.Where("mode = ?", db.LockExclusive)
@@ -370,6 +382,155 @@ func (r *gormDestinationRepository) TryAcquireBusyAll(ctx context.Context, desti
 		return false, fmt.Errorf("destinations: try acquire busy all: %w", err)
 	}
 	return true, nil
+}
+
+// maintenanceActive is true for a destination in maintenance (ADR 0026): one
+// put in maintenance by an admin, or by a repair job that is still pending or
+// running. A maintenance a repair started ends with that job, however the job
+// ends, without anything having to clear it.
+const maintenanceActive = `destinations.maintenance_since IS NOT NULL AND (destinations.maintenance_job_id IS NULL OR EXISTS (SELECT 1 FROM jobs WHERE jobs.id = destinations.maintenance_job_id AND jobs.status IN ('pending', 'waiting', 'running')))`
+
+// repairActive is true when a repair job against the destination is pending
+// or running. It reads job_destinations, which a repair job has one row in.
+const repairActive = `EXISTS (SELECT 1 FROM jobs INNER JOIN job_destinations ON job_destinations.job_id = jobs.id WHERE job_destinations.destination_id = destinations.id AND jobs.type = 'repair' AND jobs.status IN ('pending', 'waiting', 'running') AND jobs.id <> ?)`
+
+// lockDestinationRow locks one destination row for the rest of tx
+// (PostgreSQL; SQLite serialises transactions anyway), so maintenance changes
+// and claims on it take turns. It returns ErrNotFound for a missing or
+// deleted destination.
+func lockDestinationRow(tx *gorm.DB, id uuid.UUID) error {
+	var found []uuid.UUID
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Model(&db.Destination{}).
+		Where("id = ?", id).
+		Pluck("id", &found).Error; err != nil {
+		return err
+	}
+	if len(found) == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// StartMaintenance puts the destination in maintenance at an admin's
+// request, for as long as it takes an admin to end it. A maintenance a
+// repair started becomes an indefinite one, keeping its start time. Starting
+// a maintenance that is already the admin's kind changes nothing.
+func (r *gormDestinationRepository) StartMaintenance(ctx context.Context, id uuid.UUID, by string) error {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockDestinationRow(tx, id); err != nil {
+			return err
+		}
+		var active int64
+		if err := tx.Model(&db.Destination{}).Where("id = ? AND "+maintenanceActive, id).Count(&active).Error; err != nil {
+			return err
+		}
+		// The maintenance columns are read-only for GORM: written here only.
+		if active > 0 {
+			return tx.Exec(`UPDATE destinations SET maintenance_job_id = NULL WHERE id = ?`, id).Error
+		}
+		return tx.Exec(`UPDATE destinations SET maintenance_since = ?, maintenance_by = ?, maintenance_job_id = NULL WHERE id = ?`,
+			time.Now().UTC(), by, id).Error
+	})
+	if errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("destinations: start maintenance: %w", err)
+	}
+	return nil
+}
+
+// EndMaintenance takes the destination out of maintenance. Refused with
+// ErrRepairInProgress while a repair of it is pending or running: the queue
+// would otherwise start jobs against the repository being repaired.
+func (r *gormDestinationRepository) EndMaintenance(ctx context.Context, id uuid.UUID) error {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockDestinationRow(tx, id); err != nil {
+			return err
+		}
+		var repairing int64
+		if err := tx.Model(&db.Destination{}).Where("id = ? AND "+repairActive, id, uuid.Nil).Count(&repairing).Error; err != nil {
+			return err
+		}
+		if repairing > 0 {
+			return ErrRepairInProgress
+		}
+		return tx.Exec(`UPDATE destinations SET `+clearMaintenanceColumns+` WHERE id = ?`, id).Error
+	})
+	if errors.Is(err, ErrNotFound) || errors.Is(err, ErrRepairInProgress) {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("destinations: end maintenance: %w", err)
+	}
+	return nil
+}
+
+// clearMaintenanceColumns is the SET clause that ends a maintenance.
+const clearMaintenanceColumns = `maintenance_since = NULL, maintenance_by = '', maintenance_job_id = NULL`
+
+// ClaimForRepair admits repair job jobID on the destination (ADR 0026). The
+// job record must exist already, so that a maintenance this call starts is
+// active from the moment it is committed. A repair is refused, not queued:
+// with ErrDestinationBusy while another job holds the destination, and with
+// ErrRepairInProgress while another repair of it is pending or running. On a
+// destination that is not in maintenance, the repair puts it in maintenance
+// for its own duration, and auto is true.
+func (r *gormDestinationRepository) ClaimForRepair(ctx context.Context, destinationID, jobID uuid.UUID, by string) (auto bool, err error) {
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockDestinationRow(tx, destinationID); err != nil {
+			return err
+		}
+		if err := tx.Where("destination_id = ? AND NOT "+lockHolderActive, destinationID).
+			Delete(&db.DestinationLock{}).Error; err != nil {
+			return err
+		}
+		var held int64
+		if err := tx.Model(&db.DestinationLock{}).Where("destination_id = ?", destinationID).Count(&held).Error; err != nil {
+			return err
+		}
+		if held > 0 {
+			return ErrDestinationBusy
+		}
+		var repairing int64
+		if err := tx.Model(&db.Destination{}).Where("id = ? AND "+repairActive, destinationID, jobID).Count(&repairing).Error; err != nil {
+			return err
+		}
+		if repairing > 0 {
+			return ErrRepairInProgress
+		}
+		var active int64
+		if err := tx.Model(&db.Destination{}).Where("id = ? AND "+maintenanceActive, destinationID).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return nil
+		}
+		auto = true
+		return tx.Exec(`UPDATE destinations SET maintenance_since = ?, maintenance_by = ?, maintenance_job_id = ? WHERE id = ?`,
+			time.Now().UTC(), by, jobID, destinationID).Error
+	})
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrDestinationBusy), errors.Is(err, ErrRepairInProgress):
+		return false, err
+	case err != nil:
+		return false, fmt.Errorf("destinations: claim for repair: %w", err)
+	}
+	return auto, nil
+}
+
+// ClearEndedMaintenance clears the maintenance of every destination whose
+// maintenance was started by a repair that has ended. The admission rule
+// already ignores such a maintenance (maintenanceActive): this only keeps the
+// columns, and what the API shows, in line with it.
+func (r *gormDestinationRepository) ClearEndedMaintenance(ctx context.Context) (int64, error) {
+	result := r.db.WithContext(ctx).Exec(
+		`UPDATE destinations SET ` + clearMaintenanceColumns + ` WHERE maintenance_job_id IS NOT NULL AND NOT (` + maintenanceActive + `)`)
+	if result.Error != nil {
+		return 0, fmt.Errorf("destinations: clear ended maintenance: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 // ReleaseBusy releases jobID's hold on the destination. Releasing a hold the

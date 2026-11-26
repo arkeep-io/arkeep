@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -110,6 +111,11 @@ type jobResponse struct {
 	CommandSources []jobDestinationCommandResponse `json:"command_sources,omitempty"`
 	RetentionTags  []jobRetentionTagResponse       `json:"retention_tags,omitempty"`
 	CreatedAt      string                          `json:"created_at"`
+	// Params are the parameters of a job started from the GUI with options
+	// (a repair's action and filters), null otherwise. RequestedBy is the
+	// email of the admin who started it, "" for scheduled jobs.
+	Params      json.RawMessage `json:"params"`
+	RequestedBy string          `json:"requested_by"`
 }
 
 // jobLogResponse represents a single log line from a job execution.
@@ -139,6 +145,10 @@ func jobToResponse(j *repositories.JobWithNames, destinations []repositories.Job
 		CommandSources: make([]jobDestinationCommandResponse, len(commandSources)),
 		RetentionTags:  make([]jobRetentionTagResponse, len(retentionTags)),
 		CreatedAt:      j.CreatedAt.UTC().Format(time.RFC3339),
+		RequestedBy:    j.RequestedBy,
+	}
+	if j.Params != "" && json.Valid([]byte(j.Params)) {
+		resp.Params = json.RawMessage(j.Params)
 	}
 
 	if j.StartedAt != nil {
@@ -268,10 +278,10 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	if jobType := r.URL.Query().Get("type"); jobType != "" {
 		switch jobType {
-		case "backup", "restore", "retention", "check":
+		case "backup", "restore", "retention", "check", "repair":
 			filter.Type = jobType
 		default:
-			ErrBadRequest(w, "invalid type: must be one of backup, restore, retention, check")
+			ErrBadRequest(w, "invalid type: must be one of backup, restore, retention, check, repair")
 			return
 		}
 	}
@@ -282,7 +292,7 @@ func (h *JobHandler) List(w http.ResponseWriter, r *http.Request) {
 		ErrInternal(w)
 		return
 	}
-	h.writeJobList(w, jobs, total)
+	h.writeJobList(w, r, jobs, total)
 }
 
 // GetByID handles GET /api/v1/jobs/{id}.
@@ -306,7 +316,9 @@ func (h *JobHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Ok(w, jobToResponse(job, destinations, commandSources, retentionTags, logs))
+	resp := jobToResponse(job, destinations, commandSources, retentionTags, logs)
+	resp.RequestedBy = requesterFor(r, resp.RequestedBy)
+	Ok(w, resp)
 }
 
 // GetLogs handles GET /api/v1/jobs/{id}/logs.
@@ -357,7 +369,7 @@ func (h *JobHandler) ListByPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeJobList(w, jobs, total)
+	h.writeJobList(w, r, jobs, total)
 }
 
 // -----------------------------------------------------------------------------
@@ -366,18 +378,20 @@ func (h *JobHandler) ListByPolicy(w http.ResponseWriter, r *http.Request) {
 
 // writeJobList converts a slice of JobWithNames to a listJobsResponse and writes it.
 // Destinations are not included in list responses — only in single-job detail.
-func (h *JobHandler) writeJobList(w http.ResponseWriter, jobs []repositories.JobWithNames, total int64) {
+func (h *JobHandler) writeJobList(w http.ResponseWriter, r *http.Request, jobs []repositories.JobWithNames, total int64) {
 	items := make([]jobResponse, len(jobs))
 	for i := range jobs {
 		items[i] = jobToResponse(&jobs[i], nil, nil, nil, nil)
+		items[i].RequestedBy = requesterFor(r, items[i].RequestedBy)
 	}
 	Ok(w, listJobsResponse{Items: items, Total: total})
 }
 
 // Cancel handles POST /api/v1/jobs/{id}/cancel.
-// Marks the job as cancelled in the database and, if the job is running,
-// sends a cancel signal to the agent. Pending jobs, and jobs waiting for a busy
-// destination, are cancelled immediately without agent involvement.
+// Marks the job as cancelled in the database and sends a cancel signal to the
+// agent of a running job, or of a pending job when the agent is connected.
+// Jobs waiting for a busy destination were never sent to an agent and are
+// cancelled immediately without agent involvement.
 func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseUUID(w, r, "id")
 	if !ok {
@@ -412,13 +426,28 @@ func (h *JobHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For running jobs, notify the agent to abort. The agent reports
+	// Notify the agent to abort a running job, or to drop a pending one: a
+	// pending job may already sit in the agent's local queue, behind the job it
+	// is running, and would start there once its turn came, after the cancel
+	// released its destinations to other jobs. The agent reports
 	// JOB_STATUS_CANCELLED, which the already-cancelled DB row now refuses.
-	if job.Status == "running" {
+	// A waiting job was never sent to an agent.
+	switch {
+	case job.Status == "running":
 		if err := h.agents.SendCancel(job.AgentID.String(), id.String()); err != nil {
 			// Non-fatal: the DB is already updated; the agent will detect shutdown
 			// or orphan recovery will handle it.
 			h.logger.Warn("could not send cancel signal to agent",
+				zap.String("job_id", id.String()),
+				zap.String("agent_id", job.AgentID.String()),
+				zap.Error(err),
+			)
+		}
+	case job.Status == "pending" && h.agents.IsConnected(job.AgentID.String()):
+		// An offline agent gets its pending jobs again when it reconnects,
+		// and a cancelled job is no longer among them.
+		if err := h.agents.SendCancel(job.AgentID.String(), id.String()); err != nil {
+			h.logger.Warn("could not send cancel signal for a pending job to agent",
 				zap.String("job_id", id.String()),
 				zap.String("agent_id", job.AgentID.String()),
 				zap.Error(err),

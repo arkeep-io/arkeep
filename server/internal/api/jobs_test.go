@@ -159,6 +159,24 @@ func TestJobHandler_List(t *testing.T) {
 		}
 	})
 
+	t.Run("filters by the repair type", func(t *testing.T) {
+		e := newTestEnv(t)
+		createDBJobWith(t, e.deps, "check", "succeeded")
+		createDBJobWith(t, e.deps, "repair", "failed")
+
+		resp := e.get(t, "/api/v1/jobs?type=repair", e.adminToken(t))
+		assertStatus(t, resp, http.StatusOK)
+
+		var data struct {
+			Items []any `json:"items"`
+			Total int64 `json:"total"`
+		}
+		decodeData(t, resp, &data)
+		if data.Total != 1 {
+			t.Errorf("total = %d, want 1 (filtered by type=repair)", data.Total)
+		}
+	})
+
 	t.Run("filters by status and type combined", func(t *testing.T) {
 		e := newTestEnv(t)
 		createDBJobWith(t, e.deps, "backup", "failed")

@@ -36,5 +36,19 @@ export default mergeConfig(viteConfig, defineConfig({
     environment: 'jsdom',
     include: ['src/**/*.test.ts'],
     setupFiles: ['src/test/setup.ts'],
+    // The first test of a form's file mounts the whole form (vee-validate, zod,
+    // shadcn-vue) on a cold module cache: about 1 s alone, but over 5 s (the
+    // default) when the suite runs in parallel on a loaded machine.
+    testTimeout: 15000,
+    // pnpm test:coverage prints the coverage percentages in the terminal.
+    // Every source file counts, tested or not. shadcn-vue's components
+    // (components/ui) are generated, and the tests' helpers and type
+    // declarations hold no logic to cover.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,vue}'],
+      exclude: ['src/**/*.test.ts', 'src/test/**', 'src/components/ui/**', 'src/**/*.d.ts'],
+      reporter: ['text-summary'],
+    },
   },
 }))

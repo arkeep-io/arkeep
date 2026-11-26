@@ -456,8 +456,10 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 		t.Fatalf("Migrate(35): %v", err)
 	}
 
+	// The restic and rclone version columns of agents only exist from 000046
+	// on, repair_available, and jobs.params and requested_by, from 000047 on.
 	agent := &Agent{Name: "agent", Status: "online"}
-	if err := gdb.Create(agent).Error; err != nil {
+	if err := gdb.Omit("restic_version", "rclone_version", "repair_available").Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	holders := map[string]struct{ jobType, status, wantMode string }{
@@ -473,7 +475,7 @@ func TestSQLiteMigration_DestinationLocks(t *testing.T) {
 			t.Fatalf("create destination: %v", err)
 		}
 		j := &Job{AgentID: agent.ID, Type: h.jobType, Status: h.status}
-		if err := gdb.Create(j).Error; err != nil {
+		if err := gdb.Omit("params", "requested_by").Create(j).Error; err != nil {
 			t.Fatalf("create job: %v", err)
 		}
 		if err := gdb.Exec(`UPDATE destinations SET busy_job_id = ?, busy_since = ? WHERE id = ?`, j.ID.String(), time.Now().UTC(), d.ID.String()).Error; err != nil {
@@ -677,12 +679,14 @@ func TestSQLiteMigration_DestinationRepoInitialized(t *testing.T) {
 		t.Fatalf("Migrate(40): %v", err)
 	}
 
+	// The restic and rclone version columns of agents only exist from 000046
+	// on, repair_available, and jobs.params and requested_by, from 000047 on.
 	agent := &Agent{Name: "agent", Status: "online"}
-	if err := gdb.Create(agent).Error; err != nil {
+	if err := gdb.Omit("restic_version", "rclone_version", "repair_available").Create(agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
 	job := &Job{AgentID: agent.ID, Type: "backup", Status: "succeeded"}
-	if err := gdb.Create(job).Error; err != nil {
+	if err := gdb.Omit("params", "requested_by").Create(job).Error; err != nil {
 		t.Fatalf("create job: %v", err)
 	}
 	dests := map[string]*Destination{}

@@ -26,3 +26,8 @@ configuration:
   ARKEEP_LOG_LEVEL:
     name: Log level
     description: Detail of the app log.
+  ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION:
+    name: Allow local destinations inside the app
+    description: >-
+      Back up to a local destination outside /share and /media anyway. Its
+      repository is lost when the app is updated or reinstalled. Leave off.

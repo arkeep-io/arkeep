@@ -121,12 +121,18 @@ describe('PolicySheet', () => {
 
   describe('hook timeout', () => {
     // enablePreHook opens the hooks section and switches the pre-backup hook
-    // on, as an admin does.
+    // on, as an admin does. The section's content is mounted a few ticks after
+    // the click (reka-ui's Presence waits a tick in a watcher, then renders):
+    // the switch is waited for, not looked up once.
     async function enablePreHook(wrapper: Awaited<ReturnType<typeof openCreate>>) {
       useAuthStore().user = { role: 'admin' } as User
       await wrapper.findAll('button').find((b) => b.text().startsWith('Hooks'))!.trigger('click')
-      const preHook = wrapper.findAllComponents({ name: 'Switch' })
-        .find((s) => s.element.parentElement?.textContent?.includes('Pre-backup'))!
+      const preHook = await vi.waitFor(() => {
+        const found = wrapper.findAllComponents({ name: 'Switch' })
+          .find((s) => s.element.parentElement?.textContent?.includes('Pre-backup'))
+        if (!found) throw new Error('the pre-backup hook switch is not rendered yet')
+        return found
+      })
       preHook.vm.$emit('update:modelValue', true)
       await wrapper.vm.$nextTick()
     }

@@ -93,6 +93,9 @@ tasks:
         cmd: cd {{.ITEM}} && go get -u ./... && go mod tidy
       - cd tools && GOWORK=off go get -u tool && GOWORK=off go mod tidy
       - cd gui && pnpm update --latest
+      # pnpm rewrites packageManager to its own version without the integrity
+      # hash ADR 0013 requires; corepack re-pins it as pnpm@X.Y.Z+sha512.<hash>.
+      - cd gui && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack use "$(node -p "require('./package.json').packageManager.split('+')[0]")"
       - task: deps:pins:check
       - task: deps:vulncheck
 

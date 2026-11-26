@@ -236,6 +236,12 @@ const routes: RouteRecordRaw[] = [
             component: () => import('@/pages/settings/SnapshotSyncPage.vue'),
             meta: { breadcrumb: 'Snapshot Sync', requiresRole: 'admin' },
           },
+          {
+            path: 'api-tokens',
+            name: 'settings-api-tokens',
+            component: () => import('@/pages/settings/ApiTokensPage.vue'),
+            meta: { breadcrumb: 'API Tokens', requiresRole: 'admin' },
+          },
         ],
       },
 

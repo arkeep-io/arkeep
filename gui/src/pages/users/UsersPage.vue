@@ -16,9 +16,12 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { KeyRound, MoreHorizontal, PencilLine, Plus, RefreshCw, ShieldOff, Trash2, Users } from '@lucide/vue'
+import { KeyRound, MoreHorizontal, PencilLine, Plus, ShieldOff, Trash2, Users } from '@lucide/vue'
 import UserSheet from '@/components/users/UserSheet.vue'
 import SetPasswordDialog from '@/components/users/SetPasswordDialog.vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
+import { requestOrder } from '@/lib/requestOrder'
 import { api, apiErrorMessage } from '@/services/api'
 import { useAuthStore } from '@/stores/auth'
 import type { ApiResponse, User } from '@/types'
@@ -107,17 +110,27 @@ function formatDate(iso: string | null): string {
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchUsers() {
-    loading.value = true
-    error.value = null
+// Answers older than the one shown are dropped (see requestOrder): a live
+// refresh may answer after a page, sort or filter change.
+const beginRequest = requestOrder()
+
+async function fetchUsers({ quiet = false }: FetchOptions = {}) {
+    const request = beginRequest()
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
     try {
         const res = await api<ApiResponse<UserListResponse>>(`/api/v1/users?limit=${pageSize}&offset=${offset.value}`)
+        if (!request.show()) return
         users.value = res.data.items
         total.value = res.data.total
+        error.value = null
     } catch (e: any) {
+        if (request.stale) return
         error.value = apiErrorMessage(e, 'Failed to load users.')
     } finally {
-        loading.value = false
+        if (!quiet) loading.value = false
     }
 }
 
@@ -128,6 +141,10 @@ async function goToPage(p: number) {
 }
 
 onMounted(fetchUsers)
+
+// Refresh in place when a user changes on the server (edits, sign-ins,
+// two-factor).
+useLiveRefresh('users', fetchUsers)
 
 // ---------------------------------------------------------------------------
 // Sheet open helpers
@@ -209,9 +226,7 @@ async function confirmReset() {
                 </p>
             </div>
             <div class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchUsers">
-                    <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loading }" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="fetchUsers" />
                 <Button @click="openCreate">
                     <Plus class="w-4 h-4" />
                     New User

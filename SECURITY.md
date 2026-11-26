@@ -50,6 +50,10 @@ execute arbitrary code on any machine running a connected agent.
   path traversal (`..`), and references to internal credential environment variables
   (`$RESTIC_*`, `$RCLONE_*`, `$ARKEEP_*`).
 - Hook commands are limited to 1024 characters.
+- Hooks and command sources inherit the agent's environment without the agent's own
+  `ARKEEP_*` variables, so `ARKEEP_AGENT_SECRET` never reaches them, nor the job log
+  through their output. Command sources, which restic runs, also do not receive the
+  repository password and backend credentials that restic itself is given.
 
 **Deployment recommendation:** Run the agent as a dedicated low-privilege user with
 access only to the directories it needs to back up. Avoid running the agent as root
@@ -165,6 +169,28 @@ Enabling two-factor authentication
 revokes every other active session for the account except the one used to enroll;
 an administrator's reset revokes all of them, since the person completing the reset
 is not the account owner.
+
+### API tokens
+
+Users can create API tokens on their profile for programs that read the API, such as a
+Home Assistant integration (ADR 0027).
+
+- A token is read-only: it authenticates `GET` requests with the rights of the `user`
+  role, whatever its owner's role. Any other request made with it is refused.
+- Only its SHA-256 hash is stored; the token is shown once, at creation.
+- It stops working when it expires, when it is revoked, and while its owner is disabled.
+  Users revoke their own tokens on their profile; admins revoke anyone's under
+  **Settings → API Tokens**. Creating and revoking a token are audited.
+- An administrator's Set password, a password reset by email, an administrator's
+  two-factor reset and an OIDC login refused by the allowed groups revoke every token of
+  the user, as they end every session: a token created with a stolen session does not
+  outlive the clean-up. A password change from the profile keeps them.
+- A token is not bound to the OIDC session lifetime (`session_max_hours`): to cut the
+  access of an OIDC user at once, disable the user in Arkeep.
+- A token cannot list, create or revoke tokens.
+
+Treat a token like a password for read access: it can read everything the `user` role
+can, job logs included.
 
 ### Passwords set by an administrator
 

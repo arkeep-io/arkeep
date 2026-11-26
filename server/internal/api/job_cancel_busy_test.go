@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/arkeep-io/arkeep/server/internal/db"
+	"github.com/arkeep-io/arkeep/shared/proto"
 )
 
 // TestJobHandler_CancelReleasesBusyGate reproduces issue #290: a retention
@@ -129,5 +130,48 @@ func TestJobHandler_CancelWaitingJob(t *testing.T) {
 	}
 	if stored.Status != "cancelled" {
 		t.Errorf("status after cancel = %q, want \"cancelled\"", stored.Status)
+	}
+}
+
+// TestJobHandler_CancelPendingJobTellsAgent: a pending job may already sit in
+// its agent's local queue behind the job the agent is running. Cancelling it
+// must tell the agent to drop it, or the agent starts it once its turn comes,
+// after the cancel released its destinations to other jobs. A waiting job was
+// never sent to an agent, so the agent is not told about it.
+func TestJobHandler_CancelPendingJobTellsAgent(t *testing.T) {
+	for _, tc := range []struct {
+		status     string
+		wantCancel bool
+	}{
+		{status: "pending", wantCancel: true},
+		{status: "running", wantCancel: true},
+		{status: "waiting", wantCancel: false},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			e := newTestEnv(t)
+			stream := &fakeAgentStream{}
+			agentID := connectDBFakeAgent(t, e, stream)
+
+			job := &db.Job{AgentID: uuid.MustParse(agentID), Type: "backup", Status: tc.status}
+			if err := e.deps.jobs.Create(context.Background(), job); err != nil {
+				t.Fatalf("create job: %v", err)
+			}
+
+			resp := e.post(t, "/api/v1/jobs/"+job.ID.String()+"/cancel", e.adminToken(t), nil)
+			assertStatus(t, resp, http.StatusOK)
+
+			var cancels []string
+			for _, a := range stream.assignments() {
+				if a.Type == proto.JobType_JOB_TYPE_CANCEL {
+					cancels = append(cancels, a.JobId)
+				}
+			}
+			switch {
+			case tc.wantCancel && (len(cancels) != 1 || cancels[0] != job.ID.String()):
+				t.Errorf("cancels sent = %v, want one for job %s", cancels, job.ID)
+			case !tc.wantCancel && len(cancels) != 0:
+				t.Errorf("cancels sent = %v, want none for a %s job", cancels, tc.status)
+			}
+		})
 	}
 }

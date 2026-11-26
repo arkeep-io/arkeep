@@ -17,12 +17,12 @@ import (
 type mockStream struct{}
 
 func (m *mockStream) Send(_ *proto.JobAssignment) error { return nil }
-func (m *mockStream) SetHeader(_ metadata.MD) error    { return nil }
-func (m *mockStream) SendHeader(_ metadata.MD) error   { return nil }
-func (m *mockStream) SetTrailer(_ metadata.MD)         {}
-func (m *mockStream) Context() context.Context         { return context.Background() }
-func (m *mockStream) SendMsg(_ any) error              { return nil }
-func (m *mockStream) RecvMsg(_ any) error              { return nil }
+func (m *mockStream) SetHeader(_ metadata.MD) error     { return nil }
+func (m *mockStream) SendHeader(_ metadata.MD) error    { return nil }
+func (m *mockStream) SetTrailer(_ metadata.MD)          {}
+func (m *mockStream) Context() context.Context          { return context.Background() }
+func (m *mockStream) SendMsg(_ any) error               { return nil }
+func (m *mockStream) RecvMsg(_ any) error               { return nil }
 
 func newTestManager() *Manager {
 	return New(zap.NewNop())

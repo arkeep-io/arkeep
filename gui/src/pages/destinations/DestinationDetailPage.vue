@@ -37,12 +37,16 @@ import {
     ShieldCheck,
     DatabaseBackup,
 } from '@lucide/vue'
+import RefreshButton from '@/components/shared/RefreshButton.vue'
+import { useLiveRefresh, type FetchOptions } from '@/composables/useLiveRefresh'
 import { api, apiErrorMessage } from '@/services/api'
 import type { Destination, Job, ApiResponse, SyncDestinationResponse } from '@/types'
 import { statusVariant, statusClass, statusLabel, formatDate, formatBytes } from '@/lib/jobUtils'
 import { summariseSync } from '@/lib/syncSummary'
 import { lockExplanation, lockLabel } from '@/lib/destinationLocks'
+import { scheduleLabel } from '@/lib/cron'
 import DestinationSheet from '@/components/destinations/DestinationSheet.vue'
+import DestinationRepairSection from '@/components/destinations/DestinationRepairSection.vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -90,21 +94,40 @@ const resetRepoLoading = ref(false)
 // Data fetching
 // ---------------------------------------------------------------------------
 
-async function fetchDestination() {
-    loading.value = true
-    error.value = null
+async function fetchDestination({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) {
+        loading.value = true
+        error.value = null
+    }
+    try {
+        const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
+        destination.value = res.data
+        error.value = null
+    } catch (e: any) {
+        error.value = apiErrorMessage(e, 'Failed to load destination')
+    } finally {
+        if (!quiet) loading.value = false
+    }
+}
+
+// refreshDestination reloads the destination without the loading state, so
+// the sections stay mounted: the repair section keeps following its job.
+async function refreshDestination() {
     try {
         const res = await api<ApiResponse<Destination>>(`/api/v1/destinations/${destinationId}`)
         destination.value = res.data
     } catch (e: any) {
         error.value = apiErrorMessage(e, 'Failed to load destination')
-    } finally {
-        loading.value = false
     }
 }
 
-async function fetchJobs() {
-    jobsLoading.value = true
+function onRepairChanged() {
+    refreshDestination()
+    fetchJobs()
+}
+
+async function fetchJobs({ quiet = false }: FetchOptions = {}) {
+    if (!quiet) jobsLoading.value = true
     try {
         const res = await api<ApiResponse<JobListResponse>>(
             `/api/v1/jobs?destination_id=${destinationId}&limit=10&offset=0`
@@ -113,8 +136,13 @@ async function fetchJobs() {
     } catch {
         // Non-fatal — jobs section stays empty
     } finally {
-        jobsLoading.value = false
+        if (!quiet) jobsLoading.value = false
     }
+}
+
+// refreshAll reloads the destination and its latest jobs.
+function refreshAll(options: FetchOptions = {}) {
+    return Promise.all([fetchDestination(options), fetchJobs(options)])
 }
 
 // ---------------------------------------------------------------------------
@@ -207,22 +235,6 @@ function onSaved() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function scheduleLabel(cron: string): string {
-    if (!cron) return 'Not scheduled'
-    const presets: Record<string, string> = {
-        '0 * * * *': 'Hourly',
-        '0 2 * * *': 'Daily at 02:00',
-        '0 0 * * *': 'Daily at midnight',
-        '0 2 * * 0': 'Weekly (Sun)',
-        '0 2 * * 1': 'Weekly (Mon)',
-        '0 2 1 * *': 'Monthly',
-        '0 3 * * *': 'Daily at 03:00',
-        '0 3 * * 0': 'Weekly (Sun 03:00)',
-        '0 3 1 * *': 'Monthly (03:00)',
-    }
-    return presets[cron] ?? cron
-}
-
 function checkModeLabel(d: Destination): string {
     switch (d.check_mode) {
         case 'structure': return 'Structure only'
@@ -236,6 +248,14 @@ function checkModeLabel(d: Destination): string {
 // ---------------------------------------------------------------------------
 
 onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
+
+// Refresh the recent jobs in place when a job is created or changes on the
+// server.
+useLiveRefresh('jobs', fetchJobs)
+
+// Refresh the destination in place when it changes on the server, or a job
+// does: the jobs holding it (locks) are released by the job's own writes.
+useLiveRefresh((c) => c.type === 'jobs' || (c.type === 'destinations' && (c.id === destinationId || c.id === '')), fetchDestination)
 </script>
 
 <template>
@@ -259,6 +279,8 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                                 {{ destination.enabled ? 'Enabled' : 'Disabled' }}
                             </Badge>
                             <Badge v-if="destination.append_only" variant="outline">Append-only</Badge>
+                            <Badge v-if="destination.maintenance" variant="outline"
+                                class="border-amber-500/40 text-amber-600 dark:text-amber-400">In maintenance</Badge>
                             <Badge v-if="destination.locks.length" variant="outline">{{ lockLabel(destination.locks) }}</Badge>
                             <Badge v-if="destination.retention_needs_review" variant="destructive">
                                 Retention needs reconfiguration
@@ -287,9 +309,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
 
             <!-- Actions -->
             <div v-if="!loading && destination" class="flex items-center gap-2">
-                <Button variant="outline" size="icon" :disabled="loading" @click="fetchDestination(); fetchJobs()">
-                    <RefreshCw class="w-4 h-4" />
-                </Button>
+                <RefreshButton live :loading="loading" :refresh="refreshAll" />
                 <Button v-if="authStore.isAdmin && destination.retention_enabled && !destination.append_only"
                     variant="outline" size="sm" :disabled="triggerLoading" @click="triggerRetention">
                     <Loader2 v-if="triggerLoading" class="w-4 h-4 mr-1.5 animate-spin" />
@@ -348,8 +368,8 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
             </div>
             <div class="p-4 border rounded-md">
                 <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Retention Schedule</p>
-                <p class="text-sm font-mono font-medium">
-                    {{ destination.append_only || !destination.retention_enabled ? '—' : scheduleLabel(destination.retention_schedule) }}
+                <p class="text-sm font-mono font-medium" :title="destination.retention_schedule">
+                    {{ destination.append_only || !destination.retention_enabled ? '—' : scheduleLabel(destination.retention_schedule) || 'Not scheduled' }}
                 </p>
             </div>
             <div class="p-4 border rounded-md">
@@ -439,7 +459,7 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                 </div>
                 <div class="flex items-center justify-between">
                     <span class="text-xs text-muted-foreground">Schedule</span>
-                    <span class="text-sm font-mono font-medium">{{ scheduleLabel(destination.check_schedule) }}</span>
+                    <span class="text-sm font-mono font-medium" :title="destination.check_schedule">{{ scheduleLabel(destination.check_schedule) || 'Not scheduled' }}</span>
                 </div>
             </div>
 
@@ -464,6 +484,10 @@ onMounted(() => Promise.all([fetchDestination(), fetchJobs()]))
                 No maintenance agent is assigned, so scheduled checks cannot run. Edit the destination to choose one.
             </p>
         </div>
+
+        <!-- ── Maintenance & repair (ADR 0026) ─────────────────────────────── -->
+        <DestinationRepairSection v-if="!loading && destination && authStore.isAdmin"
+            :destination="destination" @changed="onRepairChanged" />
 
         <!-- ── Recent Jobs (backups + retention runs) ─────────────────────── -->
         <div class="flex flex-col gap-3">

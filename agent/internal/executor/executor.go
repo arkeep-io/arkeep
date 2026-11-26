@@ -32,8 +32,10 @@ import (
 
 	"github.com/arkeep-io/arkeep/agent/internal/docker"
 	"github.com/arkeep-io/arkeep/agent/internal/hooks"
+	"github.com/arkeep-io/arkeep/agent/internal/mountcheck"
 	"github.com/arkeep-io/arkeep/agent/internal/restic"
 	proto "github.com/arkeep-io/arkeep/shared/proto"
+	"github.com/arkeep-io/arkeep/shared/repair"
 	"github.com/arkeep-io/arkeep/shared/validation"
 )
 
@@ -124,6 +126,14 @@ type checkPayload struct {
 	SubsetPercent int                `json:"subset_percent"`
 }
 
+// repairPayload mirrors the struct serialized by the server for a repair job
+// (ADR 0026): one restic repair command against one destination.
+type repairPayload struct {
+	Destination  destinationPayload `json:"destination"`
+	RepoPassword string             `json:"repo_password"`
+	Repair       repair.Params      `json:"repair"`
+}
+
 // restorePayload mirrors the struct serialized by the server snapshot handler.
 // All credentials arrive already decrypted.
 type restorePayload struct {
@@ -211,6 +221,13 @@ type Executor struct {
 	// agent runs in; "" for a native agent or when it cannot be told.
 	selfContainerID string
 
+	// checkEphemeral makes backups refuse a local destination that is not on
+	// a bind mount or a volume (see CheckEphemeralLocalDestinations).
+	// mountinfoPath is where the mounts are read, mountcheck.ProcMountInfo
+	// except in tests.
+	checkEphemeral bool
+	mountinfoPath  string
+
 	// cancelledMu protects cancelled — jobs marked for cancellation before
 	// they are dequeued. Populated by Cancel() when a job is still queued.
 	cancelledMu sync.Mutex
@@ -219,13 +236,27 @@ type Executor struct {
 	// runningMu protects runningCancel — the cancel func for the job currently
 	// being executed. Cancel() calls it directly when a job is in flight.
 	runningMu     sync.Mutex
-	runningCancel map[string]context.CancelFunc
+	runningCancel map[string]context.CancelCauseFunc
 
 	// jobsMu protects jobs — the IDs of the jobs queued or running here. The
 	// server sends its pending jobs again when the stream reconnects, and
 	// those already queued here must not run twice.
 	jobsMu sync.Mutex
 	jobs   map[string]bool
+}
+
+// errCancelledByServer is the cause of a job context cancelled by Cancel, as
+// opposed to the agent's own context ending when it shuts down.
+var errCancelledByServer = errors.New("cancel requested by the server")
+
+// cancelReason says why the job context ctx ended, for the job log and the
+// status message: a cancel from the server (a user, or the queue timeout), or
+// the agent shutting down.
+func cancelReason(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), errCancelledByServer) {
+		return errCancelledByServer.Error()
+	}
+	return "agent shutting down"
 }
 
 // ErrQueueFull is returned by Enqueue when the job queue has no room left.
@@ -255,8 +286,9 @@ func New(
 		logger:         logger.Named("executor"),
 		dockerHostRoot: dockerHostRoot,
 		hostname:       hostname,
+		mountinfoPath:  mountcheck.ProcMountInfo,
 		cancelled:      make(map[string]bool),
-		runningCancel:  make(map[string]context.CancelFunc),
+		runningCancel:  make(map[string]context.CancelCauseFunc),
 		jobs:           make(map[string]bool),
 	}
 	// Assign only a non-nil client: a nil *docker.Client stored in the
@@ -270,6 +302,48 @@ func New(
 		e.selfContainerID = docker.SelfContainerID()
 	}
 	return e
+}
+
+// CheckEphemeralLocalDestinations makes backups refuse a local destination
+// that is on the container's own writable layer or on a tmpfs: writing there
+// succeeds, and the repository is lost when the container is recreated.
+// main.go enables it when the agent runs in a container, unless
+// ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION is set.
+func (e *Executor) CheckEphemeralLocalDestinations() {
+	e.checkEphemeral = true
+}
+
+// ephemeralDestinationError returns why a backup to the local repository repo
+// (translated from originalURL) must fail, or "" when it is on persistent
+// storage or the check does not apply. When the mounts cannot be read it logs
+// a warning and lets the backup run: the check must never be the reason a
+// backup fails on a setup it cannot see.
+func (e *Executor) ephemeralDestinationError(repo, originalURL string, log func(level, msg string)) string {
+	if !e.checkEphemeral {
+		return ""
+	}
+	kind, err := mountcheck.Ephemeral(e.mountinfoPath, repo)
+	if err != nil {
+		log("warn", fmt.Sprintf("could not tell whether local path %q is on a bind mount or a volume, backing up anyway: %v", repo, err))
+		return ""
+	}
+	if kind == "" {
+		return ""
+	}
+	path := fmt.Sprintf("%q", repo)
+	if repo != originalURL {
+		path = fmt.Sprintf("%q (translated from %q via ARKEEP_DOCKER_HOST_ROOT=%q)", repo, originalURL, e.dockerHostRoot)
+	}
+	msg := fmt.Sprintf(
+		"local path %s is on %s, not on a bind mount or a volume: the repository would be lost when the container is recreated — "+
+			"mount persistent storage at that path (e.g. -v /srv/arkeep-backups:%s, or a named volume); "+
+			"in the Home Assistant app use a folder under /share or /media",
+		path, kind, repo,
+	)
+	if _, err := os.Stat(filepath.Join(repo, "config")); err == nil {
+		msg += ". The snapshots already in it can still be restored until the container is recreated: copy the repository to persistent storage now"
+	}
+	return msg + ". To back up there anyway, set ARKEEP_ALLOW_EPHEMERAL_LOCAL_DESTINATION=true"
 }
 
 // TranslateLocalPath applies the same host-path translation used for backup
@@ -412,6 +486,11 @@ func (e *Executor) run(ctx context.Context, job JobAssignment, sink LogSink, rep
 		e.jobsMu.Lock()
 		delete(e.jobs, job.JobID)
 		e.jobsMu.Unlock()
+		// A cancel that arrived after the check below, but before the job
+		// registered its context, would otherwise stay marked forever.
+		e.cancelledMu.Lock()
+		delete(e.cancelled, job.JobID)
+		e.cancelledMu.Unlock()
 	}()
 	// If Cancel() was called while this job was still queued, skip execution
 	// and immediately report cancelled.
@@ -457,12 +536,12 @@ func (e *Executor) Enqueue(job JobAssignment) error {
 // It creates a per-job context so the job can be cancelled independently
 // of the executor's lifetime context.
 func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
-	jobCtx, cancel := context.WithCancel(ctx)
+	jobCtx, cancel := context.WithCancelCause(ctx)
 	e.runningMu.Lock()
 	e.runningCancel[job.JobID] = cancel
 	e.runningMu.Unlock()
 	defer func() {
-		cancel()
+		cancel(nil)
 		e.runningMu.Lock()
 		delete(e.runningCancel, job.JobID)
 		e.runningMu.Unlock()
@@ -475,6 +554,8 @@ func (e *Executor) execute(ctx context.Context, job JobAssignment, sink LogSink,
 		e.executeRetention(jobCtx, job, sink, reporter)
 	case proto.JobType_JOB_TYPE_VERIFY:
 		e.executeCheck(jobCtx, job, sink, reporter)
+	case proto.JobType_JOB_TYPE_REPAIR:
+		e.executeRepair(jobCtx, job, sink, reporter)
 	default:
 		// JOB_TYPE_BACKUP and unspecified types all run the backup handler.
 		e.executeBackup(jobCtx, job, sink, reporter)
@@ -488,14 +569,23 @@ func (e *Executor) Cancel(jobID string) {
 	// Check if it is currently executing.
 	e.runningMu.Lock()
 	if cancel, ok := e.runningCancel[jobID]; ok {
-		cancel()
+		cancel(errCancelledByServer)
 		e.runningMu.Unlock()
 		e.logger.Info("cancel signal sent to running job", zap.String("job_id", jobID))
 		return
 	}
 	e.runningMu.Unlock()
 
-	// Otherwise mark it for pre-execution cancellation.
+	// Otherwise mark it for pre-execution cancellation, if it is queued here.
+	// The server also cancels pending jobs it may not have sent yet: marking
+	// those would keep their IDs forever, since no run would clear them.
+	e.jobsMu.Lock()
+	queued := e.jobs[jobID]
+	e.jobsMu.Unlock()
+	if !queued {
+		e.logger.Info("cancel for a job not queued here, ignoring it", zap.String("job_id", jobID))
+		return
+	}
 	e.cancelledMu.Lock()
 	e.cancelled[jobID] = true
 	e.cancelledMu.Unlock()
@@ -605,7 +695,7 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 	// --- 5. Backup to each destination ---
 	backupFailed := false
 	for _, dest := range payload.Destinations {
-		// Stop immediately if the agent is shutting down.
+		// Stop immediately if the job was cancelled or the agent is shutting down.
 		if ctx.Err() != nil {
 			break
 		}
@@ -639,6 +729,14 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 			// its directory: ensureWritableDir would create a missing one.
 			if _, statErr := os.Stat(dest.RepoURL); dest.RepoMustExist && os.IsNotExist(statErr) {
 				errMsg := restic.RepositoryNotFoundError(dest.RepoURL).Error()
+				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
+				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, errMsg)
+				backupFailed = true
+				continue
+			}
+			// Before ensureWritableDir, which would create the directory on
+			// the container's layer.
+			if errMsg := e.ephemeralDestinationError(dest.RepoURL, originalURL, log); errMsg != "" {
 				log("error", fmt.Sprintf("backup to destination %s failed: %s", dest.DestinationID, errMsg))
 				reporter.ReportDestinationResult(job.JobID, dest.DestinationID, "failed", "", destStartedAt, nil, 0, errMsg)
 				backupFailed = true
@@ -825,14 +923,15 @@ func (e *Executor) executeBackup(ctx context.Context, job JobAssignment, sink Lo
 		}
 	}
 
-	// If the context was cancelled (agent shutting down), the job was interrupted.
+	// If the context was cancelled (a cancel from the server, or the agent
+	// shutting down), the job was interrupted.
 	// Report it as cancelled so the UI shows the right state. The server-side
 	// orphan recovery will also mark it failed if this report doesn't reach the
 	// server (e.g. connection already closed).
 	if ctx.Err() != nil {
-		log("warn", "backup cancelled: agent shutting down")
+		log("warn", "backup cancelled: "+cancelReason(ctx))
 		runPostHook()
-		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 
@@ -964,15 +1063,15 @@ func (e *Executor) executeRetention(ctx context.Context, job JobAssignment, sink
 	case ctx.Err() != nil:
 		// Interrupted between two tags: the sweep did not complete, so it
 		// must not read as a successful one (R-12).
-		destStatus, destErrMsg = "cancelled", "retention sweep cancelled: agent shutting down"
+		destStatus, destErrMsg = "cancelled", "retention sweep cancelled: "+cancelReason(ctx)
 	case sweepFailed:
 		destStatus, destErrMsg = "failed", "one or more retention tags failed"
 	}
 	reporter.ReportDestinationResult(job.JobID, payload.Destination.DestinationID, destStatus, "", time.Now().UTC(), nil, repoSizeBytes, destErrMsg)
 
 	if ctx.Err() != nil {
-		log("warn", "retention sweep cancelled: agent shutting down")
-		reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+		log("warn", "retention sweep cancelled: "+cancelReason(ctx))
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 
@@ -1041,9 +1140,9 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 	result, err := e.wrapper.Check(ctx, d, restic.CheckOptions{Mode: payload.Mode, SubsetPercent: payload.SubsetPercent})
 
 	if ctx.Err() != nil {
-		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, "integrity check cancelled")
-		log("warn", "integrity check cancelled")
-		reporter.ReportStatus(job.JobID, "cancelled", "integrity check cancelled")
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, "integrity check cancelled: "+cancelReason(ctx))
+		log("warn", "integrity check cancelled: "+cancelReason(ctx))
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 		return
 	}
 
@@ -1077,6 +1176,106 @@ func (e *Executor) executeCheck(ctx context.Context, job JobAssignment, sink Log
 	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, nil, 0, "")
 	log("info", fmt.Sprintf("integrity check of destination %s passed: no errors found", destID))
 	reporter.ReportStatus(job.JobID, "succeeded", "integrity check passed")
+}
+
+// executeRepair runs one repository repair command (ADR 0026) and streams
+// restic's output to the job log as it runs. The server only sends it while
+// the destination is in maintenance, so nothing else uses the repository.
+func (e *Executor) executeRepair(ctx context.Context, job JobAssignment, sink LogSink, reporter StatusReporter) {
+	log := func(level, msg string) {
+		sink.SendLog(job.JobID, level, msg)
+		switch level {
+		case "error":
+			e.logger.Error(msg, zap.String("job_id", job.JobID))
+		case "warn":
+			e.logger.Warn(msg, zap.String("job_id", job.JobID))
+		default:
+			e.logger.Info(msg, zap.String("job_id", job.JobID))
+		}
+	}
+
+	var payload repairPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		msg := fmt.Sprintf("failed to deserialize repair job payload: %v", err)
+		log("error", msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+		return
+	}
+	destID := payload.Destination.DestinationID
+	params := payload.Repair
+	startedAt := time.Now().UTC()
+	fail := func(msg string) {
+		log("error", msg)
+		reporter.ReportDestinationResult(job.JobID, destID, "failed", "", startedAt, nil, 0, msg)
+		reporter.ReportStatus(job.JobID, "failed", msg)
+	}
+
+	// Validated by the server already: checked again so a payload that
+	// bypassed it never reaches restic.
+	args, err := restic.BuildRepairArgs(params)
+	if err != nil {
+		fail(fmt.Sprintf("invalid repair request: %v", err))
+		return
+	}
+
+	reporter.ReportStatus(job.JobID, "running", "starting repair "+params.Action)
+	log("info", fmt.Sprintf("repair of destination %s: running restic %s", destID, strings.Join(args, " ")))
+
+	repoURL := payload.Destination.RepoURL
+	if restic.DestinationType(payload.Destination.Type) == restic.DestLocal {
+		repoURL = translateLocalPath(repoURL, e.dockerHostRoot)
+	}
+	d := restic.Destination{
+		Type:     restic.DestinationType(payload.Destination.Type),
+		RepoURL:  repoURL,
+		Password: payload.RepoPassword,
+		Env:      payload.Destination.Env,
+	}
+
+	// restic separates paragraphs with blank lines: they carry nothing in a
+	// job log, which shows one entry per line.
+	err = e.wrapper.Repair(ctx, d, params, func(line string) {
+		if strings.TrimSpace(line) != "" {
+			log("info", line)
+		}
+	})
+
+	if ctx.Err() != nil {
+		reporter.ReportDestinationResult(job.JobID, destID, "cancelled", "", startedAt, nil, 0, "repair cancelled: "+cancelReason(ctx))
+		log("warn", "repair cancelled: "+cancelReason(ctx))
+		reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
+		return
+	}
+	if err != nil {
+		fail(repairFailure(params, restic.ExitCode(err)))
+		return
+	}
+
+	log("info", fmt.Sprintf("repair %s of destination %s finished: restic exited with code 0", params.Action, destID))
+	reporter.ReportDestinationResult(job.JobID, destID, "succeeded", "", startedAt, nil, 0, "")
+	reporter.ReportStatus(job.JobID, "succeeded", params.Action+" finished")
+}
+
+// repairFailure explains a failed repair command from restic's exit code.
+// The output above it in the job log has restic's own message.
+func repairFailure(p repair.Params, code int) string {
+	if code < 0 {
+		return fmt.Sprintf("repair %s did not complete: restic did not exit normally", p.Action)
+	}
+	msg := fmt.Sprintf("repair %s failed: restic exited with code %d", p.Action, code)
+	switch code {
+	case 10:
+		return msg + ": the repository does not exist"
+	case 11:
+		return msg + ": the repository is locked by another operation; once it has ended, a stale lock can be removed with the unlock action"
+	case 12:
+		return msg + ": wrong repository password"
+	case 1:
+		if p.Action == repair.Check {
+			return msg + ": the repository has errors, listed in the job log"
+		}
+	}
+	return msg
 }
 
 // executeRestore runs a single restore job to completion.
@@ -1206,8 +1405,8 @@ func (e *Executor) executeRestore(ctx context.Context, job JobAssignment, sink L
 
 	if err := e.wrapper.Restore(ctx, d, payload.ResticSnapshotID, targetPath, includePaths, excludePaths, e.dockerHostRoot); err != nil {
 		if ctx.Err() != nil {
-			log("warn", "restore cancelled: agent shutting down")
-			reporter.ReportStatus(job.JobID, "cancelled", "agent shutting down")
+			log("warn", "restore cancelled: "+cancelReason(ctx))
+			reporter.ReportStatus(job.JobID, "cancelled", cancelReason(ctx))
 			return
 		}
 		if strings.Contains(err.Error(), "Access is denied") {

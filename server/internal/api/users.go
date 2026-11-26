@@ -19,16 +19,18 @@ import (
 type UserHandler struct {
 	repo            repositories.UserRepository
 	refresh         repositories.RefreshTokenRepository
+	apiTokens       repositories.APITokenRepository
 	passwordChanges repositories.PasswordChangeChallengeRepository
 	auditRepo       repositories.AuditRepository
 	logger          *zap.Logger
 }
 
 // NewUserHandler creates a new UserHandler.
-func NewUserHandler(repo repositories.UserRepository, refresh repositories.RefreshTokenRepository, passwordChanges repositories.PasswordChangeChallengeRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
+func NewUserHandler(repo repositories.UserRepository, refresh repositories.RefreshTokenRepository, apiTokens repositories.APITokenRepository, passwordChanges repositories.PasswordChangeChallengeRepository, auditRepo repositories.AuditRepository, logger *zap.Logger) *UserHandler {
 	return &UserHandler{
 		repo:            repo,
 		refresh:         refresh,
+		apiTokens:       apiTokens,
 		passwordChanges: passwordChanges,
 		auditRepo:       auditRepo,
 		logger:          logger.Named("user_handler"),
@@ -337,10 +339,14 @@ func (h *UserHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Whoever signed in with the old password keeps no session, and a password
-	// change step started before this one cannot complete.
+	// Whoever signed in with the old password keeps no session and no API
+	// token, and a password change step started before this one cannot
+	// complete.
 	if err := h.refresh.RevokeAllForUser(ctx, user.ID); err != nil {
 		h.logger.Warn("failed to revoke sessions after set password", zap.Error(err))
+	}
+	if err := h.apiTokens.DeleteByUserID(ctx, user.ID); err != nil {
+		h.logger.Warn("failed to revoke api tokens after set password", zap.Error(err))
 	}
 	if err := h.passwordChanges.DeleteByUserID(ctx, user.ID); err != nil {
 		h.logger.Warn("failed to clear password change challenges after set password", zap.Error(err))

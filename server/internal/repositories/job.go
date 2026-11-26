@@ -249,13 +249,17 @@ func (r *gormJobRepository) MarkRunningJobsInterruptedForAgent(ctx context.Conte
 // of on every reconnection until the next scheduled run. The status = "interrupted"
 // filter makes it idempotent. Returns ErrNotFound if the job is not (or no longer)
 // interrupted.
+//
+// ended_at moves to now: the job report selects jobs by their end time, so a
+// job already reported as interrupted is reported again, as failed.
 func (r *gormJobRepository) MarkResumeExhausted(ctx context.Context, id uuid.UUID, errMsg string) error {
 	result := r.db.WithContext(ctx).
 		Model(&db.Job{}).
 		Where("id = ? AND status = ?", id, "interrupted").
 		Updates(map[string]interface{}{
-			"status": "failed",
-			"error":  errMsg,
+			"status":   "failed",
+			"error":    errMsg,
+			"ended_at": time.Now().UTC(),
 		})
 	if result.Error != nil {
 		return fmt.Errorf("jobs: mark resume exhausted: %w", result.Error)
@@ -504,7 +508,7 @@ func (r *gormJobRepository) ListRecentBackupsByPolicies(ctx context.Context, pol
 
 	ranked := r.db.WithContext(ctx).
 		Model(&db.Job{}).
-		Select("jobs.id, jobs.policy_id, jobs.status, jobs.created_at, jobs.started_at, jobs.ended_at, " +
+		Select("jobs.id, jobs.policy_id, jobs.status, jobs.created_at, jobs.started_at, jobs.ended_at, "+
 			"ROW_NUMBER() OVER (PARTITION BY jobs.policy_id ORDER BY jobs.created_at DESC, jobs.id DESC) AS rn").
 		Where("jobs.policy_id IN ? AND jobs.type = ?", policyIDs, "backup")
 
@@ -824,10 +828,10 @@ func (r *gormJobRepository) HasWaitingForDestinations(ctx context.Context, desti
 }
 
 // maintenanceJobTypes are the per-destination job types (retention sweep,
-// integrity check) dispatched straight to the agent rather than through the
-// backup scheduler's DispatchPending: a pending one can only be in flight, so
-// it is swept together with running jobs.
-var maintenanceJobTypes = []string{"retention", "check"}
+// integrity check, repair) dispatched straight to the agent rather than
+// through the backup scheduler's DispatchPending: a pending one can only be in
+// flight, so it is swept together with running jobs.
+var maintenanceJobTypes = []string{"retention", "check", "repair"}
 
 // HasActiveJobOfType reports whether a job of jobType against the destination
 // is pending, waiting or running.
@@ -929,4 +933,57 @@ func (r *gormJobRepository) ReclaimLogSpace(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// JobReportRow is one finished job in the job report email.
+type JobReportRow struct {
+	ID        uuid.UUID
+	Type      string
+	Status    string
+	StartedAt *time.Time
+	EndedAt   *time.Time
+	// PolicyName is empty for retention and check jobs, which belong to no
+	// policy, and for a restore from an imported snapshot.
+	PolicyName string
+	AgentName  string
+	// DestinationName is the name of the job's destination when it has
+	// exactly one, as retention and check jobs do.
+	DestinationName string
+	// AddedBytes is the data the job added to its repositories: the sum over
+	// its destinations and their command sources. A failed destination adds
+	// nothing. 0 for other job types.
+	AddedBytes int64
+	// SucceededDestinations counts the destinations the job succeeded on, so
+	// "0 bytes added" can be told apart from "nothing was written".
+	SucceededDestinations int
+}
+
+// ListEndedBetween returns the jobs that ended in (from, to], see
+// JobRepository.ListEndedBetween. The sum is cast because PostgreSQL returns
+// SUM over BIGINT as NUMERIC.
+func (r *gormJobRepository) ListEndedBetween(ctx context.Context, from, to time.Time) ([]JobReportRow, error) {
+	var rows []JobReportRow
+	if err := r.db.WithContext(ctx).
+		Model(&db.Job{}).
+		Select(`jobs.id, jobs.type, jobs.status, jobs.started_at, jobs.ended_at,
+			COALESCE(policies.name, '') AS policy_name,
+			COALESCE(agents.name, '')   AS agent_name,
+			CASE WHEN (SELECT COUNT(*) FROM job_destinations jd WHERE jd.job_id = jobs.id) = 1
+				THEN COALESCE((SELECT d.name FROM job_destinations jd
+					JOIN destinations d ON d.id = jd.destination_id
+					WHERE jd.job_id = jobs.id), '')
+				ELSE '' END AS destination_name,
+			CAST(COALESCE((SELECT SUM(jd.size_bytes) FROM job_destinations jd WHERE jd.job_id = jobs.id), 0)
+				+ COALESCE((SELECT SUM(jc.size_bytes) FROM job_destination_commands jc WHERE jc.job_id = jobs.id), 0)
+				AS BIGINT) AS added_bytes,
+			(SELECT COUNT(*) FROM job_destinations jd
+				WHERE jd.job_id = jobs.id AND jd.status = 'succeeded') AS succeeded_destinations`).
+		Joins("LEFT JOIN policies ON policies.id = jobs.policy_id AND policies.deleted_at IS NULL").
+		Joins("LEFT JOIN agents ON agents.id = jobs.agent_id AND agents.deleted_at IS NULL").
+		Where("jobs.status IN ? AND jobs.ended_at > ? AND jobs.ended_at <= ?", terminalJobStatuses, from.UTC(), to.UTC()).
+		Order("COALESCE(jobs.started_at, jobs.ended_at), jobs.id").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("jobs: list ended between: %w", err)
+	}
+	return rows, nil
 }

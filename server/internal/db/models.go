@@ -82,6 +82,30 @@ type RefreshToken struct {
 	SessionExpiresAt *time.Time
 }
 
+// APIToken is a long-lived credential a user creates for a program that reads
+// the API on their behalf, such as a Home Assistant integration (ADR 0027).
+// The raw token is shown once at creation and never stored: only its SHA-256
+// hash. A token is read-only whatever its owner's role: it authenticates GET
+// requests with the rights of the "user" role. It stops working when it
+// expires, when it is revoked (the row is deleted) and while its owner is
+// disabled; deleting the owner deletes it.
+type APIToken struct {
+	Base
+	UserID    uuid.UUID `gorm:"type:text;not null;index"`
+	Name      string    `gorm:"not null"`
+	TokenHash string    `gorm:"not null;uniqueIndex"` // SHA-256 hex of the raw token
+	// Hint is the start of the raw token ("ark_" and a few characters), kept
+	// so a user can tell their tokens apart. It is not enough to guess one.
+	Hint string `gorm:"not null"`
+	// Scope is "read", the only scope so far.
+	Scope      string `gorm:"not null;default:'read'"`
+	ExpiresAt  *time.Time
+	LastUsedAt *time.Time
+}
+
+// TableName maps to the migration-created table name.
+func (APIToken) TableName() string { return "api_tokens" }
+
 // PasswordResetToken stores a hashed, single-use token for the self-service
 // password reset flow. Only local accounts can reset their password — OIDC
 // users are managed by their identity provider. The raw token is never stored:
@@ -186,6 +210,15 @@ type Agent struct {
 	// Advertised by the agent in the Register RPC via AgentCapabilities.docker.
 	// Used by the GUI to show or hide the Docker volume source option in the policy form.
 	DockerAvailable bool `gorm:"not null;default:false"`
+	// ResticVersion and RcloneVersion are the versions of the binaries
+	// embedded in the agent, reported on every registration; empty for
+	// agents that predate the report.
+	ResticVersion string `gorm:"not null;default:''"`
+	RcloneVersion string `gorm:"not null;default:''"`
+	// RepairAvailable is true when the agent reported AgentCapabilities.repair:
+	// it handles repair jobs (ADR 0026). The server refuses a repair on a
+	// maintenance agent without it, such as an agent older than repairs.
+	RepairAvailable bool `gorm:"not null;default:false"`
 	// CertFingerprint is the hex SHA-256 of the mTLS client certificate the
 	// agent is bound to; nil until its first registration with one. Read-only
 	// for GORM so that Save on a stale copy can never undo a binding: it is
@@ -272,6 +305,16 @@ type Destination struct {
 	LastCheckAt     *time.Time
 	LastCheckStatus string     `gorm:"not null;default:''"`
 	LastCheckJobID  *uuid.UUID `gorm:"type:text"`
+
+	// Maintenance mode (ADR 0026). While it is active no job can claim the
+	// destination (TryAcquireBusyAll), so scheduled work waits in the queue
+	// and starts once it ends. MaintenanceJobID is set when a repair put the
+	// destination in maintenance for its own duration: the maintenance is
+	// then only active while that job is pending or running. Written only
+	// through the DestinationRepository maintenance methods.
+	MaintenanceSince *time.Time `gorm:"->"`
+	MaintenanceBy    string     `gorm:"->"`
+	MaintenanceJobID *uuid.UUID `gorm:"->;type:text"`
 }
 
 // Destination lock modes (issue #319). A backup holds its destinations shared:
@@ -393,6 +436,14 @@ type Job struct {
 	// ResumeAttempt counts consecutive resumes, so a host that dies at the same
 	// point every time stops being retried. Zero for a normal run.
 	ResumeAttempt int `gorm:"not null;default:0"`
+
+	// Params holds the parameters of a job started from the GUI with options,
+	// as JSON without any secret: for a repair, its repair.Params. Empty for
+	// scheduled jobs.
+	Params string `gorm:"type:text;not null;default:''"`
+	// RequestedBy is the email of the admin who started the job by hand, ""
+	// for jobs started by a schedule.
+	RequestedBy string `gorm:"not null;default:''"`
 }
 
 // JobDestination tracks the result of a backup job for each individual

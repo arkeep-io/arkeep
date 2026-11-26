@@ -37,6 +37,7 @@ on Home Assistant.
 | Hostname | yes | Name of the agent in Arkeep, also recorded on every snapshot. Keep it stable: Arkeep groups snapshots by hostname. With several Home Assistant installations, give each one its own. |
 | CA certificate | no | Path of a CA certificate, under `/ssl`, when the server uses a gRPC certificate from a private CA. Not needed with the certificate Arkeep generates itself. |
 | Log level | yes | `debug`, `info`, `warn` or `error`. |
+| Allow local destinations inside the app | no | Back up to a local destination outside `/share` and `/media` anyway (see below). Leave it off. |
 
 Enrolling over plain HTTP does not expose the agent secret: the agent proves
 it knows the secret without sending it, and accepts the server's answer only
@@ -77,7 +78,10 @@ configuration. The database files in it change while Home Assistant runs, so
 do not rely on that copy of them.
 
 A local destination must be under `/share` or `/media`, and outside the folders
-the policy backs up.
+the policy backs up. A path outside the folders listed above, such as
+`/backups`, is inside the app's own container: it is lost when the app is
+updated or reinstalled, so the agent refuses it and the backup fails with
+`not on a bind mount or a volume`.
 
 ## Restoring
 
@@ -109,6 +113,35 @@ programs are left out of them: the agent rebuilds them.
 
 Without this data, for instance after uninstalling the app, the agent enrolls
 again as a new agent.
+
+## Troubleshooting
+
+The **Log** tab shows why the agent cannot reach the server. To test from Home
+Assistant, the **Terminal & SSH** app has `nc` and `curl`:
+`nc -zv <host> 9090` must report the port open, and
+`curl <server HTTP URL>/health/live` must print `ok`.
+
+- `lookup ... no such host`, for the server or in a backup log for a
+  destination: Home Assistant cannot resolve the name. Restic runs in the app,
+  so destination names must resolve there too. Names only a VPN knows, such as
+  Tailscale MagicDNS (`*.ts.net`), do not resolve in apps by default: use IP
+  addresses, or see the Tailscale case below.
+- `enroll: ... connection refused`: the server's HTTP API does not answer at
+  the default `http://<gRPC host>:8080`. Set **Server HTTP URL**.
+- A certificate error such as `doesn't contain any IP SANs` before enrollment:
+  another service answers on the gRPC port (Cockpit uses 9090, for example).
+  Check the address and port of the Arkeep server.
+- Server or destinations reachable only through Tailscale: install the
+  Tailscale app with userspace networking turned off. Then either use
+  Tailscale IPs (`100.x.y.z`) in the options and destinations, or let Home
+  Assistant resolve `*.ts.net` names with
+  `ha dns options --servers dns://100.100.100.100`, after checking that
+  `nslookup <name> 100.100.100.100` answers for your names and public ones
+  (`ha dns reset` undoes it). An HTTPS destination needs its name: its
+  certificate does not cover the IP.
+- `lstat /proc/...` errors: the policy backs up `/`, which is the app's own
+  container, not Home Assistant. Use the paths listed under **What the agent
+  can back up**.
 
 ## Support
 
