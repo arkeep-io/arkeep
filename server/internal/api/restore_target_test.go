@@ -44,6 +44,12 @@ func TestNestedRestoreTarget(t *testing.T) {
 			contains: "C:/Users/me/C/Users/me/Documents",
 		},
 		{name: "windows drive letter case", target: `c:\Users\me`, paths: []string{"/C/Users/me/Documents"}, nested: true},
+		// Windows paths are case-insensitive, so the whole path is compared
+		// without regard to case, not only the drive letter.
+		{name: "windows path case", target: `C:\users\ME`, paths: []string{"/C/Users/me/Documents"}, nested: true},
+		{name: "windows path case, drive form", target: `c:\USERS\me`, paths: []string{`C:\Users\me`}, nested: true},
+		{name: "windows sibling with a common prefix, other case", target: `C:\users\me`, paths: []string{"/C/Users/meg"}, nested: false},
+		{name: "unix paths stay case-sensitive", target: "/Data/App", paths: []string{"/data/app"}, nested: false},
 		{name: "windows drive root", target: `C:\`, paths: []string{`C:\Users\me`}, nested: true},
 		{name: "windows separate folder", target: `C:\restore`, paths: []string{`C:\Users\me`}, nested: false},
 		{name: "windows separate folder, restic form", target: `C:\restore`, paths: []string{"/C/Users/me"}, nested: false},

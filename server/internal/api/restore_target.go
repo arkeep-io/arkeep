@@ -124,11 +124,12 @@ func toResticWindowsPath(p string) string {
 	return p
 }
 
-// pathWithin reports whether p is root itself or a path below it. Drive
-// letters are compared without regard to case.
+// pathWithin reports whether p is root itself or a path below it. Windows
+// paths are case-insensitive, so two drive paths are compared without regard
+// to case; Unix paths are compared as they are.
 func pathWithin(p, root string) bool {
-	if isDrivePath(p) && isDrivePath(root) && strings.EqualFold(p[:1], root[:1]) {
-		p = root[:1] + p[1:]
+	if isDrivePath(p) && isDrivePath(root) {
+		p, root = strings.ToLower(p), strings.ToLower(root)
 	}
 	return p == root || strings.HasPrefix(p, strings.TrimSuffix(root, "/")+"/")
 }
